@@ -9,6 +9,7 @@ import { createCodexConnectedServiceRuntimeAuthAdapter } from '@/backends/codex/
 import { createCodexConnectedServicesMaterializer } from '@/backends/codex/connectedServices/createCodexConnectedServicesMaterializer';
 import { materializeCodexConnectedServiceRuntimeAuthSelection } from '@/backends/codex/connectedServices/materializeCodexConnectedServiceRuntimeAuthSelection';
 import { resolveCodexConnectedServiceSwitchContinuity } from '@/backends/codex/connectedServices/resolveCodexConnectedServiceSwitchContinuity';
+import { resolveCodexConnectedServiceCandidatePersistedSessionFile } from '@/backends/codex/connectedServices/resolveCodexConnectedServiceCandidatePersistedSessionFile';
 import { codexDaemonSpawnHooks } from '@/backends/codex/daemon/spawnHooks';
 import { readCodexEnvironmentAuthState } from '@/backends/codex/cli/auth/readCodexEnvironmentAuthState';
 import { codexAppServerCatalogControlAdapter } from '@/backends/codex/appServer/catalogControl/codexAppServerCatalogControlAdapter';
@@ -43,6 +44,8 @@ export const agent = {
   resolveConnectedServiceSwitchContinuity: async (params) => await resolveCodexConnectedServiceSwitchContinuity(params),
   verifyResumeReachable: async (input) =>
     await (await import('@/backends/codex/connectedServices/verifyResumeReachableCodex')).verifyResumeReachableCodex(input),
+  resolveConnectedServiceCandidatePersistedSessionFile: ({ metadata }) =>
+    resolveCodexConnectedServiceCandidatePersistedSessionFile({ metadata }),
   getDirectSessionProviderOps: async () => (await import('@/backends/codex/directSessions/providerOps')).codexDirectSessionProviderOps,
   getSessionGoalControlAdapter: async () => codexAppServerGoalControlAdapter,
   getSessionCatalogControlAdapter: async () => codexAppServerCatalogControlAdapter,

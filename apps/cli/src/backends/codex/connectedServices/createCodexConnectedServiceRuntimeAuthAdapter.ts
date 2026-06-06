@@ -8,6 +8,7 @@ import {
 import { classifyCodexConnectedServiceAuthFailure } from './classifyCodexConnectedServiceAuthFailure';
 import { mapCodexRateLimitSnapshotToQuotaSnapshot } from './mapCodexRateLimitSnapshot';
 import { refreshCodexChatGptTokensForBridge } from './refreshCodexChatGptTokensForBridge';
+import { verifyCodexConnectedServiceActiveAccount } from './verifyCodexConnectedServiceActiveAccount';
 import type {
   ConnectedServiceProviderRuntimeAuthAdapter,
   ConnectedServiceRuntimeAuthTargetInput,
@@ -130,6 +131,9 @@ export function createCodexConnectedServiceRuntimeAuthAdapter(): ConnectedServic
           return { resumed: true };
         },
       });
+    },
+    async verifyActiveAccount(input) {
+      return await verifyCodexConnectedServiceActiveAccount(input);
     },
     async probeQuota(input) {
       const selection = readSelectionRecord(input);

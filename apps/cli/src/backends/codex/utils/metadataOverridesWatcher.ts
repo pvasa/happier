@@ -22,10 +22,11 @@ export async function runMetadataOverridesWatcherLoop(args: Readonly<{
       continue;
     }
     if (!didUpdate) {
-      // Avoid a hot loop when waitForMetadataUpdate resolves immediately for an already-aborted signal.
-      if (signal?.aborted) {
-        await delayUnref(abortedBackoffMs);
+      // Avoid a hot loop when waitForMetadataUpdate resolves immediately for detached, disconnected, or aborted clients.
+      if (args.shouldExit()) {
+        break;
       }
+      await delayUnref(abortedBackoffMs);
       continue;
     }
     try {

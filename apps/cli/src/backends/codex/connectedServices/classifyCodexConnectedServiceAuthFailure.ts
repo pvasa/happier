@@ -22,8 +22,12 @@ export type CodexConnectedServiceRuntimeFailureClassification = Readonly<{
   planType: string | null;
   rateLimits: unknown | null;
   source: 'structured_provider_error' | 'stable_provider_message' | 'provider_runtime_marker';
-  recoveryAction?: Readonly<{ kind: 'provider_state_sharing_required' }> | null;
+  recoveryAction?: CodexConnectedServiceRecoveryAction | null;
 }>;
+
+export type CodexConnectedServiceRecoveryAction =
+  | Readonly<{ kind: 'provider_state_sharing_required' }>
+  | Readonly<{ kind: 'quota_recovery_required' }>;
 
 export type ClassifyCodexConnectedServiceAuthFailureInput = Readonly<{
   providerErrorPath: boolean;
@@ -208,7 +212,7 @@ function buildClassification(
     planType?: string | null;
     rateLimits?: unknown | null;
     source: CodexConnectedServiceRuntimeFailureClassification['source'];
-    recoveryAction?: CodexConnectedServiceRuntimeFailureClassification['recoveryAction'];
+    recoveryAction?: CodexConnectedServiceRecoveryAction | null;
   }>,
 ): CodexConnectedServiceRuntimeFailureClassification {
   return {
@@ -226,7 +230,11 @@ function buildClassification(
   };
 }
 
-const codexUsageLimitRecoveryAction = { kind: 'provider_state_sharing_required' } as const;
+// Usage-limit (capacity) recovery is distinct from provider state-sharing capability.
+// Quota recovery is satisfied by a fresh/different account or proven fresh quota, not by
+// sharing vendor continuity state. Keep `provider_state_sharing_required` reserved for
+// genuine continuity/state-sharing failures.
+const codexUsageLimitRecoveryAction = { kind: 'quota_recovery_required' } as const;
 
 export function classifyCodexConnectedServiceAuthFailure(
   input: ClassifyCodexConnectedServiceAuthFailureInput,

@@ -86,6 +86,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     rejectStructuredSteerInput?: boolean;
     emitResumeContinuationUserInputRequest?: boolean;
     emitResumeTurnStartedBeforeResponse?: boolean;
+    emitIdleMcpRequestAfterThreadStart?: boolean;
     rejectPermissionsProfileAsStringShape?: boolean;
 }>): Promise<string> {
     const scriptPath = join(params.dir, 'fake-codex-app-server.mjs');
@@ -95,6 +96,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         'import readline from "node:readline";',
         `const requestLogPath = ${JSON.stringify(params.requestLogPath)};`,
         'const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });',
+        'let staleTerminalTurnId = null;',
         'for await (const line of rl) {',
         '    if (!line.trim()) continue;',
         '    const msg = JSON.parse(line);',
@@ -118,6 +120,11 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            continue;',
         '        }',
         '        process.stdout.write(JSON.stringify({ id: msg.id, result: { threadId: "thread-started", model: "gpt-5.4", serviceTier: null, activePermissionProfile: msg.params?.permissions ?? null } }) + "\\n");',
+        `        if (${JSON.stringify(params.emitIdleMcpRequestAfterThreadStart === true)}) {`,
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ id: "idle-mcp-request", method: "mcpServer/elicitation/request", params: { threadId: "thread-started", id: "request_scoped_idle_mcp", serverName: "happier", message: "Tool \\"change_title\\" needs input", _meta: { tool_params: { title: "Idle Title" } } } }) + "\\n");',
+        '            }, 5);',
+        '        }',
         '        continue;',
         '    }',
         '    if (msg.method === "thread/resume") {',
@@ -321,7 +328,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        const text = Array.isArray(msg.params?.input) ? String(msg.params.input[0]?.text ?? "unknown") : "unknown";',
         '        const matchingTurnStartCount = (await readFile(requestLogPath, "utf8").catch(() => "")).split("\\n").filter((line) => { try { const entry = JSON.parse(line); return entry.method === "turn/start" && Array.isArray(entry.params?.input) && String(entry.params.input[0]?.text ?? "") === text; } catch { return false; } }).length;',
         '        const turnId = matchingTurnStartCount > 1 ? `turn-${text}-${matchingTurnStartCount}` : `turn-${text}`;',
-        '        const completionDelayMs = text === "cancel-me" ? 50 : 15;',
+        '        const completionDelayMs = text === "connected-service-invalidation-active-turn" && matchingTurnStartCount === 1 ? 120000 : text === "cancel-me" ? 50 : 15;',
         '        if (text === "usage-limit-before-turn-response") {',
         '            process.stdout.write(JSON.stringify({ method: "error", params: { threadId: msg.params?.threadId ?? null, turnId, willRetry: false, error: { message: "Usage limit reached", codexErrorInfo: "UsageLimitExceeded", additionalDetails: null } } }) + "\\n");',
         '            setTimeout(() => {',
@@ -330,6 +337,64 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            continue;',
         '        }',
         '        const respondDelayMs = text === "steer-delay" ? 60 : 0;',
+        '        if (text === "bridge-stale-terminal-old-turn") {',
+        '            staleTerminalTurnId = turnId;',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ id: msg.id, result: { threadId: msg.params?.threadId ?? null } }) + "\\n");',
+        '            }, 0);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: msg.params?.threadId ?? null } }) + "\\n");',
+        '            }, 5);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, id: turnId } }) + "\\n");',
+        '            }, 15);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-stale-terminal-next-turn") {',
+        '            setTimeout(() => {',
+        '                const staleTurnId = staleTerminalTurnId;',
+        '                if (!staleTurnId) return;',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId: staleTurnId, item: { id: "stale_cmd_1", type: "commandExecution", command: "stale", cwd: "/repo" } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                const staleTurnId = staleTerminalTurnId;',
+        '                if (!staleTurnId) return;',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId: staleTurnId, item: { id: "stale_cmd_1", type: "commandExecution", stdout: "stale", exitCode: 0 } } }) + "\\n");',
+        '            }, 10);',
+        '            setTimeout(() => {',
+        '                const staleTurnId = staleTerminalTurnId;',
+        '                if (!staleTurnId) return;',
+        '                process.stdout.write(JSON.stringify({ id: "approval-stale-turn", method: "item/commandExecution/requestApproval", params: { threadId: msg.params?.threadId ?? null, turnId: staleTurnId, itemId: "stale_cmd_1", reason: "stale approval" } }) + "\\n");',
+        '            }, 12);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: turnId }, threadId: msg.params?.threadId ?? null } }) + "\\n");',
+        '            }, 80);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 85);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 100);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-terminal-id-only-duplicate-command-result") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ id: msg.id, result: { threadId: msg.params?.threadId ?? null } }) + "\\n");',
+        '            }, respondDelayMs);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, item: { id: "terminal_id_cmd_1", type: "commandExecution", command: "yarn test", cwd: "/repo" } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, item: { id: "terminal_id_cmd_1", type: "commandExecution", stdout: "passed", exitCode: 0 } } }) + "\\n");',
+        '            }, 10);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 16);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "terminal_id_cmd_1", type: "commandExecution", stdout: "passed", exitCode: 0 } } }) + "\\n");',
+        '            }, 70);',
+        '            continue;',
+        '        }',
         '        setTimeout(() => {',
         '            process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: turnId }, threadId: msg.params?.threadId ?? null } }) + "\\n");',
         '        }, respondDelayMs);',
@@ -384,6 +449,15 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        if (text === "bridge-mcp-elicitation-callid") {',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ id: "mcp-elicitation-request-callid", method: "mcpServer/elicitation/request", params: { callId: "call_test_1", invocation: { tool: "mcp__happier__change_title", arguments: { title: "New Title" } } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 20);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-mcp-elicitation-param-id") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ id: "mcp-elicitation-request-param-id", method: "mcpServer/elicitation/request", params: { threadId: msg.params?.threadId ?? null, id: "mcp_request_param_id_1", serverName: "happier", mode: "form", _meta: { tool_title: "change_title", tool_params: { title: "New Title" } }, message: "Allow the happier MCP server to run tool \\"change_title\\"?", requestedSchema: { type: "object", properties: {} } } }) + "\\n");',
         '            }, 6);',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
@@ -523,6 +597,84 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
         '            }, 18);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-late-command-result-after-turn-completed") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "late_cmd_1", type: "commandExecution", command: "yarn test", cwd: "/repo" } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 12);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "late_cmd_1", type: "commandExecution", stdout: "passed", exitCode: 0 } } }) + "\\n");',
+        '            }, 70);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-duplicate-command-result-during-terminal-drain") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "drain_dup_cmd_1", type: "commandExecution", command: "yarn test", cwd: "/repo" } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 12);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "drain_dup_cmd_1", type: "commandExecution", command: "yarn test", cwd: "/repo", stdout: "passed", exitCode: 0 } } }) + "\\n");',
+        '            }, 70);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "drain_dup_cmd_1", type: "commandExecution", command: "yarn test", cwd: "/repo", stdout: "passed", exitCode: 0 } } }) + "\\n");',
+        '            }, 72);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-late-command-start-after-turn-completed") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "late_start_cmd_1", type: "commandExecution", command: "yarn test", cwd: "/repo" } } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "late_start_cmd_1", type: "commandExecution", command: "yarn test", cwd: "/repo", stdout: "passed", exitCode: 0 } } }) + "\\n");',
+        '            }, 70);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-late-filechange-start-after-turn-completed") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "late_file_1", type: "fileChange" } } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "late_file_1", type: "fileChange", changes: [{ path: "src/file.ts", kind: { type: "update", move_path: null }, diff: "@@ -1 +1,2 @@\\n-old\\n+new\\n" }], stdout: "patched", success: true } } }) + "\\n");',
+        '            }, 70);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-top-level-item-id-with-nested-turn") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, id: "nested_cmd_1", type: "commandExecution", turn: { id: turnId }, command: "pwd", cwd: "/repo" } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId }, item: { id: "nested_cmd_1", type: "commandExecution", command: "pwd", cwd: "/repo", stdout: "/repo", exitCode: 0 } } }) + "\\n");',
+        '            }, 10);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, id: turnId } }) + "\\n");',
+        '            }, 16);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-duplicate-command-result-after-terminal-turn") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "dup_cmd_1", type: "commandExecution", command: "yarn test", cwd: "/repo" } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "dup_cmd_1", type: "commandExecution", stdout: "passed", exitCode: 0 } } }) + "\\n");',
+        '            }, 10);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 16);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "dup_cmd_1", type: "commandExecution", stdout: "passed", exitCode: 0 } } }) + "\\n");',
+        '            }, 70);',
         '            continue;',
         '        }',
         '        if (text === "bridge-streams-multi-item") {',
@@ -684,6 +836,18 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId, status: "failed", error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header", codexErrorInfo: "other", additionalDetails: null } } } }) + "\\n");',
         '            }, 14);',
+        '            continue;',
+        '        }',
+        '        if (text === "top-level-failed-turn") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, id: turnId, status: "failed", error: { message: "top-level failed turn", codexErrorInfo: "other", additionalDetails: null } } }) + "\\n");',
+        '            }, 8);',
+        '            continue;',
+        '        }',
+        '        if (text === "top-level-interrupted-turn") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, id: turnId, status: "interrupted" } }) + "\\n");',
+        '            }, 8);',
         '            continue;',
         '        }',
         '        if (text === "usage-limit-structured") {',
@@ -900,6 +1064,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            continue;',
         '        }',
         '        if (text === "interrupt-notification-before-terminal") {',
+        '            process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: turnId }, threadId: msg.params?.threadId ?? null } }) + "\\n");',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "turn/interrupt", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
         '            }, 8);',
@@ -1003,6 +1168,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectStructuredSteerInput?: boolean;
             emitResumeContinuationUserInputRequest?: boolean;
             emitResumeTurnStartedBeforeResponse?: boolean;
+            emitIdleMcpRequestAfterThreadStart?: boolean;
             rejectPermissionsProfileAsStringShape?: boolean;
             rateLimitReadResult?: unknown;
         }> = {},
@@ -1030,6 +1196,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectStructuredSteerInput: options.rejectStructuredSteerInput,
             emitResumeContinuationUserInputRequest: options.emitResumeContinuationUserInputRequest,
             emitResumeTurnStartedBeforeResponse: options.emitResumeTurnStartedBeforeResponse,
+            emitIdleMcpRequestAfterThreadStart: options.emitIdleMcpRequestAfterThreadStart,
             rejectPermissionsProfileAsStringShape: options.rejectPermissionsProfileAsStringShape,
             rateLimitReadResult: options.rateLimitReadResult,
         });
@@ -1531,6 +1698,65 @@ describe('createCodexAppServerRuntime', () => {
             provider: 'codex',
             providerTurnId: 'turn-failed-turn',
         }));
+    });
+
+    it('treats top-level failed turn/completed status as a failed Codex turn', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-top-level-failed-turn-');
+
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+            permissionMode: 'read-only',
+        });
+
+        await runtime.startOrLoad({});
+        await expect(runtime.sendPrompt('top-level-failed-turn')).rejects.toThrow(/top-level failed turn/);
+
+        expect(sessionTurnLifecycle.completeTurn).not.toHaveBeenCalled();
+        expect(sessionTurnLifecycle.failTurn).toHaveBeenCalledWith(expect.objectContaining({
+            provider: 'codex',
+            providerTurnId: 'turn-top-level-failed-turn',
+        }));
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
+    });
+
+    it('treats top-level interrupted turn/completed status as a cancelled Codex turn', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-top-level-interrupted-turn-');
+
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+            permissionMode: 'read-only',
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('top-level-interrupted-turn');
+
+        expect(sessionTurnLifecycle.completeTurn).not.toHaveBeenCalled();
+        expect(sessionTurnLifecycle.attachProviderTurnId).toHaveBeenCalledWith({
+            provider: 'codex',
+            providerTurnId: 'turn-top-level-interrupted-turn',
+        });
+        expect(sessionTurnLifecycle.cancelTurn).toHaveBeenCalledWith(expect.objectContaining({
+            provider: 'codex',
+        }));
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
     });
 
     it('does not adopt late raw response items as new turns after app-server usage-limit failure', async () => {
@@ -3236,6 +3462,269 @@ describe('createCodexAppServerRuntime', () => {
         expect(eventOrder.indexOf('thinking-stopped')).toBeGreaterThan(eventOrder.indexOf('assistant-final'));
     });
 
+    it('keeps the active Codex turn open until same-turn command items finish after turn/completed', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-late-command-result-');
+
+        const eventOrder: string[] = [];
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble({
+            completeTurn: vi.fn(async () => {
+                eventOrder.push('completed-status');
+            }),
+        });
+        const session = {
+            updateMetadata: vi.fn(),
+            sessionTurnLifecycle,
+            sendCodexMessage: vi.fn((message: { type?: string; callId?: string }) => {
+                if (message.type === 'tool-call-result' && message.callId === 'late_cmd_1') {
+                    eventOrder.push('tool-result');
+                }
+            }),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn((value: boolean) => {
+                eventOrder.push(value ? 'thinking-started' : 'thinking-stopped');
+            }),
+            session: session as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-late-command-result-after-turn-completed');
+        await waitForCondition(() => eventOrder.includes('tool-result'), {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'late Codex command result bridged',
+        });
+
+        expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
+        expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledTimes(1);
+        expect(eventOrder.indexOf('completed-status')).toBeGreaterThan(eventOrder.indexOf('tool-result'));
+        expect(eventOrder.at(-1)).toBe('thinking-stopped');
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
+    });
+
+    it('cancels pending Codex turn finalization when same-turn command starts during settle', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-late-command-start-');
+
+        const eventOrder: string[] = [];
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble({
+            completeTurn: vi.fn(async () => {
+                eventOrder.push('completed-status');
+            }),
+        });
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                sendCodexMessage: vi.fn((message: { type?: string; callId?: string }) => {
+                    if (message.type === 'tool-call-result' && message.callId === 'late_start_cmd_1') {
+                        eventOrder.push('tool-result');
+                    }
+                }),
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-late-command-start-after-turn-completed');
+        await waitForCondition(() => eventOrder.includes('tool-result'), {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'late-start Codex command result bridged',
+        });
+
+        expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
+        expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledTimes(1);
+        expect(eventOrder.indexOf('completed-status')).toBeGreaterThan(eventOrder.indexOf('tool-result'));
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
+    });
+
+    it('tracks blocking Codex item starts that produce no stream update during settle', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-late-filechange-start-');
+
+        const eventOrder: string[] = [];
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble({
+            completeTurn: vi.fn(async () => {
+                eventOrder.push('completed-status');
+            }),
+        });
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                sendCodexMessage: vi.fn((message: { type?: string; callId?: string }) => {
+                    if (message.type === 'tool-call-result' && message.callId === 'late_file_1') {
+                        eventOrder.push('tool-result');
+                    }
+                }),
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-late-filechange-start-after-turn-completed');
+        await waitForCondition(() => eventOrder.includes('tool-result'), {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'late-start Codex file change result bridged',
+        });
+
+        expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
+        expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledTimes(1);
+        expect(eventOrder.indexOf('completed-status')).toBeGreaterThan(eventOrder.indexOf('tool-result'));
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
+    });
+
+    it('does not misread top-level item ids as provider turn ids when nested turn data is present', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-top-level-item-id-');
+
+        const session = {
+            updateMetadata: vi.fn(),
+            sessionTurnLifecycle: createSessionTurnLifecycleTestDouble(),
+            sendCodexMessage: vi.fn(),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: session as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-top-level-item-id-with-nested-turn');
+
+        expect(session.sendCodexMessage).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'tool-call',
+            callId: 'nested_cmd_1',
+        }));
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
+    });
+
+    it('does not adopt duplicate post-terminal command results as new Codex turns', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-duplicate-post-terminal-command-result-');
+
+        const onThinkingChange = vi.fn();
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const sendCodexMessage = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange,
+            session: {
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                sendCodexMessage,
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-duplicate-command-result-after-terminal-turn');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
+        expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledTimes(1);
+        expect(sendCodexMessage.mock.calls.filter(([message]) =>
+            message?.type === 'tool-call-result' && message.callId === 'dup_cmd_1',
+        )).toHaveLength(1);
+        expect(onThinkingChange).toHaveBeenLastCalledWith(false);
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
+    });
+
+    it('ignores duplicate same-turn command completions while terminal finalization waits for blocking items', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-duplicate-terminal-drain-result-');
+
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const sendCodexMessage = vi.fn();
+        const permissionHandler = { handleToolCall: vi.fn(async () => ({ decision: 'approved' as const })) };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                sendCodexMessage,
+            } as any,
+            permissionHandler,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-duplicate-command-result-during-terminal-drain');
+        await new Promise((resolve) => setTimeout(resolve, 140));
+
+        expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
+        expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledTimes(1);
+        expect(sendCodexMessage.mock.calls.filter(([message]) =>
+            message?.type === 'tool-call-result' && message.callId === 'drain_dup_cmd_1',
+        )).toHaveLength(1);
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
+    });
+
+    it('remembers terminal Codex turn ids that only arrive on turn/completed', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-terminal-id-only-duplicate-result-');
+
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const sendCodexMessage = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                sendCodexMessage,
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-terminal-id-only-duplicate-command-result');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
+        expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledTimes(1);
+        expect(sendCodexMessage.mock.calls.filter(([message]) =>
+            message?.type === 'tool-call-result' && message.callId === 'terminal_id_cmd_1',
+        )).toHaveLength(1);
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
+    });
+
+    it('ignores stale terminal Codex turn ids while the next active turn has not observed its provider id', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-stale-terminal-id-race-');
+
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const sendCodexMessage = vi.fn();
+        const permissionHandler = { handleToolCall: vi.fn(async () => ({ decision: 'approved' as const })) };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            permissionHandler,
+            session: {
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                sendCodexMessage,
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-stale-terminal-old-turn');
+        await runtime.sendPrompt('bridge-stale-terminal-next-turn');
+        await new Promise((resolve) => setTimeout(resolve, 130));
+
+        expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(2);
+        expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledTimes(2);
+        expect(sendCodexMessage.mock.calls.filter(([message]) =>
+            message?.type === 'tool-call-result' && message.callId === 'stale_cmd_1',
+        )).toHaveLength(0);
+        expect(permissionHandler.handleToolCall).not.toHaveBeenCalled();
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
+    });
+
     it('commits a raw assistant final when no normalized assistant final arrives', async () => {
         const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-raw-final-only-');
 
@@ -3956,6 +4445,99 @@ describe('createCodexAppServerRuntime', () => {
             'mcp__happier__change_title',
             { title: 'New Title' },
         );
+    });
+
+    it('bridges MCP elicitation requests with request-scoped params.id without rebinding the active turn', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-bridge-mcp-elicitation-param-id-');
+
+        const permissionHandler = {
+            handleToolCall: vi.fn().mockResolvedValueOnce({ decision: 'approved' }),
+        };
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                sendAgentMessageCommitted: vi.fn(async () => {}),
+                sendCodexMessage: vi.fn(),
+            } as any,
+            permissionHandler: permissionHandler as any,
+        } as any);
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-mcp-elicitation-param-id');
+
+        const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+        expect(requestLog).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'mcp-elicitation-request-param-id',
+                    params: null,
+                    result: { action: 'accept', content: {} },
+                    error: null,
+                }),
+            ]),
+        );
+
+        expect(permissionHandler.handleToolCall).toHaveBeenCalledWith(
+            'mcp_request_param_id_1',
+            'mcp__happier__change_title',
+            { title: 'New Title' },
+        );
+        expect(sessionTurnLifecycle.attachProviderTurnId).toHaveBeenCalledWith({
+            provider: 'codex',
+            providerTurnId: 'turn-bridge-mcp-elicitation-param-id',
+        });
+        expect(sessionTurnLifecycle.attachProviderTurnId).not.toHaveBeenCalledWith({
+            provider: 'codex',
+            providerTurnId: 'mcp_request_param_id_1',
+        });
+    });
+
+    it('declines id-less provider requests when no Codex turn is active', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-idle-mcp-request-', {
+            emitIdleMcpRequestAfterThreadStart: true,
+        });
+
+        const permissionHandler = {
+            handleToolCall: vi.fn().mockResolvedValueOnce({ decision: 'approved' }),
+        };
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle,
+                sendAgentMessageCommitted: vi.fn(async () => {}),
+                sendCodexMessage: vi.fn(),
+            } as any,
+            permissionHandler: permissionHandler as any,
+        } as any);
+
+        await runtime.startOrLoad({});
+        await waitForCondition(async () => {
+            const requestLog = await readRequestLog(requestLogPath);
+            return requestLog.some((entry) => entry.id === 'idle-mcp-request');
+        }, {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'idle MCP request response',
+        });
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                id: 'idle-mcp-request',
+                result: { action: 'decline' },
+            }),
+        ]));
+        expect(permissionHandler.handleToolCall).not.toHaveBeenCalled();
+        expect(sessionTurnLifecycle.beginTurn).not.toHaveBeenCalled();
+        expect(runtime.hasActiveProviderTurn()).toBe(false);
+        expect(runtime.isTurnInFlight()).toBe(false);
     });
 
     it('bridges Codex mcpServer/elicitation requests that only include serverName + message + _meta.tool_params', async () => {
@@ -5494,7 +6076,7 @@ describe('createCodexAppServerRuntime', () => {
         expect(refreshResponse?.result).not.toHaveProperty('refreshToken');
     });
 
-    it('restarts the app-server process and resumes the same thread when Codex reports the cached auth account changed', async () => {
+    it('routes Codex cached-account changes to daemon runtime-auth recovery instead of locally resuming as success', async () => {
         const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-auth-account-change-');
 
         const sendCodexMessage = vi.fn();
@@ -5511,26 +6093,22 @@ describe('createCodexAppServerRuntime', () => {
 
         await runtime.startOrLoad({});
 
-        await expect(runtime.sendPrompt('account-mismatch-once')).resolves.toBeUndefined();
+        await expect(runtime.sendPrompt('account-mismatch-once')).rejects.toMatchObject({
+            runtimeAuthClassification: expect.objectContaining({
+                kind: 'account_changed',
+                serviceId: 'openai-codex',
+            }),
+        });
 
         expect(runtime.getSessionId()).toBe('thread-started');
         const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-        expect(requestLog.filter((entry: { method: string }) => entry.method === 'initialize')).toHaveLength(2);
-        expect(requestLog).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                method: 'thread/resume',
-                params: expect.objectContaining({
-                    threadId: 'thread-started',
-                    persistExtendedHistory: true,
-                }),
-            }),
-        ]));
+        expect(requestLog.filter((entry: { method: string }) => entry.method === 'initialize')).toHaveLength(1);
+        expect(requestLog.some((entry: { method: string }) => entry.method === 'thread/resume')).toBe(false);
         const retriedTurnStarts = requestLog.filter((entry: { method: string; params?: { input?: Array<{ text?: string }>; threadId?: string } }) =>
             entry.method === 'turn/start' && entry.params?.input?.[0]?.text === 'account-mismatch-once',
         );
-        expect(retriedTurnStarts).toHaveLength(2);
+        expect(retriedTurnStarts).toHaveLength(1);
         expect(retriedTurnStarts.map((entry: { params?: { threadId?: string } }) => entry.params?.threadId)).toEqual([
-            'thread-started',
             'thread-started',
         ]);
         expect(sendCodexMessage).not.toHaveBeenCalledWith(expect.objectContaining({
@@ -5540,7 +6118,7 @@ describe('createCodexAppServerRuntime', () => {
         expect(sendCodexMessage).not.toHaveBeenCalledWith(expect.objectContaining({
             type: 'turn_aborted',
         }));
-        expect(sendSessionEvent).toHaveBeenCalledWith({
+        expect(sendSessionEvent).not.toHaveBeenCalledWith({
             type: 'message',
             message: expect.stringContaining('refused to continue in the current process'),
         });
@@ -5723,10 +6301,80 @@ describe('createCodexAppServerRuntime', () => {
                 }),
             }),
         ]));
-        expect(sendSessionEvent).toHaveBeenCalledWith({
+        // Intentional connected-service switch must NOT use the native "refused to continue" copy.
+        expect(sendSessionEvent).not.toHaveBeenCalledWith({
             type: 'message',
             message: expect.stringContaining('refused to continue in the current process'),
         });
+        expect(sendSessionEvent).toHaveBeenCalledWith({
+            type: 'message',
+            message: expect.stringContaining('applying a connected-service account switch'),
+        });
+    });
+
+    it('continues an active prompt after connected-service auth transport invalidation restarts the app-server', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-hot-apply-invalidate-active-');
+
+        const sendCodexMessage = vi.fn();
+        const sendSessionEvent = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage,
+                sendSessionEvent,
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+
+        const prompt = 'connected-service-invalidation-active-turn';
+        const promptPromise = runtime.sendPrompt(prompt);
+        await waitForCondition(async () => {
+            const requestLog = await readRequestLog(requestLogPath);
+            return requestLog.some((entry) => {
+                const params = entry.params as { input?: Array<{ text?: string }> } | null;
+                return entry.method === 'turn/start' && params?.input?.[0]?.text === prompt;
+            });
+        }, {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'Codex app-server test prompt to start before transport invalidation',
+        });
+
+        await expect((runtime as any).invalidateConnectedServiceAuthTransports?.({})).resolves.toEqual({ ok: true });
+        await expect(promptPromise).resolves.toBeUndefined();
+
+        const requestLog = await readRequestLog(requestLogPath);
+        const turnStarts = requestLog.filter((entry) => {
+            const params = entry.params as { input?: Array<{ text?: string }> } | null;
+            return entry.method === 'turn/start' && params?.input?.[0]?.text === prompt;
+        });
+        expect(turnStarts).toHaveLength(2);
+        expect(requestLog.filter((entry) => entry.method === 'initialize')).toHaveLength(2);
+        expect(requestLog).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                method: 'thread/resume',
+                params: expect.objectContaining({
+                    threadId: 'thread-started',
+                    persistExtendedHistory: true,
+                }),
+            }),
+        ]));
+        // Intentional connected-service switch must NOT use the native "refused to continue" copy.
+        expect(sendSessionEvent).not.toHaveBeenCalledWith({
+            type: 'message',
+            message: expect.stringContaining('refused to continue in the current process'),
+        });
+        expect(sendSessionEvent).toHaveBeenCalledWith({
+            type: 'message',
+            message: expect.stringContaining('applying a connected-service account switch'),
+        });
+        expect(sendCodexMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+            type: 'message',
+            message: expect.stringContaining('access token could not be refreshed'),
+        }));
     });
 
     it('treats connected-service auth invalidation as a no-op when no active thread is running', async () => {

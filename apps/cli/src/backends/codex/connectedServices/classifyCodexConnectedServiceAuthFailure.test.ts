@@ -33,6 +33,38 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
     });
   });
 
+  it('classifies structured usage-limit recovery as quota recovery, not provider state sharing', () => {
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          message: 'Usage limit reached',
+          codexErrorInfo: 'UsageLimitExceeded',
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: 'pool',
+    });
+
+    expect(result?.recoveryAction).toEqual({ kind: 'quota_recovery_required' });
+    expect(result?.recoveryAction?.kind).not.toBe('provider_state_sharing_required');
+  });
+
+  it('classifies stable-message usage-limit recovery as quota recovery, not provider state sharing', () => {
+    const message = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 5:27 PM.";
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: new Error(message),
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: null,
+    });
+
+    expect(result?.kind).toBe('usage_limit');
+    expect(result?.recoveryAction).toEqual({ kind: 'quota_recovery_required' });
+  });
+
   it('preserves structured retry-after usage-limit timing when no reset time is present', () => {
     const result = classifyCodexConnectedServiceAuthFailure({
       providerErrorPath: true,

@@ -1,12 +1,15 @@
 import { stat } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 
 import type {
   VerifyResumeReachableInput,
   VerifyResumeReachableResult,
 } from '@/backends/connectedServices/verifyResumeReachableTypes';
 import { readConnectedServiceStateSharingManifest } from '@/daemon/connectedServices/stateSharing/connectedServiceStateSharingManifest';
-import { findCodexRolloutFileById } from '@/backends/codex/utils/codexSessionFiles';
+import {
+  findCodexRolloutFileById,
+  isMatchingCodexRolloutFileName,
+} from '@/backends/codex/utils/codexSessionFiles';
 
 function normalizeVendorResumeId(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null;
@@ -68,7 +71,10 @@ export async function verifyResumeReachableCodex(
 
   if (typeof input.candidatePersistedSessionFile === 'string' && input.candidatePersistedSessionFile.trim().length > 0) {
     const candidatePath = input.candidatePersistedSessionFile.trim();
-    if (await statFile(candidatePath)) {
+    if (
+      isMatchingCodexRolloutFileName(basename(candidatePath), vendorResumeId) &&
+      await statFile(candidatePath)
+    ) {
       return { ok: true, resolvedPath: candidatePath };
     }
   }

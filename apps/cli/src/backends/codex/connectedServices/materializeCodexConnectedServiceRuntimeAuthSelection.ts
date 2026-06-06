@@ -1,3 +1,4 @@
+import { readSessionMetadataRuntimeDescriptor } from '@happier-dev/agents';
 import { SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
@@ -6,6 +7,7 @@ import { resolveSessionTransportContext } from '@/session/services/resolveSessio
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 
 import { withCodexAppServerControlClient } from '../appServer/control/withCodexAppServerControlClient';
+import { readCodexAuthStoreProviderAccountId } from './readCodexAuthStoreProviderAccountId';
 
 export const materializeCodexConnectedServiceRuntimeAuthSelection: ConnectedServiceRuntimeAuthSelectionMaterializer = async (params) => {
   if (params.input.serviceId !== 'openai-codex') return params.baseSelection;
@@ -22,6 +24,10 @@ export const materializeCodexConnectedServiceRuntimeAuthSelection: ConnectedServ
   if (!transport.ok) return params.baseSelection;
 
   const metadata = params.input.tracked.happySessionMetadataFromLocalWebhook ?? null;
+  const runtimeDescriptor = readSessionMetadataRuntimeDescriptor(metadata, 'codex');
+  const codexHome = typeof runtimeDescriptor?.homePath === 'string' && runtimeDescriptor.homePath.trim().length > 0
+    ? runtimeDescriptor.homePath.trim()
+    : null;
   const controlClientSupported = await withCodexAppServerControlClient({
     cwd,
     metadata,
@@ -48,6 +54,11 @@ export const materializeCodexConnectedServiceRuntimeAuthSelection: ConnectedServ
         return result.value;
       },
     },
+    ...(codexHome
+      ? {
+          readAuthStoreProviderAccountId: async () => await readCodexAuthStoreProviderAccountId(codexHome),
+        }
+      : {}),
     invalidateTransports: async () => {
       const rawResponse = await callSessionRpc({
         token: params.credentials.token,

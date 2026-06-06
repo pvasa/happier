@@ -32,6 +32,7 @@ export function createCodexAcpRuntime(params: {
   permissionMode: PermissionMode;
   getPermissionMode?: () => PermissionMode | null | undefined;
   onThinkingChange: (thinking: boolean) => void;
+  pendingQueueDrainMaxPopPerWake?: number;
 }) {
   const lastCodexAcpThreadIdPublished: { value: string | null } = { value: null };
   const drainPendingDuringTurn =
@@ -70,6 +71,7 @@ export function createCodexAcpRuntime(params: {
       // In normal interactive use, "queue for review" semantics should not be defeated.
       drainDuringTurn: drainPendingDuringTurn,
       waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
+      maxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
       inputConsumer: createSessionProviderPendingDrainAdapter({
         waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
         popPendingMessage: async () =>
@@ -77,7 +79,7 @@ export function createCodexAcpRuntime(params: {
         materializeNextPendingMessageSafely,
         shouldAttemptPendingMaterialization: () => params.session.shouldAttemptPendingMaterialization?.() ?? true,
         reconcilePendingQueueState: (opts) => params.session.reconcilePendingQueueState?.(opts),
-      }),
+      }, { maxPopPerWake: params.pendingQueueDrainMaxPopPerWake }),
     },
     ...(process.env.HAPPIER_TRANSCRIPT_STORAGE === 'direct'
       ? {}

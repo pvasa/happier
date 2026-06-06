@@ -1,3 +1,4 @@
+import { readdirSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -74,4 +75,45 @@ export async function findCodexRolloutFileById(params: Readonly<{
   }
 
   return await walk(params.sessionsRoot, 0);
+}
+
+/**
+ * Synchronous counterpart for catalog hooks that must return a cheap hint without introducing async
+ * work at call sites. Keep the traversal contract byte-for-byte aligned with findCodexRolloutFileById.
+ */
+export function findCodexRolloutFileByIdSync(params: Readonly<{
+  sessionsRoot: string;
+  vendorResumeId: string;
+}>): string | null {
+  function walk(currentDir: string, depth: number): string | null {
+    if (depth > CODEX_NATIVE_SEARCH_MAX_DEPTH) return null;
+
+    const subDirectoryNames: string[] = [];
+    try {
+      const entries = readdirSync(currentDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) continue;
+        const entryName = String(entry.name);
+        if (entry.isDirectory()) {
+          subDirectoryNames.push(entryName);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        if (isMatchingCodexRolloutFileName(entryName, params.vendorResumeId)) {
+          return join(currentDir, entryName);
+        }
+      }
+    } catch {
+      return null;
+    }
+
+    subDirectoryNames.sort(compareDescending);
+    for (const subDirectoryName of subDirectoryNames) {
+      const found = walk(join(currentDir, subDirectoryName), depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  return walk(params.sessionsRoot, 0);
 }

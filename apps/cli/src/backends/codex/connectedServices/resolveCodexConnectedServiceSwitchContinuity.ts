@@ -10,7 +10,12 @@ import {
   providerSessionStateUnavailableForResume,
 } from '@/backends/connectedServices/switchContinuityContext';
 import { canResumeFromMaterializedState } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedState';
+import { resolveConnectedServiceRestartContinuityAction } from '@/daemon/connectedServices/sessionAuthSwitch/continuity/resolveConnectedServiceSwitchAction';
+import { codexConnectedServiceStateSharingDescriptor } from './codexConnectedServiceStateSharingDescriptor';
 import { createCodexConnectedServiceRuntimeAuthAdapter } from './createCodexConnectedServiceRuntimeAuthAdapter';
+
+const CODEX_RESTART_REMATERIALIZE_REQUIRED_REASON = 'codex_restart_rematerialize_required';
+const CODEX_SHARED_STATE_REQUIRED_REASON = 'codex_shared_state_required';
 
 function supportsService(serviceId: string): boolean {
   return (AGENTS_CORE.codex.connectedServices.supportedServiceIds as readonly string[]).includes(serviceId);
@@ -81,8 +86,14 @@ export async function resolveCodexConnectedServiceSwitchContinuity(
     });
     return reachability.ok
       ? { mode: 'restart_same_home' }
-      : providerSessionStateUnavailableForResume();
+      : providerSessionStateUnavailableForResume({
+          diagnostics: reachability.continuityDiagnostics,
+        });
   }
 
-  return { mode: 'restart_shared_state_required', reason: 'codex_shared_state_required' };
+  return resolveConnectedServiceRestartContinuityAction({
+    stateSharingDescriptor: codexConnectedServiceStateSharingDescriptor,
+    restartReason: CODEX_RESTART_REMATERIALIZE_REQUIRED_REASON,
+    sharedStateRequiredReason: CODEX_SHARED_STATE_REQUIRED_REASON,
+  });
 }

@@ -36,6 +36,41 @@ describe('runMetadataOverridesWatcherLoop', () => {
     }
   });
 
+  it('backs off when waitForMetadataUpdate returns false without an aborted signal', async () => {
+    vi.useFakeTimers();
+    try {
+      let exit = false;
+      let attempts = 0;
+      const waitForMetadataUpdate = vi.fn(async () => {
+        attempts += 1;
+        if (attempts === 1) return false;
+        exit = true;
+        return false;
+      });
+
+      const loopPromise = runMetadataOverridesWatcherLoop({
+        shouldExit: () => exit,
+        getAbortSignal: () => undefined,
+        waitForMetadataUpdate,
+        onUpdate: () => {},
+        abortedBackoffMs: 50,
+      });
+
+      await Promise.resolve();
+      expect(waitForMetadataUpdate).toHaveBeenCalledTimes(1);
+
+      await Promise.resolve();
+      expect(waitForMetadataUpdate).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(50);
+      await loopPromise;
+
+      expect(waitForMetadataUpdate).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('swallows transient waitForMetadataUpdate failures and retries after a backoff', async () => {
     vi.useFakeTimers();
     try {

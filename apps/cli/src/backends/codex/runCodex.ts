@@ -13,6 +13,7 @@ import {
 } from '@/daemon/controlClient';
 import { findConnectedServiceChildSelection } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
+import { projectConnectedServiceRuntimeAuthRecoveryReport } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
 import { reportCodexRateLimitSnapshotToDaemon } from './connectedServices/reportCodexRateLimitSnapshotToDaemon';
 import { resolveCodexConnectedServiceBindingFromSessionMetadata } from './connectedServices/resolveCodexRuntimeAuthClassificationContext';
 import os from 'node:os';
@@ -34,6 +35,7 @@ import {
     createSessionProviderPendingDrainAdapter,
     type SessionProviderInputConsumerSession,
 } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
+import { resolveSessionPendingQueueMaxPopPerWake } from '@/agent/runtime/sessionInput/pendingQueueDrainPolicy';
 import { connectionState } from '@/api/offline/serverConnectionErrors';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { createCurrentSessionTranscriptPort } from '@/api/session/createCurrentSessionTranscriptPort';
@@ -379,6 +381,7 @@ export async function runCodex(opts: {
     const explicitPermissionMode = opts.permissionMode;
     const hasResumeArg = typeof opts.resume === 'string' && opts.resume.trim().length > 0;
     const accountSettings = hasResumeArg ? null : (opts.accountSettingsContext?.settings ?? null);
+    const pendingQueueDrainMaxPopPerWake = resolveSessionPendingQueueMaxPopPerWake(opts.accountSettingsContext?.settings ?? null);
     const permissionModeSeed = resolvePermissionModeSeedForAgentStart({
         agentId: 'codex',
         explicitPermissionMode: opts.permissionMode,
@@ -1322,6 +1325,7 @@ export async function runCodex(opts: {
             permissionMode: initialPermissionMode,
             getPermissionMode: () => currentPermissionMode ?? initialPermissionMode,
             onThinkingChange: (value) => { thinking = value; },
+            pendingQueueDrainMaxPopPerWake,
         });
         try {
             publishInFlightSteerCapability({ session, runtime: codexAcpRuntime });
@@ -1340,8 +1344,11 @@ export async function runCodex(opts: {
             permissionHandler,
             getPermissionMode: () => runtimePermissionModeRef.current,
             pendingQueue: {
-                ...createSessionProviderPendingDrainAdapter(createCodexInputConsumerSession()),
+                ...createSessionProviderPendingDrainAdapter(createCodexInputConsumerSession(), {
+                    maxPopPerWake: pendingQueueDrainMaxPopPerWake,
+                }),
                 drainAfterStartOrLoad: true,
+                maxPopPerWake: pendingQueueDrainMaxPopPerWake,
             },
             onInFlightSteerAvailabilityChange: () => {
                 const runtime = codexAppServerRuntime;
@@ -1362,10 +1369,22 @@ export async function runCodex(opts: {
                     classification,
                     logPrefix: '[Codex]',
                 });
-                if (recoveryReport.statusMessage) {
-                    messageBuffer.addMessage(recoveryReport.statusMessage, 'status');
-                    session.sendSessionEvent({ type: 'message', message: recoveryReport.statusMessage });
-                }
+                projectConnectedServiceRuntimeAuthRecoveryReport({
+                    report: recoveryReport,
+                    addStatusMessage: (message) => {
+                        messageBuffer.addMessage(message, 'status');
+                    },
+                    sendGenericStatusMessage: (message) => {
+                        session.sendSessionEvent({ type: 'message', message });
+                    },
+                    commitTypedProjection: (projection) => {
+                        if (projection.transcriptEvent) {
+                            session.sendSessionEvent(projection.transcriptEvent);
+                            return true;
+                        }
+                        return false;
+                    },
+                });
                 return recoveryReport.report;
             },
             onChatGptAuthTokensRefresh: async (requestParams) => {
@@ -1387,10 +1406,22 @@ export async function runCodex(opts: {
                         classification,
                         logPrefix: '[Codex]',
                     });
-                    if (recoveryReport.statusMessage) {
-                        messageBuffer.addMessage(recoveryReport.statusMessage, 'status');
-                        session.sendSessionEvent({ type: 'message', message: recoveryReport.statusMessage });
-                    }
+                    projectConnectedServiceRuntimeAuthRecoveryReport({
+                        report: recoveryReport,
+                        addStatusMessage: (message) => {
+                            messageBuffer.addMessage(message, 'status');
+                        },
+                        sendGenericStatusMessage: (message) => {
+                            session.sendSessionEvent({ type: 'message', message });
+                        },
+                        commitTypedProjection: (projection) => {
+                            if (projection.transcriptEvent) {
+                                session.sendSessionEvent(projection.transcriptEvent);
+                                return true;
+                            }
+                            return false;
+                        },
+                    });
                     throw attachRuntimeAuthClassificationToError(error, classification);
                 }
             },
@@ -1562,6 +1593,7 @@ export async function runCodex(opts: {
         const inputConsumer = createSessionProviderInputConsumer<EnhancedMode, string>({
             messageQueue,
             session: createCodexInputConsumerSession(),
+            pendingDrainMaxPopPerWake: pendingQueueDrainMaxPopPerWake,
             onMetadataUpdate: () => {
                 syncOverridesFromMetadata();
             },
@@ -2154,11 +2186,22 @@ export async function runCodex(opts: {
                             classification: runtimeAuthClassification,
                             logPrefix: '[Codex]',
                         });
-                        if (recoveryReport.statusMessage) {
-                            messageBuffer.addMessage(recoveryReport.statusMessage, 'status');
-                            session.sendSessionEvent({ type: 'message', message: recoveryReport.statusMessage });
-                            runtimeAuthRecoveryStatusEmitted = true;
-                        }
+                        runtimeAuthRecoveryStatusEmitted = projectConnectedServiceRuntimeAuthRecoveryReport({
+                            report: recoveryReport,
+                            addStatusMessage: (message) => {
+                                messageBuffer.addMessage(message, 'status');
+                            },
+                            sendGenericStatusMessage: (message) => {
+                                session.sendSessionEvent({ type: 'message', message });
+                            },
+                            commitTypedProjection: (projection) => {
+                                if (projection.transcriptEvent) {
+                                    session.sendSessionEvent(projection.transcriptEvent);
+                                    return true;
+                                }
+                                return false;
+                            },
+                        }).emitted;
                     } else {
                         logger.warn('Error in codex session:', error);
                     }

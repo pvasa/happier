@@ -1,0 +1,119 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  mapCodexUsageLimitSwitchProgressToProof,
+  resolveCodexUsageLimitSwitchProgress,
+} from './resolveCodexUsageLimitSwitchProgress';
+
+describe('resolveCodexUsageLimitSwitchProgress', () => {
+  it('treats a switch to a genuinely different account as progress (retry)', () => {
+    const result = resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'switched',
+      exhaustedProfileId: 'work',
+      selectedProfileId: 'backup',
+      resetAtMs: 5_000,
+      nowMs: 1_000,
+    });
+
+    expect(result).toEqual({ kind: 'retry' });
+  });
+
+  it('does NOT treat a switch to the SAME exhausted account as progress (live loop fix)', () => {
+    const result = resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'switched',
+      exhaustedProfileId: 'work',
+      selectedProfileId: 'work',
+      resetAtMs: 5_000,
+      nowMs: 1_000,
+    });
+
+    // Must NOT be an immediate retry; must wait until the provider reset time.
+    expect(result).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 5_000 });
+  });
+
+  it('waits using a fallback time when same-account switch has no known reset time', () => {
+    const result = resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'switched',
+      exhaustedProfileId: 'work',
+      selectedProfileId: 'work',
+      resetAtMs: null,
+      nowMs: 1_000,
+      fallbackNextCheckAtMs: 9_000,
+    });
+
+    expect(result).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 9_000 });
+  });
+
+  it('reports terminal when the group has no eligible member to switch to', () => {
+    const result = resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'no_eligible_member',
+      exhaustedProfileId: 'work',
+      selectedProfileId: null,
+      resetAtMs: 5_000,
+      nowMs: 1_000,
+    });
+
+    expect(result).toEqual({ kind: 'exhausted', reason: 'connected_service_group_no_eligible_member' });
+  });
+
+  it('reports generation apply failure as exhausted with a reason', () => {
+    const result = resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'generation_apply_failed',
+      exhaustedProfileId: 'work',
+      selectedProfileId: null,
+      errorCode: 'apply_blew_up',
+      resetAtMs: 5_000,
+      nowMs: 1_000,
+    });
+
+    expect(result).toEqual({
+      kind: 'exhausted',
+      reason: 'connected_service_generation_apply_failed:apply_blew_up',
+    });
+  });
+
+  it('waits until reset when the group reports manual strategy or switch limit', () => {
+    expect(resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'manual_strategy',
+      exhaustedProfileId: 'work',
+      selectedProfileId: null,
+      resetAtMs: 5_000,
+      nowMs: 1_000,
+    })).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 5_000 });
+
+    expect(resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'switch_limit_reached',
+      exhaustedProfileId: 'work',
+      selectedProfileId: null,
+      resetAtMs: 5_000,
+      nowMs: 1_000,
+    })).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 5_000 });
+  });
+
+  it('treats an observed generation on a different account as progress', () => {
+    expect(resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'observed_generation',
+      exhaustedProfileId: 'work',
+      selectedProfileId: 'backup',
+      resetAtMs: 5_000,
+      nowMs: 1_000,
+    })).toEqual({ kind: 'retry' });
+  });
+
+  describe('mapCodexUsageLimitSwitchProgressToProof (shared proof contract mapping)', () => {
+    it('maps a fresh-candidate retry to fresh_candidate_selected', () => {
+      expect(mapCodexUsageLimitSwitchProgressToProof({ kind: 'retry' })).toBe('fresh_candidate_selected');
+    });
+
+    it('maps an exhausted outcome to terminal_exhausted', () => {
+      expect(mapCodexUsageLimitSwitchProgressToProof({ kind: 'exhausted', reason: 'x' })).toBe('terminal_exhausted');
+    });
+
+    it('maps a wait_until_reset (same-account / unavailable switch) to no proof', () => {
+      expect(mapCodexUsageLimitSwitchProgressToProof({
+        kind: 'wait_until_reset',
+        nextCheckAtMs: 5_000,
+      })).toBeNull();
+    });
+  });
+});

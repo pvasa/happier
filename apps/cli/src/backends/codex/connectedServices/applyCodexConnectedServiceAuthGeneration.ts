@@ -63,12 +63,16 @@ export async function applyCodexConnectedServiceAuthGeneration(params: Readonly<
   }
 
   const record = requireConnectedServiceOauthCredentialRecord(params.candidate);
+  // Codex app-server `account/login/start` expects a flat, `type`-discriminated
+  // payload (LoginAccountParams). The `chatgptAuthTokens` variant carries only
+  // accessToken + chatgptAccountId — `idToken` is not part of the contract, and
+  // chatgptPlanType is derived from the access-token claims when omitted. The
+  // previous `{ chatgptAuthTokens: {...} }` wrapper (no `type`) was rejected with
+  // JSON-RPC -32600 "missing field `type`", so hot-apply silently always failed.
   await params.client.request('account/login/start', {
-    chatgptAuthTokens: {
-      accessToken: record.oauth.accessToken,
-      idToken: record.oauth.idToken,
-      chatgptAccountId: record.oauth.providerAccountId,
-    },
+    type: 'chatgptAuthTokens',
+    accessToken: record.oauth.accessToken,
+    chatgptAccountId: record.oauth.providerAccountId,
   });
   try {
     await params.invalidateTransports();

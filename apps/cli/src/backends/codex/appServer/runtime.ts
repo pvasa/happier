@@ -104,6 +104,12 @@ import {
     resolveCodexRuntimeAuthClassificationContext,
 } from '../connectedServices/resolveCodexRuntimeAuthClassificationContext';
 import { UsageLimitRecoveryScheduler } from '@/daemon/connectedServices/usageLimitRecovery/UsageLimitRecoveryScheduler';
+import { getSharedAccountExhaustionSuppression } from '@/daemon/connectedServices/usageLimitRecovery/accountExhaustionSuppression';
+import {
+    resolveCodexUsageLimitSwitchProgress,
+    type CodexUsageLimitSwitchAttemptStatus,
+} from './recovery/resolveCodexUsageLimitSwitchProgress';
+import { resolveCodexUsageLimitSuppressionWait } from './recovery/resolveCodexUsageLimitSuppressionWait';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { deriveUsageLimitRecoveryTiming } from '@/session/usageLimitRecoveryControls/deriveUsageLimitRecoveryTiming';
 
@@ -210,6 +216,14 @@ type StreamUpdateContext = Readonly<{
     sidechainId: string | null;
     streamScopeId: string;
 }>;
+
+const BLOCKING_CODEX_APP_SERVER_ITEM_TYPES = new Set([
+    'commandexecution',
+    'filechange',
+    'mcptoolcall',
+]);
+const MAX_RETAINED_TERMINAL_CODEX_APP_SERVER_PROVIDER_TURNS_PER_THREAD = 100;
+const CODEX_APP_SERVER_TERMINAL_BLOCKING_ITEM_DRAIN_MS = 100;
 
 type PendingRawAssistantFinal = Readonly<{
     text: string;
@@ -395,7 +409,10 @@ function readTurnId(value: unknown): string | null {
     return null;
 }
 
-function readProviderEventTurnId(value: unknown): string | null {
+function readProviderEventTurnId(
+    value: unknown,
+    options?: Readonly<{ allowTopLevelId?: boolean }>,
+): string | null {
     const record = readRecord(value);
     if (!record) return null;
     const turn = readRecord(record.turn);
@@ -405,12 +422,63 @@ function readProviderEventTurnId(value: unknown): string | null {
         turn?.turnId,
         turn?.turn_id,
         turn?.id,
+        options?.allowTopLevelId === true ? readTopLevelProviderTurnId(record) : null,
     ];
     for (const candidate of candidates) {
         const turnId = trimStringValue(candidate);
         if (turnId) return turnId;
     }
     return null;
+}
+
+function readTopLevelProviderTurnId(record: Record<string, unknown>): string | null {
+    const hasTopLevelItemIdentity = Boolean(
+        readRecord(record.item)
+        || trimStringValue(record.itemId)
+        || trimStringValue(record.item_id)
+        || trimStringValue(record.callId)
+        || trimStringValue(record.call_id)
+        || trimStringValue(record.type),
+    );
+    return hasTopLevelItemIdentity ? null : trimStringValue(record.id);
+}
+
+function readProviderEventItemRecord(value: unknown): Record<string, unknown> | null {
+    const record = readRecord(value);
+    if (!record) return null;
+    return readRecord(record.item) ?? record;
+}
+
+function readProviderEventItemId(value: unknown): string | null {
+    const item = readProviderEventItemRecord(value);
+    if (!item) return null;
+    const candidates = [
+        item.itemId,
+        item.item_id,
+        item.id,
+        item.callId,
+        item.call_id,
+    ];
+    for (const candidate of candidates) {
+        const itemId = trimStringValue(candidate);
+        if (itemId) return itemId;
+    }
+    return null;
+}
+
+function readNormalizedProviderEventItemType(value: unknown): string | null {
+    const item = readProviderEventItemRecord(value);
+    const rawType = item ? trimStringValue(item.type) ?? trimStringValue(item.itemType) ?? trimStringValue(item.item_type) : null;
+    if (!rawType) return null;
+    const normalized = rawType.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    return normalized.length > 0 ? normalized : null;
+}
+
+function isBlockingCodexAppServerItemStart(value: unknown): boolean {
+    const itemId = readProviderEventItemId(value);
+    if (!itemId) return false;
+    const itemType = readNormalizedProviderEventItemType(value);
+    return itemType !== null && BLOCKING_CODEX_APP_SERVER_ITEM_TYPES.has(itemType);
 }
 
 function trimSessionId(value: string | null | undefined): string | null {
@@ -478,8 +546,11 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 
 const CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_MESSAGE =
     'Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.';
-const CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_RECOVERY_STATUS_MESSAGE =
-    'Codex detected that the signed-in account changed and refused to continue in the current process. Restarting the Codex process and resuming this session...';
+// Emitted ONLY when Happier intentionally invalidates the connected-service auth transports to
+// apply an account switch (NOT on the real native account-changed error, which defers to the
+// prompt loop). The copy must describe the deliberate switch/restart, never "refused to continue".
+const CODEX_APP_SERVER_CONNECTED_SERVICE_SWITCH_RESTART_STATUS_MESSAGE =
+    'Happier is applying a connected-service account switch and restarting the Codex runtime to resume this session...';
 const CODEX_APP_SERVER_CONTEXT_WINDOW_EXHAUSTED_MESSAGE_MARKERS = [
     'codex ran out of room',
     'context window',
@@ -520,6 +591,19 @@ class CodexAppServerTurnFailure extends Error {
     }
 }
 
+class CodexAppServerConnectedServiceAuthTransportInvalidatedTurn extends Error {
+    constructor() {
+        super('Codex app-server connected-service auth transport invalidated the active turn');
+        this.name = 'CodexAppServerConnectedServiceAuthTransportInvalidatedTurn';
+    }
+}
+
+function isCodexAppServerConnectedServiceAuthTransportInvalidatedTurn(
+    error: unknown,
+): error is CodexAppServerConnectedServiceAuthTransportInvalidatedTurn {
+    return error instanceof CodexAppServerConnectedServiceAuthTransportInvalidatedTurn;
+}
+
 function readModelId(value: unknown): string | null {
     const record = readRecord(value);
     return record ? trimStringValue(record.model) : null;
@@ -551,7 +635,14 @@ function readCodexRuntimeContextWindowTokens(value: unknown): number | null {
 function readCodexTurnStatus(value: unknown): string | null {
     const record = readRecord(value);
     const turn = readRecord(record?.turn);
-    return trimStringValue(turn?.status);
+    return trimStringValue(turn?.status) ?? trimStringValue(record?.status);
+}
+
+function isCodexTurnInterruptedStatus(status: string | null): boolean {
+    return status === 'interrupted'
+        || status === 'cancelled'
+        || status === 'canceled'
+        || status === 'aborted';
 }
 
 function readCodexAppServerErrorPayload(value: unknown): CodexAppServerErrorPayload | null {
@@ -882,6 +973,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     let latestPendingTurnId: string | null = null;
     const deferredRecoverableFailureTurnIds = new Set<string>();
     let clientPromise: Promise<DisposableCodexAppServerClient> | null = null;
+    let connectedServiceAuthTransportInvalidationRecoveryPromise: Promise<void> | null = null;
     let currentModeId: string | null = null;
     let currentModelId: string | null = null;
     let currentReasoningEffort: string | null = null;
@@ -897,11 +989,15 @@ export function createCodexAppServerRuntime(params: Readonly<{
         },
     });
     let pendingTurnFinalizationTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingTurnBlockingItemDrainTimer: ReturnType<typeof setTimeout> | null = null;
     let scheduledPendingTurnFlushReason: 'turn-end' | 'abort' | null = null;
     let activeTurnSteerContext: CodexAppServerSteerContext | null = null;
     let activeTurnAcceptsSteer = false;
     let lastPublishedInFlightSteerAvailability: boolean | null = null;
     let activeTurnHasMeaningfulContextWindowRecoveryActivity = false;
+    const activeProviderTurnItemIds = new Set<string>();
+    const completedProviderTurnItemKeys = new Set<string>();
+    const terminalProviderTurnIdsByThreadId = new Map<string, string[]>();
     const streamEventBridge = createCodexAppServerStreamEventBridge();
     const turnChangeCollector = new TurnChangeSetCollector({
         provider: 'codex',
@@ -942,12 +1038,46 @@ export function createCodexAppServerRuntime(params: Readonly<{
             if (!activeThreadId) {
                 return { status: 'exhausted' as const, lastProbeError: 'codex_app_server_thread_not_started' };
             }
+            // S1 anti-storm: if a sibling session already recorded the currently-selected
+            // account as known-exhausted for this reset bucket, skip the rate-limit probe and
+            // the redundant group switch/restart request. Wait until the recorded reset bucket
+            // instead of each session looping against an account that cannot recover yet.
+            const suppressionDecision = resolveCodexUsageLimitSuppressionWait({
+                suppression: getSharedAccountExhaustionSuppression(),
+                serviceId: intent.selectedAuth.kind === 'native'
+                    ? (intent.selectedAuth.serviceId ?? 'openai-codex')
+                    : intent.selectedAuth.serviceId,
+                accountId: intent.selectedAuth.kind === 'native' ? null : intent.selectedAuth.profileId,
+                resetAtMs: intent.resetAtMs ?? intent.nextCheckAtMs ?? null,
+                nowMs: Date.now(),
+            });
+            if (suppressionDecision.kind === 'wait_until_reset') {
+                return {
+                    status: 'wait' as const,
+                    nextCheckAtMs: suppressionDecision.nextCheckAtMs,
+                    lastProbeError: 'account_known_exhausted_until_reset',
+                };
+            }
             const client = await ensureClient();
             try {
                 const rawSnapshot = await client.request('account/rateLimits/read');
                 await params.onRateLimitSnapshot?.(rawSnapshot);
                 if (isCodexRateLimitSnapshotExhausted(rawSnapshot)) {
-                    const nextCheckAtMs = readEarliestCodexRateLimitResetAtMs(rawSnapshot) ?? intent.nextCheckAtMs ?? intent.resetAtMs ?? Date.now();
+                    const resetAtMs = readEarliestCodexRateLimitResetAtMs(rawSnapshot) ?? intent.nextCheckAtMs ?? intent.resetAtMs ?? null;
+                    const nextCheckAtMs = resetAtMs ?? Date.now();
+                    // The currently-selected account is confirmed exhausted for this reset bucket.
+                    // Record it so sibling sessions on the same account skip the restart-loop.
+                    const exhaustedProfileId = intent.selectedAuth.kind === 'native' ? null : intent.selectedAuth.profileId;
+                    const exhaustedServiceId = intent.selectedAuth.kind === 'native'
+                        ? (intent.selectedAuth.serviceId ?? 'openai-codex')
+                        : intent.selectedAuth.serviceId;
+                    if (exhaustedProfileId) {
+                        getSharedAccountExhaustionSuppression().markExhausted({
+                            serviceId: exhaustedServiceId,
+                            accountId: exhaustedProfileId,
+                            resetAtMs,
+                        });
+                    }
                     if (intent.selectedAuth.kind === 'group' && typeof params.onUsageLimitGroupRecovery === 'function') {
                         try {
                             const recoveryRequest = await params.onUsageLimitGroupRecovery({
@@ -965,19 +1095,30 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                 },
                             });
                             const switchAttemptResult = readSwitchAttemptResult(recoveryRequest);
-                            const switchAttemptStatus = trimStringValue(switchAttemptResult?.status);
-                            if (switchAttemptStatus === 'generation_apply_failed') {
-                                return {
-                                    status: 'exhausted' as const,
-                                    lastProbeError: `connected_service_generation_apply_failed:${trimStringValue(switchAttemptResult?.errorCode) || 'unknown'}`,
-                                };
+                            const switchAttemptStatus = trimStringValue(switchAttemptResult?.status) as CodexUsageLimitSwitchAttemptStatus | null;
+                            const selectedProfileId = trimStringValue(switchAttemptResult?.activeProfileId);
+                            // Require a genuinely different account before treating the switch as
+                            // progress. A switch back to the SAME exhausted account is not fresh
+                            // quota and must wait for reset instead of immediately retrying.
+                            const progress = resolveCodexUsageLimitSwitchProgress({
+                                switchAttemptStatus,
+                                exhaustedProfileId: intent.selectedAuth.profileId,
+                                selectedProfileId,
+                                resetAtMs,
+                                nowMs: Date.now(),
+                                fallbackNextCheckAtMs: nextCheckAtMs,
+                                errorCode: trimStringValue(switchAttemptResult?.errorCode),
+                            });
+                            if (progress.kind === 'exhausted') {
+                                return { status: 'exhausted' as const, lastProbeError: progress.reason };
                             }
-                            if (switchAttemptStatus === 'switched') {
-                                return {
-                                    status: 'wait' as const,
-                                    nextCheckAtMs: Date.now(),
-                                };
+                            if (progress.kind === 'retry') {
+                                // A fresh, different candidate was selected: probe the new account
+                                // promptly. Wave-2 will add provider-activity proof before declaring
+                                // recovered; here we only prove a different candidate was chosen.
+                                return { status: 'wait' as const, nextCheckAtMs: Date.now() };
                             }
+                            return { status: 'wait' as const, nextCheckAtMs: progress.nextCheckAtMs };
                         } catch (error) {
                             logger.debug('[codex-app-server] Failed to request connected-service group recovery during usage-limit wait/resume', error);
                             return {
@@ -1878,7 +2019,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
         requestParams: unknown,
         message?: Readonly<{ id?: unknown }> | null,
     ): Promise<unknown> => {
-        await ensureActiveTurnForProviderRequest(requestParams);
+        if (!(await ensureActiveTurnForProviderRequest(requestParams))) {
+            return mapMcpElicitationResponse({ decision: 'denied' });
+        }
         const invocation = readMcpElicitationInvocation(requestParams, message);
         if (!invocation) {
             return mapMcpElicitationResponse({ decision: 'denied' });
@@ -1894,10 +2037,21 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
     const handleServerRequest = async (method: string, requestParams: unknown): Promise<unknown> => {
         const updates = streamEventBridge.onServerRequest({ method, params: requestParams });
-        if (updates.length > 0) {
-            await ensureActiveTurnForProviderRequest(requestParams);
-        }
+        const requestMatchesActiveTurn = updates.length > 0
+            ? await ensureActiveTurnForProviderRequest(requestParams)
+            : true;
         for (const update of updates) {
+            if (!requestMatchesActiveTurn) {
+                if (update.type === 'approval-request') {
+                    return mapApprovalDecision(update.requestKind, { decision: 'denied' });
+                }
+                if (update.type === 'permissions-request') {
+                    return mapPermissionsDecision(update, { decision: 'denied' });
+                }
+                if (update.type === 'user-input-request') {
+                    return buildUserInputResponse(update, { decision: 'abort' }, { allowDecisionFallback: false });
+                }
+            }
             if (isMeaningfulCodexContextWindowRecoveryActivity(update)) {
                 markActiveTurnMeaningfulContextWindowRecoveryActivity();
             }
@@ -1981,12 +2135,20 @@ export function createCodexAppServerRuntime(params: Readonly<{
             clearTimeout(pendingTurnFinalizationTimer);
             pendingTurnFinalizationTimer = null;
         }
+        if (pendingTurnBlockingItemDrainTimer) {
+            clearTimeout(pendingTurnBlockingItemDrainTimer);
+            pendingTurnBlockingItemDrainTimer = null;
+        }
         scheduledPendingTurnFlushReason = null;
         const activeTurn = pendingTurn;
         const completedTurnStartSeqInclusive = pendingTurnStartSeqInclusive;
+        const completedProviderThreadId = activeTurn?.threadId ?? threadId;
+        const completedProviderTurnId = activeTurn?.turnId ?? latestPendingTurnId;
         pendingTurn = null;
         pendingTurnStartSeqInclusive = null;
         turnInFlight = false;
+        activeProviderTurnItemIds.clear();
+        completedProviderTurnItemKeys.clear();
         clearActiveTurnSteerability();
         if (options?.flushReason) {
             const streamFlushReason = options.flushReason === 'failure' ? 'abort' : options.flushReason;
@@ -2060,6 +2222,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
         if (options?.flushReason === 'turn-end' && activeTurn) {
             await recordCompletedBestEffort(activeTurn.turnId ?? latestPendingTurnId);
         }
+        if (options?.flushReason) {
+            rememberTerminalProviderTurnId(completedProviderThreadId, completedProviderTurnId);
+        }
         latestPendingTurnId = null;
         setThinking(false);
         if (!activeTurn) return;
@@ -2070,6 +2235,28 @@ export function createCodexAppServerRuntime(params: Readonly<{
         activeTurn.resolve();
     };
 
+    const forcePendingTurnFinalizationAfterBlockingItemDrain = (): void => {
+        if (pendingTurnBlockingItemDrainTimer || !pendingTurn) return;
+        const drainMs = Math.max(
+            configuration.codexAppServerTurnCompletionSettleMs,
+            CODEX_APP_SERVER_TERMINAL_BLOCKING_ITEM_DRAIN_MS,
+        );
+        pendingTurnBlockingItemDrainTimer = setTimeout(() => {
+            pendingTurnBlockingItemDrainTimer = null;
+            if (!pendingTurn || scheduledPendingTurnFlushReason !== 'turn-end') return;
+            activeProviderTurnItemIds.clear();
+            completedProviderTurnItemKeys.clear();
+            scheduledPendingTurnFlushReason = null;
+            void runBridgeWork(async () => {
+                if (!pendingTurn) return;
+                await finishPendingTurn({
+                    flushReason: 'turn-end',
+                    insideBridgeWork: true,
+                });
+            });
+        }, drainMs);
+    };
+
     const schedulePendingTurnFinalization = (flushReason: 'turn-end' | 'abort'): void => {
         if (!pendingTurn) return;
         markActiveTurnNonSteerable();
@@ -2077,6 +2264,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
             scheduledPendingTurnFlushReason === 'abort' || flushReason === 'abort'
                 ? 'abort'
                 : 'turn-end';
+        if (scheduledPendingTurnFlushReason === 'turn-end' && activeProviderTurnItemIds.size > 0) {
+            forcePendingTurnFinalizationAfterBlockingItemDrain();
+            return;
+        }
         if (pendingTurnFinalizationTimer) {
             return;
         }
@@ -2084,6 +2275,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
         pendingTurnFinalizationTimer = setTimeout(() => {
             pendingTurnFinalizationTimer = null;
             const nextFlushReason = scheduledPendingTurnFlushReason ?? flushReason;
+            if (nextFlushReason === 'turn-end' && activeProviderTurnItemIds.size > 0) {
+                forcePendingTurnFinalizationAfterBlockingItemDrain();
+                return;
+            }
             scheduledPendingTurnFlushReason = null;
             void runBridgeWork(async () => {
                 if (!pendingTurn) return;
@@ -2093,7 +2288,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 });
             });
         }, settleMs);
-        pendingTurnFinalizationTimer.unref?.();
     };
 
     const surfaceCodexAppServerTurnFailure = async (
@@ -2159,6 +2353,62 @@ export function createCodexAppServerRuntime(params: Readonly<{
         await updateUsageLimitRecoveryFromSurfacedIssue(issue);
     };
 
+    const rememberTerminalProviderTurnId = (providerThreadId: string | null, providerTurnId: string | null): void => {
+        if (!providerThreadId || !providerTurnId) return;
+        const existing = terminalProviderTurnIdsByThreadId.get(providerThreadId) ?? [];
+        const next = [
+            ...existing.filter((turnId) => turnId !== providerTurnId),
+            providerTurnId,
+        ];
+        terminalProviderTurnIdsByThreadId.set(
+            providerThreadId,
+            next.slice(-MAX_RETAINED_TERMINAL_CODEX_APP_SERVER_PROVIDER_TURNS_PER_THREAD),
+        );
+    };
+
+    const hasProviderTurnAlreadyTerminated = (
+        activityParams: unknown,
+        providerTurnId: string | null,
+    ): boolean => {
+        if (!providerTurnId) return false;
+        const activityThreadId = readThreadId(activityParams);
+        const candidateThreadIds = new Set([activityThreadId, threadId].filter((id): id is string => Boolean(id)));
+        for (const candidateThreadId of candidateThreadIds) {
+            if (terminalProviderTurnIdsByThreadId.get(candidateThreadId)?.includes(providerTurnId)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const trackActiveProviderTurnItemStart = (notificationParams: unknown): void => {
+        if (!pendingTurn || !notificationMatchesPendingTurn(notificationParams)) return;
+        if (!isBlockingCodexAppServerItemStart(notificationParams)) return;
+        const itemId = readProviderEventItemId(notificationParams);
+        if (itemId) activeProviderTurnItemIds.add(itemId);
+    };
+
+    const trackActiveProviderTurnItemCompletion = (notificationParams: unknown): boolean => {
+        const itemId = readProviderEventItemId(notificationParams);
+        return itemId ? activeProviderTurnItemIds.delete(itemId) : false;
+    };
+
+    const shouldSkipDuplicateBlockingProviderItemCompletion = (
+        context: StreamUpdateContext,
+        notificationParams: unknown,
+    ): boolean => {
+        const itemId = readProviderEventItemId(notificationParams);
+        if (!itemId) return false;
+        const itemType = readNormalizedProviderEventItemType(notificationParams);
+        if (!itemType || !BLOCKING_CODEX_APP_SERVER_ITEM_TYPES.has(itemType)) return false;
+        const itemKey = `${context.streamScopeId}:${itemId}`;
+        if (completedProviderTurnItemKeys.has(itemKey)) {
+            return true;
+        }
+        completedProviderTurnItemKeys.add(itemKey);
+        return false;
+    };
+
     const adoptNativeTurnFromProviderActivity = async (
         activityParams: unknown,
         options?: Readonly<{ turnId?: string | null }>,
@@ -2177,15 +2427,25 @@ export function createCodexAppServerRuntime(params: Readonly<{
             publishThreadId();
         }
 
-        pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
-        activeTurnHasMeaningfulContextWindowRecoveryActivity = false;
-        const changeTrackingReady = beginTurnChangeTracking();
         const startedTurnId = Object.prototype.hasOwnProperty.call(options ?? {}, 'turnId')
             ? options?.turnId ?? null
             : readTurnId(activityParams);
+        if (hasProviderTurnAlreadyTerminated(activityParams, startedTurnId)) {
+            logger.debug('[codex-app-server] Ignoring activity for already-terminal native turn', {
+                threadId: activeThreadId,
+                turnId: startedTurnId,
+            });
+            return null;
+        }
+
+        pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
+        activeTurnHasMeaningfulContextWindowRecoveryActivity = false;
+        const changeTrackingReady = beginTurnChangeTracking();
         const adoptedTurn = createPendingTurn(activeThreadId);
         pendingTurn = startedTurnId ? { ...adoptedTurn, turnId: startedTurnId } : adoptedTurn;
         latestPendingTurnId = startedTurnId ?? null;
+        activeProviderTurnItemIds.clear();
+        completedProviderTurnItemKeys.clear();
         persistedMediaDedupeKeys.clear();
         turnInFlight = true;
         markActiveTurnSteerable();
@@ -2215,14 +2475,23 @@ export function createCodexAppServerRuntime(params: Readonly<{
         recordInProgressBestEffort(startedTurnId);
     };
 
-    const ensureActiveTurnForProviderRequest = async (requestParams: unknown): Promise<void> => {
+    const ensureActiveTurnForProviderRequest = async (requestParams: unknown): Promise<boolean> => {
+        const requestTurnId = readProviderEventTurnId(requestParams);
+        if (hasProviderTurnAlreadyTerminated(requestParams, requestTurnId)) {
+            return false;
+        }
+        if (!pendingTurn && !requestTurnId) {
+            logger.debug('[codex-app-server] Ignoring provider request without an active turn or provider turn id');
+            return false;
+        }
         const activeTurn = pendingTurn ?? await adoptNativeTurnFromProviderActivity(requestParams, {
-            turnId: readProviderEventTurnId(requestParams),
+            turnId: requestTurnId,
         });
-        if (!activeTurn || !notificationMatchesPendingTurn(requestParams)) return;
+        if (!activeTurn || !notificationMatchesPendingTurn(requestParams)) return false;
         await bindActiveNativeTurnIdFromProviderActivity(activeTurn, requestParams, {
-            turnId: readProviderEventTurnId(requestParams),
+            turnId: requestTurnId,
         });
+        return true;
     };
 
     const notificationMatchesPendingTurn = (notificationParams: unknown): boolean => {
@@ -2233,18 +2502,20 @@ export function createCodexAppServerRuntime(params: Readonly<{
             return false;
         }
         const notificationTurnId = readProviderEventTurnId(notificationParams);
+        if (hasProviderTurnAlreadyTerminated(notificationParams, notificationTurnId)) {
+            return false;
+        }
         return !notificationTurnId || !activeTurn.turnId || notificationTurnId === activeTurn.turnId;
     };
 
     const resolveStreamUpdateContext = async (
         method: string,
         notificationParams: unknown,
-        updates: readonly CodexAppServerStreamUpdate[],
     ): Promise<StreamUpdateContext | null> => {
-        if (updates.length === 0) return null;
         const hadPendingTurn = Boolean(pendingTurn);
         const notificationTurnId = readProviderEventTurnId(notificationParams);
         if (!hadPendingTurn && !notificationTurnId) return null;
+        if (hasProviderTurnAlreadyTerminated(notificationParams, notificationTurnId)) return null;
         const activeTurn = pendingTurn ?? await adoptNativeTurnFromProviderActivity(notificationParams, {
             turnId: notificationTurnId,
         });
@@ -2278,16 +2549,44 @@ export function createCodexAppServerRuntime(params: Readonly<{
     ): void => {
         client.registerNotificationHandler(method, (notificationParams) => {
             return runBridgeWork(async () => {
-                const updates = streamEventBridge.onNotification({ method, params: notificationParams });
-                const context = await resolveStreamUpdateContext(method, notificationParams, updates);
-                if (!context) return;
+                const context = await resolveStreamUpdateContext(method, notificationParams);
+                if (!context) {
+                    if (pendingTurn && notificationMatchesPendingTurn(notificationParams)) {
+                        if (method === 'item/started') {
+                            trackActiveProviderTurnItemStart(notificationParams);
+                        } else if (method === 'item/completed') {
+                            const clearedActiveItem = trackActiveProviderTurnItemCompletion(notificationParams);
+                            if (clearedActiveItem
+                                && scheduledPendingTurnFlushReason === 'turn-end'
+                                && activeProviderTurnItemIds.size === 0) {
+                                schedulePendingTurnFinalization('turn-end');
+                            }
+                        }
+                    }
+                    return;
+                }
                 if (context.sidechainId) {
                     await ensureSyntheticSubagentThread(context.sidechainId);
                 } else if (!notificationMatchesPendingTurn(notificationParams)) {
                     return;
                 }
+                if (!context.sidechainId && method === 'item/started') {
+                    trackActiveProviderTurnItemStart(notificationParams);
+                }
+                if (method === 'item/completed' && shouldSkipDuplicateBlockingProviderItemCompletion(context, notificationParams)) {
+                    return;
+                }
+                const updates = streamEventBridge.onNotification({ method, params: notificationParams });
                 for (const update of updates) {
                     await applyStreamUpdate(update, context);
+                }
+                if (!context.sidechainId && method === 'item/completed') {
+                    const clearedActiveItem = trackActiveProviderTurnItemCompletion(notificationParams);
+                    if (clearedActiveItem
+                        && scheduledPendingTurnFlushReason === 'turn-end'
+                        && activeProviderTurnItemIds.size === 0) {
+                        schedulePendingTurnFinalization('turn-end');
+                    }
                 }
             });
         });
@@ -2303,7 +2602,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 .then((client) => {
                     client.registerNotificationHandler('turn/started', (notificationParams) => {
                         void runBridgeWork(async () => {
-                            const notificationTurnId = readProviderEventTurnId(notificationParams);
+                            const notificationTurnId = readProviderEventTurnId(notificationParams, {
+                                allowTopLevelId: true,
+                            });
                             const activeTurn = pendingTurn ?? await adoptNativeTurnFromProviderActivity(notificationParams, {
                                 turnId: notificationTurnId,
                             });
@@ -2427,13 +2728,24 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     const registerTerminalHandler = (method: string): void => {
                         client.registerNotificationHandler(method, async (notificationParams) => {
                             await runBridgeWork(async () => {
-                                const terminalTurnId = readProviderEventTurnId(notificationParams);
+                                const terminalTurnId = readProviderEventTurnId(notificationParams, {
+                                    allowTopLevelId: true,
+                                });
                                 if (terminalTurnId && deferredRecoverableFailureTurnIds.delete(terminalTurnId)) {
                                     return;
                                 }
                                 if (notificationMatchesPendingTurn(notificationParams)) {
+                                    const activeTurn = pendingTurn;
+                                    if (activeTurn) {
+                                        await bindActiveNativeTurnIdFromProviderActivity(activeTurn, notificationParams, {
+                                            turnId: terminalTurnId,
+                                        });
+                                    }
                                     markActiveTurnNonSteerable();
-                                    if (method === 'turn/completed' && readCodexTurnStatus(notificationParams) === 'failed') {
+                                    const terminalStatus = method === 'turn/completed'
+                                        ? readCodexTurnStatus(notificationParams)
+                                        : null;
+                                    if (method === 'turn/completed' && terminalStatus === 'failed') {
                                         const failure = createCodexAppServerTurnFailure(notificationParams, runtimeEnv, params.session);
                                         if (shouldDeferCodexAppServerTurnFailureToPromptLoop(failure)) {
                                             await finishPendingTurn({
@@ -2446,8 +2758,22 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                         await abortPendingTurnWithFailure(failure);
                                         return;
                                     }
+                                    if (method !== 'turn/completed' || isCodexTurnInterruptedStatus(terminalStatus)) {
+                                        await surfacePrimarySessionRuntimeIssue({
+                                            provider: 'codex',
+                                            cause: 'cancelled',
+                                            providerTurnId: terminalTurnId,
+                                            session: {
+                                                sendAgentMessage: (_provider, body) => params.session.sendCodexMessage(body),
+                                            },
+                                        }).catch((error) => {
+                                            logger.debug('[codex-app-server] Failed to surface cancelled turn issue (non-fatal)', error);
+                                        });
+                                        schedulePendingTurnFinalization('abort');
+                                        return;
+                                    }
                                     schedulePendingTurnFinalization(
-                                        method === 'turn/completed' ? 'turn-end' : 'abort',
+                                        'turn-end',
                                     );
                                     return;
                                 }
@@ -2475,18 +2801,25 @@ export function createCodexAppServerRuntime(params: Readonly<{
         return await clientPromise;
     };
 
-    const disposeClient = async (): Promise<void> => {
+    const disposeClient = async (options?: Readonly<{
+        pendingTurnError?: Error;
+    }>): Promise<void> => {
         const activeClientPromise = clientPromise;
         clientPromise = null;
         if (!activeClientPromise) {
-            finishPendingTurn();
+            await finishPendingTurn(options?.pendingTurnError
+                ? { error: options.pendingTurnError, flushReason: 'abort' }
+                : undefined);
             return;
         }
         try {
             const client = await activeClientPromise;
             await client.dispose();
         } finally {
-            await finishPendingTurn({ flushReason: 'abort' });
+            await finishPendingTurn({
+                ...(options?.pendingTurnError ? { error: options.pendingTurnError } : {}),
+                flushReason: 'abort',
+            });
         }
     };
 
@@ -2708,24 +3041,47 @@ export function createCodexAppServerRuntime(params: Readonly<{
         );
     };
 
-    const recoverFromCodexAuthAccountChange = async (activeThreadId: string): Promise<void> => {
+    const waitForConnectedServiceAuthTransportInvalidationRecovery = async (): Promise<void> => {
+        const recovery = connectedServiceAuthTransportInvalidationRecoveryPromise;
+        if (recovery) {
+            await recovery;
+        }
+    };
+
+    const restartCodexRuntimeForConnectedServiceSwitch = async (activeThreadId: string): Promise<void> => {
+        if (connectedServiceAuthTransportInvalidationRecoveryPromise) {
+            await connectedServiceAuthTransportInvalidationRecoveryPromise;
+            return;
+        }
         params.session.sendSessionEvent({
             type: 'message',
-            message: CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_RECOVERY_STATUS_MESSAGE,
+            message: CODEX_APP_SERVER_CONNECTED_SERVICE_SWITCH_RESTART_STATUS_MESSAGE,
         });
         logger.debug('[codex-app-server] restarting process after Codex auth account changed', {
             threadId: activeThreadId,
         });
-        await disposeClient();
-        const resumedClient = await ensureClient();
-        const resumedThread = await resumeThread(resumedClient, activeThreadId, {
-            preserveRequestedThreadId: true,
-        });
-        await applyStartOrLoadResponse(
-            resumedClient,
-            resumedThread.nextThreadId,
-            resumedThread.response,
-        );
+        const recovery = (async () => {
+            await disposeClient({
+                pendingTurnError: new CodexAppServerConnectedServiceAuthTransportInvalidatedTurn(),
+            });
+            const resumedClient = await ensureClient();
+            const resumedThread = await resumeThread(resumedClient, activeThreadId, {
+                preserveRequestedThreadId: true,
+            });
+            await applyStartOrLoadResponse(
+                resumedClient,
+                resumedThread.nextThreadId,
+                resumedThread.response,
+            );
+        })();
+        connectedServiceAuthTransportInvalidationRecoveryPromise = recovery;
+        try {
+            await recovery;
+        } finally {
+            if (connectedServiceAuthTransportInvalidationRecoveryPromise === recovery) {
+                connectedServiceAuthTransportInvalidationRecoveryPromise = null;
+            }
+        }
     };
 
     const beginPendingTurnForThread = async (
@@ -2756,7 +3112,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const startReviewTurn = async (
         request: CodexAppServerReviewStartRequest,
     ): Promise<string | UnsupportedSessionRuntimeMethodResult | void> => {
-        let recoveredAuthAccountChange = false;
         let recoveredContextWindowExhaustion = false;
         let originalContextWindowExhaustionFailure: Error | null = null;
         while (true) {
@@ -2792,11 +3147,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 }
                 activeTurn.promise.catch(() => undefined);
                 await finishPendingTurn({ error: failure, flushReason: 'abort' });
-                if (!recoveredAuthAccountChange && isCodexAppServerAuthAccountChangedError(failure)) {
-                    recoveredAuthAccountChange = true;
-                    await recoverFromCodexAuthAccountChange(activeThreadId);
-                    continue;
-                }
                 if (isCodexAppServerContextWindowExhaustedError(failure)) {
                     const originalFailure: Error = originalContextWindowExhaustionFailure ?? failure;
                     originalContextWindowExhaustionFailure = originalFailure;
@@ -3054,7 +3404,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
             };
         },
         sendPrompt: async (prompt: string, options?: CodexAppServerPromptOptions) => {
-            let recoveredAuthAccountChange = false;
             let recoveredContextWindowExhaustion = false;
             let originalContextWindowExhaustionFailure: Error | null = null;
             let promptForAttempt = prompt;
@@ -3140,9 +3489,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     const failure = error instanceof Error ? error : new Error(String(error));
                     const failedTurnHadMeaningfulActivity = activeTurnHasMeaningfulContextWindowRecoveryActivity;
                     await finishPendingTurn({ error: failure, flushReason: 'abort' });
-                    if (!recoveredAuthAccountChange && isCodexAppServerAuthAccountChangedError(failure)) {
-                        recoveredAuthAccountChange = true;
-                        await recoverFromCodexAuthAccountChange(activeThreadId);
+                    if (isCodexAppServerConnectedServiceAuthTransportInvalidatedTurn(failure)) {
+                        await waitForConnectedServiceAuthTransportInvalidationRecovery();
+                        if (failedTurnHadMeaningfulActivity) {
+                            promptForAttempt = contextWindowRecoveryConfig.continuationPrompt;
+                            optionsForAttempt = undefined;
+                        }
                         continue;
                     }
                     if (isCodexAppServerContextWindowExhaustedError(failure)) {
@@ -3190,7 +3542,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 // A completed/idle app-server session has no thread-local transports to reset.
                 return { ok: true };
             }
-            await recoverFromCodexAuthAccountChange(activeThreadId);
+            await restartCodexRuntimeForConnectedServiceSwitch(activeThreadId);
             return { ok: true };
         },
         refreshGoal: async () => {

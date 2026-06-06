@@ -29,6 +29,33 @@ describe('verifyResumeReachableCodex', () => {
     }
   });
 
+  it('does not accept a persisted candidate file whose rollout id does not match the vendor resume id', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-reachable-stale-candidate-'));
+    try {
+      const candidatePath = join(
+        root,
+        'codex-home',
+        'sessions',
+        'rollout-2026-01-01T00-00-00-vendor-session-B.jsonl',
+      );
+      await mkdir(join(root, 'codex-home', 'sessions'), { recursive: true });
+      await writeFile(candidatePath, '{}\n');
+
+      await expect(verifyResumeReachableCodex({
+        targetMaterializedRoot: root,
+        targetMaterializedEnv: {},
+        vendorResumeId: 'vendor-session-A',
+        cwd: root,
+        candidatePersistedSessionFile: candidatePath,
+      })).resolves.toEqual({
+        ok: false,
+        reason: 'codex_session_file_not_found',
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('returns ok=true from manifest sessionFileMappings when mapped file exists', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-reachable-manifest-'));
     try {

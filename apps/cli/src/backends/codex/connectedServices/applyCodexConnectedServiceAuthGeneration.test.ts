@@ -66,11 +66,9 @@ describe('Codex connected-service runtime auth application', () => {
     })).resolves.toEqual({ applied: true, via: 'hot' });
 
     expect(client.request).toHaveBeenCalledWith('account/login/start', {
-      chatgptAuthTokens: {
-        accessToken: 'access',
-        idToken: 'id',
-        chatgptAccountId: 'workspace-work',
-      },
+      type: 'chatgptAuthTokens',
+      accessToken: 'access',
+      chatgptAccountId: 'workspace-work',
     });
     expect(invalidateTransports).toHaveBeenCalledOnce();
   });
