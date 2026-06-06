@@ -1,0 +1,155 @@
+import type {
+  TerminalHostAdapter,
+  TerminalHostHandle,
+  TerminalInjectionDuplicateRisk,
+  TerminalInjectionFailurePhase,
+  TerminalInputInjectionResult,
+  TerminalInputState,
+  TerminalPromptInput,
+} from '../terminalHost/_types';
+import { resolveTmuxPromptSubmitDelayMs, resolveTmuxSendKeysChunkSize } from './env';
+import { evaluateTmuxPaneLiveness } from './paneLiveness';
+import { TmuxUtilities } from './TmuxUtilities';
+import { typeTextViaSendKeys } from './typeText';
+
+function targetFromHandle(handle: TerminalHostHandle): string {
+  return handle.paneId ? `${handle.sessionName}:${handle.paneId}` : handle.sessionName;
+}
+
+function scheduledDeferral(input: TerminalPromptInput): Extract<TerminalInputInjectionResult, { status: 'deferred' }> | null {
+  const reason = input.scheduling.deferReason;
+  if (!reason) return null;
+  return {
+    status: 'deferred',
+    reason,
+    ...(input.scheduling.retryAfterMs !== undefined ? { retryAfterMs: input.scheduling.retryAfterMs } : {}),
+  };
+}
+
+function failedInjectionResult(params: Readonly<{
+  reason: Extract<TerminalInputInjectionResult, { status: 'failed' }>['reason'];
+  phase: TerminalInjectionFailurePhase;
+  duplicateRisk: TerminalInjectionDuplicateRisk;
+  recoverable: boolean;
+}>): Extract<TerminalInputInjectionResult, { status: 'failed' }> {
+  return {
+    status: 'failed',
+    reason: params.reason,
+    phase: params.phase,
+    duplicateRisk: params.duplicateRisk,
+    recoverable: params.recoverable,
+  };
+}
+
+export function createTmuxTerminalHostAdapter(params?: Readonly<{ tmux?: TmuxUtilities }>): TerminalHostAdapter {
+  const tmux = params?.tmux ?? new TmuxUtilities();
+
+  async function evaluateLiveness(handle: TerminalHostHandle) {
+    return evaluateTmuxPaneLiveness({
+      target: targetFromHandle(handle),
+      executor: (args) => tmux.executeTmuxCommand([...args]),
+    });
+  }
+
+  async function captureInputState(handle: TerminalHostHandle): Promise<TerminalInputState> {
+    const target = targetFromHandle(handle);
+    const currentInput = await tmux.captureCurrentInput(target);
+    return { stable: !(await tmux.isUserTyping(50, 2, target)), currentInput, observedAt: Date.now() };
+  }
+
+  return {
+    kind: 'tmux',
+    async createOrAttachHost(opts) {
+      const result = await tmux.spawnInTmux([...opts.spawnArgv], {
+        sessionName: opts.sessionName,
+        windowName: opts.sessionName,
+        cwd: opts.workingDirectory,
+      }, { ...opts.spawnEnv });
+      if (!result.success) {
+        throw new Error(result.error ?? 'Failed to create tmux terminal host');
+      }
+      return {
+        kind: 'tmux',
+        sessionName: result.sessionName ?? opts.sessionName,
+        paneId: result.windowName,
+        attachMetadata: {
+          attachStrategy: 'terminal_host',
+          topology: 'shared',
+          locality: 'same_machine',
+          maxClients: null,
+          requiresLocalAttachmentInfo: true,
+          liveProbe: 'required',
+        },
+      };
+    },
+    async injectUserPrompt(handle: TerminalHostHandle, input: TerminalPromptInput): Promise<TerminalInputInjectionResult> {
+      const deferral = scheduledDeferral(input);
+      if (deferral) return deferral;
+
+      if (handle.sessionName.trim().length === 0) {
+        return failedInjectionResult({
+          reason: 'no_target',
+          phase: 'liveness',
+          duplicateRisk: 'none',
+          recoverable: true,
+        });
+      }
+
+      const liveness = await evaluateLiveness(handle);
+      if (!liveness.paneAlive) {
+        return failedInjectionResult({
+          reason: 'pane_dead',
+          phase: 'liveness',
+          duplicateRisk: 'none',
+          recoverable: false,
+        });
+      }
+      if (input.scheduling.deferredUntilQuietMs !== undefined && input.scheduling.deferredUntilQuietMs > 0) {
+        const inputState = await captureInputState(handle);
+        if (!inputState.stable) {
+          return {
+            status: 'deferred',
+            reason: 'user_typing',
+            retryAfterMs: input.scheduling.deferredUntilQuietMs,
+          };
+        }
+      }
+      const result = await typeTextViaSendKeys({
+        target: targetFromHandle(handle),
+        text: input.text,
+        chunkSize: resolveTmuxSendKeysChunkSize(),
+        submitDelayMs: resolveTmuxPromptSubmitDelayMs(),
+        timeoutMs: input.scheduling.timeoutMs,
+        executor: (args, options) => tmux.executeTmuxCommand(
+          [...args],
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          options?.stdin,
+          options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : undefined,
+        ),
+      });
+      if (!result.success) {
+        return failedInjectionResult({
+          reason: result.reason === 'timeout' ? 'timeout' : 'host_unreachable',
+          phase: result.phase,
+          duplicateRisk: result.duplicateRisk,
+          recoverable: true,
+        });
+      }
+      return { status: 'injected', at: Date.now(), bytesWritten: Buffer.byteLength(input.text) };
+    },
+    async interruptTurn(handle: TerminalHostHandle): Promise<void> {
+      const success = await tmux.sendKeys('Escape', targetFromHandle(handle));
+      if (!success) {
+        throw new Error('Failed to interrupt tmux terminal host');
+      }
+    },
+    evaluateLiveness,
+    captureInputState,
+    async dispose(handle: TerminalHostHandle) {
+      await tmux.killWindow(targetFromHandle(handle));
+    },
+  };
+}
