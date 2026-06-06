@@ -22,7 +22,22 @@ export const AGENTS_CORE = {
             supportedServiceIds: ['claude-subscription', 'anthropic'],
             sessionAuthSwitch: {
                 continuityMode: 'restart_same_home',
-                supportedTransitions: ['native_to_connected', 'connected_to_native', 'connected_to_connected'],
+                supportedTransitions: ['same_connected_group'],
+                providerStateSharingRequired: {
+                    serviceIds: ['claude-subscription', 'anthropic'],
+                    supportedTransitions: ['native_to_connected', 'connected_to_native', 'connected_to_connected'],
+                },
+            },
+            providerStateSharing: {
+                config: {
+                    supported: true,
+                    modes: ['linked', 'copied', 'isolated'],
+                },
+                state: {
+                    supported: true,
+                    modes: ['isolated', 'shared'],
+                    sharedStatePrivacyRiskAcknowledgementRequired: true,
+                },
             },
             supportedKindsByServiceId: {
                 'claude-subscription': ['oauth', 'token'],
@@ -39,6 +54,10 @@ export const AGENTS_CORE = {
         },
         handoff: { vendorStateTransfer: 'supported' },
         localControl: { supported: true, topology: 'exclusive', attachStrategy: 'tmux' },
+        runtimeInput: {
+            inFlightSteerSupported: true,
+            terminalPromptInjectionSupported: true,
+        },
         tools: { delivery: 'native_mcp', support: 'supported' },
         media: {
             acceptsImageInput: 'supported',
@@ -189,7 +208,7 @@ export const AGENTS_CORE = {
             supportedServiceIds: ['gemini'],
             sessionAuthSwitch: {
                 continuityMode: 'restart_same_home',
-                supportedTransitions: ['connected_to_connected'],
+                supportedTransitions: ['native_to_connected', 'connected_to_connected'],
             },
             supportedKindsByServiceId: {
                 gemini: ['oauth'],
@@ -389,6 +408,7 @@ export const AGENTS_CORE = {
         handoff: { vendorStateTransfer: 'unsupported' },
         runtimeInput: {
             inFlightSteerSupported: true,
+            terminalPromptInjectionSupported: false,
         },
         tools: { delivery: 'shell_bridge', support: 'experimental' },
         media: {

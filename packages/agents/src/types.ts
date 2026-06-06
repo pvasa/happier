@@ -118,6 +118,7 @@ export type AgentLocalControlConfig = Readonly<{
 
 export type AgentRuntimeInputConfig = Readonly<{
     inFlightSteerSupported: boolean;
+    terminalPromptInjectionSupported: boolean;
 }>;
 
 export type AgentToolsConfig = Readonly<{

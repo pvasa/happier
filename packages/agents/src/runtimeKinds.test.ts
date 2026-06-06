@@ -48,7 +48,12 @@ describe('runtimeKinds', () => {
         sessionFork: { conversation: 'supported', fromMessage: 'supported' },
         usageLimitRecovery: { checkNow: 'supported' },
       },
-      localControl: { supported: true },
+      localControl: {
+        supported: true,
+        topology: 'shared',
+        attachStrategy: 'provider_attach',
+      },
+      runtimeInput: null,
     });
 
     expect(resolveAgentRuntimeControlSurface('opencode', 'acp')).toMatchObject({

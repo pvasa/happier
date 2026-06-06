@@ -22,7 +22,11 @@ describe('AGENTS_CORE cloudConnect status', () => {
   it('advertises session auth switching for providers with implemented switch continuity', () => {
     expect(AGENTS_CORE.claude.connectedServices?.sessionAuthSwitch).toEqual({
       continuityMode: 'restart_same_home',
-      supportedTransitions: ['native_to_connected', 'connected_to_native', 'connected_to_connected'],
+      supportedTransitions: ['same_connected_group'],
+      providerStateSharingRequired: {
+        serviceIds: ['claude-subscription', 'anthropic'],
+        supportedTransitions: ['native_to_connected', 'connected_to_native', 'connected_to_connected'],
+      },
     });
     expect(AGENTS_CORE.codex.connectedServices?.sessionAuthSwitch).toEqual({
       continuityMode: 'restart_shared_state_required',
@@ -38,7 +42,7 @@ describe('AGENTS_CORE cloudConnect status', () => {
     });
     expect(AGENTS_CORE.gemini.connectedServices?.sessionAuthSwitch).toEqual({
       continuityMode: 'restart_same_home',
-      supportedTransitions: ['connected_to_connected'],
+      supportedTransitions: ['native_to_connected', 'connected_to_connected'],
     });
     expect(AGENTS_CORE.pi.connectedServices?.sessionAuthSwitch).toEqual({
       continuityMode: 'restart_same_home',
@@ -51,6 +55,20 @@ describe('AGENTS_CORE cloudConnect status', () => {
 
   it('advertises Codex provider state sharing capabilities from the shared catalog', () => {
     expect(AGENTS_CORE.codex.connectedServices?.providerStateSharing).toEqual({
+      config: {
+        supported: true,
+        modes: ['linked', 'copied', 'isolated'],
+      },
+      state: {
+        supported: true,
+        modes: ['isolated', 'shared'],
+        sharedStatePrivacyRiskAcknowledgementRequired: true,
+      },
+    });
+  });
+
+  it('advertises Claude provider state sharing capabilities from the shared catalog', () => {
+    expect(AGENTS_CORE.claude.connectedServices?.providerStateSharing).toEqual({
       config: {
         supported: true,
         modes: ['linked', 'copied', 'isolated'],
