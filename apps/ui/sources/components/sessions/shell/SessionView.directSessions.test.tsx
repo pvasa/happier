@@ -545,6 +545,13 @@ vi.mock('@/sync/domains/session/control/localControlSwitch', async (importOrigin
 
 describe('SessionView (direct sessions)', () => {
   async function renderSessionView(props: { routeServerId?: string } = {}) {
+    const routeServerId = props.routeServerId?.trim();
+    if (routeServerId && storageState.sessions.s1) {
+      storageState.sessions.s1 = {
+        ...storageState.sessions.s1,
+        serverId: routeServerId,
+      };
+    }
     const { SessionView } = await import('./SessionView');
     return renderScreen(
       <AppPaneProvider>
@@ -748,7 +755,7 @@ describe('SessionView (direct sessions)', () => {
         issueFingerprint: 'usage-limit:opencode:unknown-turn:1:1779039000000',
         rememberPreference: true,
       },
-      { serverId: 'server-route-1' },
+      expect.objectContaining({ serverId: 'server-route-1' }),
     );
     expect(sessionUsageLimitCheckNowSpy).not.toHaveBeenCalled();
     expect(setUsageLimitRecoverySettingsSpy).toHaveBeenCalledWith(expect.objectContaining({
@@ -825,12 +832,27 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
     await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-resumeNow'));
+    await settleDirectSessionView();
 
-    expect(sessionUsageLimitCheckNowSpy).toHaveBeenCalledWith('s1', {
+    expect(sessionUsageLimitCheckNowSpy).toHaveBeenCalledWith('s1', expect.objectContaining({
       provider: 'codex',
       serverId: 'server-route-1',
-    });
+    }));
     expect(modalAlertSpy).not.toHaveBeenCalled();
+
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      active: true,
+      lastRuntimeIssue: null,
+      serverId: 'server-route-1-cleared',
+    };
+    const { SessionView } = await import('./SessionView');
+    await screen.update(
+      <AppPaneProvider>
+        <SessionView id="s1" routeServerId="server-route-1-cleared" />
+      </AppPaneProvider>,
+    );
+
     expect(screen.findByTestId('session-usageLimit-recovery')).toBeNull();
   });
 
@@ -862,10 +884,10 @@ describe('SessionView (direct sessions)', () => {
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
     await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-checkNow'));
 
-    expect(sessionUsageLimitCheckNowSpy).toHaveBeenCalledWith('s1', {
+    expect(sessionUsageLimitCheckNowSpy).toHaveBeenCalledWith('s1', expect.objectContaining({
       provider: 'codex',
       serverId: 'server-route-1',
-    });
+    }));
     expect(resumeSessionSpy).not.toHaveBeenCalled();
     expect(screen.findByTestId('session-usageLimit-recovery')).toBeNull();
   });
@@ -906,10 +928,10 @@ describe('SessionView (direct sessions)', () => {
     await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-switchFallbackNow'));
     await settleDirectSessionView();
 
-    expect(sessionUsageLimitSwitchAccountNowSpy).toHaveBeenCalledWith('s1', {
+    expect(sessionUsageLimitSwitchAccountNowSpy).toHaveBeenCalledWith('s1', expect.objectContaining({
       provider: 'codex',
       serverId: 'server-route-1',
-    });
+    }));
     expect(sessionUsageLimitCheckNowSpy).not.toHaveBeenCalled();
     expect(screen.findByTestId('session-usageLimit-recovery')).toBeNull();
   });
@@ -956,10 +978,10 @@ describe('SessionView (direct sessions)', () => {
       await Promise.resolve();
     });
 
-    expect(sessionUsageLimitSwitchAccountNowSpy).toHaveBeenCalledWith('s1', {
+    expect(sessionUsageLimitSwitchAccountNowSpy).toHaveBeenCalledWith('s1', expect.objectContaining({
       provider: 'codex',
       serverId: 'server-route-1',
-    });
+    }));
     expect(sessionUsageLimitCheckNowSpy).not.toHaveBeenCalled();
     expect(findUsageLimitStatusBadge(screen)).toEqual(expect.objectContaining({
       label: 'session.usageLimitRecovery.statusChecking',
@@ -1007,10 +1029,10 @@ describe('SessionView (direct sessions)', () => {
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
     await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-checkNow'));
 
-    expect(sessionUsageLimitCheckNowSpy).toHaveBeenCalledWith('s1', {
+    expect(sessionUsageLimitCheckNowSpy).toHaveBeenCalledWith('s1', expect.objectContaining({
       provider: 'codex',
       serverId: 'server-route-1',
-    });
+    }));
     expect(modalAlertSpy).toHaveBeenCalledTimes(1);
     const [, message] = modalAlertSpy.mock.calls[0] ?? [];
     expect(String(message ?? '')).not.toContain('session_usage_limit_recovery_control_remote_unavailable');
@@ -1039,6 +1061,7 @@ describe('SessionView (direct sessions)', () => {
 
     storageState.sessions.s1 = {
       ...storageState.sessions.s1,
+      serverId: 'server-runtime-refresh',
       activeAt: 1_000_000,
       thinkingAt: 1_000_000,
       latestTurnStatusObservedAt: 1_000_000,

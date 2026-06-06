@@ -509,6 +509,45 @@ describe('SessionView read cursor on blur', () => {
         });
     });
 
+    it('uses the previous session seq when a focused session view switches sessions', async () => {
+        const { useSessionViewedLifecycle } = await import('./view/useSessionViewedLifecycle');
+        const hook = await renderHook((props: {
+            sessionId: string;
+            visibleReadSeq: number | null;
+            surfaceFocused: boolean;
+        }) => {
+            useSessionViewedLifecycle(props);
+            return null;
+        }, {
+            initialProps: {
+                sessionId: 's1',
+                visibleReadSeq: 2,
+                surfaceFocused: true,
+            },
+        });
+
+        scheduledInteractionCallbacks.length = 0;
+        markSessionViewedSpy.mockClear();
+
+        await hook.rerender({
+            sessionId: 's2',
+            visibleReadSeq: 9,
+            surfaceFocused: true,
+        });
+
+        await act(async () => {
+            while (scheduledInteractionCallbacks.length > 0) {
+                scheduledInteractionCallbacks.shift()?.();
+            }
+        });
+
+        expect(markSessionViewedSpy).toHaveBeenCalledWith('s1', { sessionSeq: 2 });
+        expect(markSessionViewedSpy).toHaveBeenCalledWith('s2', { sessionSeq: 9 });
+        expect(markSessionViewedSpy).not.toHaveBeenCalledWith('s1', { sessionSeq: 9 });
+
+        await hook.unmount();
+    });
+
     it('marks the current session seq when opening a non-chat cockpit surface', async () => {
         const { SessionView } = await import('./SessionView');
 
@@ -554,6 +593,42 @@ describe('SessionView read cursor on blur', () => {
             // A later completion/message reaches storage before the delayed mark fires.
             sessionState.current.seq = 6;
             transcriptState.latestReadyEventSeq = 6;
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(300);
+            });
+        } finally {
+            vi.useRealTimers();
+        }
+
+        expect(markSessionViewedSpy).toHaveBeenCalledTimes(1);
+        expect(markSessionViewedSpy).toHaveBeenCalledWith('s1', { sessionSeq: 4 });
+
+        await hook.unmount();
+    });
+
+    it('reschedules focused seq-change read marks after a transient visible seq reset', async () => {
+        const { useSessionViewedLifecycle } = await import('./view/useSessionViewedLifecycle');
+        type RenderHookProps = { visibleReadSeq: number | null };
+        const initialProps: RenderHookProps = { visibleReadSeq: 2 };
+        const hook = await renderHook(({ visibleReadSeq }: RenderHookProps) => {
+            useSessionViewedLifecycle({
+                sessionId: 's1',
+                surfaceFocused: true,
+                visibleReadSeq,
+            });
+        }, {
+            initialProps,
+        });
+
+        scheduledInteractionCallbacks.length = 0;
+        markSessionViewedSpy.mockClear();
+
+        vi.useFakeTimers();
+        try {
+            await hook.rerender({ visibleReadSeq: 4 });
+            await hook.rerender({ visibleReadSeq: null });
+            await hook.rerender({ visibleReadSeq: 4 });
 
             await act(async () => {
                 await vi.advanceTimersByTimeAsync(300);

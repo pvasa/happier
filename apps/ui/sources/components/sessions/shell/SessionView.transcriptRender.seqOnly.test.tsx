@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import {
+    clearActiveViewingSessionsForServerScopeReset,
+    isSessionVisible,
+} from '@/sync/domains/session/activeViewingSession';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
@@ -14,12 +18,17 @@ const shouldRenderChatTimelineForSessionMock = vi.fn((_args: any) => true);
 const realtimeStatusValue = vi.hoisted(() => ({ current: { status: 'connected' } as any }));
 const onSessionVisibleSpy = vi.hoisted(() => vi.fn());
 const markSessionLiveTailIntentSpy = vi.hoisted(() => vi.fn());
+const fetchPendingMessagesSpy = vi.hoisted(() => vi.fn(async (_sessionId: string) => undefined));
 const chatHeaderRenderSpy = vi.hoisted(() => vi.fn());
 const chatListRenderSpy = vi.hoisted(() => vi.fn());
+const appPaneScopeHostRenderSpy = vi.hoisted(() => vi.fn());
+const deferredRenderSpy = vi.hoisted(() => vi.fn());
+const agentContentViewRenderSpy = vi.hoisted(() => vi.fn());
 const agentInputRenderSpy = vi.hoisted(() => vi.fn());
 const pendingMessagesHookSpy = vi.hoisted(() => vi.fn());
 const subagentSourceMessagesHookSpy = vi.hoisted(() => vi.fn());
 const sessionExecutionRunsSupportedHookSpy = vi.hoisted(() => vi.fn());
+const selectSyncErrorForServerSpy = vi.hoisted(() => vi.fn((_syncError: unknown, _serverId: string | null) => null));
 const sessionScreenFocusState = vi.hoisted(() => ({ current: true }));
 const routerPathnameState = vi.hoisted(() => ({ current: '/' }));
 const themeColors = vi.hoisted(() => ({
@@ -62,6 +71,7 @@ let committedMessagesState: readonly any[] = [];
 let committedMessageIdsState: readonly string[] = [];
 let committedMessagesSnapshot: { messages: readonly any[]; isLoaded: boolean } = { messages: [], isLoaded: true };
 let committedMessageIdsSnapshot: { ids: readonly string[]; isLoaded: boolean } = { ids: [], isLoaded: true };
+let sessionListViewDataByServerIdState: Record<string, any[] | null> = {};
 
 function setCommittedMessagesForTest(messages: readonly any[], ids: readonly string[] = messages.map((message) => message.id)) {
     const idsChanged =
@@ -82,8 +92,20 @@ function getStorageStateForTest() {
             sessionMessageSendMode: 'direct',
             sessionBusySteerSendPolicy: 'steerImmediately',
         },
-        sessionListViewDataByServerId: {},
+        sessionListViewDataByServerId: sessionListViewDataByServerIdState,
     };
+}
+
+function getVisibleReadSeqForTest(): number | null {
+    let latestSeq: number | null = null;
+    for (const message of committedMessagesState) {
+        const seq = typeof message?.seq === 'number' && Number.isFinite(message.seq)
+            ? Math.trunc(message.seq)
+            : null;
+        if (seq === null) continue;
+        latestSeq = latestSeq === null ? seq : Math.max(latestSeq, seq);
+    }
+    return latestSeq;
 }
 
 function setSessionUsageState(next: any) {
@@ -116,6 +138,25 @@ vi.mock('@react-navigation/native', () => ({
 vi.mock('@/auth/context/AuthContext', () => ({
     useAuth: () => ({ credentials: authCredentials }),
 }));
+
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            listServerProfiles: () => [{
+                id: 'server-profile',
+                name: 'Server',
+                serverUrl: 'https://server.example.test',
+                serverIdentityId: 'server-actual',
+                legacyServerIds: ['server-alias'],
+                createdAt: 1,
+                updatedAt: 1,
+                lastUsedAt: 1,
+            }],
+        },
+    });
+});
 
 installSessionShellCommonModuleMocks({
     reactNative: async () => {
@@ -200,6 +241,14 @@ installSessionShellCommonModuleMocks({
                     () => committedMessageIdsSnapshot,
                     () => committedMessageIdsSnapshot,
                 ),
+                useSessionVisibleReadSeq: () => React.useSyncExternalStore(
+                    (listener) => {
+                        committedMessagesListeners.add(listener);
+                        return () => committedMessagesListeners.delete(listener);
+                    },
+                    getVisibleReadSeqForTest,
+                    getVisibleReadSeqForTest,
+                ),
                 useSessionPendingMessages: () => {
                     pendingMessagesHookSpy();
                     return { messages: [] };
@@ -246,8 +295,9 @@ installSessionShellCommonModuleMocks({
 });
 
 vi.mock('@/components/sessions/transcript/AgentContentView', () => ({
-    AgentContentView: (props: any) =>
-        React.createElement(
+    AgentContentView: (props: any) => {
+        agentContentViewRenderSpy(props);
+        return React.createElement(
             'AgentContentView',
             props,
             React.createElement(
@@ -257,10 +307,14 @@ vi.mock('@/components/sessions/transcript/AgentContentView', () => ({
                 props.content ?? null,
                 props.input ?? null,
             ),
-        ),
+        );
+    },
 }));
 vi.mock('@/components/appShell/panes/AppPaneScopeHost', () => ({
-    AppPaneScopeHost: (props: any) => React.createElement('AppPaneScopeHost', props, props.main ?? null),
+    AppPaneScopeHost: (props: any) => {
+        appPaneScopeHostRenderSpy(props);
+        return React.createElement('AppPaneScopeHost', props, props.main ?? null);
+    },
 }));
 vi.mock('@/components/sessions/panes/useRegisterSessionPaneDriver', () => ({
     useRegisterSessionPaneDriver: () => 'pane-scope-test',
@@ -291,7 +345,10 @@ vi.mock('@/components/ui/empty/EmptyMessages', () => ({
     EmptyMessages: () => React.createElement('EmptyMessages'),
 }));
 vi.mock('@/components/ui/forms/Deferred', () => ({
-    Deferred: (props: any) => React.createElement(React.Fragment, null, props.children),
+    Deferred: (props: Readonly<{ children?: React.ReactNode; enabled?: boolean; fallback?: React.ReactNode }>) => {
+        deferredRenderSpy(props);
+        return React.createElement(React.Fragment, null, props.children);
+    },
 }));
 vi.mock('@/components/sessions/actions/SessionHeaderActionMenu', () => ({
     SessionHeaderActionMenu: () => null,
@@ -319,17 +376,38 @@ vi.mock('@/utils/platform/responsive', () => ({
     useIsTablet: () => false,
 }));
 vi.mock('@/hooks/session/useDraft', () => ({
-    useDraft: (_sessionId: string, value: string, onChange: (next: string) => void) => ({
-        clearDraft: () => onChange(''),
-        setDraftValue: (nextValueOrUpdater: string | ((currentValue: string) => string)) => {
-            onChange(typeof nextValueOrUpdater === 'function' ? nextValueOrUpdater(value) : nextValueOrUpdater);
-        },
-        clearDraftForSessionIfCurrentValueMatches: (snapshot: Readonly<{ text: string }>) => {
-            if (value !== snapshot.text) return false;
-            onChange('');
-            return true;
-        },
-    }),
+    useDraft: (_sessionId: string, value: string, onChange: (next: string) => void) => {
+        const latestValue = React.useRef(value);
+        latestValue.current = value;
+
+        const setDraftValue = React.useCallback((nextValueOrUpdater: string | ((currentValue: string) => string)) => {
+            const nextValue = typeof nextValueOrUpdater === 'function'
+                ? nextValueOrUpdater(latestValue.current)
+                : nextValueOrUpdater;
+            latestValue.current = nextValue;
+            onChange(nextValue);
+        }, [onChange]);
+
+        return {
+            clearDraft: () => setDraftValue(''),
+            setDraftValue,
+            clearDraftForSessionIfCurrentValueMatches: (snapshot: Readonly<{ text: string }>) => {
+                if (latestValue.current !== snapshot.text) return false;
+                setDraftValue('');
+                return true;
+            },
+            restoreDraftForSessionIfCurrentValueMatches: (
+                snapshot: Readonly<{ text: string }>,
+                expectedCurrentValue: string,
+            ) => {
+                if (latestValue.current !== expectedCurrentValue) return false;
+                setDraftValue(snapshot.text);
+                return true;
+            },
+            restoreDraft: setDraftValue,
+            restoreComposerSnapshot: (snapshot: Readonly<{ text: string }>) => setDraftValue(snapshot.text),
+        };
+    },
 }));
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
     getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
@@ -344,6 +422,9 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => ({ serverId: 'server-1' }),
     subscribeActiveServer: () => () => {},
 }));
+vi.mock('@/sync/runtime/connectivity/syncErrorScope', () => ({
+    selectSyncErrorForServer: (syncError: unknown, serverId: string | null) => selectSyncErrorForServerSpy(syncError, serverId),
+}));
 vi.mock('@/voice/session/voiceSession', () => ({
     useVoiceSessionSnapshot: () => ({ status: 'disconnected' }),
     voiceSessionManager: {},
@@ -351,7 +432,7 @@ vi.mock('@/voice/session/voiceSession', () => ({
 vi.mock('@/sync/sync', () => ({
     sync: {
         markSessionViewed: async () => {},
-        fetchPendingMessages: async () => {},
+        fetchPendingMessages: fetchPendingMessagesSpy,
         publishSessionPermissionModeToMetadata: async () => {},
         publishSessionAcpSessionModeOverrideToMetadata: async () => {},
         publishSessionAcpConfigOptionOverrideToMetadata: async () => {},
@@ -384,10 +465,11 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
     createDefaultActionExecutor: () => ({ execute: vi.fn() }),
 }));
 vi.mock('@/components/sessions/agentInput', () => ({
-    AgentInput: (props: any) => {
+    // Match production AgentInput's memo boundary; this spec asserts stability at that boundary.
+    AgentInput: React.memo((props: any) => {
         agentInputRenderSpy(props);
         return null;
-    },
+    }),
 }));
 vi.mock('@/utils/system/versionUtils', () => ({
     isVersionSupported: () => true,
@@ -465,10 +547,10 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         <AppPaneProvider>{children ?? null}</AppPaneProvider>
     );
 
-    async function renderSessionView() {
+    async function renderSessionView(props: Partial<React.ComponentProps<typeof import('./SessionView').SessionView>> = {}) {
         const { SessionView } = await import('./SessionView');
         return renderScreen(
-            <SessionView id="s1" />,
+            <SessionView id="s1" {...props} />,
             {
                 wrapper: AppPaneProviderWrapper,
             },
@@ -495,12 +577,19 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         markSessionLiveTailIntentSpy.mockClear();
         chatHeaderRenderSpy.mockClear();
         chatListRenderSpy.mockClear();
+        agentContentViewRenderSpy.mockClear();
+        appPaneScopeHostRenderSpy.mockClear();
+        deferredRenderSpy.mockClear();
         agentInputRenderSpy.mockClear();
+        fetchPendingMessagesSpy.mockClear();
         pendingMessagesHookSpy.mockClear();
         subagentSourceMessagesHookSpy.mockClear();
         sessionExecutionRunsSupportedHookSpy.mockClear();
+        selectSyncErrorForServerSpy.mockClear();
         subagentSourceMessagesState = [];
         setCommittedMessagesForTest([]);
+        sessionListViewDataByServerIdState = {};
+        clearActiveViewingSessionsForServerScopeReset();
         subagentSourceMessagesListeners.clear();
         committedMessagesListeners.clear();
         storageListeners.clear();
@@ -512,6 +601,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         syncPerformanceTelemetry.configure({ enabled: false });
         syncPerformanceTelemetry.reset();
         standardCleanup();
+        clearActiveViewingSessionsForServerScopeReset();
         vi.clearAllMocks();
         (globalThis as { __DEV__?: boolean }).__DEV__ = previousDev;
     });
@@ -526,6 +616,10 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
                 forceRenderFooter: true,
             }),
         );
+        expect(deferredRenderSpy.mock.calls.at(-1)?.[0]).toMatchObject({
+            enabled: true,
+        });
+        expect(agentContentViewRenderSpy.mock.calls.at(-1)?.[0]?.placeholder).toBeNull();
 
         await screen.unmount();
     });
@@ -603,6 +697,39 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         await screen.unmount();
     });
 
+    it('passes cached route hydration pending state to the transcript instead of remounting as blank content', async () => {
+        const screen = await renderSessionView({
+            routeHydrationState: { kind: 'loading', sessionId: 's1', reason: 'store-miss' },
+        });
+
+        expect(chatListRenderSpy).toHaveBeenCalled();
+        expect(chatListRenderSpy.mock.calls.at(-1)?.[0]).toMatchObject({
+            routeHydrationPending: true,
+        });
+
+        await screen.unmount();
+    });
+
+    it('mounts cached committed transcripts without waiting for the deferred first-paint window', async () => {
+        setCommittedMessagesForTest([{
+            id: 'm1',
+            kind: 'agent-text',
+            localId: null,
+            createdAt: 1,
+            text: 'cached message',
+            isThinking: false,
+        }], ['m1']);
+
+        const screen = await renderSessionView();
+
+        expect(chatListRenderSpy).toHaveBeenCalled();
+        expect(deferredRenderSpy.mock.calls.at(-1)?.[0]).toMatchObject({
+            enabled: true,
+        });
+
+        await screen.unmount();
+    });
+
     it('does not record open-to-transcript telemetry when telemetry is disabled', async () => {
         syncPerformanceTelemetry.configure({ enabled: false });
         syncPerformanceTelemetry.reset();
@@ -611,6 +738,32 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         await flushHookEffects({ cycles: 1, turns: 1 });
 
         expect(syncPerformanceTelemetry.snapshot().events).toEqual([]);
+
+        await screen.unmount();
+    });
+
+    it('does not render a cached same-id session from another server when routeServerId is the only scope hint', async () => {
+        sessionState = {
+            ...sessionState,
+            serverId: 'server-b',
+        };
+        sessionListViewDataByServerIdState = {
+            'server-b': [{ type: 'session', session: { id: 's1' } }],
+        };
+
+        const screen = await renderSessionView({ routeServerId: 'server-a' });
+
+        expect(chatHeaderRenderSpy).toHaveBeenCalledWith(expect.objectContaining({
+            title: 'errors.sessionDeleted',
+        }));
+        expect(chatHeaderRenderSpy).not.toHaveBeenCalledWith(expect.objectContaining({
+            title: 'tmp',
+        }));
+        expect(chatListRenderSpy).not.toHaveBeenCalled();
+        expect(screen.findAllByTestId('session-root-unavailable')).toHaveLength(1);
+        const scopedServerIds = selectSyncErrorForServerSpy.mock.calls.map((call) => call[1]);
+        expect(scopedServerIds).toContain('server-a');
+        expect(scopedServerIds).not.toContain('server-b');
 
         await screen.unmount();
     });
@@ -704,6 +857,123 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         await screen.unmount();
     });
 
+    it('keeps the session shell stable for committed-message-id-only updates while refreshing the transcript', async () => {
+        const screen = await renderSessionView();
+
+        await flushHookEffects({ cycles: 2, turns: 1 });
+        appPaneScopeHostRenderSpy.mockClear();
+        chatHeaderRenderSpy.mockClear();
+        agentInputRenderSpy.mockClear();
+        chatListRenderSpy.mockClear();
+
+        await act(async () => {
+            setCommittedMessagesForTest([
+                { id: 'm1', seq: 26, role: 'assistant', content: 'hello' },
+            ]);
+            for (const listener of committedMessagesListeners) {
+                listener();
+            }
+            await Promise.resolve();
+        });
+        await flushHookEffects({ cycles: 2, turns: 1 });
+
+        expect(appPaneScopeHostRenderSpy).not.toHaveBeenCalled();
+        expect(chatHeaderRenderSpy).not.toHaveBeenCalled();
+        expect(agentInputRenderSpy).not.toHaveBeenCalled();
+        expect(chatListRenderSpy).toHaveBeenCalled();
+
+        await screen.unmount();
+    });
+
+    it('keeps the transcript host stable for pending-version-only updates while still refreshing pending messages', async () => {
+        vi.useFakeTimers();
+        try {
+            const screen = await renderSessionView();
+
+            await flushHookEffects({ cycles: 2, turns: 1 });
+            await act(async () => {
+                await vi.runOnlyPendingTimersAsync();
+            });
+            chatListRenderSpy.mockClear();
+            shouldRenderChatTimelineForSessionMock.mockClear();
+            fetchPendingMessagesSpy.mockClear();
+
+            await act(async () => {
+                sessionState = {
+                    ...sessionState,
+                    pendingVersion: 2,
+                    pendingCount: 1,
+                };
+                emitStorageChangeForTest();
+                await Promise.resolve();
+            });
+            await flushHookEffects({ cycles: 5, turns: 5 });
+            await act(async () => {
+                await vi.runOnlyPendingTimersAsync();
+            });
+
+            expect(chatListRenderSpy).not.toHaveBeenCalled();
+            expect(shouldRenderChatTimelineForSessionMock).not.toHaveBeenCalled();
+            expect(fetchPendingMessagesSpy).toHaveBeenCalledWith('s1');
+
+            await screen.unmount();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps the transcript host stable for metadata freshness-only updates', async () => {
+        sessionState = {
+            ...sessionState,
+            metadata: {
+                ...sessionState.metadata,
+                summary: { text: 'Summary', updatedAt: 100 },
+                sessionModesV1: {
+                    v: 1,
+                    provider: 'codex',
+                    updatedAt: 100,
+                    currentModeId: 'default',
+                    availableModes: [{ id: 'default', name: 'Default' }],
+                },
+                sessionModelsV1: {
+                    v: 1,
+                    provider: 'codex',
+                    updatedAt: 100,
+                    currentModelId: 'model-a',
+                    availableModels: [{ id: 'model-a', name: 'Model A' }],
+                },
+            },
+        };
+
+        const screen = await renderSessionView();
+        const { SessionView } = await import('./SessionView');
+
+        await flushHookEffects({ cycles: 2, turns: 1 });
+        chatListRenderSpy.mockClear();
+
+        sessionState = {
+            ...sessionState,
+            metadataVersion: 2,
+            metadata: {
+                ...sessionState.metadata,
+                summary: { text: 'Summary', updatedAt: 200 },
+                sessionModesV1: {
+                    ...sessionState.metadata.sessionModesV1,
+                    updatedAt: 200,
+                },
+                sessionModelsV1: {
+                    ...sessionState.metadata.sessionModelsV1,
+                    updatedAt: 200,
+                },
+            },
+        };
+        await screen.update(<SessionView id="s1" />);
+
+        expect(chatListRenderSpy).not.toHaveBeenCalled();
+
+        await screen.unmount();
+    });
+
     it('keeps the session input stable for committed-sequence-only streaming updates', async () => {
         const screen = await renderSessionView();
 
@@ -750,6 +1020,40 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         });
 
         expect(agentInputRenderSpy).not.toHaveBeenCalled();
+
+        await screen.unmount();
+    });
+
+    it('keeps the transcript host stable for visible-read sequence updates while viewing', async () => {
+        setCommittedMessagesForTest([{
+            id: 'm1',
+            kind: 'agent-text',
+            localId: null,
+            createdAt: 1,
+            seq: 25,
+            text: 'hello',
+            isThinking: true,
+        }], ['m1']);
+        const screen = await renderSessionView();
+
+        await flushHookEffects({ cycles: 2, turns: 1 });
+        chatListRenderSpy.mockClear();
+        shouldRenderChatTimelineForSessionMock.mockClear();
+
+        await act(async () => {
+            setCommittedMessagesForTest([{
+                ...committedMessagesState[0],
+                seq: 26,
+                text: 'hello streaming update',
+            }], ['m1']);
+            for (const listener of committedMessagesListeners) {
+                listener();
+            }
+            await Promise.resolve();
+        });
+
+        expect(chatListRenderSpy).not.toHaveBeenCalled();
+        expect(shouldRenderChatTimelineForSessionMock).not.toHaveBeenCalled();
 
         await screen.unmount();
     });
@@ -818,6 +1122,26 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         expect(agentInputRenderSpy).toHaveBeenCalled();
 
         await screen.unmount();
+    });
+
+    it('tracks route-anchored painted sessions as visible under the accepted session server for realtime routing', async () => {
+        sessionScreenFocusState.current = false;
+        routerPathnameState.current = '/new';
+        sessionState.serverId = 'server-actual';
+        const { SessionView } = await import('./SessionView');
+
+        const screen = await renderScreen(
+            <SessionView id="s1" routeAnchorOverride={true} routeServerId="server-alias" />,
+            {
+                wrapper: AppPaneProviderWrapper,
+            },
+        );
+
+        expect(isSessionVisible('s1', 'server-actual')).toBe(true);
+        expect(isSessionVisible('s1', 'server-unrelated')).toBe(false);
+
+        await screen.unmount();
+        expect(isSessionVisible('s1', 'server-actual')).toBe(false);
     });
 
     it('does not resolve execution-run header support from the cockpit shell body', async () => {
