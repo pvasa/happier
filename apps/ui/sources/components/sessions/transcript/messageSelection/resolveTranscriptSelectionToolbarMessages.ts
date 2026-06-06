@@ -5,14 +5,20 @@ import { isCommittedMessageDiscarded } from '@/utils/sessions/discardedCommitted
 
 import type { TranscriptSelectionToolbarMessage } from './TranscriptSelectionToolbar';
 import { resolveSelectableMessageText } from './resolveSelectableMessageText';
+import {
+    shouldExcludeMessageFromTranscriptSelection,
+    type TranscriptSelectionMessageVisibilityOptions,
+} from './transcriptSelectionMessageVisibility';
 
 export function resolveTranscriptSelectionToolbarMessages(
     messagesInOrder: ReadonlyArray<Message>,
     metadata?: Metadata | null,
+    visibilityOptions?: TranscriptSelectionMessageVisibilityOptions | null,
 ): ReadonlyArray<TranscriptSelectionToolbarMessage> {
     const selectableMessages: TranscriptSelectionToolbarMessage[] = [];
     for (const message of messagesInOrder) {
         if (message.kind !== 'user-text' && message.kind !== 'agent-text') continue;
+        if (shouldExcludeMessageFromTranscriptSelection(message, visibilityOptions)) continue;
         if (message.kind === 'user-text' && isCommittedMessageDiscarded(metadata ?? null, message.localId ?? null)) continue;
         const parsedSessionMediaMeta = parseSessionMediaMessageMeta(message.meta);
         const selectable = resolveSelectableMessageText({

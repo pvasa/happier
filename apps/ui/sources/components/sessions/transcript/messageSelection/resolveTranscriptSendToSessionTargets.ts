@@ -4,6 +4,10 @@ import {
     readSessionListUpdatedOrderingKey,
     type SessionListSessionOrderingKey,
 } from '@/sync/domains/session/listing/sessionListOrderingRules';
+import {
+    areServerProfileIdentifiersEquivalent,
+    resolveServerProfileScopeIdForIdentifier,
+} from '@/sync/domains/server/serverProfiles';
 
 export type TranscriptSendToSessionTargetCandidate = Readonly<{
     id: string;
@@ -42,14 +46,16 @@ export function resolveTranscriptSendToSessionTargets(params: Readonly<{
     sessions: ReadonlyArray<TranscriptSendToSessionTargetCandidate>;
 }>): ReadonlyArray<TranscriptSendToSessionTargetCandidate> {
     const sourceSessionId = normalizeId(params.sourceSessionId);
-    const sourceServerId = normalizeId(params.sourceServerId);
+    const sourceServerIdRaw = normalizeId(params.sourceServerId);
+    const sourceServerId = resolveServerProfileScopeIdForIdentifier(sourceServerIdRaw) || sourceServerIdRaw;
     if (!sourceSessionId || !sourceServerId) return [];
 
     return params.sessions
         .filter((session) => {
             const sessionId = normalizeId(session.id);
             if (!sessionId || sessionId === sourceSessionId) return false;
-            if (normalizeId(session.serverId) !== sourceServerId) return false;
+            const candidateServerId = normalizeId(session.serverId);
+            if (!candidateServerId || !areServerProfileIdentifiersEquivalent(candidateServerId, sourceServerId)) return false;
             if (!isWritableSession(session)) return false;
             return isUserFacingSession(session);
         })

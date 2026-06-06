@@ -32,6 +32,15 @@ describe('resolveTranscriptSelectionToolbarMessages', () => {
         ]);
     });
 
+    it('skips hidden thinking messages', () => {
+        const resolved = resolveTranscriptSelectionToolbarMessages([
+            message({ id: 'thinking', kind: 'agent-text', text: '*Thinking...*\n\n*private reasoning*', isThinking: true }),
+            message({ id: 'answer', kind: 'agent-text', text: 'done' }),
+        ], null, { sessionThinkingDisplayMode: 'hidden' });
+
+        expect(resolved).toEqual([{ id: 'answer', role: 'assistant', text: 'done' }]);
+    });
+
     it('skips discarded and still-streaming assistant messages', () => {
         const resolved = resolveTranscriptSelectionToolbarMessages([
             message({ id: 'discarded', kind: 'user-text', text: 'discarded', localId: 'local-discarded' }),

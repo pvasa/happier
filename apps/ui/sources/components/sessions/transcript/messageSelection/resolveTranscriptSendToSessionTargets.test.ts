@@ -1,6 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { resolveTranscriptSendToSessionTargets, type TranscriptSendToSessionTargetCandidate } from './resolveTranscriptSendToSessionTargets';
+
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
+    const equivalentIds = new Set(['profile-a', 'legacy-a', 'identity-a']);
+    return {
+        ...original,
+        areServerProfileIdentifiersEquivalent: (leftRaw: string | null | undefined, rightRaw: string | null | undefined) => {
+            const left = String(leftRaw ?? '').trim();
+            const right = String(rightRaw ?? '').trim();
+            if (!left || !right) return false;
+            if (left === right) return true;
+            return equivalentIds.has(left) && equivalentIds.has(right);
+        },
+        resolveServerProfileScopeIdForIdentifier: (idRaw: string | null | undefined) => {
+            const id = String(idRaw ?? '').trim();
+            return equivalentIds.has(id) ? 'identity-a' : id;
+        },
+    };
+});
 
 function candidate(input: Partial<TranscriptSendToSessionTargetCandidate> & Pick<TranscriptSendToSessionTargetCandidate, 'id'>): TranscriptSendToSessionTargetCandidate {
     return {
@@ -51,5 +70,19 @@ describe('resolveTranscriptSendToSessionTargets', () => {
             'older-created',
             'older-bucket',
         ]);
+    });
+
+    it('keeps destinations whose server id is equivalent to the source server profile', () => {
+        const targets = resolveTranscriptSendToSessionTargets({
+            sourceSessionId: 'source',
+            sourceServerId: 'profile-a',
+            sessions: [
+                candidate({ id: 'canonical', serverId: 'identity-a', updatedAt: 30 }),
+                candidate({ id: 'legacy', serverId: 'legacy-a', updatedAt: 20 }),
+                candidate({ id: 'other', serverId: 'server-b', updatedAt: 10 }),
+            ],
+        });
+
+        expect(targets.map((target) => target.id)).toEqual(['canonical', 'legacy']);
     });
 });

@@ -39,9 +39,12 @@ function isVoiceAgentTurn(message: Message): boolean {
     return parseHappierMetaEnvelope(message.meta)?.kind === 'voice_agent_turn.v1';
 }
 
-function isActivelyStreaming(message: Message): boolean {
+export function isAgentTextMessageActivelyStreamingForSelection(message: Message): boolean {
     if (message.kind !== 'agent-text') return false;
-    return readStreamSegmentMetaV1(message.meta)?.segmentState === 'streaming';
+    const streamSegmentMeta = readStreamSegmentMetaV1(message.meta);
+    if (!streamSegmentMeta) return false;
+    if (streamSegmentMeta.segmentState === 'streaming') return true;
+    return streamSegmentMeta.segmentKind === 'assistant' && streamSegmentMeta.segmentState === null;
 }
 
 function normalizeResolvedText(entry: TranscriptSelectableMessageText): TranscriptSelectableMessageText | null {
@@ -71,7 +74,7 @@ export function resolveSelectableMessageText(input: {
     }
 
     if (message.kind === 'agent-text') {
-        if (isActivelyStreaming(message)) return null;
+        if (isAgentTextMessageActivelyStreamingForSelection(message)) return null;
         const baseText = input.isStructuredOnly
             ? message.text
             : isVoiceAgentTurn(message)

@@ -99,6 +99,30 @@ describe('resolveSelectableMessageText', () => {
         })).toEqual({ role: 'assistant', text: 'Assistant body' });
     });
 
+    it('does not resolve assistant stream segments with unknown state', () => {
+        for (const segmentState of [null, 'unknown'] as const) {
+            const message = createAgentMessage({
+                text: 'Partial assistant output',
+                meta: {
+                    happierStreamSegmentV1: {
+                        v: 1,
+                        segmentKind: 'assistant',
+                        segmentLocalId: 'assistant-1',
+                        segmentState,
+                        startedAtMs: 1,
+                        updatedAtMs: 2,
+                    },
+                },
+            });
+
+            expect(resolveSelectableMessageText({
+                message,
+                isStructuredOnly: false,
+                hasAttachmentBlockToStrip: false,
+            })).toBeNull();
+        }
+    });
+
     it('does not resolve actively streaming thinking agent text', () => {
         const message = createAgentMessage({
             isThinking: true,

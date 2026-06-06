@@ -8,11 +8,13 @@ import {
     renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
+import type { SessionListViewItem } from '@/sync/domains/session/listing/sessionListViewData';
 import type { Session } from '@/sync/domains/state/storageTypes';
 
 import { TranscriptSendToSessionModal } from './TranscriptSendToSessionModal';
 
 const sessionsRef = vi.hoisted((): { current: Session[] } => ({ current: [] }));
+const sessionListViewDataByServerIdRef = vi.hoisted((): { current: Record<string, SessionListViewItem[] | null> } => ({ current: {} }));
 const keyboardLayoutState = vi.hoisted(() => ({
     keyboardHeight: 0,
     windowHeight: 800,
@@ -41,6 +43,7 @@ vi.mock('@/agents/registry/AgentIcon', () => ({
 
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => createPartialStorageModuleMock(importOriginal, {
     useSessions: () => sessionsRef.current,
+    useSessionListViewDataByServerId: () => sessionListViewDataByServerIdRef.current,
 }));
 
 vi.mock(
@@ -63,6 +66,14 @@ function createNamedMetadata(name: string): Session['metadata'] {
     };
 }
 
+function createSessionListItem(session: Session, serverId: string): SessionListViewItem {
+    return {
+        type: 'session',
+        session,
+        serverId,
+    } as SessionListViewItem;
+}
+
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
         return Object.assign({}, ...style.filter(Boolean).map(flattenStyle));
@@ -73,6 +84,7 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 describe('TranscriptSendToSessionModal', () => {
     afterEach(() => {
         sessionsRef.current = [];
+        sessionListViewDataByServerIdRef.current = {};
         keyboardLayoutState.keyboardHeight = 0;
         keyboardLayoutState.windowHeight = 800;
         keyboardLayoutState.windowWidth = 390;
@@ -109,6 +121,34 @@ describe('TranscriptSendToSessionModal', () => {
         expect(renderedText).not.toContain('Source');
     });
 
+    it('lists destination sessions from the session-list cache when full sessions are not loaded', async () => {
+        const source = createSessionFixture({ id: 'source', metadata: createNamedMetadata('Source') });
+        const cachedDestination = createSessionFixture({
+            id: 'list-only-destination',
+            accessLevel: 'edit',
+            metadata: createNamedMetadata('List only destination'),
+        });
+        sessionsRef.current = [source];
+        sessionListViewDataByServerIdRef.current = {
+            'server-a': [
+                createSessionListItem(source, 'server-a'),
+                createSessionListItem(cachedDestination, 'server-a'),
+            ],
+        };
+
+        const screen = await renderScreen(
+            <TranscriptSendToSessionModal
+                sourceSessionId="source"
+                sourceServerId="server-a"
+                previewText="Preview"
+                onResolve={vi.fn()}
+                onClose={vi.fn()}
+            />,
+        );
+
+        expect(screen.getTextContent()).toContain('List only destination');
+    });
+
     it('resolves the new-session action from the top option', async () => {
         sessionsRef.current = [
             createSessionFixture({ id: 'source', serverId: 'server-a', metadata: createNamedMetadata('Source') }),
@@ -136,6 +176,8 @@ describe('TranscriptSendToSessionModal', () => {
     it('shows provider logos plus status and meaningful activity on the right of session rows', async () => {
         const nowMs = Date.now();
         const activityAt = nowMs - 2 * 60 * 60 * 1000;
+        const sameServerMetadata = createNamedMetadata('Same server');
+        if (!sameServerMetadata) throw new Error('expected session metadata fixture');
         sessionsRef.current = [
             createSessionFixture({ id: 'source', serverId: 'server-a', metadata: createNamedMetadata('Source') }),
             createSessionFixture({
@@ -150,7 +192,7 @@ describe('TranscriptSendToSessionModal', () => {
                 latestTurnStatusObservedAt: nowMs,
                 meaningfulActivityAt: activityAt,
                 metadata: {
-                    ...createNamedMetadata('Same server'),
+                    ...sameServerMetadata,
                     flavor: 'claude',
                 },
             }),
@@ -171,6 +213,44 @@ describe('TranscriptSendToSessionModal', () => {
         expect(meta).not.toBeNull();
         expect(screen.getTextContent()).toContain('working...');
         expect(screen.getTextContent()).toContain('2h');
+    });
+
+    it('uses a native-safe fixed-height scroll viewport that grows with the modal and exposes scroll affordances', async () => {
+        keyboardLayoutState.windowHeight = 1000;
+        keyboardLayoutState.windowWidth = 1200;
+        sessionsRef.current = [
+            createSessionFixture({ id: 'source', serverId: 'server-a', metadata: createNamedMetadata('Source') }),
+            ...Array.from({ length: 12 }, (_, index) => createSessionFixture({
+                id: `same-server-${index}`,
+                serverId: 'server-a',
+                accessLevel: 'edit',
+                metadata: createNamedMetadata(`Same server ${index}`),
+            })),
+        ];
+
+        const screen = await renderScreen(
+            <TranscriptSendToSessionModal
+                sourceSessionId="source"
+                sourceServerId="server-a"
+                previewText="Preview"
+                onResolve={vi.fn()}
+                onClose={vi.fn()}
+            />,
+        );
+
+        const list = screen.findByTestId('transcript-send-to-session-list');
+        if (!list) throw new Error('expected transcript send-to session list to render');
+        const listStyle = flattenStyle(list.props.style);
+        expect(listStyle.height).toBe(listStyle.maxHeight);
+        expect(listStyle.height).toBeGreaterThanOrEqual(500);
+
+        const bodyScroll = screen.findByTestId('transcript-send-to-session-list:bodyScroll');
+        expect(bodyScroll).not.toBeNull();
+        expect(bodyScroll?.props.showsVerticalScrollIndicator).toBe(true);
+        const fadeHost = screen.findByTestId('transcript-send-to-session-list:bodyScroll:fadeHost');
+        const bottomFade = screen.findByTestId('transcript-send-to-session-list:bodyScroll:fadeBottom');
+        expect(fadeHost).not.toBeNull();
+        expect(bottomFade?.props.pointerEvents).toBe('none');
     });
 
     it('reduces the destination list height while the native keyboard is open', async () => {

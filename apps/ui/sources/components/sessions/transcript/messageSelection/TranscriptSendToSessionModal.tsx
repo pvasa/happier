@@ -11,8 +11,10 @@ import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 import type { CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
-import { useSessions } from '@/sync/domains/state/storage';
+import { useSessionListViewDataByServerId, useSessions } from '@/sync/domains/state/storage';
 import { readSessionListMeaningfulActivityAt } from '@/sync/domains/session/listing/sessionListOrderingRules';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import type { SessionListViewItem } from '@/sync/domains/session/listing/sessionListViewData';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 import { formatShortRelativeTimeAt } from '@/utils/time/formatShortRelativeTime';
@@ -71,11 +73,50 @@ const styles = StyleSheet.create((theme) => ({
     },
 }));
 
-type TranscriptSendToSessionTarget = Session & Readonly<{ serverId: string }>;
+type TranscriptSendToSessionTargetSource = Session | SessionListRenderableSession;
+type TranscriptSendToSessionTarget = TranscriptSendToSessionTargetSource & Readonly<{ serverId: string }>;
 
 const NEW_SESSION_DESTINATION_ID = 'new-session';
 
-function resolveSessionAgentId(session: Session) {
+function normalizeNonEmptyString(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
+function appendTranscriptSendToTarget(
+    targets: TranscriptSendToSessionTarget[],
+    seenTargetKeys: Set<string>,
+    session: TranscriptSendToSessionTargetSource,
+    rawServerId: unknown,
+): void {
+    const sessionId = normalizeNonEmptyString(session.id);
+    const serverId = normalizeNonEmptyString(rawServerId);
+    if (!sessionId || !serverId) return;
+
+    const targetKey = `${serverId}\u0000${sessionId}`;
+    if (seenTargetKeys.has(targetKey)) return;
+    seenTargetKeys.add(targetKey);
+    targets.push({ ...session, serverId });
+}
+
+function appendSessionListTargets(
+    targets: TranscriptSendToSessionTarget[],
+    seenTargetKeys: Set<string>,
+    sessionListViewDataByServerId: Readonly<Record<string, ReadonlyArray<SessionListViewItem> | null>>,
+): void {
+    for (const [recordServerId, items] of Object.entries(sessionListViewDataByServerId)) {
+        const serverId = normalizeNonEmptyString(recordServerId);
+        if (!serverId || !Array.isArray(items)) continue;
+
+        for (const item of items) {
+            if (item.type !== 'session') continue;
+            appendTranscriptSendToTarget(targets, seenTargetKeys, item.session, item.serverId ?? serverId);
+        }
+    }
+}
+
+function resolveSessionAgentId(session: TranscriptSendToSessionTargetSource) {
     return resolveAgentIdFromFlavor(session.metadata?.flavor) ?? DEFAULT_AGENT_ID;
 }
 
@@ -113,9 +154,10 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
     const windowDimensions = useWindowDimensions();
     const keyboardHeight = useKeyboardHeight();
     const modalLayout = React.useMemo(() => resolveTranscriptSendToSessionModalLayout({
+        windowWidth: windowDimensions.width,
         windowHeight: windowDimensions.height,
         keyboardHeight,
-    }), [keyboardHeight, windowDimensions.height]);
+    }), [keyboardHeight, windowDimensions.height, windowDimensions.width]);
     const chrome = React.useMemo(() => ({
         kind: 'card' as const,
         layout: 'fill' as const,
@@ -128,17 +170,26 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
     useModalCardChrome(props.setChrome, chrome);
 
     const sourceServerId = props.sourceServerId.trim();
+    const sourceServerIds = React.useMemo(() => sourceServerId ? [sourceServerId] : [], [sourceServerId]);
+    const sessionListViewDataByServerId = useSessionListViewDataByServerId(sourceServerIds);
     const targets = React.useMemo<ReadonlyArray<TranscriptSendToSessionTarget>>(() => {
-        const candidates: TranscriptSendToSessionTarget[] = sessions.flatMap((session) => {
-            const serverId = (session.serverId ?? resolveServerIdForSessionIdFromLocalCache(session.id) ?? '').trim();
-            return serverId ? [{ ...session, serverId }] : [];
-        });
+        const candidates: TranscriptSendToSessionTarget[] = [];
+        const seenTargetKeys = new Set<string>();
+        appendSessionListTargets(candidates, seenTargetKeys, sessionListViewDataByServerId);
+        for (const session of sessions) {
+            appendTranscriptSendToTarget(
+                candidates,
+                seenTargetKeys,
+                session,
+                session.serverId ?? resolveServerIdForSessionIdFromLocalCache(session.id),
+            );
+        }
         return resolveTranscriptSendToSessionTargets({
             sourceSessionId: props.sourceSessionId,
             sourceServerId,
             sessions: candidates,
         }) as ReadonlyArray<TranscriptSendToSessionTarget>;
-    }, [props.sourceSessionId, sessions, sourceServerId]);
+    }, [props.sourceSessionId, sessions, sessionListViewDataByServerId, sourceServerId]);
 
     const onResolve = props.onResolve;
     const onClose = props.onClose;
@@ -209,7 +260,8 @@ export const TranscriptSendToSessionModal = React.memo(function TranscriptSendTo
                     autoFocusInputOnWeb
                     keyboardHintsEnabled
                     maxHeight={modalLayout.listMaxHeight}
-                    heightBehavior="measuredToMaxHeight"
+                    heightBehavior="fixedToMaxHeight"
+                    showsVerticalScrollIndicator
                 />
             ) : (
                 <Text testID="transcript-send-to-session-empty" style={styles.empty}>
