@@ -36,6 +36,16 @@ export function resolveApiListenHost(env: Record<string, string | undefined>): s
     return host.length > 0 ? host : '0.0.0.0';
 }
 
+export const DEFAULT_API_CORS_MAX_AGE_SECONDS = 600;
+
+export function resolveApiCorsMaxAgeSeconds(env: Record<string, string | undefined>): number {
+    const raw = (env.HAPPIER_API_CORS_MAX_AGE_SECONDS ?? env.HAPPY_API_CORS_MAX_AGE_SECONDS ?? '').toString().trim();
+    if (!raw) return DEFAULT_API_CORS_MAX_AGE_SECONDS;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_API_CORS_MAX_AGE_SECONDS;
+    return parsed;
+}
+
 export async function startApi() {
 
     // Configure
@@ -53,7 +63,8 @@ export async function startApi() {
         // Keep permissive defaults for now. Tighten via a proxy/WAF or by
         // changing this list once deployments are stable.
         allowedHeaders: ['authorization', 'content-type'],
-        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        maxAge: resolveApiCorsMaxAgeSeconds(process.env),
     });
     app.register(import('@fastify/rate-limit'), resolveApiRateLimitPluginOptions(process.env));
 
