@@ -1470,20 +1470,9 @@ export class ApiSessionClient extends EventEmitter {
         }
         return new Promise((resolve) => {
             let cleanedUp = false;
-            const shouldWatchConnect = !this.userSocket.connected;
             const onUpdate = () => {
                 cleanup();
                 resolve(true);
-            };
-            const onConnect = () => {
-                void (async () => {
-                    // If we just connected the user-scoped socket, we may have missed "update-session" broadcasts
-                    // while it was disconnected. Sync a snapshot once so callers can reliably observe the latest
-                    // metadata/agentState immediately after this wakeup.
-                    await this.syncSessionSnapshotFromServer({ reason: 'connect' });
-                    cleanup();
-                    resolve(true);
-                })();
             };
             const onAbort = () => {
                 cleanup();
@@ -1498,17 +1487,11 @@ export class ApiSessionClient extends EventEmitter {
                 cleanedUp = true;
                 this.off('metadata-updated', onUpdate);
                 abortSignal?.removeEventListener('abort', onAbort);
-                if (shouldWatchConnect) {
-                    this.userSocket.off('connect', onConnect);
-                }
                 this.userSocket.off('disconnect', onDisconnect);
                 this.maybeScheduleUserSocketDisconnect();
             };
 
             this.on('metadata-updated', onUpdate);
-            if (shouldWatchConnect) {
-                this.userSocket.on('connect', onConnect);
-            }
             abortSignal?.addEventListener('abort', onAbort, { once: true });
             this.userSocket.on('disconnect', onDisconnect);
 
@@ -1528,10 +1511,6 @@ export class ApiSessionClient extends EventEmitter {
                 this.pendingWakeSeq !== startPendingWakeSeq
             ) {
                 onUpdate();
-                return;
-            }
-            if (shouldWatchConnect && this.userSocket.connected) {
-                onConnect();
                 return;
             }
         });

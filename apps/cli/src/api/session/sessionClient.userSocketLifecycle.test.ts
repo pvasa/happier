@@ -95,6 +95,37 @@ describe('ApiSessionClient user socket lifecycle', () => {
     await client.close();
   });
 
+  it('does not treat user-scoped socket connect as a session-detail catch-up wake', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ id: 'session-socket', connected: true });
+    userSocketStub = createApiSessionSocketStub({ id: 'user-socket', connected: false });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    const snapshotSync = vi.fn(async () => {});
+    (client as any).syncSessionSnapshotFromServer = snapshotSync;
+
+    const abortController = new AbortController();
+    const observedResults: boolean[] = [];
+    const waitPromise = client.waitForMetadataUpdate(abortController.signal).then((result) => {
+      observedResults.push(result);
+      return result;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(userSocketStub.connect).toHaveBeenCalledTimes(1);
+    expect(snapshotSync).not.toHaveBeenCalled();
+    expect(observedResults).toEqual([]);
+
+    abortController.abort();
+    await expect(waitPromise).resolves.toBe(false);
+    expect(observedResults).toEqual([false]);
+
+    await client.close();
+  });
+
   it('emits metadata-updated after storing the fresh metadata snapshot from update-session', async () => {
     vi.resetModules();
     sessionSocketStub = createApiSessionSocketStub({ id: 'session-socket', connected: true });
