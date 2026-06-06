@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, mkdir, rm, readFile } from 'node:fs/promises';
+import { lstat, mkdtemp, writeFile, mkdir, rm, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import * as packModule from './pack.mjs';
 import { analyzeTarList, findMonorepoRoot, resolvePackDirForComponent } from './pack.mjs';
 
 test('analyzeTarList detects bundled workspace deps in tar listing', () => {
@@ -62,6 +63,75 @@ test('resolvePackDirForComponent prefers explicitDir override', async () => {
       explicitDir: explicit,
     });
     assert.equal(resolve(resolved), resolve(explicit));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('createPackSandbox includes root workspace scripts required by workspace package builds', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pack-test-sandbox-scripts-'));
+  let sandbox = null;
+  try {
+    await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'monorepo' }));
+    await writeFile(join(root, 'yarn.lock'), '# lock');
+    await mkdir(join(root, 'apps', 'cli'), { recursive: true });
+    await mkdir(join(root, 'packages', 'agents'), { recursive: true });
+    await mkdir(join(root, 'packages', 'cli-common'), { recursive: true });
+    await mkdir(join(root, 'packages', 'connection-supervisor'), { recursive: true });
+    await mkdir(join(root, 'packages', 'protocol'), { recursive: true });
+    await mkdir(join(root, 'packages', 'release-runtime'), { recursive: true });
+    await mkdir(join(root, 'packages', 'transfers'), { recursive: true });
+    await mkdir(join(root, 'node_modules', '.bin'), { recursive: true });
+    await mkdir(join(root, 'apps', 'stack', 'scripts', 'utils', 'workspaces'), { recursive: true });
+    await mkdir(join(root, 'scripts', 'workspaces'), { recursive: true });
+    await writeFile(
+      join(root, 'apps', 'cli', 'package.json'),
+      JSON.stringify({
+        dependencies: {
+          '@happier-dev/connection-supervisor': '0.0.0',
+          '@happier-dev/transfers': '0.0.0',
+        },
+        bundledDependencies: ['@happier-dev/release-runtime'],
+      }),
+    );
+    await writeFile(join(root, 'apps', 'stack', 'scripts', 'utils', 'workspaces', 'workspaceBundleLock.mjs'), 'export const lock = true;\n');
+    await writeFile(join(root, 'scripts', 'workspaces', 'execYarnCommand.mjs'), 'export const sentinel = true;\n');
+    await writeFile(join(root, 'packages', 'connection-supervisor', 'package.json'), JSON.stringify({ name: '@happier-dev/connection-supervisor' }));
+    await writeFile(join(root, 'packages', 'release-runtime', 'package.json'), JSON.stringify({ name: '@happier-dev/release-runtime' }));
+    await writeFile(join(root, 'packages', 'transfers', 'package.json'), JSON.stringify({ name: '@happier-dev/transfers' }));
+
+    assert.equal(typeof packModule.createPackSandbox, 'function');
+    sandbox = await packModule.createPackSandbox({ monorepoRoot: root, packageRelDir: 'apps/cli' });
+
+    const copied = await readFile(join(sandbox, 'scripts', 'workspaces', 'execYarnCommand.mjs'), 'utf8');
+    assert.match(copied, /sentinel/);
+    const stackWorkspaceLock = await readFile(
+      join(sandbox, 'apps', 'stack', 'scripts', 'utils', 'workspaces', 'workspaceBundleLock.mjs'),
+      'utf8',
+    );
+    assert.match(stackWorkspaceLock, /lock/);
+    assert.match(
+      await readFile(join(sandbox, 'packages', 'connection-supervisor', 'package.json'), 'utf8'),
+      /connection-supervisor/,
+    );
+    assert.match(await readFile(join(sandbox, 'packages', 'release-runtime', 'package.json'), 'utf8'), /release-runtime/);
+    assert.match(await readFile(join(sandbox, 'packages', 'transfers', 'package.json'), 'utf8'), /transfers/);
+    assert.equal((await lstat(join(sandbox, 'node_modules'))).isSymbolicLink(), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    if (sandbox) await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('buildPackEnvironment exposes the monorepo toolchain binaries to pack scripts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pack-test-env-'));
+  try {
+    const env = packModule.buildPackEnvironment({
+      monorepoRoot: root,
+      env: { PATH: '/usr/bin' },
+    });
+
+    assert.equal(env.PATH.split(':')[0], join(root, 'node_modules', '.bin'));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

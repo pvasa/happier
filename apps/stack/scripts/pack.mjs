@@ -1,7 +1,7 @@
 import './utils/env/env.mjs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { basename, delimiter, dirname, join, relative, resolve, sep } from 'node:path';
+import { mkdtemp, readFile, rm, stat, symlink } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
@@ -44,6 +44,27 @@ async function readJson(path) {
   return JSON.parse(await readFile(path, 'utf8'));
 }
 
+function collectInternalWorkspacePackageDirs(packageJson) {
+  const packageNames = new Set();
+  for (const source of [
+    packageJson?.dependencies,
+    packageJson?.devDependencies,
+    packageJson?.optionalDependencies,
+    packageJson?.peerDependencies,
+  ]) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+    for (const name of Object.keys(source)) {
+      if (name.startsWith('@happier-dev/')) packageNames.add(name);
+    }
+  }
+  for (const name of packageJson?.bundledDependencies ?? packageJson?.bundleDependencies ?? []) {
+    if (typeof name === 'string' && name.startsWith('@happier-dev/')) packageNames.add(name);
+  }
+  return [...packageNames]
+    .map((name) => `packages/${name.slice('@happier-dev/'.length)}`)
+    .sort();
+}
+
 export async function resolvePackDirForComponent({ component, componentDir, explicitDir }) {
   if (explicitDir) return explicitDir;
 
@@ -74,7 +95,7 @@ async function copyDir(src, dest) {
   await runCapture('cp', ['-R', src, dest], { cwd: '/', env: process.env });
 }
 
-async function createPackSandbox({ monorepoRoot, packageRelDir }) {
+export async function createPackSandbox({ monorepoRoot, packageRelDir }) {
   const sandboxRoot = await mkdtemp(join(tmpdir(), 'hstack-pack-'));
 
   // Minimal monorepo layout needed for pack steps that reference workspace deps:
@@ -89,12 +110,21 @@ async function createPackSandbox({ monorepoRoot, packageRelDir }) {
     await copyDir(join(monorepoRoot, f), join(sandboxRoot, f));
   }
 
-  const dirsToCopy = [
+  const rootNodeModules = join(monorepoRoot, 'node_modules');
+  if (await pathExists(rootNodeModules)) {
+    await symlink(rootNodeModules, join(sandboxRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  }
+
+  const targetPackageJson = await readJson(join(monorepoRoot, packageRelDir, 'package.json')).catch(() => ({}));
+  const dirsToCopy = [...new Set([
     packageRelDir,
     'packages/agents',
     'packages/cli-common',
     'packages/protocol',
-  ];
+    'apps/stack/scripts/utils/workspaces',
+    'scripts/workspaces',
+    ...collectInternalWorkspacePackageDirs(targetPackageJson),
+  ])];
   for (const d of dirsToCopy) {
     const src = join(monorepoRoot, d);
     if (!(await pathExists(src))) {
@@ -113,6 +143,20 @@ export function analyzeTarList(paths) {
   const hasCliCommon = paths.some((p) => p.startsWith('package/node_modules/@happier-dev/cli-common/'));
   const hasProtocol = paths.some((p) => p.startsWith('package/node_modules/@happier-dev/protocol/'));
   return { hasAgents, hasCliCommon, hasProtocol };
+}
+
+function resolvePathKey(env) {
+  return Object.keys(env ?? {}).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+}
+
+export function buildPackEnvironment({ monorepoRoot, env = process.env }) {
+  const pathKey = resolvePathKey(env);
+  const rootBinDir = join(monorepoRoot, 'node_modules', '.bin');
+  const existingPath = String(env?.[pathKey] ?? '').trim();
+  return {
+    ...env,
+    [pathKey]: existingPath ? `${rootBinDir}${delimiter}${existingPath}` : rootBinDir,
+  };
 }
 
 async function main() {
@@ -187,19 +231,20 @@ async function main() {
 
   const sandboxRoot = await createPackSandbox({ monorepoRoot, packageRelDir });
   const sandboxPackDir = join(sandboxRoot, packageRelDir);
+  const packEnv = buildPackEnvironment({ monorepoRoot, env: process.env });
 
   try {
     // 1) dry run: helps catch issues without producing a tarball
-    const dryRunOut = await runCapture('npm', ['pack', '--dry-run'], { cwd: sandboxPackDir, env: process.env });
+    const dryRunOut = await runCapture('npm', ['pack', '--dry-run'], { cwd: sandboxPackDir, env: packEnv });
 
     // 2) real pack: create tarball and inspect contents
-    const tarballNameRaw = (await runCapture('npm', ['pack'], { cwd: sandboxPackDir, env: process.env })).trim();
+    const tarballNameRaw = (await runCapture('npm', ['pack'], { cwd: sandboxPackDir, env: packEnv })).trim();
     const tarballName = tarballNameRaw.split('\n').filter(Boolean).slice(-1)[0] ?? '';
     if (!tarballName) {
       throw new Error('[pack] npm pack did not produce a tarball name');
     }
     const tarballPath = join(sandboxPackDir, tarballName);
-    const tarListRaw = await runCapture('tar', ['-tf', tarballPath], { cwd: sandboxPackDir, env: process.env });
+    const tarListRaw = await runCapture('tar', ['-tf', tarballPath], { cwd: sandboxPackDir, env: packEnv });
     const tarPaths = tarListRaw.split('\n').map((l) => l.trim()).filter(Boolean);
     const { hasAgents, hasCliCommon, hasProtocol } = analyzeTarList(tarPaths);
 
