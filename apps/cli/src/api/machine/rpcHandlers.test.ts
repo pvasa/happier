@@ -8,7 +8,7 @@ import tweetnacl from 'tweetnacl';
 import axios from 'axios';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { sealEncryptedDataKeyEnvelopeV1, SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
+import { sealEncryptedDataKeyEnvelopeV1, SPAWN_SESSION_ERROR_CODES, SPAWN_SESSION_ERROR_DETAIL_KINDS } from '@happier-dev/protocol';
 import { buildCodexAgentRuntimeDescriptor } from '@happier-dev/agents';
 import { encrypt, encodeBase64 } from '@/api/encryption';
 import type { HttpStatusErrorWithCode } from '@/api/client/httpStatusError';
@@ -654,6 +654,57 @@ describe('registerMachineRpcHandlers', () => {
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
       errorMessage: 'Session startup is still pending',
+    });
+  });
+
+  it('preserves structured connected-service error details from daemon spawn envelopes', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+    const errorDetail = {
+      kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_UX_DIAGNOSTIC,
+      uxDiagnostic: {
+        code: 'connected_service_materialization_identity_missing',
+        failurePhase: 'materialization',
+        source: 'spawn_resume',
+        agentId: 'codex',
+        retryable: false,
+        suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+        diagnostics: {
+          reason: 'missing_identity_and_resume_state',
+        },
+      },
+    };
+
+    const spawnSession = vi.fn(async (): Promise<any> => ({
+      success: false,
+      errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      error: 'connected_service_materialization_identity_missing',
+      errorDetail,
+    }));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.SPAWN_HAPPY_SESSION);
+    expect(handler).toBeDefined();
+
+    await expect(handler!({
+      directory: '/tmp',
+      spawnNonce: 'spawn-nonce-error',
+    })).resolves.toEqual({
+      type: 'error',
+      errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      errorMessage: 'connected_service_materialization_identity_missing',
+      errorDetail,
     });
   });
 
@@ -2156,6 +2207,9 @@ describe('registerMachineRpcHandlers', () => {
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       existingSessionId: 'sess_child',
     }));
+    expect((spawnSession as any).mock.calls[0]?.[0]).not.toHaveProperty(
+      'connectedServiceMaterializationIdentityV1',
+    );
     expect(getSpy).toHaveBeenCalled();
     expect(getSpy).toHaveBeenCalledTimes(4);
     expect(updateSessionMetadataWithRetryMock).toHaveBeenCalledTimes(0);
@@ -2164,7 +2218,168 @@ describe('registerMachineRpcHandlers', () => {
     const createdMeta = JSON.parse(String(posted.metadata)) as any;
     expect(createdMeta.forkV1).toMatchObject({ v: 1, parentSessionId: 'sess_parent', parentCutoffSeqInclusive: 20 });
     expect(createdMeta.replaySeedV1).toMatchObject({ v: 1, sourceSessionId: 'sess_parent', sourceCutoffSeqInclusive: 20 });
+    expect(createdMeta.connectedServiceMaterializationIdentityV1).toBeUndefined();
     expect(String(createdMeta.replaySeedV1.seedText ?? '')).toContain('User: first-unique');
+  });
+
+  it('forks connected-service replay children with a fresh child materialization identity', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_child' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get((RPC_METHODS as any).SESSION_FORK);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    const connectedServices = {
+      v: 1,
+      bindingsByServiceId: {
+        'openai-codex': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'happier',
+          profileId: 'codex1',
+        },
+      },
+    };
+    const parentIdentity = {
+      v: 1,
+      id: 'csm_parent_replay_identity',
+      createdAtMs: 100,
+    };
+    const parentMetadataPlain = JSON.stringify({
+      path: '/repo',
+      flavor: 'codex',
+      connectedServices,
+      connectedServicesUpdatedAt: 222,
+      connectedServiceMaterializationIdentityV1: parentIdentity,
+    });
+
+    const getSpy = vi.spyOn(axios, 'get');
+    const postSpy = vi.spyOn(axios, 'post');
+    getSpy
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 2,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 7,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          messages: [
+            { seq: 2, createdAt: 2, content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'hi fork' } } } },
+          ],
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 2,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 7,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          messages: [
+            { seq: 1, createdAt: 1, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello fork' } } } },
+            { seq: 2, createdAt: 2, content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'hi fork' } } } },
+          ],
+        },
+      } as any);
+
+    postSpy.mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess_child',
+          seq: 0,
+          createdAt: 10,
+          updatedAt: 10,
+          active: false,
+          activeAt: 0,
+          encryptionMode: 'plain',
+          metadata: JSON.stringify({ path: '/repo', flavor: 'codex' }),
+          metadataVersion: 0,
+          agentState: null,
+          agentStateVersion: 0,
+          dataEncryptionKey: null,
+        },
+      },
+    } as any);
+
+    const result = await handler!({
+      v: 1,
+      parentSessionId: 'sess_parent',
+      forkPoint: { type: 'seq', upToSeqInclusive: 2 },
+      strategy: 'replay',
+    });
+
+    expect(result).toMatchObject({ ok: true, childSessionId: 'sess_child' });
+    const spawnOptions = (spawnSession as any).mock.calls[0]?.[0] as any;
+    expect(spawnOptions).toMatchObject({
+      directory: '/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      existingSessionId: 'sess_child',
+      connectedServices,
+      connectedServicesUpdatedAt: 222,
+    });
+    expect(spawnOptions.connectedServiceMaterializationIdentityV1).toEqual(expect.objectContaining({ v: 1 }));
+    expect(spawnOptions.connectedServiceMaterializationIdentityV1.id).not.toBe(parentIdentity.id);
+
+    const posted = (postSpy as any).mock.calls[0][1] as any;
+    const createdMeta = JSON.parse(String(posted.metadata)) as any;
+    expect(createdMeta.connectedServices).toEqual(connectedServices);
+    expect(createdMeta.connectedServicesUpdatedAt).toBe(222);
+    expect(createdMeta.connectedServiceMaterializationIdentityV1).toEqual(
+      spawnOptions.connectedServiceMaterializationIdentityV1,
+    );
+    expect(createdMeta.connectedServiceMaterializationIdentityV1.id).not.toBe(parentIdentity.id);
+    expect(createdMeta.forkV1).toMatchObject({ v: 1, parentSessionId: 'sess_parent', strategy: 'replay' });
+    expect(createdMeta.replaySeedV1).toMatchObject({ v: 1, sourceSessionId: 'sess_parent', sourceCutoffSeqInclusive: 2 });
   });
 
   it('rejects message-level fork requests with an uncommitted seq (<= 0)', async () => {
@@ -2851,10 +3066,31 @@ describe('registerMachineRpcHandlers', () => {
         path: '/repo',
         flavor: 'codex',
         codexSessionId: 'codex_parent',
-        agentRuntimeDescriptorV1: {
+        agentRuntimeDescriptorV1: buildCodexAgentRuntimeDescriptor({
+          backendMode: 'acp',
+          vendorSessionId: 'codex_parent',
+          home: 'connectedService',
+          connectedServiceId: 'openai-codex',
+          connectedServiceGroupId: 'happier',
+          connectedServiceProfileId: 'codex1',
+          homePath: '/tmp/codex-home',
+        }),
+        connectedServices: {
           v: 1,
-          providerId: 'codex',
-          provider: { backendMode: 'acp', vendorSessionId: 'codex_parent' },
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'happier',
+              profileId: 'codex1',
+            },
+          },
+        },
+        connectedServicesUpdatedAt: 333,
+        connectedServiceMaterializationIdentityV1: {
+          v: 1,
+          id: 'csm_parent_acp_identity',
+          createdAtMs: 100,
         },
         acpSessionModelsV1: {
           v: 1,
@@ -2933,14 +3169,34 @@ describe('registerMachineRpcHandlers', () => {
         approvedNewDirectoryCreation: true,
         resume: 'codex_forked',
         codexBackendMode: 'acp',
+        connectedServices: {
+          v: 1,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'happier',
+              profileId: 'codex1',
+            },
+          },
+        },
+        connectedServicesUpdatedAt: 333,
       }),
     );
 
     expect(result).toMatchObject({ ok: true, childSessionId: 'sess_child' });
+    const spawnOptions = (spawnSession as any).mock.calls[0]?.[0] as any;
+    expect(spawnOptions.connectedServiceMaterializationIdentityV1).toEqual(expect.objectContaining({ v: 1 }));
+    expect(spawnOptions.connectedServiceMaterializationIdentityV1.id).not.toBe('csm_parent_acp_identity');
     expect(updateSessionMetadataWithRetryMock).toHaveBeenCalledTimes(1);
     const updater = (updateSessionMetadataWithRetryMock as any).mock.calls[0][0].updater as (m: any) => any;
     const updated = updater({ path: '/repo', flavor: 'codex' });
     expect(updated.codexBackendMode).toBe('acp');
+    expect(updated.connectedServices).toEqual(spawnOptions.connectedServices);
+    expect(updated.connectedServicesUpdatedAt).toBe(333);
+    expect(updated.connectedServiceMaterializationIdentityV1).toEqual(
+      spawnOptions.connectedServiceMaterializationIdentityV1,
+    );
     expect(updated.forkV1).toMatchObject({ v: 1, parentSessionId: 'sess_parent', strategy: 'acp_fork_latest' });
     expect(updated.forkV1.providerHint).toMatchObject({ providerId: 'codex', backendMode: 'acp', vendorSessionId: 'codex_forked' });
     expect(updated.replaySeedV1).toBeUndefined();
@@ -3944,6 +4200,9 @@ describe('registerMachineRpcHandlers', () => {
         HAPPIER_OPENCODE_SERVER_URL_EXPLICIT: '1',
       },
     }));
+    expect((spawnSession as any).mock.calls[0]?.[0]).not.toHaveProperty(
+      'connectedServiceMaterializationIdentityV1',
+    );
     expect(updateSessionMetadataWithRetryMock).toHaveBeenCalledTimes(1);
     const updater = (updateSessionMetadataWithRetryMock as any).mock.calls[0][0].updater as (m: any) => any;
     const updated = updater({ path: '/repo', flavor: 'opencode' });
@@ -3951,6 +4210,7 @@ describe('registerMachineRpcHandlers', () => {
     expect(updated.opencodeBackendMode).toBe('server');
     expect(updated.opencodeServerBaseUrl).toBe('http://127.0.0.1:4096/');
     expect(updated.opencodeServerBaseUrlExplicit).toBe(true);
+    expect(updated.connectedServiceMaterializationIdentityV1).toBeUndefined();
     expect(updated.forkV1).toMatchObject({
       v: 1,
       parentSessionId: 'sess_parent',
@@ -4172,6 +4432,11 @@ describe('registerMachineRpcHandlers', () => {
         connectedServiceProfileId: 'codex1',
         homePath: '/tmp/codex-home',
       }),
+      connectedServiceMaterializationIdentityV1: {
+        v: 1,
+        id: 'csm_parent_native_identity',
+        createdAtMs: 100,
+      },
       permissionMode: 'acceptEdits',
       permissionModeUpdatedAt: 123,
       modelOverrideV1: { v: 1, updatedAt: 456, modelId: 'gpt-5.4' },
@@ -4247,6 +4512,9 @@ describe('registerMachineRpcHandlers', () => {
         },
       },
     }));
+    const spawnOptions = (spawnSession as any).mock.calls[0]?.[0] as any;
+    expect(spawnOptions.connectedServiceMaterializationIdentityV1).toEqual(expect.objectContaining({ v: 1 }));
+    expect(spawnOptions.connectedServiceMaterializationIdentityV1.id).not.toBe('csm_parent_native_identity');
     expect(updateSessionMetadataWithRetryMock).toHaveBeenCalledTimes(1);
     const updater = (updateSessionMetadataWithRetryMock as any).mock.calls[0][0].updater as (m: any) => any;
     const updated = updater({ path: '/repo', flavor: 'codex' });
@@ -4263,6 +4531,9 @@ describe('registerMachineRpcHandlers', () => {
         },
       },
     });
+    expect(updated.connectedServiceMaterializationIdentityV1).toEqual(
+      spawnOptions.connectedServiceMaterializationIdentityV1,
+    );
     expect(updated.forkV1).toMatchObject({
       v: 1,
       parentSessionId: 'sess_parent',

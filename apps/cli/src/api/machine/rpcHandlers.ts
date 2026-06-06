@@ -7,11 +7,11 @@ import { collectBugReportMachineDiagnosticsSnapshotForBugReport } from '@/diagno
 
 import {
   SPAWN_SESSION_ERROR_CODES,
-  resolveCanonicalCodexBackendMode,
   type SpawnSessionErrorCode,
   type SpawnSessionOptions,
   type SpawnSessionResult,
 } from '@/rpc/handlers/registerSessionHandlers';
+import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/codexBackendMode';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
   AcpConfigOptionOverridesV1Schema,
@@ -22,6 +22,7 @@ import {
   SessionForkRpcParamsSchema,
   SessionInitialGoalRequestV1Schema,
   SessionMcpSelectionV1Schema,
+  isSpawnSessionErrorDetail,
   type ConnectedServiceBindingsV1,
 } from '@happier-dev/protocol';
 import { isPermissionMode } from '@/api/types';
@@ -32,6 +33,7 @@ import { createReplaySeededSession } from '@/session/replay/createReplaySeededSe
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { tryDecryptSessionMetadata } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveForkCutoffSeqInclusive } from '@/session/fork/resolveForkCutoffSeqInclusive';
+import { createConnectedServiceForkLaunchContext } from '@/session/fork/connectedServiceForkLaunchContext';
 import { resolveForkInheritedOverridesFromMetadata } from '@/session/fork/resolveForkInheritedOverridesFromMetadata';
 import type { SessionHandoffLocalMetadataSource } from '@/session/handoff/metadata/runtimeLocalSessionHandoffMetadata';
 import { updateSessionMetadataWithRetry } from '@/session/metadata/updateSessionMetadataWithRetry';
@@ -59,7 +61,9 @@ import { registerMachineServerWorkRpcHandlers } from './rpcHandlers.serverWork';
 import type { DaemonServerWorkScheduler } from '@/daemon/serverWork';
 import type {
   CancelInactiveSessionUsageLimitRecoveryCheck,
+  NotifyConnectedServiceRuntimeAuthFailure,
   ResumeInactiveSessionWhenUsageLimitReady,
+  RetryTemporaryThrottleNow,
   ScheduleInactiveSessionUsageLimitRecoveryCheck,
 } from '@/session/actions/createCliActionDeps';
 import { registerPetRpcHandlers } from '@/pets/rpc/registerPetRpcHandlers';
@@ -126,11 +130,13 @@ function normalizeDaemonSpawnSessionEnvelope(result: unknown): SpawnSessionResul
       : envelope.status === 'pending' && errorCode === SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT
         ? 'Session startup is still pending'
         : 'Failed to spawn session';
+  const errorDetail = isSpawnSessionErrorDetail(envelope.errorDetail) ? envelope.errorDetail : undefined;
 
   return {
     type: 'error',
     errorCode,
     errorMessage,
+    ...(errorDetail ? { errorDetail } : {}),
   };
 }
 import { isAuthenticationError } from '@/api/client/httpStatusError';
@@ -178,6 +184,8 @@ export type MachineRpcHandlerDeps = Readonly<{
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
   cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
+  notifyConnectedServiceRuntimeAuthFailure?: NotifyConnectedServiceRuntimeAuthFailure;
+  retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
 }>;
 
 async function fetchForkChildSessionOrThrow(params: Readonly<{
@@ -602,6 +610,12 @@ export function registerMachineRpcHandlers(params: Readonly<{
       ...(params.deps?.cancelInactiveSessionUsageLimitRecoveryCheck
         ? { cancelInactiveSessionUsageLimitRecoveryCheck: params.deps.cancelInactiveSessionUsageLimitRecoveryCheck }
         : {}),
+      ...(params.deps?.notifyConnectedServiceRuntimeAuthFailure
+        ? { notifyConnectedServiceRuntimeAuthFailure: params.deps.notifyConnectedServiceRuntimeAuthFailure }
+        : {}),
+      ...(params.deps?.retryTemporaryThrottleNow
+        ? { retryTemporaryThrottleNow: params.deps.retryTemporaryThrottleNow }
+        : {}),
     },
   });
   registerPetRpcHandlers({
@@ -873,6 +887,17 @@ export function registerMachineRpcHandlers(params: Readonly<{
         ? readOpenCodeSessionAffinityFromMetadata(parentMetadata)
         : null;
     const inheritedForkOverrides = resolveForkInheritedOverridesFromMetadata(parentMetadata, agentRaw);
+    const connectedServiceForkLaunchContext = createConnectedServiceForkLaunchContext({
+      inherited: inheritedForkOverrides,
+    });
+    const inheritedForkSpawnOverrides = {
+      ...inheritedForkOverrides.spawn,
+      ...connectedServiceForkLaunchContext.spawn,
+    } satisfies Partial<SpawnSessionOptions>;
+    const inheritedForkMetadataOverrides = {
+      ...inheritedForkOverrides.metadata,
+      ...connectedServiceForkLaunchContext.metadata,
+    };
 
     const targetSeqInclusive = forkPoint.type === 'seq'
       ? forkPoint.upToSeqInclusive
@@ -938,7 +963,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
             approvedNewDirectoryCreation: true,
             spawnNonce,
             ...nativeFork.spawn,
-            ...inheritedForkOverrides.spawn,
+            ...inheritedForkSpawnOverrides,
           } satisfies SpawnSessionOptions);
 
           if (requestedStrategy === 'provider_native' && result.type !== 'success') {
@@ -963,8 +988,9 @@ export function registerMachineRpcHandlers(params: Readonly<{
                 rawSession: childRaw,
                 updater: (metadata) => ({
                   ...metadata,
-                  ...inheritedForkOverrides.metadata,
+                  ...inheritedForkMetadataOverrides,
                   ...nativeFork.metadata,
+                  ...connectedServiceForkLaunchContext.metadata,
                   forkV1: {
                     v: 1,
                     parentSessionId,
@@ -1045,7 +1071,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
                   approvedNewDirectoryCreation: true,
                   resume: forkedSessionId,
                   ...(continuationShape?.spawn ?? {}),
-                  ...inheritedForkOverrides.spawn,
+                  ...inheritedForkSpawnOverrides,
                 } satisfies SpawnSessionOptions);
 
                 if (requestedStrategy === 'acp_fork_latest' && result.type !== 'success') {
@@ -1070,8 +1096,9 @@ export function registerMachineRpcHandlers(params: Readonly<{
                       rawSession: childRaw,
                       updater: (metadata) => ({
                         ...metadata,
-                        ...inheritedForkOverrides.metadata,
+                        ...inheritedForkMetadataOverrides,
                         ...(continuationShape?.metadata ?? {}),
+                        ...connectedServiceForkLaunchContext.metadata,
                         forkV1: {
                           v: 1,
                           parentSessionId,
@@ -1164,7 +1191,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
           agentId: agentRaw,
           tag: `fork:${parentSessionId}:${effectiveCutoffSeqInclusive}:${randomUUID()}`,
           metadata: {
-            ...inheritedForkOverrides.metadata,
+            ...inheritedForkMetadataOverrides,
             ...(agentRaw === 'opencode'
               ? applyOpenCodeSessionAffinityMetadata({
                 backendMode: openCodeParentAffinity?.backendMode ?? 'server',
@@ -1221,7 +1248,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
           }),
         }
         : {}),
-      ...inheritedForkOverrides.spawn,
+      ...inheritedForkSpawnOverrides,
     } satisfies SpawnSessionOptions);
 
     if (spawnResult.type !== 'success') {
