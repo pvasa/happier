@@ -10,6 +10,7 @@ import { buildConnectedServiceUxDiagnostic } from '../diagnostics/connectedServi
 import { sanitizeConnectedServiceDiagnosticString } from '../diagnostics/sanitizeConnectedServiceDiagnosticString';
 import type { ConnectedServiceRuntimeFailureClassification } from './types';
 import { readConnectedServiceAuthGenerationApplyFailure } from './connectedServiceAuthGenerationApplyFailure';
+import { isProvenRuntimeAuthRecoverySuccess } from './resolveRuntimeAuthRecoveryOutcome';
 import { buildRuntimeAuthRecoveryKey } from './recoveryKey/runtimeAuthRecoveryKey';
 import {
   buildRuntimeAuthRecoveryScheduledUxDiagnostic,
@@ -31,6 +32,13 @@ export type RuntimeAuthRecoveryIntent = Readonly<{
   nextRetryAtMs: number | null;
   attemptCount: number;
   maxAttempts: number;
+  // S2 degraded-retry track. Degraded lifecycle/endpoint-unavailable outcomes
+  // (daemon shutting down, control endpoint unreachable) are a transient local
+  // condition, not a provider failure. They must NOT advance `attemptCount` toward
+  // dead-letter; instead they advance this separate, much larger budget so a long
+  // local outage can be waited out without prematurely dead-lettering a recoverable
+  // session. It is still bounded (cannot wait forever).
+  degradedAttemptCount?: number;
   switchesThisTurn: number;
   classification: ConnectedServiceRuntimeFailureClassification;
   failurePhase: RuntimeAuthRecoveryFailurePhase;
@@ -67,6 +75,9 @@ type RuntimeAuthRecoverySchedulerDeps = Readonly<{
   maxBackoffMs?: number;
   jitterMs?: () => number;
   maxAttempts?: number;
+  // S2: bounded degraded-retry budget for endpoint/lifecycle-unavailable outcomes (defaults apply).
+  maxDegradedAttempts?: number;
+  degradedBackoffMs?: number;
   store?: DurableRecoveryStore<RuntimeAuthRecoveryIntent>;
   recover: (input: Readonly<{
     sessionId: string;
@@ -95,6 +106,12 @@ type RetryDecision =
 
 const DEFAULT_RUNTIME_AUTH_RECOVERY_MAX_ATTEMPTS = 5;
 const DEFAULT_RUNTIME_AUTH_RECOVERY_TERMINAL_RECORD_RETENTION_MS = 7 * 24 * 60 * 60_000;
+// S2: degraded retries (endpoint/lifecycle unavailable) get their own, much larger budget so a
+// long local outage can be waited out without burning the normal attempt budget. Still bounded:
+// once this many consecutive degraded retries occur the recovery becomes action-required rather
+// than waiting forever. With a ~minute degraded backoff cap this is on the order of an hour.
+const DEFAULT_RUNTIME_AUTH_RECOVERY_MAX_DEGRADED_ATTEMPTS = 60;
+const DEFAULT_RUNTIME_AUTH_RECOVERY_DEGRADED_BACKOFF_MS = 60_000;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null;
@@ -190,6 +207,9 @@ function normalizeIntent(value: unknown): RuntimeAuthRecoveryIntent | null {
     nextRetryAtMs,
     attemptCount,
     maxAttempts,
+    ...(readNonNegativeNumber(value.degradedAttemptCount) === null
+      ? {}
+      : { degradedAttemptCount: readNonNegativeNumber(value.degradedAttemptCount) as number }),
     switchesThisTurn,
     classification,
     failurePhase,
@@ -206,6 +226,67 @@ function readSwitchAttemptResult(result: unknown): Readonly<Record<string, unkno
   if (!isRecord(result)) return null;
   if (result.status === 'switch_attempted' && isRecord(result.result)) return result.result;
   return result;
+}
+
+// Non-terminal degraded lifecycle outcomes from a recovery handler. Neither is a
+// success and neither is terminal: the recovery must stay WAITING and be re-driven
+// when the daemon/endpoint is healthy again.
+//   - daemon_lifecycle_unavailable: the daemon is shutting down / control server is
+//     stopping. The handler early-returned WITHOUT running switch/restart/continuation.
+//     Treated as a deferral (the gate already avoids counting it as an attempt).
+//   - session_endpoint_unavailable: the session control endpoint was unreachable
+//     (ECONNREFUSED / socket hang up) during a recovery fetch — a transient outage.
+function isDegradedLifecycleRecoveryResult(result: unknown): boolean {
+  if (!isRecord(result)) return false;
+  return result.status === 'daemon_lifecycle_unavailable'
+    || result.status === 'session_endpoint_unavailable';
+}
+
+function resolveDegradedReason(result: unknown): string {
+  return isRecord(result) && result.status === 'daemon_lifecycle_unavailable'
+    ? 'recovery_deferred_shutdown'
+    : 'session_endpoint_unavailable';
+}
+
+// Build the recover-loop outcome for a DEGRADED lifecycle/endpoint-unavailable result.
+//
+// The durable scheduler already incremented `attemptCount` (via markChecking) for this tick. A
+// degraded outcome must NOT consume the normal attempt budget, so we roll `attemptCount` back to
+// its pre-tick value and instead advance a separate, much larger `degradedAttemptCount` budget.
+// This lets a long local outage be waited out (re-driven on every wake) without dead-lettering a
+// recoverable session, while staying bounded: once the degraded budget is exhausted we surface an
+// action-required terminal rather than waiting forever.
+function buildDegradedRecoveryOutcome(input: Readonly<{
+  intent: RuntimeAuthRecoveryIntent;
+  reason: string;
+  nowMs: number;
+  maxDegradedAttempts: number;
+  degradedBackoffMs: number;
+}>): { status: 'wait'; nextRetryAtMs: number; lastError: string; intent: RuntimeAuthRecoveryIntent }
+  | { status: 'terminal'; lastError: string; intent: RuntimeAuthRecoveryIntent } {
+  const preTickAttemptCount = Math.max(0, input.intent.attemptCount - 1);
+  const degradedAttemptCount = (input.intent.degradedAttemptCount ?? 0) + 1;
+  if (degradedAttemptCount >= input.maxDegradedAttempts) {
+    return {
+      status: 'terminal',
+      lastError: 'degraded_recovery_attempts_exhausted',
+      intent: {
+        ...input.intent,
+        attemptCount: preTickAttemptCount,
+        degradedAttemptCount,
+      },
+    };
+  }
+  return {
+    status: 'wait',
+    nextRetryAtMs: input.nowMs + input.degradedBackoffMs,
+    lastError: input.reason,
+    intent: {
+      ...input.intent,
+      attemptCount: preTickAttemptCount,
+      degradedAttemptCount,
+    },
+  };
 }
 
 function readApplyFailure(result: unknown): Readonly<{
@@ -300,12 +381,30 @@ function classifyApplyFailure(result: unknown): RetryDecision | null {
   };
 }
 
+// Provider-outcome proof gate. A switch event, auth-store adoption, credential
+// refresh, or restart request is a recovery PHASE, not proof the provider can
+// authenticate. Recovery is only cleared as recovered when there is deterministic
+// proof (verified account adoption, or a genuinely fresh candidate). Local-only
+// completions (credential_refreshed, generic ok:true, unverified switch /
+// observed_generation) are NOT success — see resolveRuntimeAuthRecoveryOutcome.
 function isRuntimeAuthRecoverySuccess(result: unknown): boolean {
+  return isProvenRuntimeAuthRecoverySuccess(result);
+}
+
+// A local recovery step completed (a switch was applied / a credential was
+// refreshed / a generation was observed / a generic ok was returned) but carries
+// no deterministic provider-outcome proof. This is NOT terminal: the recovery must
+// stay pending under the scheduler backoff/exhaustion lifecycle rather than being
+// fabricated into "recovered" (the live Codex/Pi/Claude loop bug). WAVE-2 SEAM:
+// bounded provider-activity proof will be the deterministic terminator here; until
+// then unproven completions wait and eventually exhaust rather than wait forever.
+function isLocallyCompleteWithoutProof(result: unknown): boolean {
   const switchResult = readSwitchAttemptResult(result);
-  return switchResult?.status === 'switched'
-    || switchResult?.status === 'observed_generation'
-    || switchResult?.status === 'credential_refreshed'
-    || switchResult?.ok === true;
+  if (!switchResult) return false;
+  return switchResult.status === 'switched'
+    || switchResult.status === 'observed_generation'
+    || switchResult.status === 'credential_refreshed'
+    || switchResult.ok === true;
 }
 
 function isRuntimeAuthRecoveryTerminal(result: unknown): boolean {
@@ -332,11 +431,17 @@ function classifyHandlerError(error: unknown): RetryDecision {
   const classification = classifyDaemonServerWorkError(error);
   const message = sanitizeConnectedServiceDiagnosticString(error instanceof Error ? error.message : String(error));
   if (classification.retryable) {
+    // A transient local-endpoint outage (ECONNREFUSED / socket hang up / reset / timeout)
+    // during a recovery fetch is the `session_endpoint_unavailable` edge: the session control
+    // endpoint was unreachable. Surface a stable reason for diagnostics; it stays retryable/waiting.
+    const failureReason = (classification.kind === 'network' || classification.kind === 'timeout')
+      ? 'session_endpoint_unavailable'
+      : 'handler_transient_failure';
     return {
       retryable: true,
       classification,
       failurePhase: 'handler',
-      failureReason: 'handler_transient_failure',
+      failureReason,
       lastError: message,
     };
   }
@@ -467,10 +572,22 @@ function mergeRuntimeAuthRecoveryWakeWrite(input: Readonly<{
 
 export class RuntimeAuthRecoveryScheduler {
   private readonly maxAttempts: number;
+  private readonly maxDegradedAttempts: number;
+  private readonly degradedBackoffMs: number;
   private readonly scheduler: DurableBackoffRecoveryScheduler<RuntimeAuthRecoveryIntent>;
 
   constructor(private readonly deps: RuntimeAuthRecoverySchedulerDeps) {
     this.maxAttempts = normalizeMaxAttempts(deps.maxAttempts);
+    this.maxDegradedAttempts = typeof deps.maxDegradedAttempts === 'number'
+      && Number.isFinite(deps.maxDegradedAttempts)
+      && deps.maxDegradedAttempts > 0
+      ? Math.trunc(deps.maxDegradedAttempts)
+      : DEFAULT_RUNTIME_AUTH_RECOVERY_MAX_DEGRADED_ATTEMPTS;
+    this.degradedBackoffMs = typeof deps.degradedBackoffMs === 'number'
+      && Number.isFinite(deps.degradedBackoffMs)
+      && deps.degradedBackoffMs > 0
+      ? Math.trunc(deps.degradedBackoffMs)
+      : DEFAULT_RUNTIME_AUTH_RECOVERY_DEGRADED_BACKOFF_MS;
     this.scheduler = new DurableBackoffRecoveryScheduler<RuntimeAuthRecoveryIntent>({
       nowMs: deps.nowMs,
       baseBackoffMs: deps.baseBackoffMs,
@@ -544,6 +661,26 @@ export class RuntimeAuthRecoveryScheduler {
               lastError: applyDecision.lastError,
             };
           }
+          // A local recovery step completed but produced no deterministic
+          // provider-outcome proof. Keep the recovery pending instead of clearing
+          // it (success) or terminating it: the provider may still be broken, and
+          // the scheduler's backoff/exhaustion lifecycle is the safe owner.
+          if (isLocallyCompleteWithoutProof(result)) {
+            return { status: 'wait', lastError: 'recovery_unproven_awaiting_provider_outcome' };
+          }
+          // Degraded daemon-lifecycle / endpoint-unavailable outcomes are non-terminal: keep the
+          // recovery waiting so a healthy daemon/endpoint re-drives it. Never terminalize a transient
+          // shutdown/outage as a non-retryable recovery result. S2: these go on the bounded
+          // degraded-retry track so a long local outage does not burn the normal attempt budget.
+          if (isDegradedLifecycleRecoveryResult(result)) {
+            return buildDegradedRecoveryOutcome({
+              intent,
+              reason: resolveDegradedReason(result),
+              nowMs: deps.nowMs(),
+              maxDegradedAttempts: this.maxDegradedAttempts,
+              degradedBackoffMs: this.degradedBackoffMs,
+            });
+          }
           if (isRuntimeAuthRecoveryTerminal(result)) {
             return { status: 'terminal', lastError: 'terminal_recovery_result' };
           }
@@ -552,6 +689,24 @@ export class RuntimeAuthRecoveryScheduler {
           const decision = classifyHandlerError(error);
           if (!decision.retryable) {
             return { status: 'terminal', lastError: decision.lastError };
+          }
+          // S2: a connection-level endpoint outage thrown during the recovery fetch
+          // (ECONNREFUSED / socket hang up / reset = `network`) is a degraded local condition, not a
+          // provider failure. Route it onto the bounded degraded-retry track so a long local outage
+          // cannot dead-letter the session before the normal attempt budget. A `timeout` is left on
+          // the normal track: a slow-but-reachable endpoint can be a genuine recoverable failure.
+          if (decision.retryable && decision.classification.kind === 'network') {
+            return buildDegradedRecoveryOutcome({
+              intent: {
+                ...intent,
+                lastError: decision.lastError,
+                lastErrorClassification: decision.classification,
+              },
+              reason: 'session_endpoint_unavailable',
+              nowMs: deps.nowMs(),
+              maxDegradedAttempts: this.maxDegradedAttempts,
+              degradedBackoffMs: this.degradedBackoffMs,
+            });
           }
           return {
             status: 'wait',
@@ -665,6 +820,14 @@ export class RuntimeAuthRecoveryScheduler {
 
   hydrate(): ReadonlyArray<RuntimeAuthRecoveryIntent> {
     return this.scheduler.hydrate();
+  }
+
+  /**
+   * Daemon-shutdown lifecycle: stop firing recovery timers. Persisted `waiting`
+   * intents stay on disk so a healthy future daemon re-hydrates and re-drives them.
+   */
+  dispose(): void {
+    this.scheduler.dispose();
   }
 
   async wake(input: Readonly<{ sessionId: string; reason: 'timer' | 'manual' }>): Promise<Readonly<{ status: string }>> {

@@ -1,6 +1,18 @@
 import { randomUUID } from 'node:crypto';
 
-import type { SessionStoredMessageContent } from '@happier-dev/protocol';
+import {
+  ConnectedServiceUxDiagnosticV1Schema,
+  ConnectedServiceSwitchAttemptedContinuityModeV1Schema,
+  ConnectedServiceSwitchAttemptOutcomeActionV1Schema,
+  ConnectedServiceSwitchAttemptOutcomeV1Schema,
+  ConnectedServiceSwitchAttemptSessionAdoptionV1Schema,
+  type ConnectedServiceUxDiagnosticV1,
+  type ConnectedServiceSwitchAttemptedContinuityModeV1,
+  type ConnectedServiceSwitchAttemptOutcomeActionV1,
+  type ConnectedServiceSwitchAttemptOutcomeV1,
+  type ConnectedServiceSwitchAttemptSessionAdoptionV1,
+  type SessionStoredMessageContent,
+} from '@happier-dev/protocol';
 
 import type { Credentials } from '@/persistence';
 import {
@@ -46,8 +58,19 @@ type ConnectedServiceRuntimeSwitchAttemptSessionEvent = Readonly<{
   type: 'connected_service_account_switch_attempt';
   ok: boolean;
   action: 'restart_requested' | 'hot_applied' | 'metadata_updated';
+  attemptedContinuityMode?: ConnectedServiceSwitchAttemptedContinuityModeV1;
+  outcome?: ConnectedServiceSwitchAttemptOutcomeV1;
+  outcomeAction?: ConnectedServiceSwitchAttemptOutcomeActionV1;
   errorCode: string | null;
+  diagnostic?: ConnectedServiceUxDiagnosticV1;
+  groupGeneration?: number;
+  sessionAdoption?: ConnectedServiceSwitchAttemptSessionAdoptionV1;
+  sessionAdoptedGeneration?: number;
   partialState: 'metadata_may_reference_new_binding' | 'runtime_auth_applied' | 'runtime_auth_partially_applied' | null;
+  verificationByServiceId?: Readonly<Record<string, Readonly<{
+    status: 'verified' | 'weakly_verified';
+    reason?: string;
+  }>>>;
 }>;
 
 type ConnectedServiceRuntimeStateSharingDegradedSessionEvent = Readonly<{
@@ -87,6 +110,12 @@ function parseSwitchMode(value: unknown): ConnectedServiceAccountSwitchMode {
     default:
       return 'restart_resume';
   }
+}
+
+function parseNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const parsed = Math.trunc(value);
+  return parsed >= 0 ? parsed : undefined;
 }
 
 function parseRuntimeSwitchEvent(value: unknown): ConnectedServiceRuntimeSwitchSessionEvent | null {
@@ -185,18 +214,58 @@ function parseRuntimeSwitchAttemptEvent(value: unknown): ConnectedServiceRuntime
   const errorCode = typeof record.errorCode === 'string' && record.errorCode.trim()
     ? record.errorCode.trim()
     : null;
+  const attemptedContinuityMode = ConnectedServiceSwitchAttemptedContinuityModeV1Schema.safeParse(record.attemptedContinuityMode);
+  const outcome = ConnectedServiceSwitchAttemptOutcomeV1Schema.safeParse(record.outcome);
+  const outcomeAction = ConnectedServiceSwitchAttemptOutcomeActionV1Schema.safeParse(record.outcomeAction);
+  const groupGeneration = parseNonNegativeInteger(record.groupGeneration);
+  const sessionAdoption = ConnectedServiceSwitchAttemptSessionAdoptionV1Schema.safeParse(record.sessionAdoption);
+  const sessionAdoptedGeneration = parseNonNegativeInteger(record.sessionAdoptedGeneration);
   const partialState = record.partialState === 'metadata_may_reference_new_binding'
     || record.partialState === 'runtime_auth_applied'
     || record.partialState === 'runtime_auth_partially_applied'
       ? record.partialState
       : null;
+  const verificationByServiceId = parseSwitchAttemptVerificationByServiceId(record.verificationByServiceId);
   return {
     type: 'connected_service_account_switch_attempt',
     ok: record.ok,
     action,
+    ...(attemptedContinuityMode.success ? { attemptedContinuityMode: attemptedContinuityMode.data } : {}),
+    ...(outcome.success ? { outcome: outcome.data } : {}),
+    ...(outcomeAction.success ? { outcomeAction: outcomeAction.data } : {}),
     errorCode,
+    ...(ConnectedServiceUxDiagnosticV1Schema.safeParse(record.diagnostic).success
+      ? { diagnostic: ConnectedServiceUxDiagnosticV1Schema.parse(record.diagnostic) }
+      : {}),
+    ...(groupGeneration === undefined ? {} : { groupGeneration }),
+    ...(sessionAdoption.success ? { sessionAdoption: sessionAdoption.data } : {}),
+    ...(sessionAdoptedGeneration === undefined ? {} : { sessionAdoptedGeneration }),
     partialState,
+    ...(verificationByServiceId ? { verificationByServiceId } : {}),
   };
+}
+
+function parseSwitchAttemptVerificationByServiceId(value: unknown): ConnectedServiceRuntimeSwitchAttemptSessionEvent['verificationByServiceId'] | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const parsed: Record<string, { status: 'verified' | 'weakly_verified'; reason?: string }> = {};
+  for (const [serviceId, rawVerification] of Object.entries(record)) {
+    const trimmedServiceId = serviceId.trim();
+    if (!trimmedServiceId) continue;
+    const verification = asRecord(rawVerification);
+    const status = verification?.status === 'verified' || verification?.status === 'weakly_verified'
+      ? verification.status
+      : null;
+    if (!status) continue;
+    const reason = typeof verification?.reason === 'string' && verification.reason.trim().length > 0
+      ? verification.reason.trim()
+      : undefined;
+    parsed[trimmedServiceId] = {
+      status,
+      ...(reason ? { reason } : {}),
+    };
+  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
 }
 
 function parseRuntimeStateSharingDegradedEvent(value: unknown): ConnectedServiceRuntimeStateSharingDegradedSessionEvent | null {
@@ -408,8 +477,20 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
               type: 'connected-service-account-switch-attempt',
               ok: attempt.ok,
               action: attempt.action,
+              ...(attempt.attemptedContinuityMode ? { attemptedContinuityMode: attempt.attemptedContinuityMode } : {}),
+              ...(attempt.outcome ? { outcome: attempt.outcome } : {}),
+              ...(attempt.outcomeAction ? { outcomeAction: attempt.outcomeAction } : {}),
               ...(attempt.errorCode ? { errorCode: attempt.errorCode } : {}),
+              ...(attempt.diagnostic ? { diagnostic: attempt.diagnostic } : {}),
+              ...(attempt.groupGeneration === undefined ? {} : { groupGeneration: attempt.groupGeneration }),
+              ...(attempt.sessionAdoption ? { sessionAdoption: attempt.sessionAdoption } : {}),
+              ...(attempt.sessionAdoptedGeneration === undefined
+                ? {}
+                : { sessionAdoptedGeneration: attempt.sessionAdoptedGeneration }),
               ...(attempt.partialState ? { partialState: attempt.partialState } : {}),
+              ...(attempt.verificationByServiceId
+                ? { verificationByServiceId: attempt.verificationByServiceId }
+                : {}),
             },
           },
         },
@@ -443,18 +524,17 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
           content: {
             type: 'event',
             id: eventId,
-            data: {
-              type: 'provider-state-sharing-degraded',
-              serviceId: degraded.serviceId,
-              requestedStateMode: degraded.requestedStateMode,
-              effectiveStateMode: degraded.effectiveStateMode,
-              code: degraded.code,
-              ...(degraded.reason ? { reason: degraded.reason } : {}),
-              ...(degraded.entryName ? { entryName: degraded.entryName } : {}),
-            },
-          },
-        },
-      }),
+	            data: {
+	              type: 'provider-state-sharing-degraded',
+	              serviceId: degraded.serviceId,
+	              requestedStateMode: degraded.requestedStateMode,
+	              effectiveStateMode: degraded.effectiveStateMode,
+	              code: degraded.code,
+	              ...(degraded.reason ? { reason: degraded.reason } : {}),
+	            },
+	          },
+	        },
+	      }),
     });
     return;
   }

@@ -20,6 +20,7 @@ describe('ConnectedServiceRecoveryPolicy', () => {
       issue: {
         kind: 'temporary_throttle',
         ...baseIssue,
+        resetsAtMs: 90_000,
         retryAfterMs: 45_000,
       },
       selection: {
@@ -33,6 +34,7 @@ describe('ConnectedServiceRecoveryPolicy', () => {
       serviceId: 'openai-codex',
       profileId: 'primary',
       groupId: 'main',
+      resetAtMs: 90_000,
       retryAfterMs: 45_000,
     });
   });

@@ -1,11 +1,8 @@
 import type { TrackedSession } from '@/daemon/types';
+import type { ConnectedServiceBindingsV1, ConnectedServiceId } from '@happier-dev/protocol';
 import type { ConnectedServiceCredentialRefreshResult } from '../refresh/ConnectedServiceRefreshCoordinator';
+import type { AcceptedConnectedServiceAccountVerificationByServiceId } from '../accountTransitions/acceptedConnectedServiceAccountVerification';
 
-import {
-  readConnectedServiceChildSelectionsFromEnv,
-  type ConnectedServiceChildSelection,
-} from '../connectedServiceChildEnvironment';
-import { parseConnectedServiceBindingSelections } from '../parseConnectedServicesBindings';
 import {
   SESSION_SWITCH_LIMIT_WINDOW_MS,
   type ConnectedServiceAuthGroupSwitchEvent,
@@ -18,22 +15,15 @@ import {
   createConnectedServiceSessionAuthSwitchCore,
   type ConnectedServiceSessionAuthSwitchCore,
 } from './connectedServiceSessionAuthSwitchCore';
-
-type RuntimeRecoverySelection =
-  | Readonly<{
-      kind: 'profile';
-      serviceId: string;
-      profileId: string;
-    }>
-  | Readonly<{
-      kind: 'group';
-      serviceId: string;
-      groupId: string;
-      activeProfileId?: string;
-      fallbackProfileId?: string;
-    }>;
+import { buildConnectedServiceSwitchContinuationAttemptId } from '../sessionAuthSwitch/buildConnectedServiceSwitchContinuationAttemptId';
+import {
+  isGroupRuntimeRecoverySelection,
+  resolveConnectedServiceRuntimeAuthRecoverySelection,
+  type RuntimeRecoverySelection,
+} from './resolveConnectedServiceRuntimeAuthRecoverySelection';
 
 type SwitchCoordinatorLike = Parameters<typeof handleConnectedServiceRuntimeAuthFailure>[0]['switchCoordinator'];
+type SwitchAfterClassifiedFailureInput = Parameters<SwitchCoordinatorLike['switchAfterClassifiedFailure']>[0];
 type TemporaryThrottleRecoveryLike = NonNullable<
   Parameters<typeof handleConnectedServiceRuntimeAuthFailure>[0]['temporaryThrottleRecovery']
 >;
@@ -54,6 +44,38 @@ type RuntimeCredentialRefreshService = Readonly<{
   }>): Promise<ConnectedServiceCredentialRefreshResult>;
 }>;
 
+type RuntimeAuthSwitchContinuation = (input: Readonly<{
+  tracked: TrackedSession;
+  sessionId: string;
+  attemptId: string;
+  normalizedBindings: ConnectedServiceBindingsV1;
+  serviceIds: ReadonlySet<ConnectedServiceId>;
+  action: 'hot_applied' | 'restart_requested';
+}>) => Promise<void> | void;
+
+type RuntimeAuthRecoverySuccessObserver = (input: Readonly<{
+  sessionId: string;
+  serviceId: string;
+  groupId: string | null;
+  profileId: string | null;
+  status: 'switched' | 'observed_generation' | 'credential_refreshed';
+  generation: number | null;
+  // Provider-outcome proof carriers. The observer is a LOCAL-substep notification;
+  // consumers MUST gate clearing recovery on these (post-switch account-adoption
+  // verification, or a genuinely fresh candidate). A bare status is never proof.
+  verificationByServiceId?: AcceptedConnectedServiceAccountVerificationByServiceId | null;
+  fromProfileId?: string | null;
+}>) => Promise<void> | void;
+
+type RuntimeAuthRestartFailureObserver = (input: Readonly<{
+  sessionId: string;
+  tracked: TrackedSession;
+  source: 'group_switch' | 'credential_refresh';
+  error: unknown;
+  groupSwitchResult?: ConnectedServiceAuthGroupSwitchResult;
+  credentialRefreshResult?: ConnectedServiceCredentialRefreshResult;
+}>) => Promise<void> | void;
+
 const unavailableSwitchCoordinator: SwitchCoordinatorLike = {
   switchAfterClassifiedFailure: async () => ({
     status: 'no_eligible_member',
@@ -65,6 +87,41 @@ const unavailableSwitchCoordinator: SwitchCoordinatorLike = {
 };
 
 const defaultSwitchCore = createConnectedServiceSessionAuthSwitchCore();
+
+function requestRuntimeAuthRestart(input: Readonly<{
+  sessionId: string;
+  tracked: TrackedSession;
+  source: 'group_switch' | 'credential_refresh';
+  restartSession?: ((tracked: TrackedSession) => Promise<void> | void) | null;
+  onRestartFailure?: RuntimeAuthRestartFailureObserver | null;
+  groupSwitchResult?: ConnectedServiceAuthGroupSwitchResult;
+  credentialRefreshResult?: ConnectedServiceCredentialRefreshResult;
+}>): boolean {
+  const restartSession = input.restartSession;
+  if (!restartSession) return false;
+  void Promise.resolve(restartSession(input.tracked)).catch((error) => {
+    void Promise.resolve(input.onRestartFailure?.({
+      sessionId: input.sessionId,
+      tracked: input.tracked,
+      source: input.source,
+      error,
+      ...(input.groupSwitchResult === undefined ? {} : { groupSwitchResult: input.groupSwitchResult }),
+      ...(input.credentialRefreshResult === undefined ? {} : { credentialRefreshResult: input.credentialRefreshResult }),
+    })).catch(() => {});
+  });
+  return true;
+}
+
+function createCommitOnlySwitchCoordinator(
+  switchCoordinator: SwitchCoordinatorLike,
+): SwitchCoordinatorLike {
+  return {
+    switchAfterClassifiedFailure: async (input: SwitchAfterClassifiedFailureInput) => {
+      const { sessionId: _liveSessionId, ...commitOnlyInput } = input;
+      return await switchCoordinator.switchAfterClassifiedFailure(commitOnlyInput);
+    },
+  };
+}
 
 function normalizeSessionId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -94,67 +151,6 @@ function isReconnectRequiredRefreshResult(result: ConnectedServiceCredentialRefr
     || category === 'provider_401'
     || category === 'provider_403'
     || category === 'missing_refresh_token';
-}
-
-function mapChildSelectionToRuntimeRecoverySelection(
-  selection: ConnectedServiceChildSelection | null,
-): RuntimeRecoverySelection | null {
-  if (!selection) return null;
-  if (selection.kind === 'profile') {
-    return {
-      kind: 'profile',
-      serviceId: selection.serviceId,
-      profileId: selection.profileId,
-    };
-  }
-  return {
-    kind: 'group',
-    serviceId: selection.serviceId,
-    groupId: selection.groupId,
-    activeProfileId: selection.activeProfileId,
-    fallbackProfileId: selection.fallbackProfileId,
-  };
-}
-
-function resolveRuntimeRecoverySelection(input: Readonly<{
-  canonicalSelection: RuntimeRecoverySelection | null;
-  selections: ReadonlyArray<RuntimeRecoverySelection>;
-  classification: ConnectedServiceRuntimeFailureClassification;
-}>): RuntimeRecoverySelection | null {
-  if (input.canonicalSelection?.serviceId === input.classification.serviceId) {
-    return input.canonicalSelection;
-  }
-
-  const trackedSelection = input.selections.find((candidate) => (
-    candidate.serviceId === input.classification.serviceId
-  ));
-  if (trackedSelection) return trackedSelection;
-
-  const serviceId = normalizeSessionId(input.classification.serviceId);
-  const profileId = normalizeSessionId(input.classification.profileId);
-  if (!serviceId || !profileId) return null;
-
-  const groupId = normalizeSessionId(input.classification.groupId);
-  if (groupId) {
-    return {
-      kind: 'group',
-      serviceId,
-      groupId,
-      fallbackProfileId: profileId,
-    };
-  }
-
-  return {
-    kind: 'profile',
-    serviceId,
-    profileId,
-  };
-}
-
-function isGroupRuntimeRecoverySelection(
-  selection: RuntimeRecoverySelection,
-): selection is Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>> {
-  return selection.kind === 'group';
 }
 
 function normalizeNullableProfileId(value: unknown): string | null {
@@ -192,14 +188,141 @@ function emitRuntimeGroupSwitchSessionEvent(input: Readonly<{
   input.emitSessionEvent?.(input.sessionId, event);
 }
 
-async function maybeRestartAfterRuntimeGroupSwitch(input: Readonly<{
+async function runRuntimeGroupSwitchRecovery(input: Readonly<{
+  sessionId: string;
+  selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
+  classification: ConnectedServiceRuntimeFailureClassification;
+  switchesThisTurn: number;
+  switchCoordinator: SwitchCoordinatorLike;
+  switchAttemptTracker?: SwitchAttemptTrackerLike | null;
+  temporaryThrottleRecovery?: TemporaryThrottleRecoveryLike | null;
+  applyLiveSession?: boolean;
+}>): Promise<Awaited<ReturnType<typeof handleConnectedServiceRuntimeAuthFailure>>> {
+  const effectiveSwitchesThisTurn = input.switchAttemptTracker?.resolveSwitchesThisTurn({
+    sessionId: input.sessionId,
+    serviceId: input.selection.serviceId,
+    groupId: input.selection.groupId,
+    reportedSwitchesThisTurn: input.switchesThisTurn,
+  }) ?? input.switchesThisTurn;
+  const sessionSwitchesThisHour = input.switchAttemptTracker?.countRecordedSwitchesInWindow({
+    sessionId: input.sessionId,
+    serviceId: input.selection.serviceId,
+    groupId: input.selection.groupId,
+    windowMs: SESSION_SWITCH_LIMIT_WINDOW_MS,
+  });
+
+  return await handleConnectedServiceRuntimeAuthFailure({
+    sessionId: input.sessionId,
+    selection: {
+      kind: 'group',
+      serviceId: input.selection.serviceId,
+      groupId: input.selection.groupId,
+      activeProfileId: input.classification.profileId
+        ?? input.selection.activeProfileId
+        ?? input.selection.fallbackProfileId
+        ?? '',
+    },
+    classification: {
+      ...input.classification,
+      groupId: input.classification.groupId ?? input.selection.groupId,
+      profileId: input.classification.profileId
+        ?? input.selection.activeProfileId
+        ?? input.selection.fallbackProfileId
+        ?? null,
+    },
+    switchesThisTurn: effectiveSwitchesThisTurn,
+    sessionSwitchesThisHour,
+    switchCoordinator: input.applyLiveSession === false
+      ? createCommitOnlySwitchCoordinator(input.switchCoordinator)
+      : input.switchCoordinator,
+    temporaryThrottleRecovery: input.temporaryThrottleRecovery ?? null,
+  });
+}
+
+function finalizeRuntimeGroupSwitchAttempt(input: Readonly<{
+  emitSessionEvent?: (sessionId: string, event: unknown) => void;
+  sessionId: string;
+  selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
+  classification: ConnectedServiceRuntimeFailureClassification;
+  result: Awaited<ReturnType<typeof handleConnectedServiceRuntimeAuthFailure>>;
+  switchAttemptTracker?: SwitchAttemptTrackerLike | null;
+}>): void {
+  if (input.result.status !== 'switch_attempted') return;
+  emitRuntimeGroupSwitchSessionEvent({
+    emitSessionEvent: input.emitSessionEvent,
+    sessionId: input.sessionId,
+    selection: input.selection,
+    classification: input.classification,
+    result: input.result.result,
+  });
+  input.switchAttemptTracker?.recordSwitchResult({
+    sessionId: input.sessionId,
+    serviceId: input.selection.serviceId,
+    groupId: input.selection.groupId,
+    resultStatus: input.result.result.status,
+  });
+}
+
+function maybeRestartAfterRuntimeGroupSwitch(input: Readonly<{
+  sessionId: string;
   tracked: TrackedSession;
   result: ConnectedServiceAuthGroupSwitchResult;
   restartSession?: ((tracked: TrackedSession) => Promise<void> | void) | null;
-}>): Promise<void> {
+  onRestartFailure?: RuntimeAuthRestartFailureObserver | null;
+}>): void {
   if (input.result.status !== 'switched') return;
   if (input.result.mode !== 'spawn_next_turn') return;
-  await input.restartSession?.(input.tracked);
+  requestRuntimeAuthRestart({
+    sessionId: input.sessionId,
+    tracked: input.tracked,
+    source: 'group_switch',
+    restartSession: input.restartSession ?? null,
+    onRestartFailure: input.onRestartFailure ?? null,
+    groupSwitchResult: input.result,
+  });
+}
+
+async function maybeContinueAfterObservedRuntimeGeneration(input: Readonly<{
+  tracked: TrackedSession;
+  sessionId: string;
+  selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
+  result: ConnectedServiceAuthGroupSwitchResult;
+  continueAfterRuntimeAuthSwitch?: RuntimeAuthSwitchContinuation | null;
+}>): Promise<void> {
+  if (!input.continueAfterRuntimeAuthSwitch) return;
+  if (input.result.status !== 'observed_generation') return;
+  const activeProfileId = normalizeSessionId(input.result.activeProfileId);
+  if (!activeProfileId) return;
+
+  const serviceId = input.selection.serviceId as ConnectedServiceId;
+  const normalizedBindings = {
+    v: 1,
+    bindingsByServiceId: {
+      [serviceId]: {
+        source: 'connected',
+        selection: 'group',
+        groupId: input.selection.groupId,
+        profileId: activeProfileId,
+      },
+    },
+  } satisfies ConnectedServiceBindingsV1;
+  const serviceIds = new Set<ConnectedServiceId>([serviceId]);
+
+  await input.continueAfterRuntimeAuthSwitch({
+    tracked: input.tracked,
+    sessionId: input.sessionId,
+    attemptId: buildConnectedServiceSwitchContinuationAttemptId({
+      action: 'hot_applied',
+      serviceIds,
+      normalizedBindings,
+      expectedGroupGenerationByServiceId: {
+        [serviceId]: input.result.generation,
+      },
+    }),
+    normalizedBindings,
+    serviceIds,
+    action: 'hot_applied',
+  });
 }
 
 async function maybeRefreshCredentialBeforeRuntimeRecovery(input: Readonly<{
@@ -210,6 +333,8 @@ async function maybeRefreshCredentialBeforeRuntimeRecovery(input: Readonly<{
   switchAttemptTracker?: SwitchAttemptTrackerLike | null;
   credentialRefreshService?: RuntimeCredentialRefreshService | null;
   restartSession?: ((tracked: TrackedSession) => Promise<void> | void) | null;
+  onRuntimeAuthRecoverySuccess?: RuntimeAuthRecoverySuccessObserver | null;
+  onRuntimeAuthRestartFailure?: RuntimeAuthRestartFailureObserver | null;
 }>): Promise<
   | null
   | Readonly<{
@@ -244,17 +369,55 @@ async function maybeRefreshCredentialBeforeRuntimeRecovery(input: Readonly<{
     profileId,
   });
   if (result.status === 'refreshed') {
-    await input.restartSession?.(input.tracked);
+    await input.onRuntimeAuthRecoverySuccess?.({
+      sessionId: input.sessionId,
+      serviceId: input.selection.serviceId,
+      groupId: input.classification.groupId,
+      profileId,
+      status: 'credential_refreshed',
+      generation: null,
+    });
+    const restartRequested = requestRuntimeAuthRestart({
+      sessionId: input.sessionId,
+      tracked: input.tracked,
+      source: 'credential_refresh',
+      restartSession: input.restartSession ?? null,
+      onRestartFailure: input.onRuntimeAuthRestartFailure ?? null,
+      credentialRefreshResult: result,
+    });
     return {
       status: 'credential_refreshed',
       result,
-      restartRequested: Boolean(input.restartSession),
+      restartRequested,
     };
   }
   if (result.status === 'refresh_failed' && !isReconnectRequiredRefreshResult(result)) {
     return null;
   }
   return null;
+}
+
+async function notifyRuntimeGroupSwitchRecoverySuccess(input: Readonly<{
+  onRuntimeAuthRecoverySuccess?: RuntimeAuthRecoverySuccessObserver | null;
+  sessionId: string;
+  selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
+  result: Awaited<ReturnType<typeof handleConnectedServiceRuntimeAuthFailure>>;
+}>): Promise<void> {
+  if (input.result.status !== 'switch_attempted') return;
+  if (input.result.result.status !== 'switched' && input.result.result.status !== 'observed_generation') return;
+  // Surface the post-switch account-adoption verification (when present) so the
+  // daemon's reactive proof gate can clear recovery on verified adoption. A bare
+  // switched/observed_generation status without verification is NOT proof.
+  const verificationByServiceId = input.result.result.verificationByServiceId ?? null;
+  await input.onRuntimeAuthRecoverySuccess?.({
+    sessionId: input.sessionId,
+    serviceId: input.selection.serviceId,
+    groupId: input.selection.groupId,
+    profileId: input.result.result.activeProfileId,
+    status: input.result.result.status,
+    generation: input.result.result.generation,
+    ...(verificationByServiceId ? { verificationByServiceId } : {}),
+  });
 }
 
 export async function handleConnectedServiceRuntimeAuthFailureForSession(input: Readonly<{
@@ -265,7 +428,10 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
   temporaryThrottleRecovery?: TemporaryThrottleRecoveryLike | null;
   credentialRefreshService?: RuntimeCredentialRefreshService | null;
   restartSession?: ((tracked: TrackedSession) => Promise<void> | void) | null;
+  continueAfterRuntimeAuthSwitch?: RuntimeAuthSwitchContinuation | null;
   emitSessionEvent?: (sessionId: string, event: unknown) => void;
+  onRuntimeAuthRecoverySuccess?: RuntimeAuthRecoverySuccessObserver | null;
+  onRuntimeAuthRestartFailure?: RuntimeAuthRestartFailureObserver | null;
   sessionId: string;
   switchesThisTurn: number;
   classification: ConnectedServiceRuntimeFailureClassification | null;
@@ -284,6 +450,52 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
 > {
   const tracked = findTrackedSession(input.getChildren(), input.sessionId);
   if (!tracked) {
+    const classification = input.classification;
+    const { selection } = classification
+      ? resolveConnectedServiceRuntimeAuthRecoverySelection({
+        classification,
+        environmentVariables: {},
+      })
+      : { selection: null };
+    if (classification && selection && isGroupRuntimeRecoverySelection(selection)) {
+      if (!input.switchCoordinator) {
+        return {
+          status: 'switch_coordinator_unavailable',
+          blocker: 'CLI has no connected-service auth-group load/commit API in this branch.',
+        };
+      }
+      const switchCoordinator = input.switchCoordinator;
+      const switchCore = input.switchCore ?? defaultSwitchCore;
+      const result = await switchCore.run({
+        sessionId: input.sessionId,
+        reason: 'automatic_runtime_failure',
+        execute: async () => await runRuntimeGroupSwitchRecovery({
+          sessionId: input.sessionId,
+          selection,
+          classification,
+          switchesThisTurn: input.switchesThisTurn,
+          switchCoordinator,
+          switchAttemptTracker: input.switchAttemptTracker ?? null,
+          temporaryThrottleRecovery: input.temporaryThrottleRecovery ?? null,
+          applyLiveSession: false,
+        }),
+      });
+      finalizeRuntimeGroupSwitchAttempt({
+        emitSessionEvent: input.emitSessionEvent,
+        sessionId: input.sessionId,
+        selection,
+        classification,
+        result,
+        switchAttemptTracker: input.switchAttemptTracker ?? null,
+      });
+      await notifyRuntimeGroupSwitchRecoverySuccess({
+        onRuntimeAuthRecoverySuccess: input.onRuntimeAuthRecoverySuccess ?? null,
+        sessionId: input.sessionId,
+        selection,
+        result,
+      });
+      return result;
+    }
     input.switchAttemptTracker?.clearSession(input.sessionId);
     input.switchCore?.clearSession(input.sessionId);
     return { status: 'session_not_found' };
@@ -299,16 +511,11 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
     });
   }
 
-  const selections = parseConnectedServiceBindingSelections(tracked.spawnOptions?.connectedServices);
-  const canonicalSelection = mapChildSelectionToRuntimeRecoverySelection(
-    readConnectedServiceChildSelectionsFromEnv(
-      tracked.spawnOptions?.environmentVariables ?? {},
-    ).find((candidate) => candidate.serviceId === classification.serviceId) ?? null,
-  );
-  const selection = resolveRuntimeRecoverySelection({
-    canonicalSelection,
-    selections,
+  const { selection } = resolveConnectedServiceRuntimeAuthRecoverySelection({
     classification,
+    environmentVariables: tracked.spawnOptions?.environmentVariables ?? {},
+    trackedConnectedServices: tracked.spawnOptions?.connectedServices,
+    sessionMetadataConnectedServices: tracked.happySessionMetadataFromLocalWebhook?.connectedServices,
   });
   if (!selection) {
     return await handleConnectedServiceRuntimeAuthFailure({
@@ -334,6 +541,8 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
         switchAttemptTracker: input.switchAttemptTracker ?? null,
         credentialRefreshService: input.credentialRefreshService ?? null,
         restartSession: input.restartSession ?? null,
+        onRuntimeAuthRecoverySuccess: input.onRuntimeAuthRecoverySuccess ?? null,
+        onRuntimeAuthRestartFailure: input.onRuntimeAuthRestartFailure ?? null,
       });
       if (refreshed) return refreshed;
 
@@ -367,63 +576,45 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
       }
 
       const switchCoordinator = input.switchCoordinator;
-      const effectiveSwitchesThisTurn = input.switchAttemptTracker?.resolveSwitchesThisTurn({
+      return await runRuntimeGroupSwitchRecovery({
         sessionId: input.sessionId,
-        serviceId: groupSelection.serviceId,
-        groupId: groupSelection.groupId,
-        reportedSwitchesThisTurn: input.switchesThisTurn,
-      }) ?? input.switchesThisTurn;
-      const sessionSwitchesThisHour = input.switchAttemptTracker?.countRecordedSwitchesInWindow({
-        sessionId: input.sessionId,
-        serviceId: groupSelection.serviceId,
-        groupId: groupSelection.groupId,
-        windowMs: SESSION_SWITCH_LIMIT_WINDOW_MS,
-      });
-
-      return await handleConnectedServiceRuntimeAuthFailure({
-        sessionId: input.sessionId,
-        selection: {
-          kind: 'group',
-          serviceId: groupSelection.serviceId,
-          groupId: groupSelection.groupId,
-          activeProfileId: classification.profileId
-            ?? groupSelection.activeProfileId
-            ?? groupSelection.fallbackProfileId
-            ?? '',
-        },
-        classification: {
-          ...classification,
-          groupId: classification.groupId ?? groupSelection.groupId,
-          profileId: classification.profileId
-            ?? groupSelection.activeProfileId
-            ?? groupSelection.fallbackProfileId
-            ?? null,
-        },
-        switchesThisTurn: effectiveSwitchesThisTurn,
-        sessionSwitchesThisHour,
+        selection: groupSelection,
+        classification,
+        switchesThisTurn: input.switchesThisTurn,
         switchCoordinator,
+        switchAttemptTracker: input.switchAttemptTracker ?? null,
         temporaryThrottleRecovery: input.temporaryThrottleRecovery ?? null,
       });
     },
   });
   if (result.status === 'switch_attempted' && isGroupRuntimeRecoverySelection(selection)) {
-    emitRuntimeGroupSwitchSessionEvent({
+    finalizeRuntimeGroupSwitchAttempt({
       emitSessionEvent: input.emitSessionEvent,
       sessionId: input.sessionId,
       selection,
       classification,
-      result: result.result,
+      result,
+      switchAttemptTracker: input.switchAttemptTracker ?? null,
     });
-    input.switchAttemptTracker?.recordSwitchResult({
+    await notifyRuntimeGroupSwitchRecoverySuccess({
+      onRuntimeAuthRecoverySuccess: input.onRuntimeAuthRecoverySuccess ?? null,
       sessionId: input.sessionId,
-      serviceId: selection.serviceId,
-      groupId: selection.groupId,
-      resultStatus: result.result.status,
+      selection,
+      result,
     });
-    await maybeRestartAfterRuntimeGroupSwitch({
+    maybeRestartAfterRuntimeGroupSwitch({
+      sessionId: input.sessionId,
       tracked,
       result: result.result,
       restartSession: input.restartSession ?? null,
+      onRestartFailure: input.onRuntimeAuthRestartFailure ?? null,
+    });
+    await maybeContinueAfterObservedRuntimeGeneration({
+      tracked,
+      sessionId: input.sessionId,
+      selection,
+      result: result.result,
+      continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch ?? null,
     });
   }
   return result;

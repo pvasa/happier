@@ -19,12 +19,24 @@
 // pending/waiting (and ultimately moves it toward action-required/exhausted),
 // instead of fabricating a stuck "succeeded" state.
 //
-// WAVE-2 SEAM: bounded provider-activity proof (assistant delta / tool call /
+// WAVE-3 SEAM: bounded provider-activity proof (assistant delta / tool call /
 // accepted in-flight steer after the recovery boundary, with a timeout -> terminal)
-// is the second proof class and belongs in the shared `ProviderOutcomeProof`
-// consolidation. It is intentionally NOT implemented here so we do not create
-// "wait forever" states; until it lands, refresh-without-deterministic-proof
-// simply stays pending under the scheduler's normal backoff/exhaustion lifecycle.
+// is the second proof class. It is modeled in the shared
+// `recovery/providerOutcomeProof.ts` contract as `provider_activity` but is
+// intentionally NOT produced here so we do not create "wait forever" states;
+// until it lands, refresh-without-deterministic-proof simply stays pending under
+// the scheduler's normal backoff/exhaustion lifecycle.
+//
+// This resolver MAPS the runtime-auth switch result onto the shared, provider-agnostic
+// `ProviderOutcomeProofKind` contract. The mapping is thin and behavior-preserving:
+// the deterministic proofs it can establish are `account_adoption_verified` and
+// `fresh_candidate_selected`. All other local completions (credential_refreshed,
+// generic ok:true, unverified switch/observed_generation) map to `null` (no proof).
+
+import {
+  type ProviderOutcomeProofKind,
+  isRecoveredProviderOutcomeProof,
+} from '../recovery/providerOutcomeProof';
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null;
@@ -66,11 +78,18 @@ function hasFreshCandidateSelected(switchResult: Readonly<Record<string, unknown
   return fromProfileId !== activeProfileId;
 }
 
-export type RuntimeAuthRecoveryProofKind = 'account_adoption_verified' | 'fresh_candidate_selected';
+// Runtime-auth recovery can deterministically establish exactly these two proof
+// classes of the shared contract. (The shared union is wider — quota_probe_fresh /
+// native_resume / provider_activity / terminal_* are produced by other owners.)
+export type RuntimeAuthRecoveryProofKind = Extract<
+  ProviderOutcomeProofKind,
+  'account_adoption_verified' | 'fresh_candidate_selected'
+>;
 
 /**
  * Resolve whether a runtime-auth recovery result carries deterministic
- * provider-outcome proof. Returns the proof kind when proven, otherwise `null`.
+ * provider-outcome proof, mapped onto the shared `ProviderOutcomeProofKind`
+ * contract. Returns the proof kind when proven, otherwise `null`.
  */
 export function resolveRuntimeAuthRecoveryProof(result: unknown): RuntimeAuthRecoveryProofKind | null {
   const switchResult = readRuntimeAuthRecoverySwitchResult(result);
@@ -82,9 +101,10 @@ export function resolveRuntimeAuthRecoveryProof(result: unknown): RuntimeAuthRec
 
 /**
  * True only when the runtime-auth recovery result proves the provider outcome
- * deterministically. Local-only completions (credential_refreshed, generic
- * ok:true, unverified switch/observed_generation) are intentionally NOT success.
+ * deterministically (a recovered proof class). Local-only completions
+ * (credential_refreshed, generic ok:true, unverified switch/observed_generation)
+ * are intentionally NOT success.
  */
 export function isProvenRuntimeAuthRecoverySuccess(result: unknown): boolean {
-  return resolveRuntimeAuthRecoveryProof(result) !== null;
+  return isRecoveredProviderOutcomeProof(resolveRuntimeAuthRecoveryProof(result));
 }

@@ -134,9 +134,29 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
       event: {
         type: 'connected_service_account_switch_attempt',
         ok: false,
-        action: 'restart_requested',
-        errorCode: 'post_switch_recovery_failed',
-        partialState: 'runtime_auth_applied',
+        action: 'hot_applied',
+        attemptedContinuityMode: 'hot_apply',
+        outcome: 'failed',
+        outcomeAction: 'none',
+        errorCode: 'post_switch_verification_failed',
+        diagnostic: {
+          code: 'post_switch_verification_failed',
+          failurePhase: 'post_switch_verification',
+          source: 'manual_auth_switch',
+          serviceId: 'openai-codex',
+          retryable: false,
+          suggestedActions: ['reconnect_profile'],
+        },
+        groupGeneration: 7,
+        sessionAdoption: 'failed',
+        partialState: 'runtime_auth_partially_applied',
+        verificationByServiceId: {
+          'openai-codex': {
+            status: 'weakly_verified',
+            reason: 'provider_account_email_verified_without_account_id',
+            providerAccountId: 'must-not-persist',
+          },
+        },
       },
     });
 
@@ -151,9 +171,28 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
               data: expect.objectContaining({
                 type: 'connected-service-account-switch-attempt',
                 ok: false,
-                action: 'restart_requested',
-                errorCode: 'post_switch_recovery_failed',
-                partialState: 'runtime_auth_applied',
+                action: 'hot_applied',
+                attemptedContinuityMode: 'hot_apply',
+                outcome: 'failed',
+                outcomeAction: 'none',
+                errorCode: 'post_switch_verification_failed',
+                diagnostic: {
+                  code: 'post_switch_verification_failed',
+                  failurePhase: 'post_switch_verification',
+                  source: 'manual_auth_switch',
+                  serviceId: 'openai-codex',
+                  retryable: false,
+                  suggestedActions: ['reconnect_profile'],
+                },
+                groupGeneration: 7,
+                sessionAdoption: 'failed',
+                partialState: 'runtime_auth_partially_applied',
+                verificationByServiceId: {
+                  'openai-codex': {
+                    status: 'weakly_verified',
+                    reason: 'provider_account_email_verified_without_account_id',
+                  },
+                },
               }),
             }),
           }),
@@ -207,6 +246,7 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
         requestedStateMode: 'shared',
         effectiveStateMode: 'isolated',
         code: 'state_symlink_unavailable',
+        entryName: 'sessions/--Users-alice-work-project--',
       },
     });
 
@@ -231,6 +271,9 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
       }),
       expect.any(Object),
     );
+    const [, postedBody] = postSpy.mock.calls[0]!;
+    expect(JSON.stringify(postedBody)).not.toContain('Users-alice-work-project');
+    expect(JSON.stringify(postedBody)).not.toContain('entryName');
   });
 
   it('commits preventive soft-threshold switches as transcript events', async () => {

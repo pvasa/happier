@@ -1,6 +1,10 @@
 import { notifyDaemonConnectedServiceRuntimeAuthFailure } from '@/daemon/controlClient';
 import { logger as defaultLogger } from '@/ui/logger';
 import { resolveConnectedServiceRuntimeAuthFailureStatusMessage } from './resolveConnectedServiceRuntimeAuthFailureStatusMessage';
+import {
+  normalizeConnectedServiceRuntimeAuthRecoveryProjection,
+  type ConnectedServiceRuntimeAuthRecoveryProjection,
+} from './projection/connectedServiceRuntimeAuthRecoveryProjection';
 
 type RuntimeAuthFailureNotifyBody = Readonly<{
   sessionId: string;
@@ -8,7 +12,14 @@ type RuntimeAuthFailureNotifyBody = Readonly<{
   classification: unknown;
 }>;
 
-type RuntimeAuthFailureNotify = (body: RuntimeAuthFailureNotifyBody) => Promise<unknown>;
+type RuntimeAuthFailureNotifyOptions = Readonly<{
+  timeoutMs?: number;
+}>;
+
+type RuntimeAuthFailureNotify = (
+  body: RuntimeAuthFailureNotifyBody,
+  options?: RuntimeAuthFailureNotifyOptions,
+) => Promise<unknown>;
 
 type RuntimeAuthFailureLogger = Readonly<{
   debug: (message: string, error?: unknown) => void;
@@ -19,7 +30,11 @@ export type ConnectedServiceRuntimeAuthFailureDaemonReport = Readonly<{
   report: unknown | null;
   statusCode: string | null;
   statusMessage: string | null;
+  uxDiagnostic?: ConnectedServiceRuntimeAuthRecoveryProjection['uxDiagnostic'];
+  projection?: ConnectedServiceRuntimeAuthRecoveryProjection;
 }>;
+
+export const CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS = 120_000;
 
 export async function reportConnectedServiceRuntimeAuthFailureToDaemon(input: Readonly<{
   sessionId: string;
@@ -38,13 +53,21 @@ export async function reportConnectedServiceRuntimeAuthFailureToDaemon(input: Re
       sessionId: input.sessionId,
       switchesThisTurn: input.switchesThisTurn ?? 0,
       classification: input.classification,
+    }, {
+      timeoutMs: CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS,
     });
     const statusNote = resolveConnectedServiceRuntimeAuthFailureStatusMessage(report);
-    return {
-      handled: Boolean(statusNote),
+    const projection = normalizeConnectedServiceRuntimeAuthRecoveryProjection({
       report,
-      statusCode: statusNote?.code ?? null,
-      statusMessage: statusNote?.message ?? null,
+      statusNote,
+    });
+    return {
+      handled: projection.handled,
+      report,
+      statusCode: projection.statusCode,
+      statusMessage: projection.statusMessage,
+      ...(projection.uxDiagnostic ? { uxDiagnostic: projection.uxDiagnostic } : {}),
+      projection,
     };
   } catch (error) {
     logger.debug(`${logPrefix} Failed to report connected-service runtime auth failure to daemon (non-fatal)`, error);

@@ -82,6 +82,66 @@ describe('resolveConnectedServiceRuntimeAuthFailureStatusMessage', () => {
     });
   });
 
+  it('returns provider-facing status notes for scheduled recovery and post-switch verification failures', () => {
+    const scheduled = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
+      ok: true,
+      result: {
+        status: 'recovery_retry_scheduled',
+        recovery: {
+          status: 'scheduled',
+          retryable: true,
+          nextRetryAtMs: 12_000,
+        },
+        originalResult: {
+          status: 'switch_attempted',
+          result: {
+            status: 'generation_apply_failed',
+            activeProfileId: 'backup',
+            generation: 2,
+            errorCode: 'provider_account_adoption_mismatch',
+          },
+        },
+      },
+    });
+    const adoptionMismatch = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
+      ok: true,
+      result: {
+        status: 'switch_attempted',
+        result: {
+          status: 'generation_apply_failed',
+          activeProfileId: 'backup',
+          generation: 2,
+          errorCode: 'provider_account_adoption_mismatch',
+        },
+      },
+    });
+    const verificationFailed = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
+      ok: true,
+      result: {
+        status: 'switch_attempted',
+        result: {
+          status: 'generation_apply_failed',
+          activeProfileId: 'backup',
+          generation: 2,
+          errorCode: 'post_switch_verification_failed',
+        },
+      },
+    });
+
+    expect(scheduled).toMatchObject({
+      code: 'recovery_retry_scheduled',
+      message: expect.stringContaining('retry'),
+    });
+    expect(adoptionMismatch).toMatchObject({
+      code: 'switch_attempted_provider_account_adoption_mismatch',
+      message: expect.stringContaining('account'),
+    });
+    expect(verificationFailed).toMatchObject({
+      code: 'switch_attempted_post_switch_verification_failed',
+      message: expect.stringContaining('verify'),
+    });
+  });
+
   it('returns a visible status note when the group has no eligible fallback member', () => {
     const status = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
       ok: true,
@@ -178,6 +238,50 @@ describe('resolveConnectedServiceRuntimeAuthFailureStatusMessage', () => {
     });
   });
 
+  it('returns a visible scheduled status note when daemon-lifetime temporary-throttle recovery is armed', () => {
+    const status = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
+      ok: true,
+      result: {
+        status: 'temporary_retry_armed',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        retryAfterMs: 45_000,
+        recovery: {
+          status: 'waiting',
+          nextRetryAtMs: 46_000,
+          attemptCount: 0,
+        },
+      },
+    });
+
+    expect(status).toMatchObject({
+      code: 'temporary_retry_armed',
+      message: expect.stringContaining('retry'),
+    });
+    expect(status?.message).toContain('daemon');
+  });
+
+  it('returns a visible manual-retry status note when temporary-throttle recovery is degraded', () => {
+    const status = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
+      ok: true,
+      result: {
+        status: 'temporary_retry_unavailable',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        retryAfterMs: 45_000,
+        reason: 'manual_retry_required',
+      },
+    });
+
+    expect(status).toMatchObject({
+      code: 'temporary_retry_manual_retry_required',
+      message: expect.stringContaining('manual'),
+    });
+    expect(status?.message).toContain('retry');
+  });
+
   it('returns visible status notes for daemon boundary failures', () => {
     const sessionNotFound = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
       ok: true,
@@ -195,10 +299,25 @@ describe('resolveConnectedServiceRuntimeAuthFailureStatusMessage', () => {
       ok: true,
       result: { status: 'recovery_handler_failed', errorCode: 'unexpected_error' },
     });
+    const recoveryDeadLettered = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
+      ok: true,
+      result: { status: 'recovery_dead_lettered' },
+    });
+    const recoveryCancelled = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
+      ok: true,
+      result: { status: 'recovery_cancelled' },
+    });
+    const recoveryTerminal = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
+      ok: true,
+      result: { status: 'recovery_terminal' },
+    });
 
     expect(sessionNotFound?.code).toBe('session_not_found');
     expect(selectionMismatch?.code).toBe('selection_mismatch');
     expect(coordinatorUnavailable?.code).toBe('switch_coordinator_unavailable');
     expect(recoveryHandlerFailed?.code).toBe('recovery_handler_failed');
+    expect(recoveryDeadLettered?.code).toBe('recovery_dead_lettered');
+    expect(recoveryCancelled?.code).toBe('recovery_cancelled');
+    expect(recoveryTerminal?.code).toBe('recovery_terminal');
   });
 });

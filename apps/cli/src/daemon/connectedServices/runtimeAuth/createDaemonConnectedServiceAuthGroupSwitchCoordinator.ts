@@ -14,6 +14,8 @@ import {
   type ConnectedServiceAuthGroupSwitchEvent,
 } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
 import { buildConnectedServiceAuthGroupSwitchState } from '../accountGroups/switching/buildConnectedServiceAuthGroupSwitchState';
+import { createConnectedServiceAuthGenerationApplyFailureError } from './connectedServiceAuthGenerationApplyFailure';
+import type { ConnectedServiceSessionAuthSwitchReason } from './connectedServiceSessionAuthSwitchCore';
 
 type AuthGroupApi = Readonly<{
   getConnectedServiceAuthGroup(input: Readonly<{
@@ -24,12 +26,12 @@ type AuthGroupApi = Readonly<{
     serviceId: ConnectedServiceId;
     groupId: string;
     activeProfileId: string;
-    expectedGeneration?: number;
+    expectedGeneration: number;
   }>): Promise<ConnectedServiceAuthGroupV1>;
   updateConnectedServiceAuthGroupRuntimeState?(input: Readonly<{
     serviceId: ConnectedServiceId;
     groupId: string;
-    expectedGeneration?: number;
+    expectedGeneration: number;
     memberStates: ReadonlyArray<Readonly<{
       profileId: string;
       state: ConnectedServiceAuthGroupMemberStateV1;
@@ -120,12 +122,90 @@ function resolveApiAuthGroupGenerationConflict(error: unknown): number | null {
   return readNonNegativeNumber((error as Readonly<{ generation?: unknown }>).generation);
 }
 
+// Bounded retry for the idempotent auth-group read that gates every switch. A transient
+// local-server blip previously threw at the first step of recovery and was swallowed as
+// `recovery_handler_failed` with no follow-up, permanently dropping a correctly-classified
+// usage-limit switch (observed across several sessions during a server-timeout window).
+const AUTH_GROUP_LOAD_RETRY_ATTEMPTS = 2;
+const AUTH_GROUP_LOAD_RETRY_BASE_DELAY_MS = 250;
+const DEFAULT_GROUP_QUOTA_PROBE_TIMEOUT_MS = 8_000;
+
+function defaultSwitchCoordinatorSleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function loadConnectedServiceAuthGroupWithRetry(input: Readonly<{
+  api: AuthGroupApi;
+  serviceId: ConnectedServiceId;
+  groupId: string;
+  attempts: number;
+  baseDelayMs: number;
+  sleepMs: (ms: number) => Promise<void>;
+}>): Promise<ConnectedServiceAuthGroupV1 | null> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await input.api.getConnectedServiceAuthGroup({
+        serviceId: input.serviceId,
+        groupId: input.groupId,
+      });
+    } catch (error) {
+      // A generation conflict is a real state mismatch the coordinator resolves explicitly, not
+      // a transient blip — surface it immediately. Everything else thrown by the idempotent GET
+      // (timeout/ECONNABORTED/network/5xx) is treated as transient and retried with backoff.
+      if (attempt >= input.attempts || resolveApiAuthGroupGenerationConflict(error) !== null) {
+        throw error;
+      }
+      await input.sleepMs(input.baseDelayMs * (attempt + 1));
+    }
+  }
+}
+
+function resolveGroupQuotaProbeTimeoutMs(value: number | null | undefined): number | null {
+  if (value === null) return null;
+  if (value === undefined) return DEFAULT_GROUP_QUOTA_PROBE_TIMEOUT_MS;
+  if (!Number.isFinite(value)) return DEFAULT_GROUP_QUOTA_PROBE_TIMEOUT_MS;
+  const normalized = Math.trunc(value);
+  return normalized > 0 ? normalized : null;
+}
+
+async function runQuotaSnapshotProbeWithTimeout(input: Readonly<{
+  timeoutMs: number | null;
+  probe: () => Promise<void>;
+}>): Promise<void> {
+  if (input.timeoutMs === null) {
+    await input.probe();
+    return;
+  }
+
+  const timeoutMs = input.timeoutMs;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const probePromise = input.probe().then(
+    () => ({ status: 'completed' as const }),
+    (error) => ({ status: 'failed' as const, error }),
+  );
+  const timeoutPromise = new Promise<Readonly<{ status: 'timed_out' }>>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      resolve({ status: 'timed_out' });
+    }, timeoutMs);
+    (timeoutHandle as unknown as { unref?: () => void })?.unref?.();
+  });
+
+  const result = await Promise.race([probePromise, timeoutPromise]);
+  if (timeoutHandle) {
+    clearTimeout(timeoutHandle);
+  }
+  timeoutHandle = null;
+  if (result.status === 'timed_out') return;
+  if (result.status === 'failed') throw result.error;
+}
+
 export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: Readonly<{
   api: AuthGroupApi;
   runtimeQuotaSnapshots: ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore;
   leases?: InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry;
   quotaFreshnessMs: number;
   nowMs: () => number;
+  sleepMs?: (ms: number) => Promise<void>;
   restartSession: (input: Readonly<{
     sessionId?: string;
     serviceId: ConnectedServiceId;
@@ -141,7 +221,10 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
     activeProfileId: string | null;
     generation: number;
     reason: string;
-  }>) => Promise<Readonly<{ ok: boolean; action?: string; errorCode?: string }>>;
+    switchReason: ConnectedServiceSessionAuthSwitchReason;
+    fromProfileId?: string | null;
+  }>) => Promise<Readonly<{ ok: boolean; action?: string; errorCode?: string; diagnostics?: unknown }>>;
+  switchReasonForApplyGeneration?: ConnectedServiceSessionAuthSwitchReason;
   hydratePersistedQuotaSnapshotsForGroup?: (input: Readonly<{
     serviceId: ConnectedServiceId;
     groupId: string;
@@ -153,6 +236,14 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
     profileIds: ReadonlyArray<string>;
     reason: string;
   }>) => Promise<void>;
+  quotaProbeTimeoutMs?: number | null;
+  onCommittedSwitch?: (input: Readonly<{
+    serviceId: ConnectedServiceId;
+    groupId: string;
+    activeProfileId: string;
+    generation: number;
+    expectedGeneration?: number;
+  }>) => Promise<void> | void;
   emitEvent?: (event: ConnectedServiceAuthGroupSwitchEvent) => void;
 }>): ConnectedServiceAuthGroupSwitchCoordinator {
   return new ConnectedServiceAuthGroupSwitchCoordinator({
@@ -161,7 +252,14 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
     quotaFreshnessMs: params.quotaFreshnessMs,
     loadState: async (input) => {
       const serviceId = ConnectedServiceIdSchema.parse(input.serviceId);
-      const group = await params.api.getConnectedServiceAuthGroup({ serviceId, groupId: input.groupId });
+      const group = await loadConnectedServiceAuthGroupWithRetry({
+        api: params.api,
+        serviceId,
+        groupId: input.groupId,
+        attempts: AUTH_GROUP_LOAD_RETRY_ATTEMPTS,
+        baseDelayMs: AUTH_GROUP_LOAD_RETRY_BASE_DELAY_MS,
+        sleepMs: params.sleepMs ?? defaultSwitchCoordinatorSleepMs,
+      });
       if (!group) throw new Error(`Connected service auth group not found (${input.serviceId}/${input.groupId})`);
       await params.hydratePersistedQuotaSnapshotsForGroup?.({
         serviceId,
@@ -199,6 +297,13 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
         activeProfileId: input.toProfileId,
         expectedGeneration: input.expectedGeneration,
       });
+      await params.onCommittedSwitch?.({
+        serviceId,
+        groupId: input.groupId,
+        activeProfileId: input.toProfileId,
+        generation: group.generation,
+        ...(input.expectedGeneration === undefined ? {} : { expectedGeneration: input.expectedGeneration }),
+      });
       return buildConnectedServiceAuthGroupSwitchState({
         group,
         runtimeQuotaSnapshots: params.runtimeQuotaSnapshots,
@@ -208,11 +313,16 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
     ...(params.probeQuotaSnapshotsForGroup ? {
       probeQuotaSnapshotsForGroup: async (input) => {
         const serviceId = ConnectedServiceIdSchema.parse(input.serviceId);
-        await params.probeQuotaSnapshotsForGroup?.({
-          serviceId,
-          groupId: input.groupId,
-          profileIds: input.profileIds,
-          reason: input.reason,
+        await runQuotaSnapshotProbeWithTimeout({
+          timeoutMs: resolveGroupQuotaProbeTimeoutMs(params.quotaProbeTimeoutMs),
+          probe: async () => {
+            await params.probeQuotaSnapshotsForGroup?.({
+              serviceId,
+              groupId: input.groupId,
+              profileIds: input.profileIds,
+              reason: input.reason,
+            });
+          },
         });
       },
     } : {}),
@@ -226,6 +336,8 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
           activeProfileId: input.activeProfileId,
           generation: input.generation,
           reason: input.reason ?? 'unknown',
+          switchReason: params.switchReasonForApplyGeneration ?? 'automatic_runtime_failure',
+          fromProfileId: input.fromProfileId ?? null,
         });
         if (applied.ok) {
           switch (applied.action) {
@@ -237,7 +349,10 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
               return { mode: 'restart_resume' as const };
           }
         }
-        throw new Error(`connected_service_auth_generation_apply_failed:${applied.errorCode ?? 'unknown'}`);
+        throw createConnectedServiceAuthGenerationApplyFailureError({
+          errorCode: applied.errorCode ?? 'unknown',
+          ...(applied.diagnostics === undefined ? {} : { diagnostics: applied.diagnostics }),
+        });
       }
       await params.restartSession({
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),

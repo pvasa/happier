@@ -375,6 +375,39 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     } satisfies Partial<RuntimeAuthRecoveryIntent>);
   });
 
+  it('does not double-enqueue when the same runtime-auth failure is reported through two paths (single owner per recovery key)', async () => {
+    // S3: the control-server endpoint enqueues on failure; a sibling report path may also enqueue.
+    // Both are keyed by {sessionId, serviceId, profileId, groupId} and coalesce via upsert-merge,
+    // so a single failure can never produce two competing durable recovery intents/timers.
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      maxAttempts: 3,
+      recover: async () => ({ status: 'session_endpoint_unavailable', reason: 'down' }),
+    });
+
+    const failure = {
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      error: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+    } as const;
+
+    // Apply-failure path + handler-failure path for the SAME failure.
+    await scheduler.enqueueApplyFailure({
+      sessionId: failure.sessionId,
+      switchesThisTurn: failure.switchesThisTurn,
+      classification: failure.classification,
+      result: { status: 'generation_apply_failed', errorCode: 'hot_apply_failed', diagnostics: { underlyingError: 'connect ECONNREFUSED' } },
+    });
+    await scheduler.enqueueHandlerFailure(failure);
+
+    // Exactly one durable intent for the session despite two enqueues.
+    expect(scheduler.readForSession('session-1')).toHaveLength(1);
+  });
+
   it('does not revive an exhausted runtime-auth recovery intent when the provider reports the same failure again', async () => {
     let now = 3_000;
     const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
@@ -574,7 +607,8 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       attemptCount: 1,
       switchesThisTurn: 2,
       failurePhase: 'handler',
-      failureReason: 'handler_transient_failure',
+      // A transient network handler failure now carries the specific endpoint-unavailable reason.
+      failureReason: 'session_endpoint_unavailable',
       lastError: 'socket reset',
       lastErrorClassification: { kind: 'network', retryable: true },
     } satisfies Partial<RuntimeAuthRecoveryIntent>);
@@ -712,7 +746,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     } satisfies Partial<RuntimeAuthRecoveryIntent>);
   });
 
-  it('treats credential_refreshed recovery results as success and clears the recovery intent', async () => {
+  it('does NOT clear recovery on credential_refreshed without provider-outcome proof (keeps it pending)', async () => {
     const diagnostics: string[] = [];
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => 1_000,
@@ -739,14 +773,17 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     });
 
     await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
-      .resolves.toEqual({ status: 'succeeded' });
+      .resolves.toEqual({ status: 'waiting' });
 
-    expect(scheduler.read('session-1')).toBeNull();
-    expect(diagnostics).toContain('runtime_auth_recovery_success');
+    expect(scheduler.read('session-1')).toMatchObject({
+      status: 'waiting',
+      lastError: 'recovery_unproven_awaiting_provider_outcome',
+    });
+    expect(diagnostics).not.toContain('runtime_auth_recovery_success');
     expect(diagnostics).not.toContain('runtime_auth_recovery_terminal');
   });
 
-  it('treats successful switch owner results as success and clears the recovery intent', async () => {
+  it('does NOT clear recovery on a generic ok:true switch result without proof (keeps it pending)', async () => {
     const diagnostics: string[] = [];
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => 1_000,
@@ -773,11 +810,78 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     });
 
     await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'waiting' });
+
+    expect(scheduler.read('session-1')).toMatchObject({ status: 'waiting' });
+    expect(diagnostics).not.toContain('runtime_auth_recovery_success');
+  });
+
+  it('clears recovery when account adoption is verified (deterministic proof)', async () => {
+    const diagnostics: string[] = [];
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({
+        status: 'switch_attempted',
+        result: {
+          status: 'switched',
+          activeProfileId: 'backup',
+          generation: 2,
+          verificationByServiceId: {
+            'openai-codex': { status: 'verified' },
+          },
+        },
+      }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event.event);
+      },
+    });
+
+    await scheduler.enqueueHandlerFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
       .resolves.toEqual({ status: 'succeeded' });
 
     expect(scheduler.read('session-1')).toBeNull();
     expect(diagnostics).toContain('runtime_auth_recovery_success');
     expect(diagnostics).not.toContain('runtime_auth_recovery_terminal');
+  });
+
+  it('clears recovery when a genuinely fresh candidate is selected (deterministic proof)', async () => {
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({
+        status: 'switch_attempted',
+        result: {
+          status: 'switched',
+          fromProfileId: 'primary',
+          activeProfileId: 'backup',
+          generation: 2,
+        },
+      }),
+    });
+
+    await scheduler.enqueueHandlerFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'succeeded' });
+
+    expect(scheduler.read('session-1')).toBeNull();
   });
 
   it('schedules a fresh same-key recovery after a previous recovery succeeds', async () => {
@@ -789,8 +893,10 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       recover: async () => ({
         status: 'switch_attempted',
         result: {
-          ok: true,
-          action: 'restart_requested',
+          status: 'switched',
+          fromProfileId: 'primary',
+          activeProfileId: 'backup',
+          generation: 2,
         },
       }),
     });
@@ -840,5 +946,213 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     expect(intent?.lastError).not.toContain('raw-secret-token');
     expect(intent?.lastError).not.toContain('raw-refresh-token');
     expect(intent?.lastError).toContain('[REDACTED]');
+  });
+
+  it('keeps recovery WAITING (not terminal) when a recovery fetch hits ECONNREFUSED (session_endpoint_unavailable)', async () => {
+    // Reproduces the live incident: an unreachable session control endpoint during recovery must
+    // NOT be terminalized — it is a transient outage that should stay retryable/waiting.
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const econnrefused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:52753'), {
+      code: 'ECONNREFUSED',
+    });
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => {
+        throw econnrefused;
+      },
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+
+    await scheduler.enqueueHandlerFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'waiting' });
+
+    expect(scheduler.read('session-1')).toMatchObject({ status: 'waiting' });
+    const events = diagnostics.map((event) => event.event);
+    expect(events).not.toContain('runtime_auth_recovery_terminal');
+    expect(events).not.toContain('runtime_auth_recovery_success');
+  });
+
+  it('does NOT dead-letter on the first endpoint-unavailable network failure', async () => {
+    // A single local outage must not consume the whole attempt budget toward exhausted.
+    const econnrefused = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      maxAttempts: 5,
+      recover: async () => {
+        throw econnrefused;
+      },
+    });
+
+    await scheduler.enqueueHandlerFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+
+    await scheduler.wake({ sessionId: 'session-1', reason: 'manual' });
+    const intent = scheduler.read('session-1');
+    expect(intent?.status).toBe('waiting');
+    expect(intent?.attemptCount).toBeLessThan(intent?.maxAttempts ?? 0);
+  });
+
+  it('keeps recovery WAITING when the handler returns a daemon_lifecycle_unavailable deferral', async () => {
+    // The recovery handler early-returned because the daemon was shutting down. This must not be a
+    // success and must not be terminal: stay waiting so a healthy future daemon re-drives it.
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({
+        status: 'daemon_lifecycle_unavailable',
+        reason: 'recovery_deferred_shutdown',
+      }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+
+    await scheduler.enqueueHandlerFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'waiting' });
+
+    expect(scheduler.read('session-1')).toMatchObject({
+      status: 'waiting',
+      lastError: 'recovery_deferred_shutdown',
+    });
+    const events = diagnostics.map((event) => event.event);
+    expect(events).not.toContain('runtime_auth_recovery_success');
+    expect(events).not.toContain('runtime_auth_recovery_terminal');
+  });
+
+  it('does NOT dead-letter after MANY consecutive endpoint-unavailable results (degraded retries do not advance attemptCount)', async () => {
+    // S2: a long local-endpoint outage must not dead-letter a recoverable session faster than a
+    // real provider failure. Degraded lifecycle/endpoint-unavailable retries are a separate track
+    // that does not consume the normal attempt budget toward max/dead-letter.
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    let nowMs = 1_000;
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => nowMs,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      maxAttempts: 3,
+      recover: async () => ({
+        status: 'session_endpoint_unavailable',
+        reason: 'connect ECONNREFUSED 127.0.0.1:52753',
+      }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+
+    await scheduler.enqueueHandlerFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+
+    // Drive far more wakes than maxAttempts; with only endpoint-unavailable results it must never
+    // dead-letter.
+    for (let i = 0; i < 10; i += 1) {
+      await scheduler.wake({ sessionId: 'session-1', reason: 'manual' });
+      nowMs += 10_000;
+    }
+
+    const intent = scheduler.read('session-1');
+    expect(intent?.status).toBe('waiting');
+    const events = diagnostics.map((event) => event.event);
+    expect(events).not.toContain('runtime_auth_recovery_dead_letter');
+    expect(events).not.toContain('runtime_auth_recovery_terminal');
+    // The normal attempt budget is untouched by degraded retries.
+    expect(intent?.attemptCount ?? 0).toBeLessThan(intent?.maxAttempts ?? 0);
+  });
+
+  it('still dead-letters a genuine retryable provider failure within the normal attempt budget', async () => {
+    // Guard against over-suppression: a real (non-degraded) retryable failure must still count
+    // toward max_attempts and dead-letter as before.
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    let nowMs = 1_000;
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => nowMs,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      maxAttempts: 3,
+      recover: async () => ({
+        status: 'generation_apply_failed',
+        errorCode: 'hot_apply_failed',
+        diagnostics: { underlyingError: 'connect ECONNREFUSED 127.0.0.1:9999' },
+      }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+
+    await scheduler.enqueueHandlerFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      await scheduler.wake({ sessionId: 'session-1', reason: 'manual' });
+      nowMs += 10_000;
+    }
+
+    const events = diagnostics.map((event) => event.event);
+    expect(events).toContain('runtime_auth_recovery_dead_letter');
+  });
+
+  it('keeps recovery WAITING when the handler returns a session_endpoint_unavailable result', async () => {
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({
+        status: 'session_endpoint_unavailable',
+        reason: 'connect ECONNREFUSED 127.0.0.1:52753',
+      }),
+    });
+
+    await scheduler.enqueueHandlerFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'waiting' });
+    expect(scheduler.read('session-1')).toMatchObject({
+      status: 'waiting',
+      lastError: 'session_endpoint_unavailable',
+    });
   });
 });

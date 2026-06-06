@@ -37,6 +37,17 @@ export function createConnectedServiceRuntimeAuthDispatcher(deps: Readonly<{
     recoverAfterRuntimeAuthSwitch(input: ConnectedServiceRuntimeAuthTargetInput) {
       return adapterFor(input, 'recoverAfterRuntimeAuthSwitch').recoverAfterRuntimeAuthSwitch(input);
     },
+    verifyActiveAccount(input: ConnectedServiceRuntimeAuthTargetInput) {
+      const adapter = adapterFor(input, 'verifyActiveAccount');
+      if (!adapter.verifyActiveAccount) {
+        return {
+          status: 'unavailable' as const,
+          retryable: false,
+          reason: 'provider_active_account_verification_missing',
+        };
+      }
+      return adapter.verifyActiveAccount(input);
+    },
     probeQuota(input: ConnectedServiceRuntimeAuthTargetInput) {
       return adapterFor(input, 'probeQuota').probeQuota(input);
     },

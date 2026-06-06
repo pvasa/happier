@@ -91,6 +91,55 @@ export function resolveConnectedServiceRuntimeAuthFailureStatusMessage(
       'Connected-service recovery failed before account switching could complete.',
     );
   }
+  if (outerResult?.status === 'recovery_retry_scheduled') {
+    return toStatusNote(
+      'recovery_retry_scheduled',
+      'Connected-service recovery hit a temporary provider failure; retry scheduled.',
+    );
+  }
+  if (outerResult?.status === 'recovery_dead_lettered') {
+    return toStatusNote(
+      'recovery_dead_lettered',
+      'Connected-service recovery exhausted retry attempts; manual attention may be required.',
+    );
+  }
+  if (outerResult?.status === 'recovery_cancelled') {
+    return toStatusNote(
+      'recovery_cancelled',
+      'Connected-service recovery is no longer retrying because the recovery intent was cancelled.',
+    );
+  }
+  if (outerResult?.status === 'recovery_terminal') {
+    return toStatusNote(
+      'recovery_terminal',
+      'Connected-service recovery reached a terminal result and will not retry automatically.',
+    );
+  }
+  if (outerResult?.status === 'temporary_retry_armed') {
+    return toStatusNote(
+      'temporary_retry_armed',
+      'Connected-service provider reported a temporary throttle; this daemon will retry the session when the throttle window resets.',
+    );
+  }
+  if (outerResult?.status === 'temporary_retry_unavailable') {
+    const reason = readNonEmptyString(outerResult.reason);
+    if (reason === 'manual_retry_required') {
+      return toStatusNote(
+        'temporary_retry_manual_retry_required',
+        'Connected-service provider reported a temporary throttle; manual retry is required.',
+      );
+    }
+    if (reason === 'session_id_missing') {
+      return toStatusNote(
+        'temporary_retry_session_id_missing',
+        'Connected-service temporary-throttle recovery could not find the active provider session.',
+      );
+    }
+    return toStatusNote(
+      'temporary_retry_unavailable',
+      'Connected-service temporary-throttle recovery is unavailable; manual retry may be required.',
+    );
+  }
   if (outerResult?.status !== 'switch_attempted') return null;
   const switchResult = readRecord(outerResult.result);
   if (switchResult?.status === 'no_eligible_member') {
@@ -108,6 +157,22 @@ export function resolveConnectedServiceRuntimeAuthFailureStatusMessage(
   if (switchResult?.status === 'generation_apply_failed') {
     const activeProfileId = readNonEmptyString(switchResult.activeProfileId);
     const errorCode = readNonEmptyString(switchResult.errorCode) || 'unknown';
+    if (errorCode === 'provider_account_adoption_mismatch') {
+      return toStatusNote(
+        'switch_attempted_provider_account_adoption_mismatch',
+        activeProfileId
+          ? `Connected-service provider did not adopt account ${activeProfileId}; retrying verification.`
+          : 'Connected-service provider did not adopt the selected account; retrying verification.',
+      );
+    }
+    if (errorCode === 'post_switch_verification_failed') {
+      return toStatusNote(
+        'switch_attempted_post_switch_verification_failed',
+        activeProfileId
+          ? `Connected-service provider account ${activeProfileId} could not verify after switching.`
+          : 'Connected-service provider account could not verify after switching.',
+      );
+    }
     return toStatusNote(
       'switch_attempted_generation_apply_failed',
       activeProfileId

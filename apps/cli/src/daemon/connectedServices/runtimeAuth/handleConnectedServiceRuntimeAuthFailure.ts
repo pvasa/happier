@@ -24,6 +24,7 @@ type TemporaryThrottleRecoveryLike = Readonly<{
     sessionId: string;
     issueFingerprint: string;
     retryAfterMs?: number | null;
+    resetAtMs?: number | null;
   }>): Promise<Readonly<{
     status: string;
     nextRetryAtMs: number | null;
@@ -48,6 +49,7 @@ type RuntimeTemporaryRetryArmed = Readonly<{
   profileId: string | null;
   groupId: string | null;
   retryAfterMs: number | null;
+  resetAtMs: number | null;
   recovery: Awaited<ReturnType<TemporaryThrottleRecoveryLike['enable']>>;
 }>;
 
@@ -57,7 +59,8 @@ type RuntimeTemporaryRetryUnavailable = Readonly<{
   profileId: string | null;
   groupId: string | null;
   retryAfterMs: number | null;
-  reason: 'session_id_missing' | 'scheduler_unavailable';
+  resetAtMs: number | null;
+  reason: 'session_id_missing' | 'scheduler_unavailable' | 'manual_retry_required';
 }>;
 
 function mapRecoveryDecisionToActionRequired(input: Readonly<{
@@ -143,6 +146,7 @@ export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
         profileId: decision.profileId,
         groupId: decision.groupId,
         retryAfterMs: decision.retryAfterMs,
+        resetAtMs: decision.resetAtMs,
         reason: 'session_id_missing',
       };
     }
@@ -153,6 +157,7 @@ export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
         profileId: decision.profileId,
         groupId: decision.groupId,
         retryAfterMs: decision.retryAfterMs,
+        resetAtMs: decision.resetAtMs,
         reason: 'scheduler_unavailable',
       };
     }
@@ -160,6 +165,7 @@ export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
       sessionId: input.sessionId,
       issueFingerprint: buildTemporaryThrottleIssueFingerprint(decision),
       retryAfterMs: decision.retryAfterMs,
+      resetAtMs: decision.resetAtMs,
     });
     return {
       status: 'temporary_retry_armed',
@@ -167,6 +173,7 @@ export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
       profileId: decision.profileId,
       groupId: decision.groupId,
       retryAfterMs: decision.retryAfterMs,
+      resetAtMs: decision.resetAtMs,
       recovery,
     };
   }

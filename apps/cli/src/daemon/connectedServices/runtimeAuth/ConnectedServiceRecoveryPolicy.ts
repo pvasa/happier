@@ -58,6 +58,7 @@ export type ConnectedServiceRecoveryPolicyDecision =
       serviceId: string;
       profileId: string | null;
       groupId: string | null;
+      resetAtMs: number | null;
       retryAfterMs: number | null;
     }>
   | Readonly<{
@@ -187,6 +188,7 @@ export function decideConnectedServiceRecovery(
       serviceId: issue.serviceId,
       profileId,
       groupId,
+      resetAtMs: issue.resetsAtMs ?? null,
       retryAfterMs: issue.retryAfterMs ?? null,
     };
   }

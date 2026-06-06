@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ConnectedServiceAccountTransitionVerificationResult } from '../accountTransitions/connectedServiceAccountTransition';
 
 export const ConnectedServiceRuntimeAuthFailureKindSchema = z.enum([
   'usage_limit',
@@ -51,7 +52,10 @@ export type ConnectedServiceRuntimeFailureClassification = Readonly<{
   planType: string | null;
   rateLimits: unknown | null;
   source: 'structured_provider_error' | 'stable_provider_message' | 'provider_runtime_marker';
-  recoveryAction?: Readonly<{ kind: 'provider_state_sharing_required' }> | null;
+  recoveryAction?:
+    | Readonly<{ kind: 'provider_state_sharing_required' }>
+    | Readonly<{ kind: 'quota_recovery_required' }>
+    | null;
 }>;
 
 export type ConnectedServiceRuntimeAuthTargetInput = Readonly<{
@@ -73,6 +77,7 @@ export type ConnectedServiceProviderRuntimeAuthAdapter = Readonly<{
   canHotApply(input: ConnectedServiceRuntimeAuthTargetInput): ConnectedServiceRuntimeAuthAdapterResult;
   hotApply(input: ConnectedServiceRuntimeAuthTargetInput): Promise<ConnectedServiceRuntimeAuthAdapterResult>;
   recoverAfterRuntimeAuthSwitch(input: ConnectedServiceRuntimeAuthTargetInput): Promise<ConnectedServiceRuntimeAuthAdapterResult>;
+  verifyActiveAccount?(input: ConnectedServiceRuntimeAuthTargetInput): Promise<ConnectedServiceAccountTransitionVerificationResult>;
   probeQuota(input: ConnectedServiceRuntimeAuthTargetInput): Promise<ConnectedServiceRuntimeAuthAdapterResult>;
   refreshActiveProfile(input: ConnectedServiceRuntimeAuthTargetInput): Promise<ConnectedServiceRuntimeAuthAdapterResult>;
 }>;

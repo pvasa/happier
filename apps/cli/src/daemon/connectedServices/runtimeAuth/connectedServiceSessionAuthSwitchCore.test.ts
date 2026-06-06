@@ -6,6 +6,41 @@ import {
 } from './connectedServiceSessionAuthSwitchCore';
 
 describe('connectedServiceSessionAuthSwitchCore', () => {
+  it('allows the same async transition to re-enter the same session lock', async () => {
+    const core = createConnectedServiceSessionAuthSwitchCore({
+      locks: new ConnectedServiceSessionAuthSwitchLockRegistry(),
+    });
+    const events: string[] = [];
+
+    const transition = core.run({
+      sessionId: 'session-1',
+      reason: 'automatic_runtime_failure',
+      execute: async () => {
+        events.push('outer:start');
+        const inner = await core.run({
+          sessionId: 'session-1',
+          reason: 'manual',
+          execute: async () => {
+            events.push('inner');
+            return 'inner-result';
+          },
+        });
+        events.push(`outer:${inner}`);
+        return 'outer-result';
+      },
+    });
+
+    const result = await Promise.race([
+      transition.then((value) => ({ kind: 'resolved' as const, value })),
+      new Promise<{ kind: 'timed_out' }>((resolve) => {
+        setTimeout(() => resolve({ kind: 'timed_out' }), 25);
+      }),
+    ]);
+
+    expect(result).toEqual({ kind: 'resolved', value: 'outer-result' });
+    expect(events).toEqual(['outer:start', 'inner', 'outer:inner-result']);
+  });
+
   it('serializes concurrent switches for the same session', async () => {
     const core = createConnectedServiceSessionAuthSwitchCore({
       locks: new ConnectedServiceSessionAuthSwitchLockRegistry(),

@@ -3,6 +3,63 @@ import { describe, expect, it, vi } from 'vitest';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from './reportConnectedServiceRuntimeAuthFailureToDaemon';
 
 describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
+  it('preserves typed recovery diagnostics returned by the daemon', async () => {
+    const uxDiagnostic = {
+      code: 'recovery_retry_scheduled',
+      failurePhase: 'runtime_auth_recovery',
+      source: 'runtime_auth_recovery',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'codex-group',
+      retryable: true,
+      suggestedActions: ['retry'],
+      diagnostics: {
+        runtimeFailureKind: 'usage_limit',
+        nextRetryAtMs: 1_700_000_100_000,
+      },
+    };
+    const notify = vi.fn(async () => ({
+      ok: true,
+      result: {
+        status: 'recovery_retry_scheduled',
+        recovery: {
+          status: 'scheduled',
+          retryable: true,
+          nextRetryAtMs: 1_700_000_100_000,
+        },
+        uxDiagnostic,
+      },
+    }));
+
+    await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: {
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'codex-group',
+        resetsAtMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+      notify,
+    })).resolves.toMatchObject({
+      handled: true,
+      statusCode: 'recovery_retry_scheduled',
+      statusMessage: expect.stringContaining('retry scheduled'),
+      uxDiagnostic,
+      projection: {
+        handled: true,
+        statusCode: 'recovery_retry_scheduled',
+        nextRetryAtMs: 1_700_000_100_000,
+        terminal: false,
+        uxDiagnostic,
+      },
+    });
+  });
+
   it('returns the daemon report and resolved status message when recovery is actionable', async () => {
     const classification = {
       kind: 'auth_expired',
@@ -27,7 +84,7 @@ describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
       switchesThisTurn: 2,
       classification,
       notify,
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       handled: true,
       report: {
         ok: true,
@@ -43,6 +100,34 @@ describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
       sessionId: 'sess_1',
       switchesThisTurn: 2,
       classification,
+    }, {
+      timeoutMs: 120_000,
+    });
+  });
+
+  it('uses a runtime-auth-specific daemon timeout so quota probing and switch application can finish', async () => {
+    const notify = vi.fn(async () => ({
+      ok: true,
+      result: {
+        status: 'switch_attempted',
+        result: { status: 'switched', activeProfileId: 'backup', generation: 2 },
+      },
+    }));
+
+    await reportConnectedServiceRuntimeAuthFailureToDaemon({
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: {
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'codex-group',
+      },
+      notify,
+    });
+
+    expect(notify).toHaveBeenCalledWith(expect.any(Object), {
+      timeoutMs: 120_000,
     });
   });
 
@@ -70,7 +155,7 @@ describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
         groupId: 'codex-group',
       },
       notify,
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       handled: true,
       report: {
         ok: true,
@@ -86,6 +171,41 @@ describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
       },
       statusCode: 'switch_attempted_generation_apply_failed',
       statusMessage: expect.stringContaining('provider_session_state_unavailable_for_resume'),
+    });
+  });
+
+  it('surfaces degraded temporary-throttle recovery as a handled manual-retry projection', async () => {
+    const notify = vi.fn(async () => ({
+      ok: true,
+      result: {
+        status: 'temporary_retry_unavailable',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'codex-group',
+        retryAfterMs: 45_000,
+        reason: 'manual_retry_required',
+      },
+    }));
+
+    await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: {
+        kind: 'provider_temporary_throttle',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'codex-group',
+      },
+      notify,
+    })).resolves.toMatchObject({
+      handled: true,
+      statusCode: 'temporary_retry_manual_retry_required',
+      statusMessage: expect.stringContaining('manual'),
+      projection: {
+        handled: true,
+        statusCode: 'temporary_retry_manual_retry_required',
+        statusMessage: expect.stringContaining('retry'),
+      },
     });
   });
 
