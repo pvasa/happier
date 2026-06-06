@@ -85,6 +85,35 @@ describe('createLocalTurnLifecycleController', () => {
     vi.useRealTimers();
   });
 
+  it('notifies observers when hook-driven lifecycle snapshots change', async () => {
+    vi.useFakeTimers();
+    const observed: Array<{ active: boolean; terminal: boolean; reason: string | null; source: string }> = [];
+    const lifecycle = createLocalTurnLifecycleController({
+      completionQuiescenceMs: 500,
+      onStateChange: (snapshot, event) => {
+        observed.push({
+          active: snapshot.active,
+          terminal: snapshot.terminal,
+          reason: snapshot.lastTerminalReason,
+          source: event.source,
+        });
+      },
+    });
+
+    lifecycle.observe({ type: 'turn_started', providerTurnId: 'turn-1', source: 'start-hook' });
+    lifecycle.observe({ type: 'completion_candidate', providerTurnId: 'turn-1', source: 'stop-hook' });
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(observed).toEqual([
+      { active: true, terminal: false, reason: null, source: 'start-hook' },
+      { active: true, terminal: false, reason: null, source: 'stop-hook' },
+      { active: false, terminal: true, reason: 'completed', source: 'stop-hook' },
+    ]);
+
+    lifecycle.dispose();
+    vi.useRealTimers();
+  });
+
   it('treats aborted and process-exited terminal events as safe handoff boundaries', async () => {
     const aborted = createLocalTurnLifecycleController({ completionQuiescenceMs: 0 });
     aborted.observe({ type: 'turn_started', providerTurnId: 'turn-a', source: 'test' });

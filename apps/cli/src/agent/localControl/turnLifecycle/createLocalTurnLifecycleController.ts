@@ -1,6 +1,7 @@
 import type {
   LocalTurnLifecycleController,
   LocalTurnLifecycleEvent,
+  LocalTurnLifecycleStateChange,
   LocalTurnLifecycleSnapshot,
   LocalTurnTerminalReason,
 } from './localTurnLifecycleTypes';
@@ -22,6 +23,7 @@ type MutableLifecycleState = {
 
 export function createLocalTurnLifecycleController(opts: Readonly<{
   completionQuiescenceMs: number;
+  onStateChange?: LocalTurnLifecycleStateChange;
 }>): LocalTurnLifecycleController {
   const completionQuiescenceMs = Math.max(0, Math.floor(opts.completionQuiescenceMs));
   const state: MutableLifecycleState = {
@@ -72,7 +74,15 @@ export function createLocalTurnLifecycleController(opts: Readonly<{
     }
   };
 
-  const markTerminal = (reason: LocalTurnTerminalReason, providerTurnId?: string | null): void => {
+  const notifyStateChange = (event: LocalTurnLifecycleEvent): void => {
+    opts.onStateChange?.(snapshot(), event);
+  };
+
+  const markTerminal = (
+    reason: LocalTurnTerminalReason,
+    providerTurnId: string | null | undefined,
+    sourceEvent: LocalTurnLifecycleEvent,
+  ): void => {
     if (state.terminal && !state.active) {
       resolveSafeWaiters();
       return;
@@ -83,13 +93,21 @@ export function createLocalTurnLifecycleController(opts: Readonly<{
     state.waitingForQuiescence = false;
     state.providerTurnId = providerTurnId ?? state.providerTurnId;
     state.lastTerminalReason = reason;
+    notifyStateChange(sourceEvent);
     resolveSafeWaiters();
   };
+
+  let pendingCompletionEvent: LocalTurnLifecycleEvent | null = null;
 
   const settleCompletionCandidate = (): void => {
     quiescenceTimer = null;
     if (!state.waitingForQuiescence) return;
-    markTerminal('completed', state.providerTurnId);
+    markTerminal('completed', state.providerTurnId, pendingCompletionEvent ?? {
+      type: 'completion_candidate',
+      providerTurnId: state.providerTurnId,
+      source: 'completion_quiescence',
+    });
+    pendingCompletionEvent = null;
   };
 
   const observe = (event: LocalTurnLifecycleEvent): void => {
@@ -102,6 +120,8 @@ export function createLocalTurnLifecycleController(opts: Readonly<{
       state.waitingForQuiescence = false;
       state.providerTurnId = event.providerTurnId ?? null;
       state.lastTerminalReason = null;
+      pendingCompletionEvent = null;
+      notifyStateChange(event);
       return;
     }
 
@@ -112,6 +132,8 @@ export function createLocalTurnLifecycleController(opts: Readonly<{
       state.waitingForQuiescence = true;
       state.providerTurnId = event.providerTurnId ?? state.providerTurnId;
       state.lastTerminalReason = null;
+      pendingCompletionEvent = event;
+      notifyStateChange(event);
       if (completionQuiescenceMs === 0) {
         settleCompletionCandidate();
         return;
@@ -128,16 +150,20 @@ export function createLocalTurnLifecycleController(opts: Readonly<{
       state.waitingForQuiescence = false;
       state.providerTurnId = event.providerTurnId ?? state.providerTurnId;
       state.lastTerminalReason = null;
+      pendingCompletionEvent = null;
+      notifyStateChange(event);
       return;
     }
 
     if (event.type === 'turn_terminal') {
-      markTerminal(event.reason, event.providerTurnId ?? null);
+      pendingCompletionEvent = null;
+      markTerminal(event.reason, event.providerTurnId ?? null, event);
       return;
     }
 
     if (event.type === 'session_ended' && state.active) {
-      markTerminal('session-ended', state.providerTurnId);
+      pendingCompletionEvent = null;
+      markTerminal('session-ended', state.providerTurnId, event);
     }
   };
 

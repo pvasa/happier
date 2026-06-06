@@ -28,6 +28,11 @@ export type LocalTurnLifecycleSnapshot = Readonly<{
   lastTerminalReason: LocalTurnTerminalReason | null;
 }>;
 
+export type LocalTurnLifecycleStateChange = (
+  snapshot: LocalTurnLifecycleSnapshot,
+  event: LocalTurnLifecycleEvent,
+) => void;
+
 export type LocalTurnLifecycleController = Readonly<{
   observe: (event: LocalTurnLifecycleEvent) => void;
   snapshot: () => LocalTurnLifecycleSnapshot;
