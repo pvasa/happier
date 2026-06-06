@@ -62,6 +62,7 @@ describe('windowsHostedSessionRuntime', () => {
       actualMode: 'windows_terminal',
       requestedMode: 'windows_terminal',
       windowId: 'happy-codex-sess_123',
+      title: 'Happier codex sess_123',
     })).toEqual([
       'codex',
       '--happy-starting-mode',
@@ -72,6 +73,8 @@ describe('windowsHostedSessionRuntime', () => {
       'windows_terminal',
       '--happy-terminal-window-id',
       'happy-codex-sess_123',
+      '--happy-terminal-title',
+      'Happier codex sess_123',
     ]);
   });
 

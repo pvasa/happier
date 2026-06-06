@@ -269,6 +269,17 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
       if (trackedSession.startedBy !== 'daemon') return;
       const sessionId = normalizeSessionId(trackedSession.happySessionId);
       if (!sessionId) return;
+      const forceRestart = options?.forceRestart === true;
+      if (forceRestart) {
+        // A connected-service-initiated forced restart explicitly supersedes any prior stop request
+        // (e.g. a stale flag left by an earlier manual stop that the resume path never cleared --
+        // `clearStopRequested` has no production caller). Without this, the forced kill's respawn is
+        // silently vetoed and the session dies, surfaced to the user as an exit-143 crash. Clearing
+        // here makes the manager map, a freshly-created controller, and the scheduled-spawn re-check
+        // all treat this as the intentional restart it is.
+        stopRequestedBySessionId.delete(sessionId);
+        stateBySessionId.get(sessionId)?.controller.clearStopRequested();
+      }
       const stopRequest = stopRequestedBySessionId.get(sessionId);
       if (stopRequest) return;
 
@@ -279,7 +290,6 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
 
       const vendorResumeId = normalizeOptionalString(trackedSession.vendorResumeId);
       const controller = getOrCreateController(sessionId);
-      const forceRestart = options?.forceRestart === true;
       const event = forceRestart ? connectedServiceRestartRequestedTerminationEvent : toTerminationEvent(exit);
       const decision = controller.nextDecisionForTermination(event);
       if (decision.type === 'no_restart') {

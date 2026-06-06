@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol';
 
-import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/registerSessionHandlers';
+import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/codexBackendMode';
 import type { SpawnSessionOptions, SpawnSessionResult } from '@/rpc/handlers/registerSessionHandlers';
 import { normalizeSpawnSessionDirectory } from '@/rpc/handlers/spawnSessionOptionsContract';
 

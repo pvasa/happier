@@ -40,6 +40,7 @@ export type DaemonServerWorkErrorKind =
   | 'generation_conflict'
   | 'rate_limited'
   | 'server_error'
+  | 'dependency_unavailable'
   | 'timeout'
   | 'network'
   | 'client_error'

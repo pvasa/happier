@@ -1,5 +1,5 @@
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
-import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/registerSessionHandlers';
+import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/codexBackendMode';
 import type { TerminalMode, TerminalSpawnOptions } from '@/terminal/runtime/terminalConfig';
 import { HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY } from '@/agent/runtime/sessionConnectedServiceMaterializationIdentityEnv';
 import {

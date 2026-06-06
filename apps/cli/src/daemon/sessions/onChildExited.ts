@@ -18,6 +18,33 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+function normalizeSessionId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isTrackedSessionAlive(tracked: TrackedSession): boolean {
+  if (isPidAlive(tracked.pid)) return true;
+  const runnerPid = tracked.sessionRunnerPid;
+  return typeof runnerPid === 'number' && runnerPid !== tracked.pid && isPidAlive(runnerPid);
+}
+
+function findLiveReplacementForSameSession(
+  pidToTrackedSession: Map<number, TrackedSession>,
+  pid: number,
+  tracked: TrackedSession,
+): TrackedSession | null {
+  const sessionId = normalizeSessionId(tracked.happySessionId);
+  if (!sessionId) return null;
+
+  for (const [candidatePid, candidate] of pidToTrackedSession.entries()) {
+    if (candidatePid === pid) continue;
+    if (normalizeSessionId(candidate.happySessionId) !== sessionId) continue;
+    if (isTrackedSessionAlive(candidate)) return candidate;
+  }
+
+  return null;
+}
+
 export function createOnChildExited(params: Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
   spawnResourceCleanupByPid: Map<number, () => void>;
@@ -70,6 +97,8 @@ export function createOnChildExited(params: Readonly<{
     }
 
     if (tracked) {
+      const liveReplacement = findLiveReplacementForSameSession(pidToTrackedSession, pid, tracked);
+      const shouldReportSessionEnd = liveReplacement === null;
       const isUnexpectedBase =
         exit.reason === 'process-missing' ||
         exit.reason === 'process-error' ||
@@ -77,7 +106,15 @@ export function createOnChildExited(params: Readonly<{
         (typeof exit.signal === 'string' && exit.signal.length > 0 && !['SIGTERM', 'SIGINT'].includes(exit.signal));
       const isUnexpected = typeof override === 'boolean' ? override : isUnexpectedBase;
 
-      if (isUnexpected && typeof tracked.happySessionId === 'string' && tracked.happySessionId.trim().length > 0) {
+      if (liveReplacement) {
+        logger.debug('[DAEMON RUN] Skipping session-end for exited PID because another live PID owns the same session', {
+          sessionId: tracked.happySessionId,
+          exitedPid: pid,
+          livePid: liveReplacement.pid,
+        });
+      }
+
+      if (shouldReportSessionEnd && isUnexpected && typeof tracked.happySessionId === 'string' && tracked.happySessionId.trim().length > 0) {
         try {
           onUnexpectedExit?.(tracked, exit);
         } catch (e) {
@@ -86,7 +123,7 @@ export function createOnChildExited(params: Readonly<{
       }
 
       const apiMachineForSessions = getApiMachineForSessions();
-      if (apiMachineForSessions) {
+      if (shouldReportSessionEnd && apiMachineForSessions) {
         reportDaemonObservedSessionExit({
           apiMachine: apiMachineForSessions,
           trackedSession: tracked,

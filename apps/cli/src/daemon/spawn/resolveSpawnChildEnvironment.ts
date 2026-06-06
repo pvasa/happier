@@ -1,7 +1,7 @@
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
 import type { SpawnSessionErrorCode } from '@/rpc/handlers/registerSessionHandlers';
-import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/registerSessionHandlers';
+import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/codexBackendMode';
 import { expandEnvironmentVariables } from '@/utils/expandEnvVars';
 import { sanitizeEnvVarRecord } from '@/terminal/runtime/envVarSanitization';
 import type { DaemonSpawnHooks } from '../spawnHooks';

@@ -107,6 +107,135 @@ describe('createOnHappySessionWebhook', () => {
     expect(pidToAwaiter.has(789)).toBe(false);
   });
 
+  it('matches a Windows Terminal child webhook to the pending daemon launch pid', () => {
+    const windowsTerminalPid = 13764;
+    const runnerPid = 5500;
+    const tracked: TrackedSession = {
+      pid: windowsTerminalPid,
+      startedBy: 'daemon',
+      hostedTerminal: {
+        mode: 'windows_terminal',
+        requested: 'windows_terminal',
+        windows: {
+          host: 'windows_terminal',
+          pid: windowsTerminalPid,
+          windowId: 'happier-qa-claude-unified',
+        },
+      },
+    };
+    const pidToTrackedSession = new Map<number, TrackedSession>([[windowsTerminalPid, tracked]]);
+    const awaiter = vi.fn();
+    const pidToAwaiter = new Map<number, (session: TrackedSession) => void>([[windowsTerminalPid, awaiter]]);
+
+    const onWebhook = createOnHappySessionWebhook({
+      pidToTrackedSession,
+      pidToAwaiter,
+      getParentPidFn: () => null,
+      findHappyProcessByPidFn: async () => null,
+      writeSessionMarkerFn: async () => {},
+    });
+
+    onWebhook('session-windows-terminal-1', {
+      ...createMetadata(runnerPid, 'daemon'),
+      terminal: {
+        mode: 'windows_terminal',
+        requested: 'windows_terminal',
+        windows: {
+          host: 'windows_terminal',
+          windowId: 'happier-qa-claude-unified',
+        },
+      },
+    });
+
+    expect(awaiter).toHaveBeenCalledTimes(1);
+    expect(awaiter).toHaveBeenCalledWith(expect.objectContaining({
+      pid: windowsTerminalPid,
+      sessionRunnerPid: runnerPid,
+      happySessionId: 'session-windows-terminal-1',
+    }));
+    expect(pidToAwaiter.has(windowsTerminalPid)).toBe(false);
+    expect(pidToTrackedSession.has(runnerPid)).toBe(false);
+    expect(pidToTrackedSession.get(windowsTerminalPid)?.sessionRunnerPid).toBe(runnerPid);
+    expect(pidToTrackedSession.get(windowsTerminalPid)?.happySessionId).toBe('session-windows-terminal-1');
+  });
+
+  it('matches concurrent Windows Terminal child webhooks by unique tab title inside a shared window', () => {
+    const firstWindowsTerminalPid = 13764;
+    const secondWindowsTerminalPid = 13765;
+    const runnerPid = 5501;
+    const firstAwaiter = vi.fn();
+    const secondAwaiter = vi.fn();
+    const firstTracked: TrackedSession = {
+      pid: firstWindowsTerminalPid,
+      startedBy: 'daemon',
+      hostedTerminal: {
+        mode: 'windows_terminal',
+        requested: 'windows_terminal',
+        windows: {
+          host: 'windows_terminal',
+          pid: firstWindowsTerminalPid,
+          windowId: 'happier-qa-claude-unified',
+          title: 'Happier claude spawn-a',
+        },
+      },
+    };
+    const secondTracked: TrackedSession = {
+      pid: secondWindowsTerminalPid,
+      startedBy: 'daemon',
+      hostedTerminal: {
+        mode: 'windows_terminal',
+        requested: 'windows_terminal',
+        windows: {
+          host: 'windows_terminal',
+          pid: secondWindowsTerminalPid,
+          windowId: 'happier-qa-claude-unified',
+          title: 'Happier claude spawn-b',
+        },
+      },
+    };
+    const pidToTrackedSession = new Map<number, TrackedSession>([
+      [firstWindowsTerminalPid, firstTracked],
+      [secondWindowsTerminalPid, secondTracked],
+    ]);
+    const pidToAwaiter = new Map<number, (session: TrackedSession) => void>([
+      [firstWindowsTerminalPid, firstAwaiter],
+      [secondWindowsTerminalPid, secondAwaiter],
+    ]);
+
+    const onWebhook = createOnHappySessionWebhook({
+      pidToTrackedSession,
+      pidToAwaiter,
+      getParentPidFn: () => null,
+      findHappyProcessByPidFn: async () => null,
+      writeSessionMarkerFn: async () => {},
+    });
+
+    onWebhook('session-windows-terminal-2', {
+      ...createMetadata(runnerPid, 'daemon'),
+      terminal: {
+        mode: 'windows_terminal',
+        requested: 'windows_terminal',
+        windows: {
+          host: 'windows_terminal',
+          windowId: 'happier-qa-claude-unified',
+          title: 'Happier claude spawn-b',
+        },
+      },
+    });
+
+    expect(firstAwaiter).not.toHaveBeenCalled();
+    expect(secondAwaiter).toHaveBeenCalledTimes(1);
+    expect(secondAwaiter).toHaveBeenCalledWith(expect.objectContaining({
+      pid: secondWindowsTerminalPid,
+      sessionRunnerPid: runnerPid,
+      happySessionId: 'session-windows-terminal-2',
+    }));
+    expect(pidToAwaiter.has(firstWindowsTerminalPid)).toBe(true);
+    expect(pidToAwaiter.has(secondWindowsTerminalPid)).toBe(false);
+    expect(pidToTrackedSession.has(runnerPid)).toBe(false);
+    expect(pidToTrackedSession.get(secondWindowsTerminalPid)?.sessionRunnerPid).toBe(runnerPid);
+  });
+
   it('notifies when a tracked daemon session reports provider context', () => {
     const tracked: TrackedSession = {
       pid: 790,

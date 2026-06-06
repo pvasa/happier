@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDaemonControlApp } from './controlServer';
-import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
+import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionErrorDetail } from '@/rpc/handlers/registerSessionHandlers';
+import { SPAWN_SESSION_ERROR_DETAIL_KINDS } from '@happier-dev/protocol';
 
 describe('daemon control server: /spawn-session', () => {
   afterEach(() => {
@@ -249,6 +250,57 @@ describe('daemon control server: /spawn-session', () => {
         success: false,
         error: 'Failed to spawn session: boom',
         errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('preserves structured connected-service spawn error details on /spawn-session errors', async () => {
+    const errorDetail: SpawnSessionErrorDetail = {
+      kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_UX_DIAGNOSTIC,
+      uxDiagnostic: {
+        code: 'connected_service_materialization_identity_missing',
+        failurePhase: 'materialization',
+        source: 'spawn_resume',
+        agentId: 'codex',
+        retryable: false,
+        suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+        diagnostics: {
+          reason: 'missing_identity_and_resume_state',
+        },
+      },
+    };
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine_local',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+        errorMessage: 'connected_service_materialization_identity_missing',
+        errorDetail,
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'test-token',
+    });
+
+    try {
+      await app.ready();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/spawn-session',
+        headers: { 'Content-Type': 'application/json', 'x-happier-daemon-token': 'test-token' },
+        payload: JSON.stringify({ directory: '/tmp' }),
+      });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toMatchObject({
+        success: false,
+        error: 'connected_service_materialization_identity_missing',
+        errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+        errorDetail,
       });
     } finally {
       await app.close();

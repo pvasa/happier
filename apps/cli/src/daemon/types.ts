@@ -17,6 +17,11 @@ export interface TrackedSession {
   spawnOptions?: SpawnSessionOptions;
   /** Vendor resume id (e.g. Claude/Codex session id) supplied/derived at spawn time. */
   vendorResumeId?: string;
+  /**
+   * Expected terminal host metadata for visible/hosted daemon launches.
+   * Used to correlate wrapper host PIDs (for example wt.exe) with the child session runner webhook.
+   */
+  hostedTerminal?: Metadata['terminal'];
   pid: number;
   /**
    * When the daemon spawns a wrapper script that then spawns the actual runner

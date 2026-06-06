@@ -113,6 +113,7 @@ describe('daemon control client (HTTP error responses)', () => {
       await expect(requestDaemonSessionConnectedServiceAuthSwitch({
         sessionId: 'sess_1',
         agentId: 'claude',
+        accountSettingsVersionHint: 42,
         bindings: {
           v: 1,
           bindingsByServiceId: {
@@ -125,6 +126,7 @@ describe('daemon control client (HTTP error responses)', () => {
       expect(observedBody).toEqual({
         sessionId: 'sess_1',
         agentId: 'claude',
+        accountSettingsVersionHint: 42,
         bindings: {
           v: 1,
           bindingsByServiceId: {

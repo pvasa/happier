@@ -276,6 +276,7 @@ export async function requestDaemonSessionConnectedServiceAuthSwitch(
     bindings: ConnectedServiceBindingsV1;
     rematerializeServiceId?: string;
     expectedGroupGenerationByServiceId?: Readonly<Record<string, number>>;
+    accountSettingsVersionHint?: number;
   }>,
   options: DaemonControlRequestOptions = {},
 ): Promise<unknown> {
@@ -283,6 +284,9 @@ export async function requestDaemonSessionConnectedServiceAuthSwitch(
     sessionId: body.sessionId,
     agentId: body.agentId,
     bindings: body.bindings,
+    ...(body.accountSettingsVersionHint === undefined
+      ? {}
+      : { accountSettingsVersionHint: body.accountSettingsVersionHint }),
     ...(body.rematerializeServiceId === undefined
       ? {}
       : { rematerializeServiceId: body.rematerializeServiceId }),
@@ -314,7 +318,7 @@ export async function notifyDaemonConnectedServiceRuntimeAuthFailure(
 export async function notifyDaemonConnectedServiceTurnLifecycle(
   body: Readonly<{
     sessionId: string;
-    event: 'prompt_or_steer' | 'assistant_message_end' | 'turn_cancelled';
+    event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled';
   }>,
   options: DaemonControlRequestOptions = {},
 ): Promise<{ error?: string } | any> {

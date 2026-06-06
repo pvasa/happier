@@ -58,6 +58,7 @@ export function buildWindowsHostedTerminalArgs(params: {
   actualMode: WindowsHostedActualMode;
   requestedMode: WindowsHostedRequestedMode;
   windowId?: string;
+  title?: string;
   fallbackReason?: string;
 }): string[] {
   return [
@@ -68,6 +69,9 @@ export function buildWindowsHostedTerminalArgs(params: {
     params.requestedMode,
     ...(params.actualMode === 'windows_terminal' && typeof params.windowId === 'string' && params.windowId.trim().length > 0
       ? ['--happy-terminal-window-id', params.windowId]
+      : []),
+    ...(params.actualMode === 'windows_terminal' && typeof params.title === 'string' && params.title.trim().length > 0
+      ? ['--happy-terminal-title', params.title]
       : []),
     ...(typeof params.fallbackReason === 'string' && params.fallbackReason.trim().length > 0
       ? ['--happy-terminal-fallback-reason', params.fallbackReason]

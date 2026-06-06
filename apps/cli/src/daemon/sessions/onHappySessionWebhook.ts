@@ -63,6 +63,50 @@ function findTrackedSessionByRunnerPid(
   return null;
 }
 
+function normalizeNonEmptyString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function resolveWindowsTerminalWindowId(metadata: Metadata['terminal'] | undefined): string {
+  if (metadata?.mode !== 'windows_terminal') return '';
+  if (metadata.windows?.host !== 'windows_terminal') return '';
+  return normalizeNonEmptyString(metadata.windows.windowId);
+}
+
+function resolveWindowsTerminalTitle(metadata: Metadata['terminal'] | undefined): string {
+  if (metadata?.mode !== 'windows_terminal') return '';
+  if (metadata.windows?.host !== 'windows_terminal') return '';
+  return normalizeNonEmptyString(metadata.windows.title);
+}
+
+function findPendingWindowsTerminalTrackedSession(params: Readonly<{
+  pidToTrackedSession: Map<number, TrackedSession>;
+  pidToAwaiter: Map<number, (session: TrackedSession) => void>;
+  webhookPid: number;
+  metadata: Metadata;
+}>): TrackedSession | null {
+  if (params.metadata.startedBy !== 'daemon') return null;
+
+  const webhookWindowId = resolveWindowsTerminalWindowId(params.metadata.terminal);
+  if (!webhookWindowId) return null;
+  const webhookTitle = resolveWindowsTerminalTitle(params.metadata.terminal);
+
+  const matches: TrackedSession[] = [];
+  for (const [trackedPid, tracked] of params.pidToTrackedSession.entries()) {
+    if (trackedPid === params.webhookPid) continue;
+    if (tracked.startedBy !== 'daemon') continue;
+    if (!params.pidToAwaiter.has(trackedPid)) continue;
+
+    const trackedWindowId = resolveWindowsTerminalWindowId(tracked.hostedTerminal);
+    if (trackedWindowId !== webhookWindowId) continue;
+    const trackedTitle = resolveWindowsTerminalTitle(tracked.hostedTerminal);
+    if (webhookTitle && trackedTitle !== webhookTitle) continue;
+    matches.push(tracked);
+  }
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export function createOnHappySessionWebhook(params: Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
   pidToAwaiter: Map<number, (session: TrackedSession) => void>;
@@ -212,6 +256,35 @@ export function createOnHappySessionWebhook(params: Readonly<{
               }
             }
           } else {
+            const windowsTerminalSession = findPendingWindowsTerminalTrackedSession({
+              pidToTrackedSession,
+              pidToAwaiter,
+              webhookPid: pid,
+              metadata: normalizedMetadata,
+            });
+            if (windowsTerminalSession) {
+              const wrapperPid = windowsTerminalSession.pid;
+              trackedForPid = windowsTerminalSession;
+              windowsTerminalSession.sessionRunnerPid = pid;
+              windowsTerminalSession.happySessionId = sessionId;
+              windowsTerminalSession.happySessionMetadataFromLocalWebhook = normalizedMetadata;
+              logger.debug(
+                `[DAEMON RUN] Matched Windows Terminal webhook PID ${pid} to daemon launch PID ${wrapperPid}`,
+              );
+
+              const awaiter = pidToAwaiter.get(wrapperPid);
+              if (awaiter) {
+                if (isPlaceholderSessionId) {
+                  logger.debug(
+                    `[DAEMON RUN] Deferred awaiter resolution for Windows Terminal PID ${wrapperPid}; waiting for canonical session id`,
+                  );
+                } else {
+                  pidToAwaiter.delete(wrapperPid);
+                  awaiter(windowsTerminalSession);
+                  logger.debug(`[DAEMON RUN] Resolved session awaiter via Windows Terminal PID ${wrapperPid}`);
+                }
+              }
+          } else {
             // New session started externally (not by this daemon)
             const trackedSession: TrackedSession = {
               startedBy: 'happy directly - likely by user from terminal',
@@ -222,6 +295,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
             trackedForPid = trackedSession;
             pidToTrackedSession.set(pid, trackedSession);
             logger.debug(`[DAEMON RUN] Registered externally-started session ${sessionId}`);
+          }
           }
         }
       }

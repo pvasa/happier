@@ -391,6 +391,78 @@ describe('createSessionRunnerRespawnManager', () => {
     expect(spawnSession).toHaveBeenCalledTimes(0);
   });
 
+  it('respawns after the stop request is cleared (e.g. on resume)', async () => {
+    vi.useFakeTimers();
+    const spawnSession = vi.fn(async (_opts: unknown) => ({ type: 'success' as const, pid: 123 }));
+
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true,
+      maxRestarts: 10,
+      baseDelayMs: 50,
+      maxDelayMs: 50,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession: (opts) => spawnSession(opts),
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+
+    // A user stop sets the flag; an explicit resume must clear it so a LATER genuine crash respawns
+    // (otherwise the stale flag silently vetoes the respawn forever — see the exit-143 crash RCA).
+    manager.markStopRequested('sess-1', { reason: 'daemon_stop_session', requestedAtMs: 1_000 });
+    manager.clearStopRequested('sess-1');
+
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 111,
+      happySessionId: 'sess-1',
+      spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'claude' } } as any,
+    };
+
+    manager.handleUnexpectedExit(tracked, { reason: 'process-missing', code: null, signal: null });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(spawnSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('respawns on a forced connected-service restart even when stop was requested', async () => {
+    vi.useFakeTimers();
+    const spawnSession = vi.fn(async (_opts: unknown) => ({ type: 'success' as const, pid: 123 }));
+
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true,
+      maxRestarts: 10,
+      baseDelayMs: 50,
+      maxDelayMs: 50,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession: (opts) => spawnSession(opts),
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+
+    // A stale stop flag (e.g. from an earlier manual stop that the resume path never cleared) must
+    // NOT veto a connected-service-initiated forced restart — otherwise the forced kill leaves the
+    // session dead (the exit-143 "crash" RCA).
+    manager.markStopRequested('sess-1', { reason: 'daemon_stop_session', requestedAtMs: 1_000 });
+
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 111,
+      happySessionId: 'sess-1',
+      spawnOptions: { directory: '/tmp', backendTarget: { kind: 'builtInAgent', agentId: 'claude' } } as any,
+    };
+
+    manager.handleUnexpectedExit(
+      tracked,
+      { reason: 'process-missing', code: null, signal: null },
+      { forceRestart: true },
+    );
+    await vi.advanceTimersByTimeAsync(50);
+    expect(spawnSession).toHaveBeenCalledTimes(1);
+  });
+
   it('resets restart state when a replacement session is already running before the timer fires', async () => {
     vi.useFakeTimers();
     const spawnSession = vi.fn(async (_opts: unknown) => ({ type: 'success' as const, pid: 123 }));

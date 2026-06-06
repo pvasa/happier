@@ -35,6 +35,51 @@ describe('createOnChildExited', () => {
     expect(apiMachine.emitSessionEnd).not.toHaveBeenCalled();
   });
 
+  it('does not queue session-end for an obsolete pid when another live pid owns the same session', () => {
+    const obsoletePid = 123;
+    const livePid = 456;
+    const obsolete = { pid: obsoletePid, startedBy: 'daemon', happySessionId: 'session-1' };
+    const replacement = { pid: livePid, startedBy: 'daemon', happySessionId: 'session-1' };
+
+    const pidToTrackedSession = new Map<number, any>([
+      [obsoletePid, obsolete],
+      [livePid, replacement],
+    ]);
+    const spawnResourceCleanupByPid = new Map<number, () => void>();
+    const sessionAttachCleanupByPid = new Map<number, () => Promise<void>>();
+    const apiMachine = {
+      emitSessionEnd: vi.fn(),
+      enqueueSessionEndMutation: vi.fn(),
+    };
+    const onUnexpectedExit = vi.fn();
+    const originalKill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: any) => {
+      if (targetPid === livePid && signal === 0) {
+        return true;
+      }
+      return originalKill(targetPid, signal as any);
+    }) as any);
+
+    const onChildExited = createOnChildExited({
+      pidToTrackedSession,
+      spawnResourceCleanupByPid,
+      sessionAttachCleanupByPid,
+      getApiMachineForSessions: () => apiMachine,
+      onUnexpectedExit,
+    } as any);
+
+    onChildExited(obsoletePid, { reason: 'process-missing', code: null, signal: null });
+
+    expect(apiMachine.enqueueSessionEndMutation).not.toHaveBeenCalled();
+    expect(apiMachine.emitSessionEnd).not.toHaveBeenCalled();
+    expect(onUnexpectedExit).not.toHaveBeenCalled();
+    expect(pidToTrackedSession.has(obsoletePid)).toBe(false);
+    expect(pidToTrackedSession.get(livePid)).toEqual(expect.objectContaining({
+      happySessionId: 'session-1',
+    }));
+    killSpy.mockRestore();
+  });
+
   it('invokes onUnexpectedExit hook for non-zero exits with a known session id', () => {
     const pid = 123;
     const tracked = { pid, startedBy: 'daemon', happySessionId: 'session-1' };

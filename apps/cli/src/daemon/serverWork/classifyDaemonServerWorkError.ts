@@ -52,10 +52,56 @@ function readRetryAfterMs(error: unknown): number | undefined {
   return Math.max(0, dateMs - Date.now());
 }
 
-function readErrorCode(error: unknown): string {
+function readErrorCode(error: unknown, depth = 0): string {
   const record = asRecord(error);
   const code = record?.code;
-  return typeof code === 'string' ? code : '';
+  if (typeof code === 'string') return code;
+  if (depth >= 4) return '';
+  return readErrorCode(record?.cause, depth + 1);
+}
+
+function readErrorMessage(error: unknown, depth = 0): string {
+  if (typeof error === 'string') return error;
+  const record = asRecord(error);
+  const message = record?.message;
+  if (typeof message === 'string' && message.length > 0) return message;
+  if (depth >= 4) return '';
+  return readErrorMessage(record?.cause, depth + 1);
+}
+
+function readRetryableHint(error: unknown): boolean {
+  const record = asRecord(error);
+  return record?.retryable === true;
+}
+
+function isTimeoutMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    /\btimeout\b/.test(normalized) ||
+    normalized.includes('timed out') ||
+    normalized.includes('database failed to respond')
+  );
+}
+
+// Defense-in-depth network-message fallback. When an error is re-wrapped by a
+// higher layer that strips `code`/`cause` (e.g. an api.ts catch that throws a
+// plain `Error(message)`), the only remaining signal is the message text. A
+// transient local-endpoint outage (ECONNREFUSED / socket hang up / reset) must
+// still classify as `network`/retryable — NOT fall through to `protocol_error`
+// (non-retryable), which would terminalize a recovery that should keep waiting.
+function isNetworkMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('econnrefused') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('enetunreach') ||
+    normalized.includes('enetdown') ||
+    normalized.includes('eai_again') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('socket disconnected') ||
+    normalized.includes('getaddrinfo') ||
+    normalized.includes('network error')
+  );
 }
 
 function readPreservedStatus(error: unknown): number | null {
@@ -101,11 +147,28 @@ export function classifyDaemonServerWorkError(
   }
 
   const code = readErrorCode(error);
+  if (code === 'HAPPIER_ACCOUNT_MODE_UNKNOWN') {
+    return {
+      kind: 'dependency_unavailable',
+      retryable: true,
+      retryAfterMs: readRetryAfterMs(error),
+    };
+  }
   if (code === 'ETIMEDOUT' || code === 'ECONNABORTED') {
     return { kind: 'timeout', retryable: true };
   }
   if (code && NETWORK_ERROR_CODES.has(code)) {
     return { kind: 'network', retryable: true };
+  }
+  const message = readErrorMessage(error);
+  if (isTimeoutMessage(message)) {
+    return { kind: 'timeout', retryable: true };
+  }
+  if (isNetworkMessage(message)) {
+    return { kind: 'network', retryable: true };
+  }
+  if (readRetryableHint(error)) {
+    return { kind: 'network', retryable: true, retryAfterMs: readRetryAfterMs(error) };
   }
 
   return { kind: 'protocol_error', retryable: false };

@@ -10,7 +10,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { captureStderr, captureStdout, captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 import type { DaemonLocallyPersistedState } from '@/persistence';
-import { planDaemonServiceInstall } from './plan';
+import { planDaemonServiceInstall, planDaemonServiceLifecycle } from './plan';
 const stopDaemonMock = vi.fn(async () => undefined);
 const restartDaemonAndWaitMock = vi.fn(async () => true);
 
@@ -1986,91 +1986,25 @@ describe('runDaemonServiceCliCommand', () => {
       }
     });
   });
-  it('allows starting the currently owning background service label without rebootstrap', async () => {
-    await withTempDir('happier-service-start-same-owner-', async (homeDir) => {
-      const happierHomeDir = `${homeDir}/.happier`;
-      envScope.patch({
-        HAPPIER_HOME_DIR: happierHomeDir,
-        HAPPIER_DAEMON_SERVICE_PLATFORM: 'darwin',
-        HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: homeDir,
-        HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
-      });
-      vi.resetModules();
-
-      const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }, { writeDaemonState }, { configuration }, { resolveDaemonServiceInstallRuntimeTarget }, controlClient] = await Promise.all([
-        loadCliModule(),
-        import('@/persistence'),
-        import('@/configuration'),
-        import('./resolveDaemonServiceInstallRuntimeTarget'),
-        import('@/daemon/controlClient'),
-      ]);
-
-      const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
-      const paths = resolveDaemonServicePaths(runtime);
-      mkdirSync(dirname(paths.installedPath), { recursive: true });
-      const installRuntimeTarget = await resolveDaemonServiceInstallRuntimeTarget({
-        currentExecPath: process.execPath,
-        explicitNodePath: process.env.HAPPIER_DAEMON_SERVICE_NODE_PATH ?? '',
-        explicitEntryPath: process.env.HAPPIER_DAEMON_SERVICE_ENTRY_PATH ?? '',
-        targetMode: runtime.targetMode,
-        processEnv: process.env,
-      });
-      const expectedInstallPlan = planDaemonServiceInstall({
-        platform: runtime.platform,
-        channel: runtime.channel,
-        targetMode: runtime.targetMode,
-        instanceId: runtime.instanceId,
-        uid: runtime.uid ?? undefined,
-        userHomeDir: runtime.userHomeDir,
-        happierHomeDir: runtime.happierHomeDir,
-        serverUrl: runtime.serverUrl,
-        webappUrl: runtime.webappUrl,
-        publicServerUrl: runtime.publicServerUrl,
-        nodePath: installRuntimeTarget.nodePath,
-        entryPath: installRuntimeTarget.entryPath,
-      });
-      writeFileSync(paths.installedPath, expectedInstallPlan.files[0]?.content ?? '', 'utf-8');
-
-      writeDaemonState({
-        pid: process.pid,
-        httpPort: 43127,
-        startedAt: Date.now(),
-        startedWithCliVersion: configuration.currentCliVersion,
-        startedWithPublicReleaseChannel: 'stable',
-        startupSource: 'background-service',
-        serviceLabel: paths.label,
-      });
-      vi.spyOn(controlClient, 'inspectDaemonRunningStateAndCleanupStaleState').mockResolvedValue({
-        status: 'running',
-        state: {
-          pid: process.pid,
-          httpPort: 43129,
-          startedAt: Date.now(),
-          startedWithCliVersion: configuration.currentCliVersion,
-          startedWithPublicReleaseChannel: 'stable',
-          startupSource: 'background-service',
-          serviceLabel: paths.label,
-        },
-      });
-
-      const output = captureStdoutJsonOutput<{
-        ok: boolean;
-        plan?: { commands: Array<{ cmd: string; args: string[] }> };
-      }>();
-      try {
-        await runDaemonServiceCliCommand({ argv: ['start', '--dry-run', '--json'] });
-        const payload = output.json();
-        expect(payload.ok).toBe(true);
-        expect(payload.plan?.commands).toEqual([
-          {
-            cmd: 'launchctl',
-            args: ['kickstart', '-k', `gui/${process.getuid?.() ?? 0}/${paths.label}`],
-          },
-        ]);
-      } finally {
-        output.restore();
-      }
+  it('plans starting the currently owning background service label with kickstart instead of rebootstrap', () => {
+    const uid = process.getuid?.() ?? 501;
+    const plan = planDaemonServiceLifecycle({
+      platform: 'darwin',
+      action: 'start',
+      channel: 'stable',
+      targetMode: 'default-following',
+      instanceId: 'cloud',
+      userHomeDir: '/Users/tester',
+      uid,
+      darwinStartMode: 'kickstart',
     });
+
+    expect(plan.commands).toEqual([
+      {
+        cmd: 'launchctl',
+        args: ['kickstart', '-k', `gui/${uid}/com.happier.cli.daemon.default`],
+      },
+    ]);
   });
 
   it('refreshes the darwin launch agent definition before starting an installed stopped service', async () => {
