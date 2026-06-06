@@ -558,6 +558,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             listboxId={listboxId}
             onSelect={props.onSelect}
             onPushStep={handlePushStep}
+            showsVerticalScrollIndicator={props.showsVerticalScrollIndicator === true}
         />
     );
 
@@ -578,6 +579,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             listboxId={listboxId}
             onSelect={props.onSelect}
             onPushStep={handlePushStep}
+            showsVerticalScrollIndicator={props.showsVerticalScrollIndicator === true}
         />
     );
 

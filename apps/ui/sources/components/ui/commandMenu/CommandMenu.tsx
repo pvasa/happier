@@ -42,6 +42,12 @@ export const CommandMenu = React.memo((props: CommandMenuProps) => {
         maxWidth,
         placement,
         gap,
+        boundaryRef,
+        keyboardBottomInset,
+        edgePadding,
+        backdrop,
+        consumeOutsidePointerDown,
+        containerStyle,
         emptyStateLabel,
         testID = 'command-menu',
     } = props;
@@ -112,6 +118,12 @@ export const CommandMenu = React.memo((props: CommandMenuProps) => {
             maxWidth={maxWidth}
             placement={placement}
             gap={gap}
+            boundaryRef={boundaryRef}
+            keyboardBottomInset={keyboardBottomInset}
+            edgePadding={edgePadding}
+            backdrop={backdrop}
+            consumeOutsidePointerDown={consumeOutsidePointerDown}
+            containerStyle={containerStyle}
             onRequestClose={onRequestClose}
             testID={testID ? `${testID}:surface` : undefined}
         >

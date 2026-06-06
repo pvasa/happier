@@ -1,5 +1,6 @@
 import type * as React from 'react';
-import type { PopoverAnchor } from '@/components/ui/popover';
+import type { StyleProp, ViewStyle } from 'react-native';
+import type { PopoverAnchor, PopoverBackdropOptions, PopoverPlacement } from '@/components/ui/popover';
 
 /** A single row in the menu. */
 export type CommandMenuItem = Readonly<{
@@ -39,9 +40,21 @@ export type CommandMenuProps = Readonly<{
     maxHeight?: number;
     maxWidth?: number;
     /** Uses Popover placement. Defaults to auto-vertical/bottom depending on host. */
-    placement?: 'top' | 'bottom' | 'auto' | 'auto-vertical';
+    placement?: PopoverPlacement;
     /** Uses Popover gap. Hosts must NOT pre-offset rect anchors (D42). */
     gap?: number;
+    /** Optional explicit Popover boundary override. Passing null intentionally disables context boundary clamping. */
+    boundaryRef?: React.RefObject<any> | null;
+    /** Native keyboard occlusion supplied by the host when it already owns canonical keyboard metrics. */
+    keyboardBottomInset?: number;
+    /** Popover edge padding forwarded to the positioning primitive. */
+    edgePadding?: number | Readonly<{ horizontal?: number; vertical?: number }>;
+    /** Popover backdrop behavior forwarded for host-specific click/tap-through semantics. */
+    backdrop?: PopoverBackdropOptions;
+    /** Web outside-pointer behavior forwarded to Popover. */
+    consumeOutsidePointerDown?: boolean;
+    /** Extra styles applied to the Popover positioned container. */
+    containerStyle?: StyleProp<ViewStyle>;
     /** Optional copy when items is empty (only rendered when open && items.length === 0). */
     emptyStateLabel?: string;
     testID?: string;

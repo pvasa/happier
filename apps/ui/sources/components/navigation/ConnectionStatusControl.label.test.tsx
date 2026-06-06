@@ -102,6 +102,7 @@ vi.mock('@/sync/domains/server/serverConfig', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
+    areServerProfileIdentifiersEquivalent: (left: unknown, right: unknown) => String(left ?? '').trim() === String(right ?? '').trim(),
     getActiveServerId: () => 'srv-1',
     getServerProfileById: (id: string) =>
         id === 'srv-1'

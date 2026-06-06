@@ -23,6 +23,8 @@ installPopoverCommonModuleMocks({
     },
 });
 
+const safeAreaInsets = { top: 0, right: 0, bottom: 0, left: 0 };
+
 describe('PopoverPortalTargetProvider (web dom)', () => {
     it('does not churn the web modal portal target across parent re-renders', async () => {
         const { PopoverPortalTargetProvider } = await import('./PopoverPortalTargetProvider');
@@ -152,15 +154,18 @@ describe('PopoverPortalTargetProvider (web dom)', () => {
         try {
             const { PopoverPortalTargetProvider } = await import('./PopoverPortalTargetProvider');
             const { BaseModal } = await import('@/modal/components/BaseModal');
+            const { SafeAreaInsetsContext } = await import('react-native-safe-area-context');
 
             await act(async () => {
                 root.render(
                     <React.StrictMode>
                         <PopoverPortalTargetProvider>
                             <div>sidebar-shell</div>
-                            <BaseModal visible={true} showBackdrop closeOnBackdrop={false}>
-                                <div>create-account</div>
-                            </BaseModal>
+                            <SafeAreaInsetsContext.Provider value={safeAreaInsets}>
+                                <BaseModal visible={true} showBackdrop closeOnBackdrop={false}>
+                                    <div>create-account</div>
+                                </BaseModal>
+                            </SafeAreaInsetsContext.Provider>
                         </PopoverPortalTargetProvider>
                     </React.StrictMode>,
                 );

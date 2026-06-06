@@ -10,6 +10,7 @@ import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { useAccountSettingsSyncStatus, useSocketStatus, useSyncError, useLastSyncAt, useSettingMutable } from '@/sync/domains/state/storage';
 import { getServerUrl } from '@/sync/domains/server/serverConfig';
 import {
+    areServerProfileIdentifiersEquivalent,
     getActiveServerId,
     getServerProfileById,
     listServerProfiles,
@@ -380,7 +381,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
         setServerSelectionActiveTargetKind('group');
         setServerSelectionActiveTargetId(target.groupId);
 
-        if (nextServerId && nextServerId !== activeServerId) {
+        if (nextServerId && !areServerProfileIdentifiersEquivalent(nextServerId, activeServerId)) {
             await switchServer(nextServerId, 'device');
         }
         if (nextServerId && (authStatusByServerId[nextServerId] ?? 'unknown') === 'signedOut') {

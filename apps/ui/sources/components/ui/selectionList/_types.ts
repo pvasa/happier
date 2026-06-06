@@ -399,6 +399,11 @@ export type SelectionListProps = Readonly<{
     /** Cap container height; defaults to undefined (popover-driven). */
     maxHeight?: number;
     /**
+     * Whether the owned scroll hosts should show the platform vertical scroll
+     * indicator. Defaults to false so compact popovers keep their chrome quiet.
+     */
+    showsVerticalScrollIndicator?: boolean;
+    /**
      * Height policy for the outer list container.
      *
      * - `content` (default): natural content height, capped by `maxHeight`.

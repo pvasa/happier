@@ -9,6 +9,12 @@ import type { CommandMenuAnchor } from '../commandMenuTypes';
 type CapturedPopoverProps = Readonly<{
     open: boolean;
     children: React.ReactNode | ((renderProps: Readonly<{ maxHeight: number; maxWidth: number; placement: string }>) => React.ReactNode);
+    boundaryRef?: React.RefObject<any> | null;
+    backdrop?: Readonly<{ style?: unknown; blockOutsidePointerEvents?: boolean | string; enabled?: boolean }>;
+    consumeOutsidePointerDown?: boolean;
+    containerStyle?: unknown;
+    edgePadding?: number | Readonly<{ horizontal?: number; vertical?: number }>;
+    keyboardBottomInset?: number;
     portal?: Readonly<{
         web?: boolean | Readonly<{ target?: string }>;
         native?: boolean;
@@ -78,5 +84,38 @@ describe('CommandMenuSurface', () => {
             matchAnchorWidth: false,
             anchorAlign: 'start',
         });
+    });
+
+    it('forwards keyboard-safe popover overrides to Popover', async () => {
+        const boundaryRef = React.createRef<View>();
+        const backdrop = {
+            style: { backgroundColor: 'transparent' },
+            blockOutsidePointerEvents: 'above-anchor' as const,
+        };
+        const containerStyle = { paddingHorizontal: 0 };
+
+        await renderScreen(
+            <CommandMenuSurface
+                open
+                anchor={RECT_ANCHOR}
+                boundaryRef={boundaryRef}
+                keyboardBottomInset={320}
+                edgePadding={{ horizontal: 16 }}
+                backdrop={backdrop}
+                consumeOutsidePointerDown={false}
+                containerStyle={containerStyle}
+                onRequestClose={() => {}}
+                testID="command-menu-surface"
+            >
+                <View testID="command-menu-content" />
+            </CommandMenuSurface>,
+        );
+
+        expect(capturedPopoverProps.current?.boundaryRef).toBe(boundaryRef);
+        expect(capturedPopoverProps.current?.keyboardBottomInset).toBe(320);
+        expect(capturedPopoverProps.current?.edgePadding).toEqual({ horizontal: 16 });
+        expect(capturedPopoverProps.current?.backdrop).toBe(backdrop);
+        expect(capturedPopoverProps.current?.consumeOutsidePointerDown).toBe(false);
+        expect(capturedPopoverProps.current?.containerStyle).toBe(containerStyle);
     });
 });

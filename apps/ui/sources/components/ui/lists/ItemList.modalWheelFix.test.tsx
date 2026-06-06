@@ -8,6 +8,8 @@ const modalWheelState = vi.hoisted(() => ({
     scrollTo: vi.fn(),
 }));
 
+const safeAreaInsets = { top: 0, right: 0, bottom: 0, left: 0 };
+
 function createRadixHostComponent(tagName: string) {
     return (props: Record<string, unknown>) => {
         const { children, ...rest } = props as Record<string, unknown> & { children?: React.ReactNode };
@@ -52,16 +54,19 @@ describe('ItemList (web modal wheel fix)', () => {
     it('translates wheel deltas into scrollTo when rendered inside BaseModal', async () => {
         const { BaseModal } = await import('@/modal/components/BaseModal');
         const { ItemList } = await import('./ItemList');
+        const { SafeAreaInsetsContext } = await import('react-native-safe-area-context');
 
         modalWheelState.scrollTo.mockClear();
         const onScroll = vi.fn();
 
         const screen = await renderScreen(
-            <BaseModal visible={true} onClose={() => {}}>
-                <ItemList onScroll={onScroll} scrollEventThrottle={16}>
-                    <React.Fragment />
-                </ItemList>
-            </BaseModal>,
+            <SafeAreaInsetsContext.Provider value={safeAreaInsets}>
+                <BaseModal visible={true} onClose={() => {}}>
+                    <ItemList onScroll={onScroll} scrollEventThrottle={16}>
+                        <React.Fragment />
+                    </ItemList>
+                </BaseModal>
+            </SafeAreaInsetsContext.Provider>,
         );
 
         const scrollView = screen.tree.findByType('ScrollView');
@@ -92,4 +97,3 @@ describe('ItemList (web modal wheel fix)', () => {
         expect(scrollView.props.onWheel).toBeUndefined();
     });
 });
-

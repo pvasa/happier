@@ -11,6 +11,8 @@ import { useUnistyles } from 'react-native-unistyles';
 const DEFAULT_SMALL_SPINNER_SIZE = 20;
 const DEFAULT_LARGE_SPINNER_SIZE = 36;
 const DEFAULT_NUMERIC_SPINNER_SIZE = 20;
+const STEPPED_WEB_SPINNER_MAX_SIZE = DEFAULT_SMALL_SPINNER_SIZE;
+const STEPPED_WEB_SPINNER_TIMING_FUNCTION = 'steps(6, end)';
 const SPINNER_ANIMATION_NAME = 'happierActivitySpinnerSpin';
 
 type WebActivitySpinnerStyle = ViewStyle & {
@@ -24,6 +26,12 @@ type WebActivitySpinnerStyle = ViewStyle & {
 
 export type ActivitySpinnerProps = Omit<ActivityIndicatorProps, 'size'> & {
     size?: ActivityIndicatorProps['size'] | number;
+    /**
+     * Keep the web spinner visible but stop the continuous CSS transform animation.
+     * Used for mounted offscreen list rows so overscan content does not force a
+     * browser frame on every refresh tick.
+     */
+    animationEnabled?: boolean;
 };
 
 function resolveSpinnerSize(size: ActivityIndicatorProps['size']): number {
@@ -50,6 +58,7 @@ export function ActivitySpinner(props: ActivitySpinnerProps) {
 
     const {
         animating = true,
+        animationEnabled = true,
         color,
         hidesWhenStopped = true,
         size,
@@ -70,12 +79,16 @@ export function ActivitySpinner(props: ActivitySpinnerProps) {
         borderWidth: resolveSpinnerBorderWidth(resolvedSize),
         borderColor: typeof resolvedColor === 'string' ? resolvedColor : 'currentColor',
         borderTopColor: 'transparent',
-        animationDuration: '850ms',
-        animationIterationCount: 'infinite',
-        animationName: SPINNER_ANIMATION_NAME,
-        animationTimingFunction: 'linear',
+        ...(animationEnabled ? {
+            animationDuration: '850ms',
+            animationIterationCount: 'infinite',
+            animationName: SPINNER_ANIMATION_NAME,
+            animationTimingFunction: resolvedSize <= STEPPED_WEB_SPINNER_MAX_SIZE
+                ? STEPPED_WEB_SPINNER_TIMING_FUNCTION
+                : 'linear',
+            willChange: 'transform',
+        } : null),
         opacity: animating ? 1 : 0,
-        willChange: 'transform',
     };
 
     return (

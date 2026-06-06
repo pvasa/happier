@@ -353,6 +353,7 @@ export function SelectionListBodyFlatFlashList(props: Readonly<{
     focusedOptionId: string | null;
     onSelect: (id: string, option: SelectionListOption) => void;
     onPushStep: (step: SelectionListStep) => void;
+    showsVerticalScrollIndicator?: boolean;
     /** FR3-1 / FR3-8 — identity-free measure mode. */
     measureMode?: boolean;
 }>): React.ReactElement {
@@ -438,6 +439,7 @@ export function SelectionListBodyFlatFlashList(props: Readonly<{
                 renderItem={renderItem}
                 getItemType={(item: SelectionListBodyFlashListItem) => item.kind}
                 estimatedItemSize={SELECTION_LIST_VIRTUALIZED_ROW_ESTIMATED_HEIGHT_PX}
+                showsVerticalScrollIndicator={props.showsVerticalScrollIndicator === true}
             />
         </View>
     );

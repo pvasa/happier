@@ -1,6 +1,11 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS, Popover, type PopoverPlacement } from '@/components/ui/popover';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
+import {
+    MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS,
+    Popover,
+    type PopoverBackdropOptions,
+    type PopoverPlacement,
+} from '@/components/ui/popover';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import type { CommandMenuAnchor } from './commandMenuTypes';
 
@@ -16,6 +21,12 @@ interface CommandMenuSurfaceProps {
     maxWidth?: number;
     placement?: PopoverPlacement;
     gap?: number;
+    boundaryRef?: React.RefObject<any> | null;
+    keyboardBottomInset?: number;
+    edgePadding?: number | Readonly<{ horizontal?: number; vertical?: number }>;
+    backdrop?: PopoverBackdropOptions;
+    consumeOutsidePointerDown?: boolean;
+    containerStyle?: StyleProp<ViewStyle>;
     onRequestClose: () => void;
     testID?: string;
 }
@@ -35,6 +46,12 @@ export const CommandMenuSurface = React.memo((props: CommandMenuSurfaceProps) =>
         maxWidth = DEFAULT_MAX_WIDTH,
         placement = 'auto-vertical',
         gap = DEFAULT_GAP,
+        boundaryRef,
+        keyboardBottomInset,
+        edgePadding,
+        backdrop = { enabled: false },
+        consumeOutsidePointerDown,
+        containerStyle,
         onRequestClose,
         testID,
     } = props;
@@ -51,8 +68,13 @@ export const CommandMenuSurface = React.memo((props: CommandMenuSurfaceProps) =>
             gap={gap}
             maxHeightCap={maxHeight}
             maxWidthCap={maxWidth}
+            boundaryRef={boundaryRef}
+            keyboardBottomInset={keyboardBottomInset}
+            edgePadding={edgePadding}
+            containerStyle={containerStyle}
+            consumeOutsidePointerDown={consumeOutsidePointerDown}
             onRequestClose={onRequestClose}
-            backdrop={{ enabled: false }}
+            backdrop={backdrop}
             portal={MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS}
         >
             {({ maxHeight: resolvedMaxHeight }) => (

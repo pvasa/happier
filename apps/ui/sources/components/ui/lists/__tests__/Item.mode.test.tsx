@@ -115,33 +115,36 @@ describe('Item mode prop', () => {
     it('uses the middle global item density when density prop is omitted', async () => {
         uiItemDensitySetting = 'cozy';
         const { Item } = await import('../Item');
+        const { ITEM_TITLE_TEXT_METRICS } = await import('../itemDensityMetrics');
 
-        const screen = await renderScreen(<Item title="Compact by setting" subtitle="Subtitle" />);
+        const screen = await renderScreen(<Item title="Cozy by setting" subtitle="Subtitle" />);
 
-        const titleNode = findTextNode(screen, 'Compact by setting');
-        expect(titleNode?.props?.style).toEqual(expect.arrayContaining([expect.objectContaining({ fontSize: 14, lineHeight: 20 })]));
+        const titleNode = findTextNode(screen, 'Cozy by setting');
+        expect(flattenTestStyle(titleNode?.props?.style)).toMatchObject(ITEM_TITLE_TEXT_METRICS.cozy);
         uiItemDensitySetting = 'comfortable';
     });
 
     it('preserves an explicit density prop over the global item density', async () => {
         uiItemDensitySetting = 'compact';
         const { Item } = await import('../Item');
+        const { ITEM_TITLE_TEXT_METRICS } = await import('../itemDensityMetrics');
 
         const screen = await renderScreen(<Item title="Explicit density" subtitle="Subtitle" density="comfortable" />);
 
         const titleNode = findTextNode(screen, 'Explicit density');
-        expect(titleNode?.props?.style).not.toEqual(expect.arrayContaining([expect.objectContaining({ fontSize: 13, lineHeight: 18 })]));
+        expect(flattenTestStyle(titleNode?.props?.style)).toMatchObject(ITEM_TITLE_TEXT_METRICS.comfortable);
         uiItemDensitySetting = 'comfortable';
     });
 
     it('applies the resolved density to right-side detail text', async () => {
         uiItemDensitySetting = 'compact';
         const { Item } = await import('../Item');
+        const { ITEM_TITLE_TEXT_METRICS } = await import('../itemDensityMetrics');
 
         const screen = await renderScreen(<Item title="Detail row" detail="Compact detail" />);
 
         const detailNode = findTextNode(screen, 'Compact detail');
-        expect(detailNode?.props?.style).toEqual(expect.arrayContaining([expect.objectContaining({ fontSize: 13, lineHeight: 18 })]));
+        expect(flattenTestStyle(detailNode?.props?.style)).toMatchObject(ITEM_TITLE_TEXT_METRICS.compact);
         uiItemDensitySetting = 'comfortable';
     });
 

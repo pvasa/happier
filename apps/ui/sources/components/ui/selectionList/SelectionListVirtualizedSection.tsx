@@ -55,6 +55,7 @@ export type SelectionListVirtualizedSectionProps = Readonly<{
      * applies.
      */
     virtualization?: SelectionListVirtualizationMode;
+    showsVerticalScrollIndicator?: boolean;
     /**
      * Override the threshold (test/escape hatch). Defaults to
      * `SELECTION_LIST_VIRTUALIZATION_THRESHOLD`.
@@ -222,6 +223,7 @@ export function SelectionListVirtualizedSection(
                     renderItem={({ item }: { item: SelectionListOption }) => renderRow(item)}
                     getItemType={(option: SelectionListOption) => (option.openStep ? 'drilldown' : 'option')}
                     estimatedItemSize={SELECTION_LIST_VIRTUALIZED_ROW_ESTIMATED_HEIGHT_PX}
+                    showsVerticalScrollIndicator={props.showsVerticalScrollIndicator === true}
                 />
             </View>
         );

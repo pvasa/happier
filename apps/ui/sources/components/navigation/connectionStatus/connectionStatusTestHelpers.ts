@@ -59,16 +59,27 @@ export function installConnectionStatusCommonModuleMocks(
         };
     });
 
-    vi.mock('@/sync/domains/server/serverProfiles', async () => {
+    vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+        const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
         const activeOptions = connectionStatusModuleState.options;
         if (activeOptions.serverProfiles) {
-            return await activeOptions.serverProfiles();
+            return createServerProfilesModuleMock({
+                importOriginal,
+                overrides: await activeOptions.serverProfiles() as Partial<typeof import('@/sync/domains/server/serverProfiles')>,
+            });
         }
 
-        return {
-            getActiveServerSnapshot: () => null,
-            listServerProfiles: () => [],
-        };
+        return createServerProfilesModuleMock({
+            importOriginal,
+            overrides: {
+                getActiveServerSnapshot: () => ({
+                    serverId: '',
+                    serverUrl: '',
+                    generation: 0,
+                }),
+                listServerProfiles: () => [],
+            },
+        });
     });
 
     vi.mock('@/sync/domains/state/storage', async (importOriginal) => {

@@ -2,12 +2,16 @@ import * as React from 'react';
 import { Platform, View, type ViewStyle } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming } from 'react-native-reanimated';
 
+const WEB_PULSE_TIMING_FUNCTION = 'steps(6, end)';
+
 export interface StatusDotProps {
     color: string;
     isPulsing?: boolean;
     size?: number;
     style?: ViewStyle;
     testID?: string;
+    /** Keep pulsing state visible while disabling the web CSS animation. */
+    animationEnabled?: boolean;
 }
 
 export const StatusDot = React.memo((props: StatusDotProps) => {
@@ -29,13 +33,13 @@ function resolveBaseDotStyle(color: string, size: number): ViewStyle {
     };
 }
 
-function WebStatusDot({ color, isPulsing, size = 6, style, testID }: StatusDotProps) {
+function WebStatusDot({ color, isPulsing, size = 6, style, testID, animationEnabled = true }: StatusDotProps) {
     return (
         <View
             testID={testID}
             style={[
                 resolveBaseDotStyle(color, size),
-                isPulsing ? webPulseStyle : null,
+                isPulsing && animationEnabled ? webPulseStyle : null,
                 style,
             ]}
         />
@@ -102,5 +106,5 @@ const webPulseStyle: WebPulseStyle = {
     animationDuration: '1000ms',
     animationIterationCount: 'infinite',
     animationName: 'happierStatusDotPulse',
-    animationTimingFunction: 'ease-in-out',
+    animationTimingFunction: WEB_PULSE_TIMING_FUNCTION,
 };
