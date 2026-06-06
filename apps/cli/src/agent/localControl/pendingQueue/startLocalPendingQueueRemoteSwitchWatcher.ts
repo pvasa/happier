@@ -5,7 +5,6 @@ export type LocalPendingQueueRemoteSwitchWatcher = Readonly<{
 export function startLocalPendingQueueRemoteSwitchWatcher(opts: Readonly<{
   peekPendingCount?: () => Promise<number>;
   pollIntervalMs: number;
-  reconcilePendingQueueState?: () => Promise<void> | void;
   requestRemoteSwitch: () => Promise<boolean>;
   waitForPendingQueueUpdate?: (signal?: AbortSignal) => Promise<boolean>;
 }>): LocalPendingQueueRemoteSwitchWatcher {
@@ -127,11 +126,6 @@ export function startLocalPendingQueueRemoteSwitchWatcher(opts: Readonly<{
 
       const wake = await waitForWake();
       if (wake === 'stopped') return;
-      try {
-        await opts.reconcilePendingQueueState?.();
-      } catch {
-        // Best-effort defensive reconciliation only.
-      }
       allowDirectInspection = true;
     }
   })();

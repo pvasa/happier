@@ -3,11 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { startLocalPendingQueueRemoteSwitchWatcher } from './startLocalPendingQueueRemoteSwitchWatcher';
 
 describe('startLocalPendingQueueRemoteSwitchWatcher', () => {
-  it('reconciles and inspects the server queue after a pending-queue update before switching', async () => {
+  it('inspects the local pending projection after a pending-queue update before switching', async () => {
     vi.useFakeTimers();
     const wakeRef: { current: ((value: boolean) => void) | null } = { current: null };
     const peekPendingCount = vi.fn<() => Promise<number>>().mockResolvedValue(1);
-    const reconcilePendingQueueState = vi.fn(async () => {});
     const requestRemoteSwitch = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
     const waitForPendingQueueUpdate = vi.fn<(signal?: AbortSignal) => Promise<boolean>>(
         async (signal?: AbortSignal) =>
@@ -20,7 +19,6 @@ describe('startLocalPendingQueueRemoteSwitchWatcher', () => {
     const opts = {
       peekPendingCount,
       pollIntervalMs: 30_000,
-      reconcilePendingQueueState,
       requestRemoteSwitch,
       waitForPendingQueueUpdate,
     };
@@ -37,7 +35,6 @@ describe('startLocalPendingQueueRemoteSwitchWatcher', () => {
     wake(true);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(reconcilePendingQueueState).toHaveBeenCalledTimes(1);
     expect(peekPendingCount).toHaveBeenCalledTimes(1);
     expect(requestRemoteSwitch).toHaveBeenCalledTimes(1);
 
@@ -45,10 +42,9 @@ describe('startLocalPendingQueueRemoteSwitchWatcher', () => {
     vi.useRealTimers();
   });
 
-  it('uses defensive polling to reconcile pending state before inspecting the server queue', async () => {
+  it('uses defensive polling without forcing pending-state reconciliation before inspecting the local projection', async () => {
     vi.useFakeTimers();
     const peekPendingCount = vi.fn<() => Promise<number>>().mockResolvedValue(1);
-    const reconcilePendingQueueState = vi.fn(async () => {});
     const requestRemoteSwitch = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
     const waitForPendingQueueUpdate = vi.fn<(signal?: AbortSignal) => Promise<boolean>>(
       async (signal?: AbortSignal) =>
@@ -60,7 +56,6 @@ describe('startLocalPendingQueueRemoteSwitchWatcher', () => {
     const opts = {
       peekPendingCount,
       pollIntervalMs: 30_000,
-      reconcilePendingQueueState,
       requestRemoteSwitch,
       waitForPendingQueueUpdate,
     };
@@ -68,11 +63,9 @@ describe('startLocalPendingQueueRemoteSwitchWatcher', () => {
     const watcher = startLocalPendingQueueRemoteSwitchWatcher(opts);
 
     await vi.advanceTimersByTimeAsync(29_999);
-    expect(reconcilePendingQueueState).not.toHaveBeenCalled();
     expect(peekPendingCount).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(reconcilePendingQueueState).toHaveBeenCalledTimes(1);
     expect(requestRemoteSwitch).toHaveBeenCalledTimes(1);
     expect(peekPendingCount).toHaveBeenCalledTimes(1);
 
@@ -82,7 +75,6 @@ describe('startLocalPendingQueueRemoteSwitchWatcher', () => {
 
   it('waits for the defensive interval after a missed pending-queue update wait', async () => {
     vi.useFakeTimers();
-    const reconcilePendingQueueState = vi.fn(async () => {});
     const requestRemoteSwitch = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
     let waitCalls = 0;
     const waitForPendingQueueUpdate = vi.fn<(signal?: AbortSignal) => Promise<boolean>>(
@@ -99,7 +91,6 @@ describe('startLocalPendingQueueRemoteSwitchWatcher', () => {
 
     const watcher = startLocalPendingQueueRemoteSwitchWatcher({
       pollIntervalMs: 30_000,
-      reconcilePendingQueueState,
       requestRemoteSwitch,
       waitForPendingQueueUpdate,
     });
@@ -108,14 +99,10 @@ describe('startLocalPendingQueueRemoteSwitchWatcher', () => {
     await Promise.resolve();
 
     expect(waitForPendingQueueUpdate).toHaveBeenCalledTimes(1);
-    expect(reconcilePendingQueueState).not.toHaveBeenCalled();
-
     await vi.advanceTimersByTimeAsync(29_999);
     expect(waitForPendingQueueUpdate).toHaveBeenCalledTimes(1);
-    expect(reconcilePendingQueueState).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(reconcilePendingQueueState).toHaveBeenCalledTimes(1);
     expect(waitForPendingQueueUpdate).toHaveBeenCalledTimes(2);
 
     watcher.stop();
