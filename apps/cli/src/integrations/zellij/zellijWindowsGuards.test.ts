@@ -10,7 +10,7 @@ describe('resolveZellijWindowsGuard', () => {
     });
   });
 
-  it('refuses legacy Windows Console Host with an actionable reason', () => {
+  it('uses a foreground Windows Terminal launch strategy from legacy Windows Console Host', () => {
     expect(
       resolveZellijWindowsGuard({
         platform: 'win32',
@@ -18,23 +18,24 @@ describe('resolveZellijWindowsGuard', () => {
         env: { WT_SESSION: '', TERM_PROGRAM: '' },
         parentProcessName: 'conhost.exe',
       }),
-    ).toMatchObject({ status: 'disabled', reason: 'windows_console_host_unsupported' });
+    ).toMatchObject({ status: 'ok', shell: 'cmd.exe', launchStrategy: 'foreground_windows_terminal' });
   });
 
-  it('fails closed on Windows when no supported terminal host marker is present', () => {
+  it('uses a foreground Windows Terminal launch strategy when no terminal host marker is present', () => {
     expect(
       resolveZellijWindowsGuard({
         platform: 'win32',
         arch: 'x64',
         env: { WT_SESSION: '', TERM_PROGRAM: '' },
       }),
-    ).toMatchObject({ status: 'disabled', reason: 'windows_console_host_unsupported' });
+    ).toMatchObject({ status: 'ok', shell: 'cmd.exe', launchStrategy: 'foreground_windows_terminal' });
   });
 
-  it('fails closed for native Windows zellij TUI hosts even inside Windows Terminal', () => {
+  it('uses the same foreground launch strategy inside Windows Terminal instead of the background TUI host shape', () => {
     expect(resolveZellijWindowsGuard({ platform: 'win32', arch: 'x64', env: { WT_SESSION: 'abc' } })).toMatchObject({
-      status: 'disabled',
-      reason: 'windows_zellij_tui_unsupported',
+      status: 'ok',
+      shell: 'cmd.exe',
+      launchStrategy: 'foreground_windows_terminal',
     });
   });
 });

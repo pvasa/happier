@@ -106,6 +106,162 @@ describe('createZellijTerminalHostAdapter', () => {
     });
     });
 
+  it('starts foreground-attached sessions through an injected client launcher and detached command launcher', async () => {
+    const calls: string[] = [];
+    let launcherDisposed = false;
+    let listCount = 0;
+    let bootstrapClosed = false;
+    const actions = {
+      attachCreateBackground: async () => {
+        throw new Error('should not create a background session');
+      },
+      runCommand: async () => {
+        throw new Error('foreground launch should not await zellij run');
+      },
+      startCommandDetached: async (params: {
+        sessionName: string;
+        env: Readonly<Record<string, string>>;
+        command: readonly string[];
+        timeoutMs?: number;
+      }) => {
+        calls.push(`detached:${params.sessionName}:${params.env.ZELLIJ_SOCKET_DIR ?? ''}:${params.command.join('|')}:${params.timeoutMs ?? 'none'}`);
+        return {
+          pid: 12345,
+          dispose: () => {
+            launcherDisposed = true;
+          },
+        };
+      },
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) {
+          return [{ id: 1, is_plugin: false, terminal_command: null }];
+        }
+        if (bootstrapClosed) {
+          return [{ id: 42, is_plugin: false, terminal_command: '/managed/node' }];
+        }
+        return [
+          { id: 1, is_plugin: false, terminal_command: null },
+          { id: 42, is_plugin: false, terminal_command: '/managed/node' },
+        ];
+      },
+      dumpScreen: async () => '',
+      closePane: async (params: { paneId: string }) => {
+        calls.push(`close:${params.paneId}`);
+        bootstrapClosed = true;
+      },
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    } as ZellijActions & {
+      startCommandDetached(params: {
+        sessionName: string;
+        env: Readonly<Record<string, string>>;
+        command: readonly string[];
+        timeoutMs?: number;
+      }): Promise<{ pid?: number; dispose(): void }>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+      actionTimeoutMs: 456,
+      launchStrategy: {
+        type: 'foregroundAttached',
+        launchClient: async (params: {
+          sessionName: string;
+          env: Readonly<Record<string, string>>;
+          cwd?: string;
+          defaultShell?: string;
+        }) => {
+          calls.push(`foreground:${params.sessionName}:${params.env.ZELLIJ_SOCKET_DIR ?? ''}:${params.cwd ?? ''}:${params.defaultShell ?? ''}`);
+        },
+      },
+      defaultShell: 'cmd.exe',
+    } as Parameters<typeof createZellijTerminalHostAdapterBase>[0] & {
+      launchStrategy: {
+        type: 'foregroundAttached';
+        launchClient(params: {
+          sessionName: string;
+          env: Readonly<Record<string, string>>;
+          cwd?: string;
+          defaultShell?: string;
+        }): Promise<void>;
+      };
+    });
+
+    const handle = await adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    });
+
+    const socketDir = join('/home/happier', 'zellij-sock');
+    expect(calls).toEqual([
+      `foreground:session-a:${socketDir}:/workspace/project:cmd.exe`,
+      `detached:session-a:${socketDir}:/managed/node|claude_local_launcher.cjs:456`,
+      'close:terminal_1',
+    ]);
+    expect(handle.paneId).toBe('terminal_42');
+    expect(launcherDisposed).toBe(true);
+  });
+
+  it('disposes a foreground detached command launcher when pane discovery fails', async () => {
+    let launcherDisposed = false;
+    const actions = {
+      attachCreateBackground: async () => {
+        throw new Error('should not create a background session');
+      },
+      runCommand: async () => {
+        throw new Error('foreground launch should not await zellij run');
+      },
+      startCommandDetached: async () => ({
+        dispose: () => {
+          launcherDisposed = true;
+        },
+      }),
+      writeBytesChunked: async () => undefined,
+      sendEnter: async () => undefined,
+      sendEscape: async () => undefined,
+      listPanes: async () => [],
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    } as ZellijActions & {
+      startCommandDetached(): Promise<{ dispose(): void }>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+      actionTimeoutMs: 5,
+      launchStrategy: {
+        type: 'foregroundAttached',
+        launchClient: async () => undefined,
+      },
+    } as Parameters<typeof createZellijTerminalHostAdapterBase>[0] & {
+      launchStrategy: { type: 'foregroundAttached'; launchClient(): Promise<void> };
+    });
+
+    await expect(adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    })).rejects.toThrow(/zellij launch produced no terminal target pane/);
+    expect(launcherDisposed).toBe(true);
+  });
+
   it('creates the shortened zellij socket directory before startup actions run', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-zellij-socket-test-'));
     const happyHomeDir = join(root, 'long-happy-home-path-for-zellij-socket-dir-'.repeat(3));
@@ -404,11 +560,11 @@ describe('createZellijTerminalHostAdapter', () => {
       spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
       spawnEnv: {},
       isolatedEnv: true,
-    })).rejects.toThrow(
-      /zellij startup failed: zellij list-panes failed: No session named "session-a" found.; cleanup failed: zellij kill-session failed: No session named "session-a" found./,
-    );
+    })).rejects.toThrow(/zellij startup failed: zellij session did not become addressable: zellij list-panes failed: No session named "session-a" found.; cleanup failed: zellij kill-session failed: No session named "session-a" found./);
 
-    expect(calls).toEqual(['attach', 'list', 'kill']);
+    expect(calls[0]).toBe('attach');
+    expect(calls).toContain('list');
+    expect(calls.at(-1)).toBe('kill');
   });
 
       it('closes the default shell pane left by zellij background session creation', async () => {
@@ -988,6 +1144,7 @@ describe('createZellijTerminalHostAdapter', () => {
       },
       closePane: async (params: { paneId: string }) => {
         calls.push(`close:${params.paneId}`);
+        bootstrapClosed = true;
       },
       dumpScreen: async () => '',
       killSession: async (params) => {

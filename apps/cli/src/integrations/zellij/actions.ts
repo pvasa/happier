@@ -35,6 +35,15 @@ export type ZellijActionParams = Readonly<{
 
 export type ZellijPaneActionParams = ZellijActionParams & Readonly<{ paneId: string }>;
 export type ZellijTimeoutParams = Readonly<{ timeoutMs?: number }>;
+export type ZellijRunCommandParams = ZellijActionParams & Readonly<{
+  sessionName: string;
+  cwd?: string;
+  command: readonly string[];
+}>;
+export type ZellijDetachedCommandHandle = Readonly<{
+  pid?: number;
+  dispose(): void;
+}>;
 
 export type ZellijActions = Readonly<{
   attachCreateBackground(params: ZellijActionParams & Readonly<{
@@ -42,11 +51,8 @@ export type ZellijActions = Readonly<{
     cwd?: string;
     defaultShell?: string;
   }> & ZellijTimeoutParams): Promise<ZellijCommandResult>;
-  runCommand(params: ZellijActionParams & Readonly<{
-    sessionName: string;
-    cwd?: string;
-    command: readonly string[];
-  }> & ZellijTimeoutParams): Promise<ZellijCommandResult>;
+  runCommand(params: ZellijRunCommandParams & ZellijTimeoutParams): Promise<ZellijCommandResult>;
+  startCommandDetached(params: ZellijRunCommandParams & ZellijTimeoutParams): Promise<ZellijDetachedCommandHandle>;
   writeBytesChunked(params: ZellijPaneActionParams & Readonly<{ text: string; chunkSize?: number; timeoutMs?: number }>): Promise<void>;
   sendEnter(params: ZellijPaneActionParams & Readonly<{ timeoutMs?: number }>): Promise<void>;
   sendEscape(params: ZellijPaneActionParams & Readonly<{ timeoutMs?: number }>): Promise<void>;
@@ -155,6 +161,15 @@ function runZellijForeground(
   });
 }
 
+function buildRunCommandArgs(params: ZellijRunCommandParams): string[] {
+  const args = ['-s', params.sessionName, 'run'];
+  if (params.cwd) {
+    args.push('--cwd', params.cwd);
+  }
+  args.push('--', ...params.command);
+  return args;
+}
+
 function splitByteChunks(text: string, chunkSize: number): Buffer[] {
   const bytes = Buffer.from(text, 'utf8');
   if (bytes.length === 0) return [];
@@ -218,14 +233,8 @@ export async function attachForeground(
   return runZellijForeground(params, ['attach', params.sessionName]);
 }
 
-export async function runCommand(
-  params: ZellijActionParams & Readonly<{ sessionName: string; cwd?: string; command: readonly string[] }> & ZellijTimeoutParams,
-): Promise<ZellijCommandResult> {
-  const args = ['-s', params.sessionName, 'run'];
-  if (params.cwd) {
-    args.push('--cwd', params.cwd);
-  }
-  args.push('--', ...params.command);
+export async function runCommand(params: ZellijRunCommandParams & ZellijTimeoutParams): Promise<ZellijCommandResult> {
+  const args = buildRunCommandArgs(params);
   return runZellij(
     params,
     args,
@@ -233,6 +242,45 @@ export async function runCommand(
       ? { cwd: params.cwd, timeoutMs: params.timeoutMs, action: 'run' }
       : { cwd: params.cwd, action: 'run' },
   );
+}
+
+export async function startCommandDetached(params: ZellijRunCommandParams & ZellijTimeoutParams): Promise<ZellijDetachedCommandHandle> {
+  const args = buildRunCommandArgs(params);
+  return await new Promise((resolve, reject) => {
+    let closed = false;
+    let settled = false;
+    const child = spawn(params.zellijBinary, args, {
+      cwd: params.cwd,
+      env: buildZellijProcessEnv(params.env),
+      shell: false,
+      stdio: ['ignore', 'ignore', 'ignore'],
+      windowsHide: true,
+    });
+    child.once('close', () => {
+      closed = true;
+    });
+    child.once('error', (error) => {
+      closed = true;
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    const handle: ZellijDetachedCommandHandle = {
+      ...(typeof child.pid === 'number' ? { pid: child.pid } : {}),
+      dispose: () => {
+        if (!closed && !child.killed) {
+          child.kill();
+        }
+      },
+    };
+    queueMicrotask(() => {
+      if (!settled) {
+        settled = true;
+        resolve(handle);
+      }
+    });
+  });
 }
 
 export async function writeBytesChunked(params: ZellijPaneActionParams & Readonly<{
@@ -336,6 +384,7 @@ export async function killSession(
 export const defaultZellijActions: ZellijActions = {
   attachCreateBackground,
   runCommand,
+  startCommandDetached,
   writeBytesChunked,
   sendEnter,
   sendEscape,

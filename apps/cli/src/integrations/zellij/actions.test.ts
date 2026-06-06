@@ -29,10 +29,12 @@ function mockHangingChild() {
   const child = new EventEmitter() as EventEmitter & {
     stdout: EventEmitter;
     stderr: EventEmitter;
+    pid: number;
     kill: ReturnType<typeof vi.fn>;
   };
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
+  child.pid = 12345;
   child.kill = vi.fn();
   return child;
 }
@@ -448,6 +450,59 @@ describe('zellij actions', () => {
     );
     const options = spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined;
     expect(options?.env?.HUGE_UNRELATED_ZELLIJ_ENV).toBeUndefined();
+  });
+
+  it('starts detached command launchers without inheriting stdio and kills only the launcher on dispose', async () => {
+    const child = mockHangingChild();
+    spawnMock.mockImplementationOnce(() => child);
+    const actions = await import('./actions') as typeof import('./actions') & {
+      startCommandDetached?: (params: {
+        zellijBinary: string;
+        env: Record<string, string>;
+        sessionName: string;
+        cwd?: string;
+        command: readonly string[];
+      }) => Promise<{ pid?: number; dispose(): void }>;
+    };
+    expect(typeof actions.startCommandDetached).toBe('function');
+
+    const handle = await actions.startCommandDetached?.({
+      zellijBinary: '/tools/zellij',
+      env: { ZELLIJ_SOCKET_DIR: '/tmp/zellij-sock', HAPPIER_CLAUDE_PATH: '/opt/claude/cli.js' },
+      sessionName: 'happy-claude',
+      cwd: '/workspace',
+      command: ['/managed/node', 'claude_local_launcher.cjs', '--model', 'sonnet'],
+    });
+
+    expect(handle?.pid).toBe(12345);
+    expect(spawnMock).toHaveBeenCalledWith(
+      '/tools/zellij',
+      [
+        '-s',
+        'happy-claude',
+        'run',
+        '--cwd',
+        '/workspace',
+        '--',
+        '/managed/node',
+        'claude_local_launcher.cjs',
+        '--model',
+        'sonnet',
+      ],
+      expect.objectContaining({
+        cwd: '/workspace',
+        env: expect.objectContaining({
+          HAPPIER_CLAUDE_PATH: '/opt/claude/cli.js',
+          ZELLIJ_SOCKET_DIR: '/tmp/zellij-sock',
+        }),
+        shell: false,
+        stdio: ['ignore', 'ignore', 'ignore'],
+        windowsHide: true,
+      }),
+    );
+
+    handle?.dispose();
+    expect(child.kill).toHaveBeenCalledTimes(1);
   });
 
   it('preserves Windows Path casing for zellij host actions', async () => {
