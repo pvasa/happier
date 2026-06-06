@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { ApiClient } from '@/api/api';
-import { isMachineIdConflictError, isMachineRevokedError } from '@/api/api';
+import { isMachineIdConflictError, isMachineReplacedError, isMachineRevokedError } from '@/api/api';
 import type { DaemonState, Machine, MachineMetadata } from '@/api/types';
 import { updateSettings } from '@/persistence';
 import { sanitizeServerIdForFilesystem } from '@/server/serverId';
@@ -72,6 +72,64 @@ async function rotateMachineIdForActiveServer(opts: Readonly<{ expectedCurrentMa
   return updated.machineId ?? nextMachineId;
 }
 
+async function adoptReplacementMachineIdForActiveServer(opts: Readonly<{
+  expectedCurrentMachineId: string;
+  replacementMachineId: string;
+}>): Promise<string> {
+  const normalizedReplacementMachineId = opts.replacementMachineId.trim();
+
+  const updated = await updateSettings((settings) => {
+    const activeServerId = sanitizeServerIdForFilesystem(
+      configuration.activeServerId ?? settings.activeServerId ?? 'cloud',
+      'cloud',
+    );
+
+    const nextByServerId = { ...(settings.machineIdByServerId ?? {}) };
+    const current = nextByServerId[activeServerId];
+    if (typeof current === 'string' && current.trim() && current !== opts.expectedCurrentMachineId) {
+      return settings;
+    }
+    nextByServerId[activeServerId] = normalizedReplacementMachineId;
+
+    const normalizedTokenSub = typeof settings.lastTokenSubByServerId?.[activeServerId] === 'string'
+      ? (settings.lastTokenSubByServerId?.[activeServerId] ?? '').trim()
+      : '';
+
+    const nextByServerIdByAccountId = (() => {
+      if (!normalizedTokenSub) return settings.machineIdByServerIdByAccountId;
+
+      const next = { ...(settings.machineIdByServerIdByAccountId ?? {}) };
+      const nextForServer = { ...(next[activeServerId] ?? {}) };
+      nextForServer[normalizedTokenSub] = normalizedReplacementMachineId;
+      next[activeServerId] = nextForServer;
+      return next;
+    })();
+
+    const nextConfirmed = { ...(settings.machineIdConfirmedByServerByServerId ?? {}) };
+    if (activeServerId in nextConfirmed) delete nextConfirmed[activeServerId];
+
+    const nextReplacementCandidates = { ...(settings.machineReplacementCandidatesByServerIdByAccountId ?? {}) };
+    if (normalizedTokenSub) {
+      const nextForServer = { ...(nextReplacementCandidates[activeServerId] ?? {}) };
+      delete nextForServer[normalizedTokenSub];
+      if (Object.keys(nextForServer).length) nextReplacementCandidates[activeServerId] = nextForServer;
+      else delete nextReplacementCandidates[activeServerId];
+    }
+
+    return {
+      ...settings,
+      machineIdByServerId: nextByServerId,
+      ...(nextByServerIdByAccountId ? { machineIdByServerIdByAccountId: nextByServerIdByAccountId } : {}),
+      machineReplacementCandidatesByServerIdByAccountId: Object.keys(nextReplacementCandidates).length ? nextReplacementCandidates : {},
+      machineIdConfirmedByServerByServerId: nextConfirmed,
+      // derived (not persisted in v5+)
+      machineId: normalizedReplacementMachineId,
+    };
+  });
+
+  return updated.machineId ?? normalizedReplacementMachineId;
+}
+
 export async function ensureMachineRegistered(opts: Readonly<{
   api: Pick<ApiClient, 'getOrCreateMachine'>;
   machineId: string;
@@ -94,6 +152,30 @@ export async function ensureMachineRegistered(opts: Readonly<{
     });
     return { machine, machineId: opts.machineId, didRotateMachineId: false };
   } catch (error) {
+    if (isMachineReplacedError(error) && error.replacementMachineId) {
+      const caller = opts.caller ? ` (${opts.caller})` : '';
+      const recoveryLogger = opts.recoveryLogger ?? logger;
+      recoveryLogger.info(
+        `[MACHINE] [RECOVERED] Machine identity replaced${caller}: ${opts.machineId} was replaced on this server; adopting ${error.replacementMachineId}.`,
+      );
+
+      const replacement = await adoptReplacementMachineIdForActiveServer({
+        expectedCurrentMachineId: opts.machineId,
+        replacementMachineId: error.replacementMachineId,
+      });
+
+      const machine = await opts.api.getOrCreateMachine({
+        machineId: replacement,
+        metadata: opts.metadata,
+        daemonState: opts.daemonState,
+        timeoutMs: opts.timeoutMs,
+      });
+
+      recoveryLogger.info(`[MACHINE] [RECOVERED] Machine id adopted${caller}: ${opts.machineId} -> ${replacement}`);
+
+      return { machine, machineId: replacement, didRotateMachineId: true };
+    }
+
     if (!isMachineIdConflictError(error) && !isMachineRevokedError(error)) {
       throw error;
     }

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DaemonState, Machine, MachineMetadata } from '@/api/types';
-import { MachineIdConflictError, MachineRevokedError } from '../api';
+import { MachineIdConflictError, MachineReplacedError, MachineRevokedError } from '../api';
 
 vi.mock('@/ui/logger', () => ({
   logger: {
@@ -421,6 +421,101 @@ describe('ensureMachineRegistered', () => {
       const settings = await readSettings();
       expect(settings.machineId).toBe(calls[1]);
       expect(settings.machineIdConfirmedByServer).toBeUndefined();
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('adopts the server replacement machine id when the persisted machine id was replaced', async () => {
+    vi.useRealTimers();
+
+    const homeDir = mkdtempSync(join(tmpdir(), 'happier-cli-machine-replaced-adopt-'));
+    process.env.HAPPIER_HOME_DIR = homeDir;
+    process.env.HAPPIER_ACTIVE_SERVER_ID = 'cloud';
+
+    try {
+      const oldMachineId = 'machine-old';
+      const replacementMachineId = 'machine-replacement';
+      writeFileSync(
+        join(homeDir, 'settings.json'),
+        JSON.stringify(
+          {
+            schemaVersion: 6,
+            onboardingCompleted: true,
+            activeServerId: 'cloud',
+            servers: {
+              cloud: {
+                id: 'cloud',
+                name: 'cloud',
+                serverUrl: 'https://api.happier.dev',
+                webappUrl: 'https://app.happier.dev',
+                createdAt: 0,
+                updatedAt: 0,
+                lastUsedAt: 0,
+              },
+            },
+            machineIdByServerId: {
+              cloud: oldMachineId,
+            },
+            machineIdByServerIdByAccountId: {
+              cloud: {
+                account_1: oldMachineId,
+              },
+            },
+            machineIdConfirmedByServerByServerId: {
+              cloud: true,
+            },
+            lastTokenSubByServerId: {
+              cloud: 'account_1',
+            },
+            lastChangesCursorByServerIdByAccountId: {},
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      vi.resetModules();
+      const { readSettings } = await import('@/persistence');
+      const { ensureMachineRegistered } = await import('./ensureMachineRegistered');
+
+      const calls: string[] = [];
+      const api = {
+        getOrCreateMachine: async (opts: { machineId: string; metadata: MachineMetadata; daemonState?: DaemonState }): Promise<Machine> => {
+          calls.push(opts.machineId);
+          if (calls.length === 1) {
+            throw new MachineReplacedError(opts.machineId, replacementMachineId);
+          }
+          return {
+            id: opts.machineId,
+            encryptionKey: new Uint8Array(),
+            encryptionVariant: 'legacy',
+            metadata: opts.metadata,
+            metadataVersion: 0,
+            daemonState: opts.daemonState ?? null,
+            daemonStateVersion: 0,
+          };
+        },
+      };
+
+      const { machine, machineId, didRotateMachineId } = await ensureMachineRegistered({
+        api: api as any,
+        machineId: oldMachineId,
+        metadata: { host: 'host1' } as any,
+      });
+
+      expect(calls).toEqual([oldMachineId, replacementMachineId]);
+      expect(machineId).toBe(replacementMachineId);
+      expect(machine.id).toBe(replacementMachineId);
+      expect(didRotateMachineId).toBe(true);
+
+      const settings = await readSettings();
+      expect(settings.machineId).toBe(replacementMachineId);
+      expect(settings.machineIdByServerId?.cloud).toBe(replacementMachineId);
+      expect(settings.machineIdByServerIdByAccountId?.cloud?.account_1).toBe(replacementMachineId);
+      expect(settings.machineIdConfirmedByServer).toBeUndefined();
+      expect(settings.machineReplacementCandidatesByServerIdByAccountId?.cloud?.account_1).toBeUndefined();
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
