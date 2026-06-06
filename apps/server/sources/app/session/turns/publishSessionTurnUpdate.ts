@@ -7,6 +7,11 @@ import {
 import type { ApplySessionTurnMutationResult } from "@/app/session/sessionWriteService";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 
+function resolveSessionTurnUpdateSkipSenderConnection(connection?: ClientConnection): ClientConnection | undefined {
+    if (!connection) return undefined;
+    return connection.connectionType === "user-scoped" ? undefined : connection;
+}
+
 export async function publishSessionTurnUpdate(params: {
     sessionId: string;
     actorUserId: string;
@@ -14,6 +19,7 @@ export async function publishSessionTurnUpdate(params: {
     result: Extract<ApplySessionTurnMutationResult, { ok: true }>;
 }): Promise<void> {
     if (!params.result.didApply) return;
+    const skipSenderConnection = resolveSessionTurnUpdateSkipSenderConnection(params.connection);
     await Promise.all(params.result.participantCursors.map(async ({ accountId, cursor }) => {
         const payload = buildUpdateSessionUpdate(
             params.sessionId,
@@ -32,7 +38,7 @@ export async function publishSessionTurnUpdate(params: {
             userId: accountId,
             payload,
             recipientFilter: { type: "all-interested-in-session", sessionId: params.sessionId },
-            skipSenderConnection: accountId === params.actorUserId ? params.connection : undefined,
+            skipSenderConnection: accountId === params.actorUserId ? skipSenderConnection : undefined,
         });
     }));
     await refreshSessionParticipantBadgePushes({
