@@ -1164,6 +1164,7 @@ export function getDaemonEnv({
   const settingsServerId = resolvePreferredStackServerIdFromCliSettings({
     cliHomeDir,
     serverUrl: internalServerUrl,
+    env: scopedEnv,
   });
   if (settingsServerId) {
     scopedEnv.HAPPIER_ACTIVE_SERVER_ID = settingsServerId;

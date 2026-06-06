@@ -52,6 +52,57 @@ test('getDaemonEnv prefers the matching cli settings server id over the stable s
   assert.equal(env.HAPPIER_DAEMON_STARTUP_SOURCE, 'manual');
 });
 
+test('getDaemonEnv preserves a matching explicit active server id when settings profiles share the URL', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'happy-stack-daemon-env-explicit-'));
+  const serverUrl = 'http://127.0.0.1:52753';
+  const defaultServerId = 'stack_repo-remote-dev-d72117acdb__id_default';
+  const explicitServerId = 'android-keyboard-qa';
+
+  await writeFile(
+    join(dir, 'settings.json'),
+    JSON.stringify(
+      {
+        schemaVersion: 6,
+        activeServerId: defaultServerId,
+        servers: {
+          [defaultServerId]: {
+            id: defaultServerId,
+            name: 'Default',
+            serverUrl,
+            localServerUrl: serverUrl,
+            webappUrl: 'http://localhost:52753',
+            createdAt: 1,
+            updatedAt: 1,
+            lastUsedAt: 1,
+          },
+          [explicitServerId]: {
+            id: explicitServerId,
+            name: 'Android keyboard QA',
+            serverUrl: 'http://10.0.2.2:52753',
+            localServerUrl: serverUrl,
+            webappUrl: 'http://10.0.2.2:52753',
+            createdAt: 1,
+            updatedAt: 1,
+            lastUsedAt: 1,
+          },
+        },
+      },
+      null,
+      2,
+    ) + '\n',
+    'utf-8',
+  );
+
+  const env = getDaemonEnv({
+    baseEnv: { HAPPIER_ACTIVE_SERVER_ID: explicitServerId },
+    cliHomeDir: dir,
+    internalServerUrl: serverUrl,
+    publicServerUrl: 'http://localhost:52753',
+  });
+
+  assert.equal(env.HAPPIER_ACTIVE_SERVER_ID, explicitServerId);
+});
+
 test('getDaemonEnv marks service-mode starts as background-service', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stack-daemon-env-service-'));
 
