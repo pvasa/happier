@@ -148,6 +148,7 @@ describe('protocol package root exports', () => {
             autoSwitch: true,
             switchOn: { usageLimit: false },
         });
+        expect(typeof (protocol as any).BackendSurfaceDeclarationV1Schema?.safeParse).toBe('function');
         expect(typeof (protocol as any).normalizeMachineHomeDir).toBe('function');
         expect(typeof (protocol as any).isSameMachineLocality).toBe('function');
     });

@@ -163,6 +163,13 @@ export {
 } from './backendTargets/backendTargetRef.js';
 
 export {
+  AttachSurfaceStaticMetadataV1Schema,
+  BackendSurfaceDeclarationV1Schema,
+  type AttachSurfaceStaticMetadataV1,
+  type BackendSurfaceDeclarationV1,
+} from './backendSurface/declarationV1.js';
+
+export {
   AcpBackendAuthConfigV1Schema,
   AcpBackendCapabilitiesV1Schema,
   AcpBackendDefinitionV1Schema,
