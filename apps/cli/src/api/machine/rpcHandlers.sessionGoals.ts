@@ -7,6 +7,7 @@ import {
   SessionUsageLimitCheckNowRequestV1Schema,
   SessionUsageLimitWaitResumeCancelRequestV1Schema,
   SessionUsageLimitWaitResumeEnableRequestV1Schema,
+  normalizeSessionUsageLimitRecoveryOperationResultV1,
   type ActionExecutorDeps,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -15,7 +16,9 @@ import { readCredentials, type Credentials } from '@/persistence';
 import {
   createCliActionDeps,
   type CancelInactiveSessionUsageLimitRecoveryCheck,
+  type NotifyConnectedServiceRuntimeAuthFailure,
   type ResumeInactiveSessionWhenUsageLimitReady,
+  type RetryTemporaryThrottleNow,
   type ScheduleInactiveSessionUsageLimitRecoveryCheck,
 } from '@/session/actions/createCliActionDeps';
 import {
@@ -45,6 +48,8 @@ type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
   cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
+  notifyConnectedServiceRuntimeAuthFailure?: NotifyConnectedServiceRuntimeAuthFailure;
+  retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
 }>;
 
 type GoalOperation = 'get' | 'set' | 'clear';
@@ -73,6 +78,31 @@ function transportError(transport: Extract<ResolveSessionTransportContextResult,
     ...(transport.candidates ? { candidates: transport.candidates } : {}),
     ...(transport.sessionId ? { sessionId: transport.sessionId } : {}),
   };
+}
+
+function readRequestSessionId(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = (raw as { sessionId?: unknown }).sessionId;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeUsageLimitRecoveryMachineResult(params: Readonly<{
+  sessionId?: string | null;
+  result: unknown;
+}>): unknown {
+  return normalizeSessionUsageLimitRecoveryOperationResultV1(
+    params.result,
+    params.sessionId ? { sessionId: params.sessionId } : {},
+  );
+}
+
+function invalidUsageLimitParameters(raw: unknown): unknown {
+  return normalizeUsageLimitRecoveryMachineResult({
+    sessionId: readRequestSessionId(raw),
+    result: invalidParameters(),
+  });
 }
 
 async function executeGoalControl(params: Readonly<{
@@ -223,7 +253,7 @@ async function executeUsageLimitRecoveryControl(params: Readonly<{
 }>): Promise<unknown> {
   if (params.operation === 'enable') {
     const parsed = SessionUsageLimitWaitResumeEnableRequestV1Schema.safeParse(params.raw);
-    if (!parsed.success) return invalidParameters();
+    if (!parsed.success) return invalidUsageLimitParameters(params.raw);
     const remember = parsed.data.remember === true || parsed.data.rememberPreference === true;
     return await executeResolvedUsageLimitRecoveryControl({
       operation: 'enable',
@@ -235,7 +265,7 @@ async function executeUsageLimitRecoveryControl(params: Readonly<{
   }
   if (params.operation === 'cancel') {
     const parsed = SessionUsageLimitWaitResumeCancelRequestV1Schema.safeParse(params.raw);
-    if (!parsed.success) return invalidParameters();
+    if (!parsed.success) return invalidUsageLimitParameters(params.raw);
     return await executeResolvedUsageLimitRecoveryControl({
       operation: 'cancel',
       sessionId: parsed.data.sessionId,
@@ -247,7 +277,7 @@ async function executeUsageLimitRecoveryControl(params: Readonly<{
   }
 
   const parsed = SessionUsageLimitCheckNowRequestV1Schema.safeParse(params.raw);
-  if (!parsed.success) return invalidParameters();
+  if (!parsed.success) return invalidUsageLimitParameters(params.raw);
   const effectiveOperation = parsed.data.operation === 'switch_account_now'
     ? 'switchAccountNow'
     : params.operation;
@@ -268,13 +298,23 @@ async function executeResolvedUsageLimitRecoveryControl(params: Readonly<{
   deps?: RegisterMachineSessionGoalRpcHandlersDeps;
 }>): Promise<unknown> {
   const credentials = await (params.deps?.readCredentials ?? readCredentials)();
-  if (!credentials) return notAuthenticated();
+  if (!credentials) {
+    return normalizeUsageLimitRecoveryMachineResult({
+      sessionId: params.sessionId,
+      result: notAuthenticated(),
+    });
+  }
 
   const transport = await (params.deps?.resolveSessionTransportContext ?? resolveSessionTransportContext)({
     credentials,
     idOrPrefix: params.sessionId,
   });
-  if (!transport.ok) return transportError(transport);
+  if (!transport.ok) {
+    return normalizeUsageLimitRecoveryMachineResult({
+      sessionId: transport.sessionId ?? params.sessionId,
+      result: transportError(transport),
+    });
+  }
 
   const actionDeps = (params.deps?.createCliActionDeps ?? createCliActionDeps)({
     token: credentials.token,
@@ -292,39 +332,49 @@ async function executeResolvedUsageLimitRecoveryControl(params: Readonly<{
     ...(params.deps?.cancelInactiveSessionUsageLimitRecoveryCheck
       ? { cancelInactiveSessionUsageLimitRecoveryCheck: params.deps.cancelInactiveSessionUsageLimitRecoveryCheck }
       : {}),
+    ...(params.deps?.notifyConnectedServiceRuntimeAuthFailure
+      ? { notifyConnectedServiceRuntimeAuthFailure: params.deps.notifyConnectedServiceRuntimeAuthFailure }
+      : {}),
+    ...(params.deps?.retryTemporaryThrottleNow
+      ? { retryTemporaryThrottleNow: params.deps.retryTemporaryThrottleNow }
+      : {}),
   });
 
   if (params.operation === 'enable') {
-    return actionDeps.sessionUsageLimitWaitResumeEnable
+    const result = actionDeps.sessionUsageLimitWaitResumeEnable
       ? await actionDeps.sessionUsageLimitWaitResumeEnable({
         sessionId: transport.sessionId,
         ...(typeof params.issueFingerprint === 'string' ? { issueFingerprint: params.issueFingerprint } : {}),
         ...(params.remember === true ? { remember: true } : {}),
       })
       : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
+    return normalizeUsageLimitRecoveryMachineResult({ sessionId: transport.sessionId, result });
   }
   if (params.operation === 'cancel') {
-    return actionDeps.sessionUsageLimitWaitResumeCancel
+    const result = actionDeps.sessionUsageLimitWaitResumeCancel
       ? await actionDeps.sessionUsageLimitWaitResumeCancel({
         sessionId: transport.sessionId,
         ...(params.issueFingerprint !== undefined ? { issueFingerprint: params.issueFingerprint } : {}),
       })
       : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
+    return normalizeUsageLimitRecoveryMachineResult({ sessionId: transport.sessionId, result });
   }
   if (params.operation === 'switchAccountNow') {
-    return actionDeps.sessionUsageLimitSwitchAccountNow
+    const result = actionDeps.sessionUsageLimitSwitchAccountNow
       ? await actionDeps.sessionUsageLimitSwitchAccountNow({
         sessionId: transport.sessionId,
         ...(typeof params.provider === 'string' ? { provider: params.provider } : {}),
       })
       : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
+    return normalizeUsageLimitRecoveryMachineResult({ sessionId: transport.sessionId, result });
   }
-  return actionDeps.sessionUsageLimitCheckNow
+  const result = actionDeps.sessionUsageLimitCheckNow
     ? await actionDeps.sessionUsageLimitCheckNow({
       sessionId: transport.sessionId,
       ...(typeof params.provider === 'string' ? { provider: params.provider } : {}),
     })
     : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
+  return normalizeUsageLimitRecoveryMachineResult({ sessionId: transport.sessionId, result });
 }
 
 export function registerMachineSessionGoalRpcHandlers(params: Readonly<{

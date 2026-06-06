@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { SessionUsageLimitRecoveryOperationResultV1Schema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { registerMachineSessionGoalRpcHandlers } from './rpcHandlers.sessionGoals';
 import type { Credentials } from '@/persistence';
 import type { RpcHandler, RpcHandlerRegistrar } from '../rpc/types';
+import { RpcHandlerManager } from '../rpc/RpcHandlerManager';
+import { decodeBase64, decrypt, encodeBase64, encrypt } from '@/api/encryption';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+
+function parseUsageLimitResult(value: unknown) {
+  return SessionUsageLimitRecoveryOperationResultV1Schema.parse(value);
+}
 
 describe('rpcHandlers.sessionGoals', () => {
   const credentials: Credentials = {
@@ -32,10 +39,26 @@ describe('rpcHandlers.sessionGoals', () => {
     sessionGoalGet = vi.fn(async () => ({ workState: null }));
     sessionVendorPluginCatalogList = vi.fn(async () => ({ vendorPlugins: [] }));
     sessionSkillCatalogList = vi.fn(async () => ({ skills: [] }));
-    sessionUsageLimitWaitResumeEnable = vi.fn(async () => ({ ok: true }));
-    sessionUsageLimitWaitResumeCancel = vi.fn(async () => ({ ok: true }));
-    sessionUsageLimitCheckNow = vi.fn(async () => ({ ok: true }));
-    sessionUsageLimitSwitchAccountNow = vi.fn(async () => ({ ok: true, status: 'waiting' }));
+    sessionUsageLimitWaitResumeEnable = vi.fn(async () => ({
+      ok: true,
+      status: 'waiting',
+      sessionId: 'resolved-session',
+    }));
+    sessionUsageLimitWaitResumeCancel = vi.fn(async () => ({
+      ok: true,
+      status: 'cancelled',
+      sessionId: 'resolved-session',
+    }));
+    sessionUsageLimitCheckNow = vi.fn(async () => ({
+      ok: true,
+      status: 'waiting',
+      sessionId: 'resolved-session',
+    }));
+    sessionUsageLimitSwitchAccountNow = vi.fn(async () => ({
+      ok: true,
+      status: 'switch_applied',
+      sessionId: 'resolved-session',
+    }));
     createCliActionDepsParams = [];
   });
 
@@ -43,6 +66,7 @@ describe('rpcHandlers.sessionGoals', () => {
     resumeInactiveSessionWhenUsageLimitReady?: (input: unknown) => Promise<boolean> | boolean;
     scheduleInactiveSessionUsageLimitRecoveryCheck?: (input: unknown) => void;
     cancelInactiveSessionUsageLimitRecoveryCheck?: (input: unknown) => void;
+    notifyConnectedServiceRuntimeAuthFailure?: (input: unknown) => Promise<unknown>;
   }> = {}) {
     const rawSession = createSessionRecordFixture({
       id: 'resolved-session',
@@ -78,6 +102,9 @@ describe('rpcHandlers.sessionGoals', () => {
           : {}),
         ...(options.cancelInactiveSessionUsageLimitRecoveryCheck
           ? { cancelInactiveSessionUsageLimitRecoveryCheck: options.cancelInactiveSessionUsageLimitRecoveryCheck }
+          : {}),
+        ...(options.notifyConnectedServiceRuntimeAuthFailure
+          ? { notifyConnectedServiceRuntimeAuthFailure: options.notifyConnectedServiceRuntimeAuthFailure }
           : {}),
         createCliActionDeps: (params) => {
           createCliActionDepsParams.push(params);
@@ -149,21 +176,23 @@ describe('rpcHandlers.sessionGoals', () => {
     });
     expect(sessionGoalSet).not.toHaveBeenCalled();
 
-    await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
       sessionId: 'session-prefix',
       issueFingerprint: '   ',
-    })).resolves.toEqual({
+    }))).toEqual({
       ok: false,
+      status: 'unsupported',
+      sessionId: 'session-prefix',
       errorCode: 'invalid_parameters',
-      error: 'invalid_parameters',
     });
-    await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
       sessionId: 'session-prefix',
       issueFingerprint: '   ',
-    })).resolves.toEqual({
+    }))).toEqual({
       ok: false,
+      status: 'unsupported',
+      sessionId: 'session-prefix',
       errorCode: 'invalid_parameters',
-      error: 'invalid_parameters',
     });
     expect(sessionUsageLimitWaitResumeEnable).not.toHaveBeenCalled();
     expect(sessionUsageLimitWaitResumeCancel).not.toHaveBeenCalled();
@@ -172,13 +201,14 @@ describe('rpcHandlers.sessionGoals', () => {
   it('rejects non-boolean rememberPreference values before dispatching usage-limit enable controls', async () => {
     registerWithTransport();
 
-    await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
       sessionId: 'session-prefix',
       rememberPreference: 'yes',
-    })).resolves.toEqual({
+    }))).toEqual({
       ok: false,
+      status: 'unsupported',
+      sessionId: 'session-prefix',
       errorCode: 'invalid_parameters',
-      error: 'invalid_parameters',
     });
 
     expect(sessionUsageLimitWaitResumeEnable).not.toHaveBeenCalled();
@@ -219,23 +249,39 @@ describe('rpcHandlers.sessionGoals', () => {
   it('routes inactive-session usage-limit recovery controls through CLI action deps', async () => {
     registerWithTransport();
 
-    await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
       sessionId: 'session-prefix',
       issueFingerprint: 'usage-limit:session-prefix:reset',
       rememberPreference: true,
-    })).resolves.toEqual({ ok: true });
-    await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+    }))).toEqual({
+      ok: true,
+      status: 'waiting',
+      sessionId: 'resolved-session',
+    });
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
       sessionId: 'session-prefix',
       issueFingerprint: null,
-    })).resolves.toEqual({ ok: true });
-    await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+    }))).toEqual({
+      ok: true,
+      status: 'cancelled',
+      sessionId: 'resolved-session',
+    });
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
       sessionId: 'session-prefix',
-    })).resolves.toEqual({ ok: true });
-    await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+    }))).toEqual({
+      ok: true,
+      status: 'waiting',
+      sessionId: 'resolved-session',
+    });
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
       sessionId: 'session-prefix',
       provider: ' codex ',
       operation: 'switch_account_now',
-    })).resolves.toEqual({ ok: true, status: 'waiting' });
+    }))).toEqual({
+      ok: true,
+      status: 'switch_applied',
+      sessionId: 'resolved-session',
+    });
 
     expect(sessionUsageLimitWaitResumeEnable).toHaveBeenCalledWith({
       sessionId: 'resolved-session',
@@ -259,9 +305,13 @@ describe('rpcHandlers.sessionGoals', () => {
     const resumeInactiveSessionWhenUsageLimitReady = vi.fn(async () => true);
     registerWithTransport({ resumeInactiveSessionWhenUsageLimitReady });
 
-    await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
       sessionId: 'session-prefix',
-    })).resolves.toEqual({ ok: true });
+    }))).toMatchObject({
+      ok: true,
+      status: 'waiting',
+      sessionId: 'resolved-session',
+    });
 
     expect(createCliActionDepsParams.at(-1)).toMatchObject({
       resumeInactiveSessionWhenUsageLimitReady,
@@ -276,14 +326,234 @@ describe('rpcHandlers.sessionGoals', () => {
       cancelInactiveSessionUsageLimitRecoveryCheck,
     });
 
-    await expect(handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
       sessionId: 'session-prefix',
       issueFingerprint: 'usage-limit:session-prefix:reset',
-    })).resolves.toEqual({ ok: true });
+    }))).toMatchObject({
+      ok: true,
+      status: 'waiting',
+      sessionId: 'resolved-session',
+    });
 
     expect(createCliActionDepsParams.at(-1)).toMatchObject({
       scheduleInactiveSessionUsageLimitRecoveryCheck,
       cancelInactiveSessionUsageLimitRecoveryCheck,
+    });
+  });
+
+  it('passes the daemon runtime-auth notifier into CLI action deps for switch-account controls', async () => {
+    const notifyConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      ok: true,
+      result: { status: 'switch_attempted', result: { status: 'switched' } },
+    }));
+    registerWithTransport({ notifyConnectedServiceRuntimeAuthFailure });
+
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'session-prefix',
+      provider: 'codex',
+      operation: 'switch_account_now',
+    }))).toEqual({
+      ok: true,
+      status: 'switch_applied',
+      sessionId: 'resolved-session',
+    });
+
+    expect(createCliActionDepsParams.at(-1)).toMatchObject({
+      notifyConnectedServiceRuntimeAuthFailure,
+    });
+  });
+
+  it('forwards feature-disabled usage-limit results as schema-valid machine RPC responses', async () => {
+    sessionUsageLimitCheckNow.mockResolvedValueOnce({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'resolved-session',
+      errorCode: 'feature_disabled',
+    });
+    registerWithTransport();
+
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'session-prefix',
+    }))).toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'resolved-session',
+      errorCode: 'feature_disabled',
+    });
+  });
+
+  it('returns schema-valid usage-limit errors when credentials are unavailable', async () => {
+    registerMachineSessionGoalRpcHandlers({
+      rpcHandlerManager: {
+        registerHandler: <TRequest, TResponse>(method: string, handler: RpcHandler<TRequest, TResponse>) => {
+          handlers.set(method, async (raw: unknown) => await handler(raw as TRequest));
+        },
+      } satisfies RpcHandlerRegistrar,
+      deps: {
+        readCredentials: async () => null,
+      },
+    });
+
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'session-prefix',
+    }))).toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'session-prefix',
+      errorCode: 'not_authenticated',
+    });
+  });
+
+  it('returns schema-valid usage-limit errors when machine RPC session resolution fails', async () => {
+    registerMachineSessionGoalRpcHandlers({
+      rpcHandlerManager: {
+        registerHandler: <TRequest, TResponse>(method: string, handler: RpcHandler<TRequest, TResponse>) => {
+          handlers.set(method, async (raw: unknown) => await handler(raw as TRequest));
+        },
+      } satisfies RpcHandlerRegistrar,
+      deps: {
+        readCredentials: async () => credentials,
+        resolveSessionTransportContext: async () => ({
+          ok: false,
+          code: 'session_not_found',
+          candidates: ['sess_a', 'sess_b'],
+        }),
+      },
+    });
+
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'missing',
+    }))).toEqual({
+      ok: false,
+      status: 'not_found',
+      sessionId: 'missing',
+      errorCode: 'session_not_found',
+    });
+  });
+
+  it('returns schema-valid usage-limit errors when an action dependency is missing', async () => {
+    registerMachineSessionGoalRpcHandlers({
+      rpcHandlerManager: {
+        registerHandler: <TRequest, TResponse>(method: string, handler: RpcHandler<TRequest, TResponse>) => {
+          handlers.set(method, async (raw: unknown) => await handler(raw as TRequest));
+        },
+      } satisfies RpcHandlerRegistrar,
+      deps: {
+        readCredentials: async () => credentials,
+        resolveSessionTransportContext: async () => ({
+          ok: true,
+          sessionId: 'resolved-session',
+          rawSession: createSessionRecordFixture({
+            id: 'resolved-session',
+            metadata: '{}',
+            path: '/repo',
+            host: 'localhost',
+            machineId: 'machine-1',
+            encryptionMode: 'plain',
+          }),
+          ctx: {
+            encryptionKey: new Uint8Array(32),
+            encryptionVariant: 'legacy',
+          },
+          mode: 'plain',
+        }),
+        createCliActionDeps: () => ({
+          sessionGoalSet,
+          sessionGoalClear,
+          sessionGoalGet,
+          sessionVendorPluginCatalogList,
+          sessionSkillCatalogList,
+        }),
+      },
+    });
+
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'session-prefix',
+    }))).toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'resolved-session',
+      errorCode: 'action_not_supported',
+    });
+  });
+
+  it('returns a parseable encrypted machine RPC result for switch-account controls', async () => {
+    const encryptionKey = new Uint8Array(32).fill(11);
+    const notifyConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      ok: true,
+      result: {
+        status: 'switch_attempted',
+        result: { status: 'switched', activeProfileId: 'backup', generation: 2 },
+      },
+    }));
+    const rawSession = createSessionRecordFixture({
+      id: 'resolved-session',
+      metadata: '{}',
+      path: '/repo',
+      host: 'localhost',
+      machineId: 'machine-1',
+      encryptionMode: 'plain',
+    });
+    const rpcHandlerManager = new RpcHandlerManager({
+      scopePrefix: 'machine-1',
+      encryptionKey,
+      encryptionVariant: 'dataKey',
+      logger: () => {},
+    });
+
+    registerMachineSessionGoalRpcHandlers({
+      rpcHandlerManager,
+      deps: {
+        readCredentials: async () => credentials,
+        resolveSessionTransportContext: async () => ({
+          ok: true,
+          sessionId: 'resolved-session',
+          rawSession,
+          ctx: {
+            encryptionKey: new Uint8Array(32),
+            encryptionVariant: 'legacy',
+          },
+          mode: 'plain',
+        }),
+        notifyConnectedServiceRuntimeAuthFailure,
+        createCliActionDeps: (params) => {
+          createCliActionDepsParams.push(params);
+          return {
+            sessionGoalSet,
+            sessionGoalClear,
+            sessionGoalGet,
+            sessionVendorPluginCatalogList,
+            sessionSkillCatalogList,
+            sessionUsageLimitWaitResumeEnable,
+            sessionUsageLimitWaitResumeCancel,
+            sessionUsageLimitCheckNow,
+            sessionUsageLimitSwitchAccountNow,
+          };
+        },
+      },
+    });
+
+    const encryptedResponse = await rpcHandlerManager.handleRequest({
+      method: `${rawSession.machineId}:${RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW}`,
+      params: encodeBase64(encrypt(encryptionKey, 'dataKey', {
+        sessionId: 'session-prefix',
+        provider: 'codex',
+        operation: 'switch_account_now',
+      })),
+    });
+
+    expect(typeof encryptedResponse).toBe('string');
+    expect(parseUsageLimitResult(decrypt(encryptionKey, 'dataKey', decodeBase64(encryptedResponse as string)))).toEqual({
+      ok: true,
+      status: 'switch_applied',
+      sessionId: 'resolved-session',
+    });
+    expect(sessionUsageLimitSwitchAccountNow).toHaveBeenCalledWith({
+      sessionId: 'resolved-session',
+      provider: 'codex',
+    });
+    expect(createCliActionDepsParams.at(-1)).toMatchObject({
+      notifyConnectedServiceRuntimeAuthFailure,
     });
   });
 });
