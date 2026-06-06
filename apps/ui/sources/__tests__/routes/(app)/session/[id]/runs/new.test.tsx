@@ -318,6 +318,9 @@ vi.mock('@/sync/ops/sessions', () => ({
 }));
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
     readMachineTargetForSession: () => machineTargetMock,
+    readMachineControlTargetForSession: () => machineTargetMock
+        ? { ...machineTargetMock, confidence: 'reachable' }
+        : null,
     resolveMachineTargetForSessionFromState: () => machineTargetMock,
 }));
 vi.mock('@/sync/domains/server/serverRuntime', () => ({

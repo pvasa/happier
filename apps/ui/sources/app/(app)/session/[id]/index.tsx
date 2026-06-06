@@ -16,6 +16,7 @@ import { resolveSessionRouteAuthRecoveryState } from '@/hooks/session/sessionRou
 import { useSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { markSessionRouteEnteredForSessionUiTelemetry } from '@/sync/runtime/performance/sessionUiTelemetry';
 import {
     isSessionRouteHydrationAvailable,
     isSessionRouteHydrationPending,
@@ -143,6 +144,10 @@ export default React.memo(() => {
     const syncError = useSyncError();
     const activeServerSnapshot = useActiveServerSnapshot();
     const activeServerGeneration = activeServerSnapshot.generation;
+
+    React.useLayoutEffect(() => {
+        markSessionRouteEnteredForSessionUiTelemetry({ sessionId });
+    }, [sessionId]);
 
     const routeHydrationState = useHydrateSessionForRoute(
         sessionId,

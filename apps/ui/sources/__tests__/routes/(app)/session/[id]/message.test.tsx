@@ -111,6 +111,7 @@ installSessionRouteCommonModuleMocks({
         } as any,
         useSession: () => mockSession,
         useSessionTranscriptIds: () => ({ ids: [], isLoaded: mockMessagesLoaded }),
+        useSessionServerId: () => mockSession?.serverId ?? (typeof mockSearchParams?.serverId === 'string' ? mockSearchParams.serverId : null),
         useMessage: (_sessionId: string, messageId: string) => mockMessagesById[messageId] ?? mockMessage,
         useResolvedSessionMessageRouteId: (_sessionId: string, _routeMessageId: string) => mockResolvedRouteMessageId,
         // Boundary fixture: this route only needs falsy local settings while preserving the hook signature.

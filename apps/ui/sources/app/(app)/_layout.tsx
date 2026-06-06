@@ -389,7 +389,6 @@ export default function RootLayout() {
                     ...MAIN_TAB_STACK_SCREEN_OPTIONS,
                     headerShown: false,
                     headerTitle: '',
-                    freezeOnBlur: Platform.OS !== 'web',
                 }}
             />
             <Stack.Screen

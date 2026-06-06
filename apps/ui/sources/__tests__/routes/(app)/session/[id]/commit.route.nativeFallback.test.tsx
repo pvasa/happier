@@ -12,6 +12,11 @@ let mockShaParam = '';
 let mockServerIdParam = 'server-b';
 const routerReplaceSpy = vi.fn();
 const openDetailsTabSpy = vi.fn();
+const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) => ({
+    kind: 'available',
+    sessionId,
+    serverId: options?.serverId,
+}));
 const routerMock = createCommitRouteRouterMock();
 
 function createCommitRouteRouterMock() {
@@ -74,6 +79,11 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
     }),
 }));
 
+vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
+        hydrateSpy(sessionId, tag, options),
+}));
+
 vi.mock('@/components/sessions/files/views/SessionCommitDetailsView', () => ({
     SessionCommitDetailsView: () => React.createElement('SessionCommitDetailsView'),
 }));
@@ -97,6 +107,7 @@ describe('CommitScreen native route fallback', () => {
         routerMock.state.params = { id: 'session-1', sha: mockShaParam, serverId: mockServerIdParam };
         routerReplaceSpy.mockClear();
         openDetailsTabSpy.mockClear();
+        hydrateSpy.mockClear();
         const screen = await renderScreen(React.createElement(CommitScreen));
         try {
             await act(async () => {
@@ -121,6 +132,7 @@ describe('CommitScreen native route fallback', () => {
         routerMock.state.params = { id: 'session-1', sha: mockShaParam, serverId: mockServerIdParam };
         routerReplaceSpy.mockClear();
         openDetailsTabSpy.mockClear();
+        hydrateSpy.mockClear();
         const screen = await renderScreen(React.createElement(CommitScreen));
         try {
             expect(openDetailsTabSpy).toHaveBeenCalledTimes(1);

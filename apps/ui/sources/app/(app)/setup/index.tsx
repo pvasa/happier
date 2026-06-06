@@ -153,7 +153,7 @@ function PreAuthSetupRoute() {
         .slice()
         .filter((profile) => {
             const profileRelayUrl = normalizeRelayUrl(profile.serverUrl);
-            return profile.id !== snapshot.serverId && profileRelayUrl !== relayUrl;
+            return resolveServerProfileScopeId(profile) !== snapshot.serverId && profileRelayUrl !== relayUrl;
         }), [relayUrl, snapshot.generation, snapshot.serverId]);
     const shouldOpenCustomRelayForm = readOpenCustomParam(params.openCustom);
     const [showInlineRelayForm, setShowInlineRelayForm] = React.useState(shouldOpenCustomRelayForm);
@@ -256,7 +256,7 @@ function PreAuthSetupRoute() {
                                     testID={`setup.savedRelay.${profile.id}`}
                                     title={profile.name}
                                     subtitle={toServerUrlDisplay(profile.serverUrl)}
-                                    selected={profile.id === snapshot.serverId}
+                                    selected={resolveServerProfileScopeId(profile) === snapshot.serverId}
                                     showChevron={false}
                                     onPress={() => {
                                         setActiveServer({ serverId: resolveServerProfileScopeId(profile), scope: 'device' });

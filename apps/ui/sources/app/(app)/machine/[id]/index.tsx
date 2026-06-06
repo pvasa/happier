@@ -34,7 +34,7 @@ import { resolveAbsolutePath } from '@/utils/path/pathUtils';
 import { MultiTextInput, type MultiTextInputHandle } from '@/components/ui/forms/MultiTextInput';
 import { DetectedClisList } from '@/components/machines/DetectedClisList';
 import { useMachineCapabilitiesCache } from '@/hooks/server/useMachineCapabilitiesCache';
-import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { resolveTerminalSpawnOptions } from '@/sync/domains/settings/terminalSettings';
 import {
     readMachineWindowsRemoteSessionLaunchMode,
@@ -197,7 +197,7 @@ export default function MachineDetailScreen() {
     React.useEffect(() => {
         if (!requestedServerId) return;
         const currentServerId = getActiveServerId();
-        if (currentServerId === requestedServerId) return;
+        if (areServerProfileIdentifiersEquivalent(currentServerId, requestedServerId)) return;
 
         let cancelled = false;
         setIsServerSwitching(true);

@@ -17,6 +17,8 @@ const modalMock = vi.hoisted(() => ({
     alert: vi.fn(),
 }));
 const fetchArchivedSessionsSpy = vi.hoisted(() => vi.fn(async () => {}));
+const fetchMoreArchivedSessionsSpy = vi.hoisted(() => vi.fn(async () => {}));
+const fetchMoreSessionsSpy = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock('@/text', () => createTextModuleMock({ translate: (key: string) => key }));
 vi.mock('@expo/vector-icons', () => ({
@@ -82,6 +84,8 @@ vi.mock('@/sync/ops', () => ({
 vi.mock('@/sync/sync', () => ({
     sync: {
         fetchArchivedSessions: fetchArchivedSessionsSpy,
+        fetchMoreArchivedSessions: fetchMoreArchivedSessionsSpy,
+        fetchMoreSessions: fetchMoreSessionsSpy,
     },
 }));
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
@@ -113,6 +117,8 @@ describe('Archived sessions route', () => {
         capturedSectionListProps = null;
         modalMock.alert.mockReset();
         fetchArchivedSessionsSpy.mockReset();
+        fetchMoreArchivedSessionsSpy.mockReset();
+        fetchMoreSessionsSpy.mockReset();
         (sessionUnarchiveWithServerScope as any).mockReset?.();
         mockSessions.hideInactiveSessions = false;
         mockSessions.pinnedSessionKeysV1 = [];
@@ -160,6 +166,37 @@ describe('Archived sessions route', () => {
         expect(fetchArchivedSessionsSpy).toHaveBeenCalledTimes(1);
     });
 
+    it('loads more archived and hidden inactive sessions when the list reaches the end', async () => {
+        mockSessions.hideInactiveSessions = true;
+        mockSessions.all = [
+            {
+                id: 'inactive-1',
+                active: false,
+                archivedAt: null,
+                updatedAt: 10,
+                metadata: { name: 'Inactive Session', path: '/tmp/inactive' },
+                serverId: 'server-1',
+            },
+            {
+                id: 'archived-1',
+                active: false,
+                archivedAt: 123,
+                updatedAt: 20,
+                metadata: { name: 'Archived Session', path: '/tmp/archived' },
+                serverId: 'server-archived',
+            },
+        ];
+
+        const Screen = (await import('@/app/(app)/session/archived')).default;
+        await renderScreen(<Screen />);
+
+        expect(typeof capturedSectionListProps?.onEndReached).toBe('function');
+        capturedSectionListProps?.onEndReached?.();
+
+        expect(fetchMoreSessionsSpy).toHaveBeenCalledTimes(1);
+        expect(fetchMoreArchivedSessionsSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('shows archived cache-only list rows before full hydration finishes', async () => {
         mockSessions.listViewDataByServerId = {
             'server-cache': [
@@ -182,6 +219,50 @@ describe('Archived sessions route', () => {
         const screen = await renderScreen(<Screen />);
 
         expect(screen.getTextContent()).toContain('Cached Archived Session');
+    });
+
+    it('keeps archived sessions distinct when server scopes reuse a session id', async () => {
+        mockSessions.listViewDataByServerId = {
+            'server-a': [
+                {
+                    type: 'session',
+                    serverId: 'server-a',
+                    session: {
+                        id: 'shared-session',
+                        active: false,
+                        archivedAt: 123,
+                        updatedAt: 20,
+                        metadata: { name: 'Server A Archived Session', path: '/tmp/server-a' },
+                        accessLevel: 'admin',
+                    },
+                },
+            ],
+            'server-b': [
+                {
+                    type: 'session',
+                    serverId: 'server-b',
+                    session: {
+                        id: 'shared-session',
+                        active: false,
+                        archivedAt: 124,
+                        updatedAt: 30,
+                        metadata: { name: 'Server B Archived Session', path: '/tmp/server-b' },
+                        accessLevel: 'admin',
+                    },
+                },
+            ],
+        };
+
+        const Screen = (await import('@/app/(app)/session/archived')).default;
+        const screen = await renderScreen(<Screen />);
+        const archivedSection = capturedSectionListProps?.sections.find((section: any) => section.key === 'archived');
+
+        expect(archivedSection?.data).toHaveLength(2);
+        expect(screen.getTextContent()).toContain('Server A Archived Session');
+        expect(screen.getTextContent()).toContain('Server B Archived Session');
+
+        const rowKeys = archivedSection.data.map((item: any, index: number) => capturedSectionListProps?.keyExtractor(item, index));
+        expect(new Set(rowKeys)).toEqual(new Set(['server-a:shared-session', 'server-b:shared-session']));
     });
 
     it('does not show inactive sessions when hide inactive sessions is disabled', async () => {

@@ -50,12 +50,18 @@ const mockState = await vi.hoisted(async () => {
     };
 });
 
-vi.mock('expo-notifications', () => ({
+const expoNotificationsMock = vi.hoisted(() => ({
     DEFAULT_ACTION_IDENTIFIER: 'expo.modules.notifications.actions.DEFAULT',
     getLastNotificationResponseAsync: vi.fn(),
     clearLastNotificationResponseAsync: vi.fn(async () => {}),
     addNotificationResponseReceivedListener: vi.fn(() => ({ remove: () => {} })),
     setBadgeCountAsync: vi.fn(async () => {}),
+}));
+
+vi.mock('expo-notifications', () => expoNotificationsMock);
+
+vi.mock('@/utils/platform/loadExpoNotifications', () => ({
+    loadExpoNotifications: () => Promise.resolve(expoNotificationsMock),
 }));
 
 vi.mock('@expo/vector-icons', () => ({
@@ -147,7 +153,14 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
         kind: 'custom',
         generation: 1,
     }),
+    resolveServerProfileScopeId: (profile: { id?: string; serverIdentityId?: string | null }) => profile.serverIdentityId || profile.id || '',
+    resolveServerProfileScopeIdForIdentifier: (id: string | null | undefined) => String(id ?? '').trim(),
+    areServerProfileIdentifiersEquivalent: (left: string | null | undefined, right: string | null | undefined) => (
+        String(left ?? '').trim() !== ''
+        && String(left ?? '').trim() === String(right ?? '').trim()
+    ),
     subscribeActiveServer: () => () => {},
+    subscribeServerProfiles: () => () => {},
 }));
 
 vi.mock('@/sync/domains/server/activeServerSwitch', () => ({

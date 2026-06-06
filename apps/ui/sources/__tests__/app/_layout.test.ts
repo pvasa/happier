@@ -434,7 +434,7 @@ describe('RootLayout native freeze policy', () => {
         return options ?? {};
     }
 
-    it('freezes only the native root index route and leaves side-effect routes unfrozen', async () => {
+    it('does not freeze the native root index route or side-effect routes', async () => {
         stubFeatureFetch();
 
         const { default: RootLayout } = await import('@/app/(app)/_layout');
@@ -450,12 +450,12 @@ describe('RootLayout native freeze policy', () => {
             const screens = screen.findAllByType('StackScreen' as any) as StackScreenTestNode[];
             const indexRoute = screens.find((node) => node.props?.name === 'index');
             expect(indexRoute).toBeTruthy();
-            expect(resolveScreenOptions(indexRoute!).freezeOnBlur).toBe(true);
+            expect(resolveScreenOptions(indexRoute!).freezeOnBlur).not.toBe(true);
 
             const explicitlyFrozenRoutes = screens
                 .filter((node) => resolveScreenOptions(node).freezeOnBlur === true)
                 .map((node) => node.props?.name);
-            expect(explicitlyFrozenRoutes).toEqual(['index']);
+            expect(explicitlyFrozenRoutes).toEqual([]);
 
             const newSessionRoute = screens.find((node) => node.props?.name === 'new/index');
             expect(newSessionRoute).toBeTruthy();

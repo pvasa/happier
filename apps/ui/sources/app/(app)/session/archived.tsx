@@ -118,11 +118,20 @@ function canManageArchive(session: ArchivedScreenSession): boolean {
     return !session.accessLevel || session.accessLevel === 'admin';
 }
 
-function normalizePinnedSessionKey(serverIdRaw: unknown, sessionIdRaw: unknown): string | null {
+function normalizeServerId(serverIdRaw: unknown): string | null {
     const serverId = typeof serverIdRaw === 'string' ? serverIdRaw.trim() : '';
+    return serverId || null;
+}
+
+function normalizeServerScopedSessionKey(serverIdRaw: unknown, sessionIdRaw: unknown): string | null {
+    const serverId = normalizeServerId(serverIdRaw) ?? '';
     const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
     if (!serverId || !sessionId) return null;
     return `${serverId}:${sessionId}`;
+}
+
+function getArchivedSessionKey(session: ArchivedScreenSession): string {
+    return normalizeServerScopedSessionKey(session.serverId, session.id) ?? session.id;
 }
 
 export default function ArchivedSessionsScreen() {
@@ -138,6 +147,14 @@ export default function ArchivedSessionsScreen() {
         void sync.fetchArchivedSessions().catch(() => undefined);
     }, []);
 
+    const handleLoadMoreSessions = React.useCallback(() => {
+        const requests = [sync.fetchMoreArchivedSessions()];
+        if (hideInactiveSessions) {
+            requests.push(sync.fetchMoreSessions());
+        }
+        void Promise.all(requests).catch(() => undefined);
+    }, [hideInactiveSessions]);
+
     const pinnedSessionKeySet = React.useMemo(() => {
         return new Set(
             pinnedSessionKeysV1
@@ -147,33 +164,34 @@ export default function ArchivedSessionsScreen() {
     }, [pinnedSessionKeysV1]);
 
     const cachedArchivedSessions = React.useMemo(() => {
-        const byId = new Map<string, ArchivedScreenSession>();
+        const byKey = new Map<string, ArchivedScreenSession>();
         for (const [serverId, items] of Object.entries(sessionListViewDataByServerId)) {
             if (!Array.isArray(items)) continue;
             for (const item of items) {
                 if (item.type !== 'session') continue;
                 if (item.session.archivedAt == null) continue;
-                byId.set(item.session.id, {
-                    ...item.session,
-                    serverId: typeof item.serverId === 'string' && item.serverId.trim() ? item.serverId.trim() : serverId,
-                });
+                const normalizedServerId = normalizeServerId(item.serverId) ?? normalizeServerId(serverId);
+                const archivedSession: ArchivedScreenSession = normalizedServerId
+                    ? { ...item.session, serverId: normalizedServerId }
+                    : item.session;
+                byKey.set(getArchivedSessionKey(archivedSession), archivedSession);
             }
         }
-        return Array.from(byId.values());
+        return Array.from(byKey.values());
     }, [sessionListViewDataByServerId]);
 
     const archivedSessions = React.useMemo(() => {
-        const byId = new Map<string, ArchivedScreenSession>();
+        const byKey = new Map<string, ArchivedScreenSession>();
         for (const session of cachedArchivedSessions) {
-            byId.set(session.id, session);
+            byKey.set(getArchivedSessionKey(session), session);
         }
         for (const session of allSessions) {
             if (session.archivedAt != null) {
-                byId.set(session.id, session);
+                byKey.set(getArchivedSessionKey(session), session);
             }
         }
 
-        return Array.from(byId.values())
+        return Array.from(byKey.values())
             .sort((a, b) => {
                 const aAt = typeof a.archivedAt === 'number' ? a.archivedAt : 0;
                 const bAt = typeof b.archivedAt === 'number' ? b.archivedAt : 0;
@@ -189,7 +207,7 @@ export default function ArchivedSessionsScreen() {
             .filter((session) => {
                 if (session.archivedAt != null) return false;
                 if (session.active === true) return false;
-                const sessionKey = normalizePinnedSessionKey((session as any).serverId, session.id);
+                const sessionKey = normalizeServerScopedSessionKey(session.serverId, session.id);
                 if (sessionKey && pinnedSessionKeySet.has(sessionKey)) return false;
                 return true;
             })
@@ -324,7 +342,9 @@ export default function ArchivedSessionsScreen() {
                         sections={sections}
                         renderItem={renderItem}
                         renderSectionHeader={renderSectionHeader}
-                        keyExtractor={(item) => item.id}
+                        keyExtractor={getArchivedSessionKey}
+                        onEndReached={handleLoadMoreSessions}
+                        onEndReachedThreshold={0.4}
                         {...(Platform.OS === 'web'
                             ? ({ onWheel: stopScrollEventPropagationOnWeb, onTouchMove: stopScrollEventPropagationOnWeb } as any)
                             : null)}

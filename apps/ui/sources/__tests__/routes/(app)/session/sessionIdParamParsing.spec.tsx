@@ -10,6 +10,18 @@ let searchParams: SearchParams = {};
 const ensureSessionVisibleSpy = vi.fn((_sessionId: string) => Promise.resolve());
 let hydrateReady = true;
 let lastMobileSurfaceBySessionId: Record<string, string> = {};
+const routeSessions = {
+    'session-123': {
+        id: 'session-123',
+        seq: 0,
+        createdAt: 1,
+        updatedAt: 1,
+        active: true,
+        thinking: false,
+        metadata: null,
+        agentState: null,
+    },
+};
 const routerMock = createExpoRouterMock({
     params: () => searchParams,
 });
@@ -46,6 +58,8 @@ installSessionRouteCommonModuleMocks({
                 }) as any,
                 getStorage: (() => ({
                     getState: () => ({
+                        sessions: routeSessions,
+                        sessionListViewDataByServerId: {},
                         localSettings: {
                             sessionLastMobileSurfaceBySessionId: lastMobileSurfaceBySessionId,
                         },
