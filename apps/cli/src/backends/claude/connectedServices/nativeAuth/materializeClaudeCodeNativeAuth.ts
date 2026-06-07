@@ -127,7 +127,10 @@ export async function materializeClaudeCodeNativeAuth(params: Readonly<{
   }
   return {
     status: 'materialized',
-    env: { CLAUDE_CONFIG_DIR: params.claudeConfigDir },
+    env: {
+      CLAUDE_CONFIG_DIR: params.claudeConfigDir,
+      CLAUDE_CODE_OAUTH_TOKEN: built.payload.claudeAiOauth.accessToken,
+    },
     diagnostics: [],
     credentialPath,
   };

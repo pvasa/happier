@@ -67,7 +67,7 @@ describe('createClaudeConnectedServicesMaterializer', () => {
 
     expect(result).not.toBeNull();
     expect(result!.env.CLAUDE_CONFIG_DIR).toContain(join('claude-subscription', 'oauth-profile', 'claude', 'claude-config'));
-    expect(result!.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(result!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('selected-access-placeholder');
     expect(result!.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]).toBeUndefined();
     expect(result!.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]).toBeUndefined();

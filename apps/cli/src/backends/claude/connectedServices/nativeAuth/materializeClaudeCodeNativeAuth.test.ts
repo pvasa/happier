@@ -73,10 +73,14 @@ describe('materializeClaudeCodeNativeAuth', () => {
       },
     });
 
-    expect(profile.env).toEqual({ CLAUDE_CONFIG_DIR: profileClaudeConfigDir });
-    expect(group.env).toEqual({ CLAUDE_CONFIG_DIR: groupClaudeConfigDir });
-    expect(profile.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
-    expect(group.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(profile.env).toEqual({
+      CLAUDE_CONFIG_DIR: profileClaudeConfigDir,
+      CLAUDE_CODE_OAUTH_TOKEN: 'selected-access-placeholder',
+    });
+    expect(group.env).toEqual({
+      CLAUDE_CONFIG_DIR: groupClaudeConfigDir,
+      CLAUDE_CODE_OAUTH_TOKEN: 'selected-access-placeholder',
+    });
 
     const profileCredential = JSON.parse(await readFile(join(profileClaudeConfigDir, '.credentials.json'), 'utf8'));
     const groupCredential = JSON.parse(await readFile(join(groupClaudeConfigDir, '.credentials.json'), 'utf8'));
@@ -137,7 +141,10 @@ describe('materializeClaudeCodeNativeAuth', () => {
 
     expect(result).toEqual({
       status: 'materialized',
-      env: { CLAUDE_CONFIG_DIR: claudeConfigDir },
+      env: {
+        CLAUDE_CONFIG_DIR: claudeConfigDir,
+        CLAUDE_CODE_OAUTH_TOKEN: 'access-placeholder',
+      },
       diagnostics: [],
       credentialPath: join(claudeConfigDir, '.credentials.json'),
     });
@@ -145,7 +152,6 @@ describe('materializeClaudeCodeNativeAuth', () => {
     expect(credentialFile.claudeAiOauth.scopes).toContain('user:sessions:claude_code');
     expect(credentialFile.claudeAiOauth.expiresAt).toBe(REALISTIC_EXPIRES_AT_MS);
     expect(credentialFile.claudeAiOauth.expiresAt).toBeGreaterThan(1_000_000_000_000);
-    expect(result.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN');
     expect(result.env).not.toHaveProperty('CLAUDE_CODE_SETUP_TOKEN');
   });
 

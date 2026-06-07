@@ -145,6 +145,7 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
       fallbackProfileId: 'fallback',
       generation: 3,
       targetMaterializedEnv: {
+        CLAUDE_CODE_OAUTH_TOKEN: 'selected-access-placeholder',
         CLAUDE_CONFIG_DIR: join(
           activeServerDir,
           'daemon',
@@ -159,7 +160,6 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
       },
     });
     const materializedEnv = (result as { targetMaterializedEnv?: Record<string, string> }).targetMaterializedEnv;
-    expect(materializedEnv?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(materializedEnv?.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
 
     const credential = JSON.parse(await readFile(join(materializedEnv!.CLAUDE_CONFIG_DIR, '.credentials.json'), 'utf8'));

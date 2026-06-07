@@ -123,7 +123,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       serviceId: 'claude-subscription',
       profileId: 'work',
     });
-    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('fresh-access');
     expect(connectedServiceAuth?.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(connectedServiceAuth?.env.CLAUDE_CONFIG_DIR).toBeTypeOf('string');
     const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
@@ -306,7 +306,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       serviceId: 'claude-subscription',
       profileId: 'work',
     });
-    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('near-expiry-fresh-access');
     expect(connectedServiceAuth?.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(connectedServiceAuth?.env.CLAUDE_CONFIG_DIR).toBeTypeOf('string');
     const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
@@ -1262,7 +1262,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       groupId: 'main',
       activeProfileId: 'backup',
     }));
-    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('backup-access');
     expect(connectedServiceAuth?.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(connectedServiceAuth?.env.CLAUDE_CONFIG_DIR).toBeTypeOf('string');
     const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
@@ -1545,7 +1545,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
         providerErrorCode: 'claude_subscription_missing_claude_code_scope',
       }),
     }));
-    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('healthy-access');
     expect(connectedServiceAuth?.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(connectedServiceAuth?.env.CLAUDE_CONFIG_DIR).toBeTypeOf('string');
     const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
@@ -1982,7 +1982,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       groupId: 'claude',
       activeProfileId: 'batiplus',
     }));
-    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(connectedServiceAuth?.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('batiplus-access');
     expect(connectedServiceAuth?.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(connectedServiceAuth?.env.CLAUDE_CONFIG_DIR).toBeTypeOf('string');
     const credential = await readClaudeCodeNativeCredential(connectedServiceAuth!.env.CLAUDE_CONFIG_DIR!);
