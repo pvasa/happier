@@ -1,8 +1,14 @@
+import { resolve } from 'node:path';
 import { defineConfig } from 'vitest/config';
 
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@': resolve('../../apps/cli/src'),
+    },
+  },
   test: {
     environment: 'node',
     include: ['suites/core-e2e/**/*.slow.e2e.test.ts'],

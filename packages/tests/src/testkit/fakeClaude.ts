@@ -15,6 +15,25 @@ export type FakeClaudeInvocation = {
   [key: string]: unknown;
 };
 
+export type FakeClaudeNativeAuthContract = {
+  type: 'native_auth_contract';
+  invocationId?: string;
+  claudeConfigDir: string;
+  credentialsPath: string;
+  hasClaudeConfigDirEnv: boolean;
+  hasHappierClaudeConfigDirEnv: boolean;
+  hasCredentialFile: boolean;
+  hasClaudeAiOauth: boolean;
+  hasAccessToken: boolean;
+  hasRefreshToken: boolean;
+  scopes: string[];
+  missingScopes: string[];
+  hasOauthEnvToken: boolean;
+  hasSetupEnvToken: boolean;
+  ok: boolean;
+  [key: string]: unknown;
+};
+
 export function fakeClaudeFixturePath(): string {
   const path = resolve(repoRootDir(), 'packages/tests/src/fixtures/fake-claude-code-cli.js');
   if (!existsSync(path)) {
@@ -113,4 +132,49 @@ export async function waitForFakeClaudeUserText(
   }
 
   throw new Error(`Timed out waiting for fake Claude user text in ${logPath}`);
+}
+
+export async function waitForFakeClaudeNativeAuthContract(
+  logPath: string,
+  predicate: (event: FakeClaudeNativeAuthContract) => boolean = () => true,
+  opts?: { timeoutMs?: number; pollMs?: number },
+): Promise<FakeClaudeNativeAuthContract> {
+  const timeoutMs = opts?.timeoutMs ?? 60_000;
+  const pollMs = opts?.pollMs ?? 100;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const events = await readJsonlFile(logPath);
+    const contracts = events.filter(
+      (e): e is FakeClaudeNativeAuthContract => e && e.type === 'native_auth_contract',
+    );
+    const found = contracts.find((event) => predicate(event));
+    if (found) return found;
+    await sleep(pollMs);
+  }
+
+  const events = await readJsonlFile(logPath);
+  const contracts = events.filter(
+    (e): e is FakeClaudeNativeAuthContract => e && e.type === 'native_auth_contract',
+  );
+  const last = contracts.length > 0 ? contracts[contracts.length - 1] : null;
+  throw new Error(
+    [
+      'Timed out waiting for fake Claude native auth contract',
+      `logPath=${logPath}`,
+      `contracts=${contracts.length}`,
+      `last=${last ? JSON.stringify({
+        ok: last.ok,
+        hasClaudeConfigDirEnv: last.hasClaudeConfigDirEnv,
+        hasHappierClaudeConfigDirEnv: last.hasHappierClaudeConfigDirEnv,
+        hasCredentialFile: last.hasCredentialFile,
+        hasClaudeAiOauth: last.hasClaudeAiOauth,
+        hasAccessToken: last.hasAccessToken,
+        hasRefreshToken: last.hasRefreshToken,
+        missingScopes: last.missingScopes,
+        hasOauthEnvToken: last.hasOauthEnvToken,
+        hasSetupEnvToken: last.hasSetupEnvToken,
+      }) : 'null'}`,
+    ].join(' | '),
+  );
 }

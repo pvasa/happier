@@ -6,8 +6,9 @@
  * - Records invocations (argv + parsed --mcp-config) to a JSONL log for assertions.
  * - In SDK mode (`--output-format stream-json --input-format stream-json`), reads user messages from stdin until EOF,
  *   and for each user turn emits a small stream-json transcript (system:init once → assistant → result).
- * - In local/interactive mode, can optionally append a deterministic user → assistant/end_turn
- *   transcript when temp signal files are toggled, then stays alive until SIGTERM (mode-switch abort).
+ * - In local/interactive mode, appends deterministic user → assistant/end_turn transcript
+ *   records for submitted stdin lines, can optionally append signal-file driven turns, then
+ *   stays alive until SIGTERM (mode-switch abort).
  *
  * This file is used via `HAPPIER_CLAUDE_PATH` so the real user-installed Claude Code is not required.
  */
@@ -67,6 +68,91 @@ function resolveClaudeConfigDir() {
   return path.join(os.homedir(), '.claude');
 }
 
+const requireNativeOauth = ['1', 'true', 'yes'].includes(
+  String(process.env.HAPPIER_E2E_FAKE_CLAUDE_REQUIRE_NATIVE_OAUTH || '').trim().toLowerCase(),
+);
+
+function parseCredentialsJson(credentialsPath) {
+  try {
+    const raw = fs.readFileSync(credentialsPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeScopes(value) {
+  if (Array.isArray(value)) {
+    return value.filter((scope) => typeof scope === 'string' && scope.trim()).map((scope) => scope.trim());
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/\s+/)
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function inspectNativeOauthContract() {
+  const claudeConfigDir = resolveClaudeConfigDir();
+  const credentialsPath = path.join(claudeConfigDir, '.credentials.json');
+  const parsed = parseCredentialsJson(credentialsPath);
+  const claudeAiOauth = parsed?.claudeAiOauth && typeof parsed.claudeAiOauth === 'object' ? parsed.claudeAiOauth : null;
+  const scopes = normalizeScopes(claudeAiOauth?.scopes);
+  const requiredScopes = ['user:inference', 'user:profile', 'user:sessions:claude_code'];
+  const missingScopes = requiredScopes.filter((scope) => !scopes.includes(scope));
+  const hasOauthEnvToken = typeof process.env.CLAUDE_CODE_OAUTH_TOKEN === 'string' && process.env.CLAUDE_CODE_OAUTH_TOKEN.length > 0;
+  const hasSetupEnvToken = typeof process.env.CLAUDE_CODE_SETUP_TOKEN === 'string' && process.env.CLAUDE_CODE_SETUP_TOKEN.length > 0;
+  const hasClaudeConfigDirEnv = typeof process.env.CLAUDE_CONFIG_DIR === 'string' && process.env.CLAUDE_CONFIG_DIR.trim().length > 0;
+  const hasHappierClaudeConfigDirEnv =
+    typeof process.env.HAPPIER_CLAUDE_CONFIG_DIR === 'string' && process.env.HAPPIER_CLAUDE_CONFIG_DIR.trim().length > 0;
+  const hasCredentialFile = fs.existsSync(credentialsPath);
+  const hasAccessToken = typeof claudeAiOauth?.accessToken === 'string' && claudeAiOauth.accessToken.length > 0;
+  const hasRefreshToken = typeof claudeAiOauth?.refreshToken === 'string' && claudeAiOauth.refreshToken.length > 0;
+  const ok =
+    hasClaudeConfigDirEnv &&
+    hasCredentialFile &&
+    hasAccessToken &&
+    hasRefreshToken &&
+    missingScopes.length === 0 &&
+    !hasOauthEnvToken &&
+    !hasSetupEnvToken;
+
+  return {
+    type: 'native_auth_contract',
+    invocationId,
+    ts: Date.now(),
+    claudeConfigDir,
+    credentialsPath,
+    hasClaudeConfigDirEnv,
+    hasHappierClaudeConfigDirEnv,
+    hasCredentialFile,
+    hasClaudeAiOauth: !!claudeAiOauth,
+    hasAccessToken,
+    hasRefreshToken,
+    scopes,
+    missingScopes,
+    hasOauthEnvToken,
+    hasSetupEnvToken,
+    ok,
+  };
+}
+
+function readCurrentNativeOauthAccessToken() {
+  const claudeConfigDir = resolveClaudeConfigDir();
+  const credentialsPath = path.join(claudeConfigDir, '.credentials.json');
+  const parsed = parseCredentialsJson(credentialsPath);
+  const claudeAiOauth = parsed?.claudeAiOauth && typeof parsed.claudeAiOauth === 'object' ? parsed.claudeAiOauth : null;
+  return typeof claudeAiOauth?.accessToken === 'string' ? claudeAiOauth.accessToken : '';
+}
+
+function shouldFailLocalStdinWhileTokenIsStale() {
+  if (scenario !== 'local-auth-fails-while-stale-token') return false;
+  return /\bstale\b/i.test(readCurrentNativeOauthAccessToken());
+}
+
 function resolveClaudeProjectDirForCwd(cwd) {
   return path.join(resolveClaudeConfigDir(), 'projects', resolveClaudeProjectId(cwd));
 }
@@ -80,6 +166,59 @@ function safeAppendTranscriptJsonl(obj) {
   } catch {
     // Best-effort: a missing transcript will surface as a provider bundle export failure in tests/QA.
   }
+}
+
+function createLocalUserTurn(text) {
+  return {
+    type: 'user',
+    uuid: randomUUID(),
+    session_id: sessionId,
+    timestamp: new Date().toISOString(),
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text }],
+    },
+  };
+}
+
+function createLocalAssistantTurn(text, turn) {
+  return {
+    type: 'assistant',
+    uuid: randomUUID(),
+    parent_tool_use_id: null,
+    session_id: sessionId,
+    isSidechain: false,
+    timestamp: new Date().toISOString(),
+    message: {
+      id: `fake-local-assistant-${processNonce}-${turn}`,
+      type: 'message',
+      role: 'assistant',
+      model: 'fake-claude',
+      content: [{ type: 'text', text }],
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  };
+}
+
+function createLocalResultSuccess(turn) {
+  return {
+    type: 'result',
+    subtype: 'success',
+    result: `FAKE_CLAUDE_LOCAL_DONE_${turn}`,
+    num_turns: turn,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    modelUsage: {},
+    permission_denials: [],
+    total_cost_usd: 0,
+    duration_ms: 1,
+    duration_api_ms: 1,
+    is_error: false,
+    stop_reason: null,
+    uuid: randomUUID(),
+    session_id: sessionId,
+  };
 }
 
 function appendLocalUserTurn() {
@@ -116,6 +255,20 @@ function appendLocalAssistantTurnComplete() {
     },
   });
   safeAppendJsonl(logPath, { type: 'local_turn_completed', invocationId, ts: Date.now() });
+}
+
+function appendLocalStdinTurn(promptText, turn) {
+  safeAppendTranscriptJsonl(createLocalUserTurn(promptText));
+  safeAppendTranscriptJsonl(createLocalAssistantTurn(`FAKE_CLAUDE_LOCAL_OK_${turn}`, turn));
+  safeAppendTranscriptJsonl(createLocalResultSuccess(turn));
+  safeAppendJsonl(logPath, {
+    type: 'local_stdin_turn_completed',
+    invocationId,
+    ts: Date.now(),
+    turn,
+    userTextLength: promptText.length,
+    userTextPreview: promptText.slice(0, 800),
+  });
 }
 
 function extractUserTextFromSdkMessage(msg) {
@@ -164,6 +317,28 @@ safeAppendJsonl(logPath, {
   mergedMcpServers,
 });
 
+if (requireNativeOauth) {
+  const nativeAuthContract = inspectNativeOauthContract();
+  safeAppendJsonl(logPath, nativeAuthContract);
+  if (!nativeAuthContract.ok) {
+    safeAppendJsonl(logPath, {
+      type: 'native_auth_contract_failed',
+      invocationId,
+      ts: Date.now(),
+      missingScopes: nativeAuthContract.missingScopes,
+      hasClaudeConfigDirEnv: nativeAuthContract.hasClaudeConfigDirEnv,
+      hasHappierClaudeConfigDirEnv: nativeAuthContract.hasHappierClaudeConfigDirEnv,
+      hasCredentialFile: nativeAuthContract.hasCredentialFile,
+      hasClaudeAiOauth: nativeAuthContract.hasClaudeAiOauth,
+      hasAccessToken: nativeAuthContract.hasAccessToken,
+      hasRefreshToken: nativeAuthContract.hasRefreshToken,
+      hasOauthEnvToken: nativeAuthContract.hasOauthEnvToken,
+      hasSetupEnvToken: nativeAuthContract.hasSetupEnvToken,
+    });
+    process.exit(42);
+  }
+}
+
 // Ensure the transcript path exists even if this process is terminated before any SDK output is emitted.
 safeAppendTranscriptJsonl({
   type: 'system',
@@ -177,15 +352,26 @@ safeAppendTranscriptJsonl({
 const settingsPath = findArgValue(argv, '--settings');
 const hookPluginDir = findArgValue(argv, '--plugin-dir');
 const hook = parseHookForwarderCommand(settingsPath, hookPluginDir);
-void runHookForwarder({
-  hook,
-  payload: {
+function emitHookEvent(hookEventName, payload = {}) {
+  return runHookForwarder({
+    hook: hook ? { ...hook, hookEventName } : hook,
+    payload: {
+      ...payload,
+      hook_event_name: hookEventName,
+      hookEventName,
+      session_id: sessionId,
+      // Match the real Claude transcript location expected by the CLI handoff export path.
+      transcript_path: transcriptPath,
+    },
+    logPath,
+    invocationId,
+  });
+}
+
+void emitHookEvent('SessionStart', {
     session_id: sessionId,
     // Match the real Claude transcript location expected by the CLI handoff export path.
     transcript_path: transcriptPath,
-  },
-  logPath,
-  invocationId,
 });
 
 async function runSdkStreamUntilEof() {
@@ -900,6 +1086,28 @@ if (isSdkStreamJson) {
   // Avoid printing anything on stdout, as local mode uses `inherit`.
   let localTurnStarted = false;
   let localTurnCompleted = false;
+  let localStdinTurn = 0;
+  const rl = readline.createInterface({ input: process.stdin });
+
+  rl.on('line', (line) => {
+    const promptText = String(line || '').trim();
+    if (!promptText) return;
+    localStdinTurn += 1;
+    if (shouldFailLocalStdinWhileTokenIsStale()) {
+      safeAppendJsonl(logPath, {
+        type: 'local_stdin_auth_failed',
+        invocationId,
+        ts: Date.now(),
+        turn: localStdinTurn,
+        userTextLength: promptText.length,
+        userTextPreview: promptText.slice(0, 800),
+      });
+      return;
+    }
+    void emitHookEvent('UserPromptSubmit');
+    appendLocalStdinTurn(promptText, localStdinTurn);
+    void emitHookEvent('Stop', { background_tasks: [] });
+  });
 
   const maybeStartLocalTurn = () => {
     if (!localActiveTurnEnabled || localTurnStarted) return;
@@ -926,7 +1134,8 @@ if (isSdkStreamJson) {
   const stop = () => {
     if (localTurnInterval) clearInterval(localTurnInterval);
     clearInterval(interval);
-    safeAppendJsonl(logPath, { type: 'local_exited', invocationId, ts: Date.now() });
+    rl.close();
+    safeAppendJsonl(logPath, { type: 'local_exited', invocationId, ts: Date.now(), stdinTurns: localStdinTurn });
     process.exit(0);
   };
   process.on('SIGTERM', stop);

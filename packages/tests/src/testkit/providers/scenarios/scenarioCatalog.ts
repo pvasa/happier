@@ -167,6 +167,8 @@ function makeAcpPermissionModeOutsideWorkspaceScenario(
 
 const agentSdkRemoteMetaBase = {
   claudeRemoteAgentSdkEnabled: true,
+  claudeUnifiedTerminalEnabled: false,
+  claudeUnifiedTerminalHost: 'auto',
   claudeRemoteSettingSourcesV2: ['user', 'project', 'local'],
 } as const;
 
