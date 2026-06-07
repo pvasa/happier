@@ -24,6 +24,7 @@ let state: CacheState | null = null;
 let legacyWebStoreKeysRemoved = false;
 let scheduledXmlWrites: Map<string, string> | null = null;
 let scheduledXmlWriteHandle: ReturnType<typeof setTimeout> | null = null;
+let lastGeneratedUpdatedAt = 0;
 
 function getStorage(): MMKV | null {
     if (isWebRuntime) return null;
@@ -118,6 +119,25 @@ function estimateEntrySize(key: string, entry: CacheEntry): number {
     return key.length + entry.value.length + 72;
 }
 
+function findLatestUpdatedAt(entries: Record<string, CacheEntry>): number {
+    let latest = 0;
+    for (const entry of Object.values(entries)) {
+        latest = Math.max(latest, entry.updatedAt);
+    }
+    return latest;
+}
+
+function allocateUpdatedAt(current: CacheState): number {
+    const baseline = Math.max(
+        Date.now(),
+        lastGeneratedUpdatedAt,
+        findLatestUpdatedAt(current.xmlEntries),
+        findLatestUpdatedAt(current.rasterEntries),
+    );
+    lastGeneratedUpdatedAt = baseline + 1;
+    return lastGeneratedUpdatedAt;
+}
+
 function pruneByLimit(
     entries: Record<string, CacheEntry>,
     maxEntries: number,
@@ -149,7 +169,7 @@ export function writeAvatarXmlToStore(key: string, xml: string): void {
         ...current,
         xmlEntries: pruneByLimit({
             ...current.xmlEntries,
-            [key]: { updatedAt: Date.now(), value: xml },
+            [key]: { updatedAt: allocateUpdatedAt(current), value: xml },
         }, MAX_XML_ENTRIES, isWebRuntime ? MAX_WEB_XML_CHARS : undefined),
     };
     writeRawState(JSON.stringify(state));
@@ -162,10 +182,9 @@ function flushScheduledAvatarXmlStoreWrites(): void {
     if (!pendingWrites || pendingWrites.size === 0) return;
 
     const current = hydrateState();
-    const updatedAt = Date.now();
     const nextXmlEntries = { ...current.xmlEntries };
     for (const [key, xml] of pendingWrites.entries()) {
-        nextXmlEntries[key] = { updatedAt, value: xml };
+        nextXmlEntries[key] = { updatedAt: allocateUpdatedAt(current), value: xml };
     }
     state = {
         ...current,
@@ -206,7 +225,7 @@ export function writeAvatarRasterToStore(key: string, dataUri: string): void {
         ...current,
         rasterEntries: pruneByLimit({
             ...current.rasterEntries,
-            [key]: { updatedAt: Date.now(), value: dataUri },
+            [key]: { updatedAt: allocateUpdatedAt(current), value: dataUri },
         }, MAX_RASTER_ENTRIES),
     };
     writeRawState(JSON.stringify(state));
