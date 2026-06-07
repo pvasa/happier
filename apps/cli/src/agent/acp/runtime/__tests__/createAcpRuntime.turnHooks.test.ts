@@ -107,6 +107,7 @@ describe('createAcpRuntime (turn hooks)', () => {
         endSession: async () => {},
         markRollbackEligible: async () => {},
         markRolledBack: async () => {},
+        hasActiveTurn: () => false,
       },
     });
 
@@ -157,6 +158,7 @@ describe('createAcpRuntime (turn hooks)', () => {
         endSession: async () => {},
         markRollbackEligible: async () => {},
         markRolledBack: async () => {},
+        hasActiveTurn: () => false,
       },
     });
 
@@ -215,6 +217,7 @@ describe('createAcpRuntime (turn hooks)', () => {
         endSession: async () => {},
         markRollbackEligible: async () => {},
         markRolledBack: async () => {},
+        hasActiveTurn: () => false,
       },
     });
 

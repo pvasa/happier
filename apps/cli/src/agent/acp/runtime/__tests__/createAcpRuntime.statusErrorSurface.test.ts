@@ -35,6 +35,7 @@ describe('createAcpRuntime (status error surfacing)', () => {
         endSession: async () => {},
         markRollbackEligible: async () => {},
         markRolledBack: async () => {},
+        hasActiveTurn: () => false,
       },
     };
 
