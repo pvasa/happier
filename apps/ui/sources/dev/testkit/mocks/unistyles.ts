@@ -8,6 +8,19 @@ export type TestUnistylesOverrides = Readonly<{
     runtime?: PlainObject;
 }>;
 
+function flattenStyle(style: unknown): unknown {
+    if (style == null) return style;
+    if (Array.isArray(style)) {
+        return style.reduce<PlainObject>(
+            (accumulator, entry) => ({ ...accumulator, ...(flattenStyle(entry) as PlainObject | null ?? {}) }),
+            {},
+        );
+    }
+    if (typeof style === 'number') return {};
+    if (typeof style === 'object') return style;
+    return {};
+}
+
 export async function createUnistylesMock(overrides?: TestUnistylesOverrides) {
     const theme = createThemeFixture(overrides?.theme);
     const rt = createThemeRuntimeFixture(overrides?.rt);
@@ -28,6 +41,7 @@ export async function createUnistylesMock(overrides?: TestUnistylesOverrides) {
                 typeof input === 'function'
                     ? (input as (theme: unknown, runtime: unknown) => unknown)(theme, rt)
                     : input,
+            flatten: flattenStyle,
             configure: () => {},
             absoluteFillObject: {},
         },

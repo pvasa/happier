@@ -580,6 +580,18 @@ vi.mock('expo-secure-store', () => ({
 vi.mock('react-native-unistyles', () => {
     // Keep this theme self-contained: many unit tests mock `react-native` and may omit Platform,
     // so importing the real theme (which depends on Platform.select) would make those tests flaky.
+    const flattenStyle = (style: any): any => {
+        if (style == null) return style;
+        if (Array.isArray(style)) {
+            return style.reduce((acc: Record<string, unknown>, entry: unknown) => ({
+                ...acc,
+                ...(flattenStyle(entry) ?? {}),
+            }), {});
+        }
+        if (typeof style === 'number') return {};
+        if (typeof style === 'object') return style;
+        return {};
+    };
     const theme = {
         dark: false,
         colors: {
@@ -731,6 +743,7 @@ vi.mock('react-native-unistyles', () => {
     return {
         StyleSheet: {
             create: (styles: any) => (typeof styles === 'function' ? styles(theme) : styles),
+            flatten: flattenStyle,
             configure: () => {},
             absoluteFillObject: {},
         },

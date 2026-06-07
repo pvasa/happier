@@ -41,6 +41,7 @@ type FlashListLayoutStateInitialValue<T> = T | (() => T);
 type FlashListChatListHarnessState = {
     flashListProps: any | null;
     flashListRefHandle: unknown;
+    flashListRenderCount: number;
     platformOs: 'web' | 'ios';
     sessionMessagesState: SessionMessagesState;
     sessionPendingState: SessionPendingState;
@@ -186,6 +187,7 @@ export const flashListChatListHarnessState: FlashListChatListHarnessState = {
         scrollToOffset: () => {},
         scrollToIndex: () => {},
     },
+    flashListRenderCount: 0,
     platformOs: 'web',
     sessionMessagesState: { messages: [], isLoaded: true },
     sessionPendingState: { messages: [], discarded: [], isLoaded: true },
@@ -233,6 +235,7 @@ export function resetFlashListChatListHarness(
         scrollToOffset: () => {},
         scrollToIndex: () => {},
     };
+    flashListChatListHarnessState.flashListRenderCount = 0;
     flashListChatListHarnessState.platformOs = options.platformOs ?? 'web';
     flashListChatListHarnessState.sessionMessagesState = { messages: [], isLoaded: true };
     flashListChatListHarnessState.sessionPendingState = { messages: [], discarded: [], isLoaded: true };
@@ -412,6 +415,7 @@ export async function createFlashListChatListModuleMock(
 
     return {
         FlashList: React.forwardRef<any, any>((props, ref) => {
+            flashListChatListHarnessState.flashListRenderCount += 1;
             const element = (flashListMock.module.FlashList as any).render?.(props, ref)
                 ?? React.createElement(flashListMock.module.FlashList as any, { ...props, ref });
             flashListChatListHarnessState.flashListProps = flashListMock.state.props;

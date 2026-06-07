@@ -6,6 +6,7 @@ const ESCAPE_EVENT_HANDLED_KEY = '__happierEscapeEventHandled';
 
 export const ESCAPE_LAYER_PRIORITIES = {
     focusSessionSurface: 10,
+    sessionListSelection: 15,
     draftClear: 20,
     pane: 100,
     overlay: 200,

@@ -79,9 +79,12 @@ installModalComponentCommonModuleMocks({
     },
 });
 
+const safeAreaInsets = { top: 0, right: 0, bottom: 0, left: 0 };
+
 describe('BaseModal (dom ref loop)', () => {
     it('provides the modal portal target on first mount without a follow-up render', async () => {
         const { BaseModal } = await import('./BaseModal');
+        const { SafeAreaInsetsContext } = await import('react-native-safe-area-context');
 
         const observedTargets: Array<unknown> = [];
 
@@ -97,9 +100,11 @@ describe('BaseModal (dom ref loop)', () => {
         try {
             await act(async () => {
                 root.render(
-                    <BaseModal visible={true}>
-                        <Probe />
-                    </BaseModal>,
+                    <SafeAreaInsetsContext.Provider value={safeAreaInsets}>
+                        <BaseModal visible={true}>
+                            <Probe />
+                        </BaseModal>
+                    </SafeAreaInsetsContext.Provider>,
                 );
             });
 
@@ -115,6 +120,7 @@ describe('BaseModal (dom ref loop)', () => {
 
     it('does not churn the modal portal target across parent re-renders', async () => {
         const { BaseModal } = await import('./BaseModal');
+        const { SafeAreaInsetsContext } = await import('react-native-safe-area-context');
         let latestTick = -1;
 
         function Probe(props: Readonly<{ bump: () => void }>) {
@@ -135,9 +141,11 @@ describe('BaseModal (dom ref loop)', () => {
             latestTick = tick;
 
             return (
-                <BaseModal visible={true}>
-                    <Probe bump={bump} />
-                </BaseModal>
+                <SafeAreaInsetsContext.Provider value={safeAreaInsets}>
+                    <BaseModal visible={true}>
+                        <Probe bump={bump} />
+                    </BaseModal>
+                </SafeAreaInsetsContext.Provider>
             );
         }
 

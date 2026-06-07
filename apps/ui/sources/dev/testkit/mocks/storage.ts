@@ -106,6 +106,7 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         sessions: {},
         machines: {},
         getProjectForSession: () => null,
+        mergeSessionListRenderables: () => undefined,
         applySessionListRenderablePatches: () => undefined,
         upsertWorkspaceReviewCommentDraft: () => undefined,
         setWorkspaceReviewCommentDraftIncluded: () => undefined,

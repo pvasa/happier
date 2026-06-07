@@ -22,6 +22,11 @@ function EscapeLayerProbe(props: Readonly<{ onEscape: (event: unknown) => boolea
 }
 
 describe('useEscapeLayer', () => {
+    it('orders session-list selection below overlays and above ordinary focus behavior', () => {
+        expect(ESCAPE_LAYER_PRIORITIES.overlay).toBeGreaterThan(ESCAPE_LAYER_PRIORITIES.sessionListSelection);
+        expect(ESCAPE_LAYER_PRIORITIES.sessionListSelection).toBeGreaterThan(ESCAPE_LAYER_PRIORITIES.focusSessionSurface);
+    });
+
     it('handles Escape before older document-capture modal listeners observe it', async () => {
         const container = document.createElement('div');
         document.body.append(container);

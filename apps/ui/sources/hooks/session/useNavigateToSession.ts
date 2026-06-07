@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { setActiveServerAndSwitch } from '@/sync/domains/server/activeServerSwitch';
 import { useAuth } from '@/auth/context/AuthContext';
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
+import { markSessionOpenRequestedForSessionUiTelemetry } from '@/sync/runtime/performance/sessionUiTelemetry';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { buildScopedSessionRouteHref } from './sessionRouteServerScope';
 
@@ -16,6 +17,10 @@ export function useNavigateToSession() {
         const href = buildScopedSessionRouteHref({
             sessionId,
             serverId: targetServerId || null,
+        });
+        markSessionOpenRequestedForSessionUiTelemetry({
+            sessionId,
+            source: 'navigate-hook',
         });
         router.navigate(href, {
             dangerouslySingular(name, params) {

@@ -271,4 +271,69 @@ describe('createKeyboardShortcutDispatcher', () => {
             singleKeyShortcutsEnabled: true,
         })).toBe(true);
     });
+
+    it('dispatches session-list selection commands only outside editable targets', () => {
+        const selectAll = vi.fn();
+        const dispatcher = createKeyboardShortcutDispatcher({
+            enabled: true,
+            platform: 'macos',
+            surface: 'web',
+            singleKeyShortcutsEnabled: true,
+            disabledCommandIds: [],
+            overrides: {},
+            handlers: { 'sessions.selection.selectAll': selectAll },
+            getContext: () => context,
+        });
+
+        expect(dispatcher(keyEvent({ key: 'a', code: 'KeyA', metaKey: true }))).toBe(true);
+        expect(selectAll).toHaveBeenCalledTimes(1);
+
+        const editableDispatcher = createKeyboardShortcutDispatcher({
+            enabled: true,
+            platform: 'macos',
+            surface: 'web',
+            singleKeyShortcutsEnabled: true,
+            disabledCommandIds: [],
+            overrides: {},
+            handlers: { 'sessions.selection.selectAll': selectAll },
+            getContext: () => ({ ...context, isEditableTarget: true }),
+        });
+
+        expect(editableDispatcher(keyEvent({ key: 'a', code: 'KeyA', metaKey: true }))).toBe(false);
+        expect(selectAll).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not expose Space row-selection when single-key shortcuts are disabled', () => {
+        const toggleFocused = vi.fn();
+        const dispatcher = createKeyboardShortcutDispatcher({
+            enabled: true,
+            platform: 'macos',
+            surface: 'web',
+            singleKeyShortcutsEnabled: false,
+            disabledCommandIds: [],
+            overrides: {},
+            handlers: { 'sessions.selection.toggleFocused': toggleFocused },
+            getContext: () => context,
+        });
+
+        expect(dispatcher(keyEvent({ key: ' ', code: 'Space' }))).toBe(false);
+        expect(toggleFocused).not.toHaveBeenCalled();
+    });
+
+    it('keeps Shift+Arrow session-list range selection available when single-key shortcuts are disabled', () => {
+        const extendDown = vi.fn();
+        const dispatcher = createKeyboardShortcutDispatcher({
+            enabled: true,
+            platform: 'macos',
+            surface: 'web',
+            singleKeyShortcutsEnabled: false,
+            disabledCommandIds: [],
+            overrides: {},
+            handlers: { 'sessions.selection.extendDown': extendDown },
+            getContext: () => context,
+        });
+
+        expect(dispatcher(keyEvent({ key: 'ArrowDown', code: 'ArrowDown', shiftKey: true }))).toBe(true);
+        expect(extendDown).toHaveBeenCalledTimes(1);
+    });
 });

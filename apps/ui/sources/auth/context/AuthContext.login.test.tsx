@@ -10,6 +10,7 @@ import { renderScreen } from '@/dev/testkit';
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 const secureStore = vi.hoisted(() => new Map<string, string>());
+const asyncStorage = vi.hoisted(() => new Map<string, string>());
 vi.mock('expo-secure-store', () => ({
     getItemAsync: async (key: string) => secureStore.get(key) ?? null,
     setItemAsync: async (key: string, value: string) => {
@@ -17,6 +18,18 @@ vi.mock('expo-secure-store', () => ({
     },
     deleteItemAsync: async (key: string) => {
         secureStore.delete(key);
+    },
+}));
+
+vi.mock('@react-native-async-storage/async-storage', () => ({
+    default: {
+        getItem: async (key: string) => asyncStorage.get(key) ?? null,
+        setItem: async (key: string, value: string) => {
+            asyncStorage.set(key, value);
+        },
+        removeItem: async (key: string) => {
+            asyncStorage.delete(key);
+        },
     },
 }));
 
@@ -49,6 +62,7 @@ describe('AuthContext.login', () => {
     beforeEach(() => {
         vi.useFakeTimers();
         secureStore.clear();
+        asyncStorage.clear();
     });
 
     afterEach(() => {

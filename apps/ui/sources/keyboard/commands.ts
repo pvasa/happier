@@ -100,6 +100,36 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         when: (context) => !context.isEditableTarget,
     },
     {
+        id: 'sessions.selection.toggleFocused',
+        defaultBinding: { binding: 'Space', platforms: ['web'] },
+        settingsTitleKey: 'settingsKeyboard.commands.sessionsSelectionToggleFocused',
+        when: (context) => !context.isEditableTarget,
+    },
+    {
+        id: 'sessions.selection.extendUp',
+        defaultBinding: { binding: 'Shift+ArrowUp', platforms: ['web'] },
+        settingsTitleKey: 'settingsKeyboard.commands.sessionsSelectionExtendUp',
+        when: (context) => !context.isEditableTarget,
+    },
+    {
+        id: 'sessions.selection.extendDown',
+        defaultBinding: { binding: 'Shift+ArrowDown', platforms: ['web'] },
+        settingsTitleKey: 'settingsKeyboard.commands.sessionsSelectionExtendDown',
+        when: (context) => !context.isEditableTarget,
+    },
+    {
+        id: 'sessions.selection.selectAll',
+        defaultBinding: { binding: 'Mod+A', platforms: ['web'] },
+        settingsTitleKey: 'settingsKeyboard.commands.sessionsSelectionSelectAll',
+        when: (context) => !context.isEditableTarget,
+    },
+    {
+        id: 'sessions.selection.clear',
+        defaultBinding: { binding: 'Escape', platforms: ['web'] },
+        settingsTitleKey: 'settingsKeyboard.commands.sessionsSelectionClear',
+        when: (context) => !context.isEditableTarget,
+    },
+    {
         id: 'session.visible.next',
         defaultBinding: { binding: 'Alt+ArrowDown' },
         settingsTitleKey: 'settingsKeyboard.commands.sessionVisibleNext',

@@ -66,7 +66,11 @@ export type NativeHardwareKeyboardAllowlist = Readonly<{
 
 function isSingleKeyRule(rule: KeybindingRule): boolean {
     const parsed = parseKeybindingRule(rule);
-    return parsed.mod !== true && parsed.alt !== true && parsed.ctrl !== true && parsed.meta !== true;
+    return parsed.mod !== true
+        && parsed.alt !== true
+        && parsed.ctrl !== true
+        && parsed.meta !== true
+        && parsed.shift !== true;
 }
 
 function getCommandBindings(

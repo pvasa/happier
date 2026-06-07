@@ -1,6 +1,11 @@
 import { Platform } from 'react-native';
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
-import { getActiveServerId, getActiveServerUrl, listServerProfiles } from '@/sync/domains/server/serverProfiles';
+import {
+    areServerProfileIdentifiersEquivalent,
+    getActiveServerId,
+    getActiveServerUrl,
+    listServerProfiles,
+} from '@/sync/domains/server/serverProfiles';
 import { digest } from '@/platform/digest';
 import { encodeBase64 } from '@/encryption/base64';
 import {
@@ -321,7 +326,7 @@ function doesPendingExternalStateMatchActiveServer(
     const pendingServerId = normalizeServerId(typeof value.serverId === 'string' ? value.serverId : null);
     if (pendingServerId) {
         const activeServerId = normalizeServerId(getActiveServerId());
-        return activeServerId === pendingServerId;
+        return areServerProfileIdentifiersEquivalent(activeServerId, pendingServerId);
     }
 
     const pendingServerUrl = normalizeUrl(typeof value.serverUrl === 'string' ? value.serverUrl : '');
