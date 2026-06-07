@@ -57,6 +57,7 @@ export type ZellijActions = Readonly<{
   sendEnter(params: ZellijPaneActionParams & Readonly<{ timeoutMs?: number }>): Promise<void>;
   sendEscape(params: ZellijPaneActionParams & Readonly<{ timeoutMs?: number }>): Promise<void>;
   closePane(params: ZellijPaneActionParams & ZellijTimeoutParams): Promise<void>;
+  listSessions?(params: ZellijActionParams & ZellijTimeoutParams): Promise<ZellijCommandResult>;
   listPanes(params: ZellijActionParams & ZellijTimeoutParams): Promise<ZellijPane[]>;
   dumpScreen(params: ZellijPaneActionParams & ZellijTimeoutParams): Promise<string>;
   killSession(params: ZellijActionParams & Readonly<{ sessionName: string }> & ZellijTimeoutParams): Promise<ZellijCommandResult>;
@@ -350,6 +351,14 @@ export async function closePane(params: ZellijPaneActionParams & ZellijTimeoutPa
   );
 }
 
+export async function listSessions(params: ZellijActionParams & ZellijTimeoutParams): Promise<ZellijCommandResult> {
+  return runZellij(
+    params,
+    ['list-sessions'],
+    params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, action: 'list-sessions' } : { action: 'list-sessions' },
+  );
+}
+
 export async function listPanes(params: ZellijActionParams & ZellijTimeoutParams): Promise<ZellijPane[]> {
   const result = await runZellij(
     params,
@@ -389,6 +398,7 @@ export const defaultZellijActions: ZellijActions = {
   sendEnter,
   sendEscape,
   closePane,
+  listSessions,
   listPanes,
   dumpScreen,
   killSession,

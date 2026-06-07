@@ -215,6 +215,86 @@ describe('createZellijTerminalHostAdapter', () => {
     expect(launcherDisposed).toBe(true);
   });
 
+  it('waits for foreground-attached sessions to be listed before probing panes', async () => {
+    const calls: string[] = [];
+    let sessionListCount = 0;
+    let paneListCount = 0;
+    let launcherDisposed = false;
+    const actions = {
+      attachCreateBackground: async () => {
+        throw new Error('should not create a background session');
+      },
+      runCommand: async () => {
+        throw new Error('foreground launch should not await zellij run');
+      },
+      startCommandDetached: async () => ({
+        dispose: () => {
+          launcherDisposed = true;
+        },
+      }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listSessions: async () => {
+        sessionListCount += 1;
+        calls.push(`sessions:${sessionListCount}`);
+        return {
+          exitCode: 0,
+          stdout: sessionListCount < 3
+            ? 'other-session [Created 1s ago]\n'
+            : '\u001B[32;1msession-a\u001B[m [Created 1s ago]\n',
+          stderr: '',
+        };
+      },
+      listPanes: async () => {
+        paneListCount += 1;
+        calls.push(`panes:${paneListCount}`);
+        if (sessionListCount < 3) {
+          throw new ZellijActionTimeoutError('list-panes');
+        }
+        return paneListCount === 1
+          ? [{ id: 0, is_plugin: true, is_suppressed: true }]
+          : [{ id: 42, is_plugin: false, terminal_command: '/managed/node' }];
+      },
+      dumpScreen: async () => '',
+      closePane: async () => undefined,
+      killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    } as ZellijActions & {
+      listSessions(): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+      startCommandDetached(): Promise<{ dispose(): void }>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+      actionTimeoutMs: 1_000,
+      launchStrategy: {
+        type: 'foregroundAttached',
+        launchClient: async () => undefined,
+      },
+    } as Parameters<typeof createZellijTerminalHostAdapterBase>[0] & {
+      launchStrategy: { type: 'foregroundAttached'; launchClient(): Promise<void> };
+    });
+
+    const handle = await adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    });
+
+    expect(handle.paneId).toBe('terminal_42');
+    expect(launcherDisposed).toBe(true);
+    expect(calls).toEqual(['sessions:1', 'sessions:2', 'sessions:3', 'panes:1', 'panes:2', 'panes:3']);
+  });
+
   it('disposes a foreground detached command launcher when pane discovery fails', async () => {
     let launcherDisposed = false;
     const actions = {

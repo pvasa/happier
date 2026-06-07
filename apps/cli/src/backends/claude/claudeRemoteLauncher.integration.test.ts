@@ -199,6 +199,7 @@ function createRemoteHarness(options?: {
       endSession: vi.fn(async () => {}),
       markRollbackEligible: vi.fn(async () => {}),
       markRolledBack: vi.fn(async () => {}),
+      hasActiveTurn: vi.fn(() => false),
       observeAcpLifecycleMarker: vi.fn((input) => ({ body: input.body, pendingWrite: null })),
     },
     updateMetadata: vi.fn((updater: (current: Metadata) => Metadata) => {

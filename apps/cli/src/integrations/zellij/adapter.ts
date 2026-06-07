@@ -22,6 +22,7 @@ import { prepareZellijSocketDir, resolveZellijSocketDir } from './socketDir';
 const DEFAULT_INPUT_STABILITY_DELAY_MS = 50;
 const DEFAULT_ACTION_TIMEOUT_MS = 5_000;
 const DEFAULT_LAUNCH_PANE_DISCOVERY_POLL_MS = 50;
+const DEFAULT_SESSION_DISCOVERY_ACTION_TIMEOUT_MS = 1_000;
 
 export type ZellijForegroundClientLaunchParams = Readonly<{
   zellijBinary: string;
@@ -164,6 +165,66 @@ function isZellijMissingSessionOutput(output: string, sessionName: string): bool
   const normalizedOutput = output.toLowerCase();
   const normalizedSessionName = sessionName.toLowerCase();
   return normalizedOutput.includes(`no session named "${normalizedSessionName}" found`);
+}
+
+function stripAnsiCodes(input: string): string {
+  return input.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+function zellijSessionListContains(output: string, sessionName: string): boolean {
+  const cleanOutput = stripAnsiCodes(output);
+  return cleanOutput.split(/\r?\n/).some((line) => {
+    const [listedName] = line.trimStart().split(/\s+/, 1);
+    return listedName === sessionName;
+  });
+}
+
+async function waitForListedZellijSession(params: Readonly<{
+  actions: ZellijActions;
+  zellijBinary: string;
+  env: Readonly<Record<string, string>>;
+  sessionName: string;
+  actionTimeoutMs: number;
+}>): Promise<void> {
+  if (!params.actions.listSessions) return;
+
+  const deadline = createDeadline(params.actionTimeoutMs);
+  let lastError: unknown;
+  while (true) {
+    const remainingMs = remainingTimeoutMs(deadline);
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      const message = lastError instanceof Error ? lastError.message : String(lastError ?? `zellij session "${params.sessionName}" was not listed`);
+      throw new Error(`zellij session was not listed before addressability probing: ${message}`);
+    }
+
+    const timeoutMs = remainingMs === undefined
+      ? DEFAULT_SESSION_DISCOVERY_ACTION_TIMEOUT_MS
+      : Math.max(1, Math.min(remainingMs, DEFAULT_SESSION_DISCOVERY_ACTION_TIMEOUT_MS));
+    try {
+      const result = await params.actions.listSessions({
+        zellijBinary: params.zellijBinary,
+        env: params.env,
+        timeoutMs,
+      });
+      const output = `${result.stdout}\n${result.stderr}`;
+      if (result.exitCode === 0 && zellijSessionListContains(output, params.sessionName)) {
+        return;
+      }
+      lastError = new Error(
+        result.exitCode === 0
+          ? `zellij session "${params.sessionName}" was not listed`
+          : `zellij list-sessions failed: ${result.stderr || result.stdout}`,
+      );
+    } catch (error) {
+      lastError = error;
+    }
+
+    const nextRemainingMs = remainingTimeoutMs(deadline);
+    if (nextRemainingMs !== undefined && nextRemainingMs <= 0) {
+      continue;
+    }
+    await wait(Math.min(DEFAULT_LAUNCH_PANE_DISCOVERY_POLL_MS, nextRemainingMs ?? DEFAULT_LAUNCH_PANE_DISCOVERY_POLL_MS));
+  }
 }
 
 async function killZellijSessionOrThrow(params: Readonly<{
@@ -397,6 +458,8 @@ async function waitForAddressableZellijSession(params: Readonly<{
   sessionName: string;
   actionTimeoutMs: number;
 }>): Promise<readonly ZellijPane[]> {
+  await waitForListedZellijSession(params);
+
   const deadline = createDeadline(params.actionTimeoutMs);
   let lastError: unknown;
   while (true) {
