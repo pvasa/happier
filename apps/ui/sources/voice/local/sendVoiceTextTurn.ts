@@ -244,7 +244,9 @@ export async function sendVoiceTextTurn(params: {
 
   patchLocalVoiceState({ status: 'sending' });
   try {
-    await sync.sendMessage(sessionId, userText);
+    await sync.sendMessage(sessionId, userText, undefined, undefined, {
+      bypassPendingQueueReason: 'voice_turn_immediate',
+    });
     voiceActivityController.appendActionExecuted(sessionId, adapterId, 'unknown', `Sent to session: ${userText.slice(0, 200)}`);
   } catch (error) {
     voiceActivityController.appendError(sessionId, adapterId, 'send_failed', error instanceof Error ? error.message : 'send_failed');

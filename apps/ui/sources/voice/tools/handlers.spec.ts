@@ -252,6 +252,11 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
   getActiveServerSnapshot: () => ({ serverId: 'server-a' }),
 }));
 
+vi.mock('@/sync/domains/server/serverProfiles', () => ({
+  areServerProfileIdentifiersEquivalent: (left: unknown, right: unknown) => String(left ?? '').trim() === String(right ?? '').trim(),
+  getServerProfileById: (_serverId: unknown) => null,
+}));
+
 vi.mock('@/auth/context/AuthContext', () => ({
   getCurrentAuth: () => ({ refreshFromActiveServer }),
 }));

@@ -30,10 +30,11 @@ export async function postprocessSpawnedSession(params: Readonly<{
   if (initialMessage) {
     try {
       await sync.refreshSessions();
-      await sync.sendMessage(sessionId, initialMessage);
+      await sync.sendMessage(sessionId, initialMessage, undefined, undefined, {
+        bypassPendingQueueReason: 'voice_post_process',
+      });
     } catch {
       // best-effort
     }
   }
 }
-
