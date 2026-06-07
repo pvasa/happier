@@ -98,6 +98,40 @@ describe('connectedServiceSwitchDeferralQueue', () => {
     expect(queue.isTurnInFlight('sess_1')).toBe(false);
   });
 
+  it('exposes lifecycle evidence so recovery can distinguish first-prompt retry from mid-turn continuation', () => {
+    const queue = createConnectedServiceSwitchDeferralQueue({
+      timeoutMs: 60_000,
+      disableDeferral: false,
+    });
+
+    expect(queue.getTurnLifecycleState('sess_1')).toEqual({
+      inFlight: false,
+      lastEvent: null,
+      hasProviderActivityThisTurn: false,
+    });
+
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'prompt_or_steer' });
+    expect(queue.getTurnLifecycleState('sess_1')).toEqual({
+      inFlight: true,
+      lastEvent: 'prompt_or_steer',
+      hasProviderActivityThisTurn: false,
+    });
+
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'task_started' });
+    expect(queue.getTurnLifecycleState('sess_1')).toEqual({
+      inFlight: true,
+      lastEvent: 'task_started',
+      hasProviderActivityThisTurn: true,
+    });
+
+    queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'assistant_message_end' });
+    expect(queue.getTurnLifecycleState('sess_1')).toEqual({
+      inFlight: false,
+      lastEvent: 'assistant_message_end',
+      hasProviderActivityThisTurn: true,
+    });
+  });
+
   it('falls back to abort-and-restart exactly once when boundary timeout expires', async () => {
     const runSwitch = vi.fn(async () => {});
     const queue = createConnectedServiceSwitchDeferralQueue({

@@ -7,6 +7,10 @@ import type { AccountSettings } from '@happier-dev/protocol';
 
 import type { SessionConnectedServiceRuntimeAuthSelectionMaterializerInput } from './switchSessionConnectedServiceAuth';
 
+function readNonEmptyString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export async function materializeSessionConnectedServiceRuntimeAuthSelection(params: Readonly<{
   credentials: Credentials;
   api: ApiClient;
@@ -18,17 +22,6 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
   if (params.input.next.source !== 'connected') return null;
   const binding = params.input.normalizedBindings.bindingsByServiceId[params.input.serviceId];
   if (!binding || binding.source !== 'connected') return null;
-
-  const profileId = typeof binding.profileId === 'string' ? binding.profileId.trim() : '';
-  if (!profileId) return null;
-
-  const records = await resolveConnectedServiceCredentials({
-    credentials: params.credentials,
-    api: params.api,
-    bindings: [{ serviceId: params.input.serviceId, profileId }],
-  });
-  const record = records.get(params.input.serviceId);
-  if (!record) return null;
 
   const previousSelection = findConnectedServiceChildSelection(
     params.input.tracked.spawnOptions?.environmentVariables ?? {},
@@ -45,6 +38,21 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
     && params.input.groupMetadata?.groupId === binding.groupId
       ? params.input.groupMetadata
       : null;
+  const profileId = binding.selection === 'group'
+    ? readNonEmptyString(params.input.next.profileId)
+      || readNonEmptyString(groupMetadata?.activeProfileId)
+      || readNonEmptyString(previousGroupSelection?.activeProfileId)
+      || readNonEmptyString(binding.profileId)
+    : readNonEmptyString(binding.profileId);
+  if (!profileId) return null;
+
+  const records = await resolveConnectedServiceCredentials({
+    credentials: params.credentials,
+    api: params.api,
+    bindings: [{ serviceId: params.input.serviceId, profileId }],
+  });
+  const record = records.get(params.input.serviceId);
+  if (!record) return null;
 
   const baseSelection = {
     serviceId: params.input.serviceId,
@@ -53,13 +61,15 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
     ...(binding.selection === 'group'
       ? {
           groupId: binding.groupId,
-          activeProfileId: binding.profileId,
-          ...(previousGroupSelection || groupMetadata
-            ? {
-                fallbackProfileId: groupMetadata?.fallbackProfileId ?? previousGroupSelection?.fallbackProfileId,
-                generation: groupMetadata?.generation ?? previousGroupSelection?.generation,
-              }
-            : {}),
+          activeProfileId: profileId,
+          fallbackProfileId: readNonEmptyString(groupMetadata?.fallbackProfileId)
+            || readNonEmptyString(previousGroupSelection?.fallbackProfileId)
+            || profileId,
+          generation: typeof groupMetadata?.generation === 'number'
+            ? groupMetadata.generation
+            : typeof previousGroupSelection?.generation === 'number'
+              ? previousGroupSelection.generation
+              : 0,
         }
       : {}),
     record,

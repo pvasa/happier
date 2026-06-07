@@ -207,6 +207,18 @@ type AuthGroupSwitchCoordinator = Readonly<{
     observedProfileId?: string | null;
   }>): Promise<unknown>;
 }>;
+type SoftSwitchRecoveryGuardResult =
+  | Readonly<{ status: 'allow' }>
+  | Readonly<{ status: 'suppress' | 'fold'; reason: string }>;
+export type ConnectedServiceQuotaSoftSwitchRecoveryGuard = (
+  input: Readonly<{
+    sessionId: string;
+    serviceId: ConnectedServiceId;
+    groupId: string;
+    activeProfileId: string;
+    reason: 'soft_threshold';
+  }>,
+) => SoftSwitchRecoveryGuardResult | Promise<SoftSwitchRecoveryGuardResult>;
 
 function buildResolvedSelectionProfilesByServiceId(
   env: Pick<NodeJS.ProcessEnv, string> | undefined,
@@ -423,6 +435,7 @@ export class ConnectedServiceQuotasCoordinator {
   private readonly quotaFingerprintKeyMaterial: Uint8Array;
   private quotaFingerprintHmacKey: Uint8Array;
   private readonly authGroupSwitchCoordinator: AuthGroupSwitchCoordinator | null;
+  private readonly softSwitchRecoveryGuard: ConnectedServiceQuotaSoftSwitchRecoveryGuard | null;
   private readonly groupSwitchCheckMinIntervalMs: number;
   private readonly groupSwitchCheckJitterMs: number;
   private readonly quotaWorkGate: DaemonServerWorkGate | null;
@@ -468,6 +481,7 @@ export class ConnectedServiceQuotasCoordinator {
     quotaPersistenceMinFreshnessRefreshMs?: number;
     quotaPersistenceMaxConsecutiveFailures?: number;
     authGroupSwitchCoordinator?: AuthGroupSwitchCoordinator | null;
+    softSwitchRecoveryGuard?: ConnectedServiceQuotaSoftSwitchRecoveryGuard | null;
     groupSwitchCheckMinIntervalMs?: number;
     groupSwitchCheckJitterMs?: number;
     quotaWorkGate?: DaemonServerWorkGate | null;
@@ -517,6 +531,7 @@ export class ConnectedServiceQuotasCoordinator {
         : 5_000;
     this.sleepMs = params.sleepMs ?? defaultSleepMs;
     this.authGroupSwitchCoordinator = params.authGroupSwitchCoordinator ?? null;
+    this.softSwitchRecoveryGuard = params.softSwitchRecoveryGuard ?? null;
     this.groupSwitchCheckMinIntervalMs =
       typeof params.groupSwitchCheckMinIntervalMs === 'number' && Number.isFinite(params.groupSwitchCheckMinIntervalMs)
         ? Math.max(0, Math.trunc(params.groupSwitchCheckMinIntervalMs))
@@ -950,6 +965,35 @@ export class ConnectedServiceQuotasCoordinator {
     return result;
   }
 
+  private async shouldRunSoftSwitchForTarget(target: ActiveGroupQuotaSwitchTarget): Promise<boolean> {
+    const guard = this.softSwitchRecoveryGuard;
+    if (!guard) return true;
+    let result: SoftSwitchRecoveryGuardResult;
+    try {
+      result = await guard({
+        sessionId: target.sessionId,
+        serviceId: target.serviceId,
+        groupId: target.groupId,
+        activeProfileId: target.activeProfileId,
+        reason: 'soft_threshold',
+      });
+    } catch {
+      this.recordDiagnostic?.({
+        event: 'quota_work_suppressed',
+        phase: 'soft_switch',
+        reason: 'quota_soft_switch_recovery_guard_failed',
+      });
+      return false;
+    }
+    if (result.status === 'allow') return true;
+    this.recordDiagnostic?.({
+      event: 'quota_work_suppressed',
+      phase: 'soft_switch',
+      reason: result.reason.trim() || 'quota_soft_switch_suppressed_recovery_pending',
+    });
+    return false;
+  }
+
   private async persistCredentialHealthForQuotaFailure(input: Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
@@ -993,7 +1037,13 @@ export class ConnectedServiceQuotasCoordinator {
         key,
         input.now + this.groupSwitchCheckMinIntervalMs + this.computeBoundedJitterMs(this.groupSwitchCheckJitterMs),
       );
-      await Promise.all(targets.map((target) =>
+      const allowedTargets: ActiveGroupQuotaSwitchTarget[] = [];
+      for (const target of targets) {
+        if (await this.shouldRunSoftSwitchForTarget(target)) {
+          allowedTargets.push(target);
+        }
+      }
+      await Promise.all(allowedTargets.map((target) =>
         authGroupSwitchCoordinator.switchBeforeTurn({
           sessionId: target.sessionId,
           serviceId: target.serviceId,

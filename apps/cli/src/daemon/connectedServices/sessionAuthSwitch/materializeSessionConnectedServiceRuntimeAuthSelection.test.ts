@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -106,6 +106,189 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
     });
   });
 
+  it('uses group metadata active profile when the normalized group binding omits optional profileId', async () => {
+    const record = buildConnectedServiceCredentialRecord({
+      now: 1_000,
+      serviceId: 'anthropic',
+      profileId: 'backup',
+      kind: 'token',
+      token: {
+        token: 'sk-ant',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record } })),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+    };
+    const credentials: Credentials = {
+      token: 'token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    };
+    const previousBindings: ConnectedServiceBindingsV1 = {
+      v: 1,
+      bindingsByServiceId: {
+        anthropic: { source: 'connected', selection: 'group', groupId: 'work', profileId: 'primary' },
+      },
+    };
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      happySessionId: 'sess_1',
+      pid: 123,
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        connectedServices: previousBindings,
+        environmentVariables: {},
+      },
+    };
+    const normalizedBindings = {
+      v: 1,
+      bindingsByServiceId: {
+        anthropic: { source: 'connected', selection: 'group', groupId: 'work' },
+      },
+    } as const;
+
+    await expect(materializeSessionConnectedServiceRuntimeAuthSelection({
+      credentials,
+      api: api as unknown as ApiClient,
+      input: {
+        tracked,
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        serviceId: 'anthropic',
+        previous: {
+          source: 'connected',
+          selection: 'group',
+          serviceId: 'anthropic',
+          profileId: 'primary',
+          groupId: 'work',
+        },
+        next: {
+          source: 'connected',
+          selection: 'group',
+          serviceId: 'anthropic',
+          profileId: null,
+          groupId: 'work',
+        },
+        previousBindings,
+        normalizedBindings,
+        groupMetadata: {
+          groupId: 'work',
+          activeProfileId: 'backup',
+          fallbackProfileId: 'fallback',
+          generation: 8,
+        },
+      },
+    })).resolves.toMatchObject({
+      serviceId: 'anthropic',
+      profileId: 'backup',
+      groupId: 'work',
+      activeProfileId: 'backup',
+      fallbackProfileId: 'fallback',
+      generation: 8,
+      record,
+    });
+    expect(api.getConnectedServiceCredentialPlain).toHaveBeenCalledWith({
+      serviceId: 'anthropic',
+      profileId: 'backup',
+    });
+  });
+
+  it('uses the previous child group active profile when unchanged group rematerialization omits profileId', async () => {
+    const record = buildConnectedServiceCredentialRecord({
+      now: 1_000,
+      serviceId: 'anthropic',
+      profileId: 'primary',
+      kind: 'token',
+      token: {
+        token: 'sk-ant',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record } })),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+    };
+    const credentials: Credentials = {
+      token: 'token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    };
+    const previousBindings: ConnectedServiceBindingsV1 = {
+      v: 1,
+      bindingsByServiceId: {
+        anthropic: { source: 'connected', selection: 'group', groupId: 'work' },
+      },
+    };
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      happySessionId: 'sess_1',
+      pid: 123,
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        connectedServices: previousBindings,
+        environmentVariables: {
+          [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([
+            {
+              kind: 'group',
+              serviceId: 'anthropic',
+              groupId: 'work',
+              activeProfileId: 'primary',
+              fallbackProfileId: 'fallback',
+              generation: 7,
+            },
+          ]),
+        },
+      },
+    };
+    const normalizedBindings = {
+      v: 1,
+      bindingsByServiceId: {
+        anthropic: { source: 'connected', selection: 'group', groupId: 'work' },
+      },
+    } as const;
+
+    await expect(materializeSessionConnectedServiceRuntimeAuthSelection({
+      credentials,
+      api: api as unknown as ApiClient,
+      input: {
+        tracked,
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        serviceId: 'anthropic',
+        previous: {
+          source: 'connected',
+          selection: 'group',
+          serviceId: 'anthropic',
+          profileId: null,
+          groupId: 'work',
+        },
+        next: {
+          source: 'connected',
+          selection: 'group',
+          serviceId: 'anthropic',
+          profileId: null,
+          groupId: 'work',
+        },
+        previousBindings,
+        normalizedBindings,
+      },
+    })).resolves.toMatchObject({
+      serviceId: 'anthropic',
+      profileId: 'primary',
+      groupId: 'work',
+      activeProfileId: 'primary',
+      fallbackProfileId: 'fallback',
+      generation: 7,
+      record,
+    });
+  });
+
   it('prefers authoritative group metadata over stale current session selection env', async () => {
     const record = buildConnectedServiceCredentialRecord({
       now: 1_000,
@@ -202,6 +385,141 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
       generation: 8,
       record,
     });
+  });
+
+  it('rewrites the Claude group stable config dir when refreshing the same active profile', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-session-runtime-selection-refresh-'));
+    const groupConfigDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      '__groups',
+      'work',
+      'claude',
+      'claude-config',
+    );
+    await mkdir(groupConfigDir, { recursive: true });
+    await writeFile(join(groupConfigDir, '.credentials.json'), JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'stale-access-placeholder',
+        refreshToken: 'stale-refresh-placeholder',
+        expiresAt: 1,
+        scopes: [CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE],
+      },
+    }));
+    const record = buildConnectedServiceCredentialRecord({
+      now: 1_000,
+      serviceId: 'claude-subscription',
+      profileId: 'primary',
+      kind: 'oauth',
+      expiresAt: 2_000,
+      oauth: {
+        accessToken: 'refreshed-access-placeholder',
+        refreshToken: 'refreshed-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'provider-account',
+        providerEmail: null,
+      },
+    });
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record } })),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+    };
+    const credentials: Credentials = {
+      token: 'token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    };
+    const previousBindings: ConnectedServiceBindingsV1 = {
+      v: 1,
+      bindingsByServiceId: {
+        'claude-subscription': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'work',
+          profileId: 'primary',
+        },
+      },
+    };
+    const normalizedBindings = {
+      v: 1,
+      bindingsByServiceId: {
+        'claude-subscription': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'work',
+          profileId: 'primary',
+        },
+      },
+    } as const;
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      happySessionId: 'sess_1',
+      pid: 123,
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        connectedServices: previousBindings,
+        environmentVariables: {
+          [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([
+            {
+              kind: 'group',
+              serviceId: 'claude-subscription',
+              groupId: 'work',
+              activeProfileId: 'primary',
+              fallbackProfileId: 'fallback',
+              generation: 7,
+            },
+          ]),
+        },
+      },
+    };
+
+    const result = await materializeSessionConnectedServiceRuntimeAuthSelection({
+      credentials,
+      api: api as unknown as ApiClient,
+      activeServerDir,
+      input: {
+        tracked,
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        serviceId: 'claude-subscription',
+        previous: {
+          source: 'connected',
+          selection: 'group',
+          serviceId: 'claude-subscription',
+          profileId: 'primary',
+          groupId: 'work',
+        },
+        next: {
+          source: 'connected',
+          selection: 'group',
+          serviceId: 'claude-subscription',
+          profileId: 'primary',
+          groupId: 'work',
+        },
+        previousBindings,
+        normalizedBindings,
+        groupMetadata: {
+          groupId: 'work',
+          activeProfileId: 'primary',
+          fallbackProfileId: 'fallback',
+          generation: 8,
+        },
+      },
+      processEnv: { HOME: tmpdir() },
+    });
+
+    const materializedEnv = (result as { targetMaterializedEnv?: Record<string, string> }).targetMaterializedEnv;
+    expect(materializedEnv?.CLAUDE_CONFIG_DIR).toBe(groupConfigDir);
+    const credential = JSON.parse(await readFile(join(groupConfigDir, '.credentials.json'), 'utf8'));
+    expect(credential.claudeAiOauth.accessToken).toBe('refreshed-access-placeholder');
+    expect(credential.claudeAiOauth.accessToken).not.toBe('stale-access-placeholder');
+    expect(credential.claudeAiOauth.refreshToken).toBe('refreshed-refresh-placeholder');
   });
 
   it('uses Claude catalog runtime selection materializer for group switches', async () => {

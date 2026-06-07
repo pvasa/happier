@@ -14,6 +14,10 @@ import {
   type ConnectedServiceDaemonRestartDiagnosticRecorder,
 } from '../sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
 import { DurableBackoffRecoveryScheduler } from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
+import {
+  isRecoveredProviderOutcomeProof,
+  type ProviderOutcomeProofKind,
+} from '../recovery/providerOutcomeProof';
 
 export const RUNTIME_USAGE_LIMIT_RECOVERY_FIELD = SESSION_USAGE_LIMIT_RECOVERY_STATE_FIELD_ID;
 export const METADATA_SESSION_USAGE_LIMIT_RECOVERY_V1_KEY = SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY;
@@ -56,6 +60,25 @@ function readUsageLimitRecoveryGroupId(
   selectedAuth: SessionUsageLimitRecoveryAuthSelectionV1,
 ): string | null {
   return selectedAuth.kind === 'group' ? selectedAuth.groupId : null;
+}
+
+function isPendingUsageLimitRecoveryStatus(status: UsageLimitRecoveryIntent['status']): boolean {
+  return status === 'armed' || status === 'waiting' || status === 'checking';
+}
+
+function usageLimitRecoverySelectedAuthMatchesIdentity(input: Readonly<{
+  selectedAuth: SessionUsageLimitRecoveryAuthSelectionV1;
+  serviceId: string;
+  profileId: string | null;
+  groupId: string | null;
+}>): boolean {
+  if (input.selectedAuth.kind === 'native') return false;
+  if (input.selectedAuth.serviceId !== input.serviceId) return false;
+  if (input.selectedAuth.kind === 'group') {
+    return input.selectedAuth.groupId === input.groupId
+      && input.selectedAuth.profileId === input.profileId;
+  }
+  return input.groupId === null && input.selectedAuth.profileId === input.profileId;
 }
 
 const DEFAULT_USAGE_LIMIT_RECOVERY_MAX_ATTEMPTS = 3;
@@ -249,6 +272,33 @@ export class UsageLimitRecoveryScheduler {
 
   async cancel(input: Readonly<{ sessionId: string }>): Promise<UsageLimitRecoveryIntent | null> {
     return await this.scheduler.cancel(input);
+  }
+
+  async markProviderOutcomeProofForSession(input: Readonly<{
+    sessionId: string;
+    proofKind: ProviderOutcomeProofKind;
+    serviceId: string;
+    profileId?: string | null;
+    groupId?: string | null;
+  }>): Promise<UsageLimitRecoveryIntent | null> {
+    const intent = this.read(input.sessionId);
+    if (!intent || !isRecoveredProviderOutcomeProof(input.proofKind)) return intent;
+    if (!isPendingUsageLimitRecoveryStatus(intent.status)) return intent;
+    const profileId = typeof input.profileId === 'string' && input.profileId.trim().length > 0
+      ? input.profileId.trim()
+      : null;
+    const groupId = typeof input.groupId === 'string' && input.groupId.trim().length > 0
+      ? input.groupId.trim()
+      : null;
+    if (!usageLimitRecoverySelectedAuthMatchesIdentity({
+      selectedAuth: intent.selectedAuth,
+      serviceId: input.serviceId,
+      profileId,
+      groupId,
+    })) {
+      return intent;
+    }
+    return await this.cancel({ sessionId: input.sessionId });
   }
 
   async checkNow(input: Readonly<{ sessionId: string }>): Promise<Readonly<{

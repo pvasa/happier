@@ -776,6 +776,245 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     });
   });
 
+  it('suppresses proactive soft-threshold switching for a session with matching pending recovery', async () => {
+    const now = 1_000_000;
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const activeRecord = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'active',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
+      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: activeRecord } })),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+
+    const fetcher: ConnectedServiceQuotaFetcher = {
+      serviceId: 'openai-codex',
+      fetch: vi.fn(async ({ record: inputRecord }: FetchArgs): Promise<ConnectedServiceQuotaSnapshotV1 | null> => ({
+        v: 1,
+        serviceId: inputRecord.serviceId,
+        profileId: inputRecord.profileId,
+        fetchedAt: now,
+        staleAfterMs: 300_000,
+        planLabel: 'Pro',
+        accountLabel: 'user@example.com',
+        meters: [
+          {
+            meterId: 'weekly',
+            label: 'Weekly',
+            used: null,
+            limit: null,
+            unit: 'unknown',
+            utilizationPct: 95,
+            remainingPct: 5,
+            resetsAt: now + 60_000,
+            status: 'ok',
+            details: {},
+          },
+        ],
+      })),
+    };
+    const switchBeforeTurn = vi.fn(async () => ({ status: 'switched' as const, activeProfileId: 'backup', generation: 2 }));
+    const softSwitchRecoveryGuard = vi.fn(async () => ({
+      status: 'suppress' as const,
+      reason: 'quota_soft_switch_suppressed_recovery_pending',
+    }));
+    const recordDiagnostic = vi.fn();
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [fetcher],
+      now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+      discoveryEnabled: false,
+      authGroupSwitchCoordinator: { switchBeforeTurn },
+      groupSwitchCheckMinIntervalMs: 0,
+      softSwitchRecoveryGuard,
+      recordDiagnostic,
+    });
+
+    coordinator.registerSpawnTarget({
+      pid: 123,
+      sessionId: 'session-1',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'team',
+          },
+        },
+      },
+      connectedServiceSelectionsEnv: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'team',
+          activeProfileId: 'active',
+          fallbackProfileId: 'backup',
+          generation: 1,
+        }]),
+      },
+    });
+
+    await coordinator.tickOnce();
+
+    expect(softSwitchRecoveryGuard).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'team',
+      activeProfileId: 'active',
+      reason: 'soft_threshold',
+    });
+    expect(switchBeforeTurn).not.toHaveBeenCalled();
+    expect(recordDiagnostic).toHaveBeenCalledWith({
+      event: 'quota_work_suppressed',
+      phase: 'soft_switch',
+      reason: 'quota_soft_switch_suppressed_recovery_pending',
+    });
+  });
+
+  it('keeps proactive soft-threshold switching active for sessions without matching pending recovery', async () => {
+    const now = 1_000_000;
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    const activeRecord = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'active',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
+      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: activeRecord } })),
+      registerConnectedServiceQuotaSnapshotPlain: vi.fn(async () => {}),
+      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+      registerConnectedServiceQuotaSnapshotSealed: vi.fn(async () => {}),
+    } as unknown as QuotaApi;
+
+    const fetcher: ConnectedServiceQuotaFetcher = {
+      serviceId: 'openai-codex',
+      fetch: vi.fn(async ({ record: inputRecord }: FetchArgs): Promise<ConnectedServiceQuotaSnapshotV1 | null> => ({
+        v: 1,
+        serviceId: inputRecord.serviceId,
+        profileId: inputRecord.profileId,
+        fetchedAt: now,
+        staleAfterMs: 300_000,
+        planLabel: 'Pro',
+        accountLabel: 'user@example.com',
+        meters: [
+          {
+            meterId: 'weekly',
+            label: 'Weekly',
+            used: null,
+            limit: null,
+            unit: 'unknown',
+            utilizationPct: 95,
+            remainingPct: 5,
+            resetsAt: now + 60_000,
+            status: 'ok',
+            details: {},
+          },
+        ],
+      })),
+    };
+    const switchBeforeTurn = vi.fn(async () => ({ status: 'switched' as const, activeProfileId: 'backup', generation: 2 }));
+    const softSwitchRecoveryGuard = vi.fn(async () => ({ status: 'allow' as const }));
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      api,
+      credentials,
+      quotaFetchers: [fetcher],
+      now: () => now,
+      randomBytes: (length: number) => randomBytes(length),
+      discoveryEnabled: false,
+      authGroupSwitchCoordinator: { switchBeforeTurn },
+      groupSwitchCheckMinIntervalMs: 0,
+      softSwitchRecoveryGuard,
+    });
+
+    coordinator.registerSpawnTarget({
+      pid: 123,
+      sessionId: 'session-1',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'team',
+          },
+        },
+      },
+      connectedServiceSelectionsEnv: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'team',
+          activeProfileId: 'active',
+          fallbackProfileId: 'backup',
+          generation: 1,
+        }]),
+      },
+    });
+
+    await coordinator.tickOnce();
+
+    expect(softSwitchRecoveryGuard).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'team',
+      activeProfileId: 'active',
+      reason: 'soft_threshold',
+    });
+    expect(switchBeforeTurn).toHaveBeenCalledTimes(1);
+    expect(switchBeforeTurn).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'team',
+      reason: 'soft_threshold',
+      observedProfileId: 'active',
+    });
+  });
+
   it('deduplicates proactive soft-threshold quota fetches while applying to every session sharing the same group and active profile', async () => {
     const now = 1_000_000;
 

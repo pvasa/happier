@@ -147,6 +147,68 @@ describe('UsageLimitRecoveryScheduler', () => {
     expect(scheduler.read('session-1')?.status).toBe('cancelled');
   });
 
+  it('cancels a matching waiting intent when provider-activity proof is observed', async () => {
+    const scheduler = new UsageLimitRecoveryScheduler({ nowMs: () => 1_000 });
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'limit',
+      resetAtMs: 2_000,
+      selectedAuth: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        profileId: 'fresh-member',
+      },
+    });
+
+    await expect(scheduler.markProviderOutcomeProofForSession({
+      sessionId: 'session-1',
+      proofKind: 'provider_activity',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'fresh-member',
+    })).resolves.toMatchObject({
+      status: 'cancelled',
+      selectedAuth: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        profileId: 'fresh-member',
+      },
+    });
+    expect(scheduler.read('session-1')?.status).toBe('cancelled');
+  });
+
+  it('does not cancel usage-limit recovery from provider activity for another group member', async () => {
+    const scheduler = new UsageLimitRecoveryScheduler({ nowMs: () => 1_000 });
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'limit',
+      resetAtMs: 2_000,
+      selectedAuth: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        profileId: 'old-member',
+      },
+    });
+
+    await expect(scheduler.markProviderOutcomeProofForSession({
+      sessionId: 'session-1',
+      proofKind: 'provider_activity',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'fresh-member',
+    })).resolves.toMatchObject({
+      status: 'waiting',
+      selectedAuth: {
+        kind: 'group',
+        profileId: 'old-member',
+      },
+    });
+    expect(scheduler.read('session-1')?.status).toBe('waiting');
+  });
+
   it('re-runs group recovery on wake instead of retrying the old profile directly', async () => {
     const selectedProfiles: string[] = [];
     const scheduler = new UsageLimitRecoveryScheduler({

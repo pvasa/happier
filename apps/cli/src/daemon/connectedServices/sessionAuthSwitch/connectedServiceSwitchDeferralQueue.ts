@@ -59,6 +59,7 @@ type PendingSwitch = {
 type SessionTurnState = {
   inFlight: boolean;
   lastEvent: ConnectedServiceTurnLifecycleEvent | null;
+  hasProviderActivityThisTurn: boolean;
 };
 
 export class ConnectedServiceSwitchDeferralConflictError extends Error {
@@ -136,6 +137,11 @@ export type ConnectedServiceSwitchDeferralQueue = Readonly<{
   requestSwitch: (input: ConnectedServiceSwitchRequest) => Promise<void>;
   recordTurnLifecycleEvent: (input: Readonly<{ sessionId: string; event: ConnectedServiceTurnLifecycleEvent }>) => void;
   isTurnInFlight: (sessionId: string) => boolean;
+  getTurnLifecycleState: (sessionId: string) => Readonly<{
+    inFlight: boolean;
+    lastEvent: ConnectedServiceTurnLifecycleEvent | null;
+    hasProviderActivityThisTurn: boolean;
+  }>;
   cancelSession: (sessionId: string, reason: 'session_terminated' | 'session_restarting') => void;
   cancelAll: (reason: 'daemon_shutdown') => void;
 }>;
@@ -155,7 +161,11 @@ export function createConnectedServiceSwitchDeferralQueue(
   const readTurnState = (sessionId: string): SessionTurnState => {
     const existing = turnStateBySessionId.get(sessionId);
     if (existing) return existing;
-    const created: SessionTurnState = { inFlight: false, lastEvent: null };
+    const created: SessionTurnState = {
+      inFlight: false,
+      lastEvent: null,
+      hasProviderActivityThisTurn: false,
+    };
     turnStateBySessionId.set(sessionId, created);
     return created;
   };
@@ -332,6 +342,12 @@ export function createConnectedServiceSwitchDeferralQueue(
     state.lastEvent = input.event;
     if (input.event === 'prompt_or_steer' || input.event === 'task_started') {
       state.inFlight = true;
+      if (input.event === 'prompt_or_steer') {
+        state.hasProviderActivityThisTurn = false;
+      }
+      if (input.event === 'task_started') {
+        state.hasProviderActivityThisTurn = true;
+      }
       return;
     }
     state.inFlight = false;
@@ -348,6 +364,27 @@ export function createConnectedServiceSwitchDeferralQueue(
     const normalizedSessionId = String(sessionId ?? '').trim();
     if (!normalizedSessionId) return false;
     return turnStateBySessionId.get(normalizedSessionId)?.inFlight === true;
+  };
+
+  const getTurnLifecycleState = (sessionId: string): Readonly<{
+    inFlight: boolean;
+    lastEvent: ConnectedServiceTurnLifecycleEvent | null;
+    hasProviderActivityThisTurn: boolean;
+  }> => {
+    const normalizedSessionId = String(sessionId ?? '').trim();
+    if (!normalizedSessionId) {
+      return {
+        inFlight: false,
+        lastEvent: null,
+        hasProviderActivityThisTurn: false,
+      };
+    }
+    const state = readTurnState(normalizedSessionId);
+    return {
+      inFlight: state.inFlight,
+      lastEvent: state.lastEvent,
+      hasProviderActivityThisTurn: state.hasProviderActivityThisTurn,
+    };
   };
 
   const cancelSession = (sessionId: string, reason: 'session_terminated' | 'session_restarting'): void => {
@@ -380,6 +417,7 @@ export function createConnectedServiceSwitchDeferralQueue(
     requestSwitch,
     recordTurnLifecycleEvent,
     isTurnInFlight,
+    getTurnLifecycleState,
     cancelSession,
     cancelAll,
   };
