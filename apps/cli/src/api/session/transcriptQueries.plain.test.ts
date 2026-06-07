@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/configuration', () => ({
   configuration: { serverUrl: 'http://example.test', apiServerUrl: 'http://example.test' },
@@ -18,6 +18,7 @@ import { AxiosError, AxiosHeaders } from 'axios'
 import { HttpStatusError, isAuthenticationError } from '@/api/client/httpStatusError'
 import { logger } from '@/ui/logger'
 import {
+  fetchLatestCommittedUserTextAtOrBeforeMs,
   fetchLatestUserPermissionIntentFromEncryptedTranscript,
   fetchRecentTranscriptTextItemsForAcpImportFromServer,
   hasCommittedUserMessageAfterMs,
@@ -31,6 +32,10 @@ const queryParams = {
 }
 
 describe('transcriptQueries (plaintext envelopes)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('prefilters ACP import candidates to user and agent rows while validating semantic transcript text', async () => {
     const getSpy = vi.spyOn(axios, 'get').mockResolvedValueOnce({
       status: 200,
@@ -157,6 +162,90 @@ describe('transcriptQueries (plaintext envelopes)', () => {
     expect(getSpy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
       params: { limit: 25, role: 'user' },
     }))
+  })
+
+  it('fetches the latest committed user text at or before a failure time for original-message retry', async () => {
+    const getSpy = vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        messages: [
+          {
+            localId: 'newer-user',
+            createdAt: 1_500,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'user',
+                content: { type: 'text', text: 'newer prompt' },
+              },
+            },
+          },
+          {
+            localId: 'original-user',
+            createdAt: 900,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'user',
+                content: { type: 'text', text: 'original prompt' },
+                meta: { permissionMode: 'yolo', model: 'claude-sonnet' },
+              },
+            },
+          },
+        ],
+      },
+    } as any)
+
+    await expect(fetchLatestCommittedUserTextAtOrBeforeMs({
+      ...queryParams,
+      failureAtMs: 1_000,
+    })).resolves.toEqual({
+      text: 'original prompt',
+      localId: 'original-user',
+      createdAt: 900,
+      permissionMode: 'yolo',
+      model: 'claude-sonnet',
+    })
+
+    expect(getSpy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      params: { limit: 25, role: 'user' },
+    }))
+  })
+
+  it('ignores non-text and post-failure user rows while resolving original-message retry text', async () => {
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        messages: [
+          {
+            localId: 'too-new',
+            createdAt: 1_500,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'too new' } } },
+          },
+          {
+            localId: 'not-text',
+            createdAt: 900,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'acp', data: { type: 'tool-call' } } } },
+          },
+          {
+            localId: 'usable',
+            createdAt: 800,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'usable' } } },
+          },
+        ],
+      },
+    } as any)
+
+    await expect(fetchLatestCommittedUserTextAtOrBeforeMs({
+      ...queryParams,
+      failureAtMs: 1_000,
+    })).resolves.toEqual({
+      text: 'usable',
+      localId: 'usable',
+      createdAt: 800,
+      permissionMode: null,
+      model: null,
+    })
   })
 
   it('keeps permission intent resolution scoped to semantically valid user rows', async () => {

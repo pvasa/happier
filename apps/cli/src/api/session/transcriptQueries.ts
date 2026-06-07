@@ -186,3 +186,124 @@ export async function hasCommittedUserMessageAfterMs(params: Readonly<{
     return false;
   }
 }
+
+export type LatestCommittedUserTextBeforeFailure = Readonly<{
+  text: string;
+  localId: string | null;
+  createdAt: number;
+  permissionMode: string | null;
+  model: string | null;
+}>;
+
+function readUserTextRecordFromTranscriptContent(input: Readonly<{
+  content: unknown;
+  encryptionKey: Uint8Array;
+  encryptionVariant: EncryptionVariant;
+}>): Readonly<{
+  text: string;
+  permissionMode: string | null;
+  model: string | null;
+}> | null {
+  const parsedContent = SessionMessageContentSchema.safeParse(input.content);
+  if (!parsedContent.success) return null;
+
+  let decoded: unknown;
+  if (parsedContent.data.t === 'plain') {
+    decoded = parsedContent.data.v;
+  } else {
+    try {
+      decoded = decrypt(
+        input.encryptionKey,
+        input.encryptionVariant,
+        decodeBase64(parsedContent.data.c),
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  const decodedObj = decoded && typeof decoded === 'object' && !Array.isArray(decoded)
+    ? decoded as Record<string, unknown>
+    : null;
+  if (decodedObj?.role !== 'user') return null;
+  const body = decodedObj.content;
+  const bodyObj = body && typeof body === 'object' && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : null;
+  if (bodyObj?.type !== 'text' || typeof bodyObj.text !== 'string') return null;
+  const text = bodyObj.text.trim();
+  if (!text) return null;
+  const meta = decodedObj.meta && typeof decodedObj.meta === 'object' && !Array.isArray(decodedObj.meta)
+    ? decodedObj.meta as Record<string, unknown>
+    : null;
+  const permissionMode = typeof meta?.permissionMode === 'string' && meta.permissionMode.trim().length > 0
+    ? meta.permissionMode.trim()
+    : null;
+  const model = typeof meta?.model === 'string' && meta.model.trim().length > 0
+    ? meta.model.trim()
+    : null;
+  return { text, permissionMode, model };
+}
+
+export async function fetchLatestCommittedUserTextAtOrBeforeMs(
+  params: SessionTranscriptQueryParams & Readonly<{
+    failureAtMs: number;
+    take?: number;
+  }>,
+): Promise<LatestCommittedUserTextBeforeFailure | null> {
+  const take = normalizeTake(params.take, 25);
+  const failureAtMs = Number.isFinite(params.failureAtMs)
+    ? Math.max(0, Math.trunc(params.failureAtMs))
+    : 0;
+  const serverUrl = resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
+
+  try {
+    const response = await axios.get(`${serverUrl}/v1/sessions/${params.sessionId}/messages`, {
+      headers: {
+        Authorization: `Bearer ${params.token}`,
+        'Content-Type': 'application/json',
+      },
+      params: { limit: take, role: 'user' },
+      timeout: 10_000,
+    });
+
+    const data = response?.data as unknown;
+    const raw = data && typeof data === 'object' ? (data as Record<string, unknown>).messages : null;
+    if (!Array.isArray(raw)) return null;
+
+    const candidates = raw
+      .map((msg): LatestCommittedUserTextBeforeFailure | null => {
+        const record = msg && typeof msg === 'object' && !Array.isArray(msg)
+          ? msg as Record<string, unknown>
+          : null;
+        if (!record) return null;
+        const createdAt = typeof record.createdAt === 'number' && Number.isFinite(record.createdAt)
+          ? Math.trunc(record.createdAt)
+          : null;
+        if (createdAt === null || createdAt > failureAtMs) return null;
+        const decoded = readUserTextRecordFromTranscriptContent({
+          content: record.content,
+          encryptionKey: params.encryptionKey,
+          encryptionVariant: params.encryptionVariant,
+        });
+        if (!decoded) return null;
+        return {
+          text: decoded.text,
+          localId: typeof record.localId === 'string' && record.localId.trim().length > 0
+            ? record.localId.trim()
+            : null,
+          createdAt,
+          permissionMode: decoded.permissionMode,
+          model: decoded.model,
+        };
+      })
+      .filter((candidate): candidate is LatestCommittedUserTextBeforeFailure => candidate !== null)
+      .sort((a, b) => b.createdAt - a.createdAt);
+
+    return candidates[0] ?? null;
+  } catch (error) {
+    if (isAuthenticationError(error)) throw error;
+    logTranscriptQueryFailure('[API] Failed to fetch transcript messages for original-message retry', error);
+    return null;
+  }
+}
