@@ -69,7 +69,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node -e \"const fs=require('node:fs');fs.rmSync('dist', { recursive: true, force: true });\" && node scripts/generate-embedded-feature-policies.mjs && tsc -p tsconfig.json",
+    "build": "node -e \"const fs=require('node:fs');fs.rmSync('dist', { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });\" && node scripts/generate-embedded-feature-policies.mjs && tsc -p tsconfig.json",
     "test": "node ../../node_modules/vitest/vitest.mjs run --config ../../vitest.config.ts",
     "pretypecheck": "node scripts/generate-embedded-feature-policies.mjs",
     "postinstall:real": "yarn -s build",

@@ -131,4 +131,53 @@ describe('sessionContinuationRecoveryV1', () => {
       },
     }).success).toBe(false);
   });
+
+  it('accepts recovery identity and replay mode on continuation attempts', () => {
+    expect(SessionMetadataSchema.safeParse({
+      sessionContinuationRecoveryV1: {
+        v: 1,
+        attemptsById: {
+          'claude:group:restart': {
+            v: 1,
+            attemptId: 'claude:group:restart',
+            status: 'pending_provider_context',
+            failureAtMs: 1_000,
+            updatedAtMs: 1_100,
+            resumePromptMode: 'standard',
+            replayMode: 'retry_original_user_message',
+            recoveryIdentity: {
+              serviceId: 'claude-subscription',
+              selectionKind: 'group',
+              groupId: 'claude',
+              profileId: 'leeroy_new',
+              failureFingerprint: 'authentication_failed:401',
+              targetGeneration: 18,
+            },
+          },
+        },
+      },
+    }).success).toBe(true);
+
+    expect(SessionMetadataSchema.safeParse({
+      sessionContinuationRecoveryV1: {
+        v: 1,
+        attemptsById: {
+          invalid: {
+            v: 1,
+            attemptId: 'invalid',
+            status: 'pending_provider_context',
+            failureAtMs: 1_000,
+            updatedAtMs: 1_100,
+            resumePromptMode: 'standard',
+            replayMode: 'retry_original_user_message',
+            recoveryIdentity: {
+              serviceId: 'claude-subscription',
+              selectionKind: 'profile',
+              groupId: 'claude',
+            },
+          },
+        },
+      },
+    }).success).toBe(false);
+  });
 });

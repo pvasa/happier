@@ -6,6 +6,57 @@ export const SessionContinuationResumePromptModeV1Schema = z.enum(['standard', '
 export type SessionContinuationResumePromptModeV1 =
   z.infer<typeof SessionContinuationResumePromptModeV1Schema>;
 
+export const SessionContinuationReplayModeV1Schema = z.enum([
+  'continuation_prompt',
+  'retry_original_user_message',
+  'suppress',
+]);
+export type SessionContinuationReplayModeV1 =
+  z.infer<typeof SessionContinuationReplayModeV1Schema>;
+
+export const SessionContinuationRecoverySelectionKindV1Schema = z.enum([
+  'profile',
+  'group',
+]);
+export type SessionContinuationRecoverySelectionKindV1 =
+  z.infer<typeof SessionContinuationRecoverySelectionKindV1Schema>;
+
+export const SessionContinuationRecoveryIdentityV1Schema = z
+  .object({
+    serviceId: z.string().trim().min(1),
+    selectionKind: SessionContinuationRecoverySelectionKindV1Schema,
+    groupId: z.string().trim().min(1).optional(),
+    profileId: z.string().trim().min(1).optional(),
+    failureFingerprint: z.string().trim().min(1).optional(),
+    targetGeneration: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .superRefine((identity, ctx) => {
+    if (identity.selectionKind === 'group' && !identity.groupId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'group continuation recovery identity requires groupId',
+        path: ['groupId'],
+      });
+    }
+    if (identity.selectionKind === 'profile' && !identity.profileId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'profile continuation recovery identity requires profileId',
+        path: ['profileId'],
+      });
+    }
+    if (identity.selectionKind === 'profile' && identity.groupId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'profile continuation recovery identity must not include groupId',
+        path: ['groupId'],
+      });
+    }
+  });
+export type SessionContinuationRecoveryIdentityV1 =
+  z.infer<typeof SessionContinuationRecoveryIdentityV1Schema>;
+
 export const SessionContinuationRecoveryAttemptStatusV1Schema = z.enum([
   'pending_provider_context',
   'sending',
@@ -29,6 +80,8 @@ export const SessionContinuationRecoveryAttemptV1Schema = z
     failureAtMs: z.number().int().nonnegative(),
     updatedAtMs: z.number().int().nonnegative(),
     resumePromptMode: SessionContinuationResumePromptModeV1Schema,
+    replayMode: SessionContinuationReplayModeV1Schema.optional(),
+    recoveryIdentity: SessionContinuationRecoveryIdentityV1Schema.optional(),
     continuationRequired: z.boolean().optional(),
     sentAtMs: z.number().int().nonnegative().optional(),
     errorCode: z.string().trim().min(1).optional(),
