@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook } from '@/dev/testkit';
 import { renderHookAndCollectValues, flushHookEffects } from '@/hooks/server/serverFeatureHookHarness.testHelpers';
+import { stubServerFeaturesFetch } from '@/hooks/server/serverFeaturesTestUtils';
 
 vi.mock('expo-updates', () => ({
     checkForUpdateAsync: vi.fn(async () => ({ isAvailable: false })),
@@ -19,7 +20,18 @@ vi.mock('expo-updates', () => ({
     })),
 }));
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({
+        Platform: {
+            OS: 'ios',
+            select: <T,>(options: { ios?: T; native?: T; default?: T; web?: T; android?: T }) =>
+                options?.ios ?? options?.native ?? options?.default ?? options?.web ?? options?.android,
+        },
+    });
+});
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 afterEach(() => {
     vi.unstubAllGlobals();
@@ -30,130 +42,44 @@ async function flushMore() {
     await flushHookEffects(10);
 }
 
+function prepareNativeProductionFeatureProbe(updatesOtaEnabled: boolean): void {
+    vi.resetModules();
+    vi.stubGlobal('__DEV__', false);
+    stubServerFeaturesFetch({ updatesOtaEnabled });
+}
+
+async function getCheckForUpdateAsyncMock() {
+    const Updates = await import('expo-updates');
+    return vi.mocked(Updates.checkForUpdateAsync);
+}
+
 describe('useUpdates (OTA gating)', () => {
     it('does not check for OTA updates when updates.ota is disabled', async () => {
-        vi.resetModules();
-
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(async () => ({
-                ok: true,
-                json: async () => ({
-                    features: {
-                        updates: { ota: { enabled: false } },
-                        sharing: {
-                            session: { enabled: true },
-                            public: { enabled: false },
-                            contentKeys: { enabled: true },
-                            pendingQueueV2: { enabled: false },
-                        },
-                        voice: { enabled: false, configured: false, provider: null },
-                        social: { friends: { enabled: false, allowUsername: false, requiredIdentityProviderId: null } },
-                        oauth: { providers: {} },
-                        auth: {
-                            signup: { methods: [] },
-                            login: { requiredProviders: [] },
-                            recovery: { providerReset: { enabled: false, providers: [] } },
-                            ui: {
-                                autoRedirect: { enabled: false, providerId: null },
-                                recoveryKeyReminder: { enabled: false },
-                            },
-                            providers: {},
-                            misconfig: [],
-                        },
-                    },
-                }),
-            })) as any,
-        );
+        prepareNativeProductionFeatureProbe(false);
 
         const { useUpdates } = await import('./useUpdates');
         await renderHookAndCollectValues(() => useUpdates());
         await flushMore();
 
-        const Updates = await import('expo-updates');
-        expect((Updates as any).checkForUpdateAsync).not.toHaveBeenCalled();
+        const checkForUpdateAsync = await getCheckForUpdateAsyncMock();
+        expect(checkForUpdateAsync).not.toHaveBeenCalled();
     });
 
     it('checks for OTA updates when updates.ota is enabled', async () => {
-        vi.resetModules();
-
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(async () => ({
-                ok: true,
-                json: async () => ({
-                    features: {
-                        updates: { ota: { enabled: true } },
-                        sharing: {
-                            session: { enabled: true },
-                            public: { enabled: false },
-                            contentKeys: { enabled: true },
-                            pendingQueueV2: { enabled: false },
-                        },
-                        voice: { enabled: false, configured: false, provider: null },
-                        social: { friends: { enabled: false, allowUsername: false, requiredIdentityProviderId: null } },
-                        oauth: { providers: {} },
-                        auth: {
-                            signup: { methods: [] },
-                            login: { requiredProviders: [] },
-                            recovery: { providerReset: { enabled: false, providers: [] } },
-                            ui: {
-                                autoRedirect: { enabled: false, providerId: null },
-                                recoveryKeyReminder: { enabled: false },
-                            },
-                            providers: {},
-                            misconfig: [],
-                        },
-                    },
-                }),
-            })) as any,
-        );
+        prepareNativeProductionFeatureProbe(true);
 
         const { useUpdates } = await import('./useUpdates');
         await renderHookAndCollectValues(() => useUpdates());
         await flushMore();
 
-        const Updates = await import('expo-updates');
-        expect((Updates as any).checkForUpdateAsync).toHaveBeenCalledTimes(1);
+        const checkForUpdateAsync = await getCheckForUpdateAsyncMock();
+        expect(checkForUpdateAsync).toHaveBeenCalledTimes(1);
     });
 
     it('shares startup update checks across multiple consumers', async () => {
-        vi.resetModules();
-
-        vi.stubGlobal(
-            'fetch',
-            vi.fn(async () => ({
-                ok: true,
-                json: async () => ({
-                    features: {
-                        updates: { ota: { enabled: true } },
-                        sharing: {
-                            session: { enabled: true },
-                            public: { enabled: false },
-                            contentKeys: { enabled: true },
-                            pendingQueueV2: { enabled: false },
-                        },
-                        voice: { enabled: false, configured: false, provider: null },
-                        social: { friends: { enabled: false, allowUsername: false, requiredIdentityProviderId: null } },
-                        oauth: { providers: {} },
-                        auth: {
-                            signup: { methods: [] },
-                            login: { requiredProviders: [] },
-                            recovery: { providerReset: { enabled: false, providers: [] } },
-                            ui: {
-                                autoRedirect: { enabled: false, providerId: null },
-                                recoveryKeyReminder: { enabled: false },
-                            },
-                            providers: {},
-                            misconfig: [],
-                        },
-                    },
-                }),
-            })) as any,
-        );
-
-        const Updates = await import('expo-updates');
-        (Updates as any).checkForUpdateAsync.mockClear();
+        prepareNativeProductionFeatureProbe(true);
+        const checkForUpdateAsync = await getCheckForUpdateAsyncMock();
+        checkForUpdateAsync.mockClear();
 
         const { useUpdates } = await import('./useUpdates');
         const harness = await renderHook(() => {
@@ -164,7 +90,7 @@ describe('useUpdates (OTA gating)', () => {
 
         await flushHookEffects(10);
 
-        expect((Updates as any).checkForUpdateAsync).toHaveBeenCalledTimes(1);
+        expect(checkForUpdateAsync).toHaveBeenCalledTimes(1);
 
         await harness.unmount();
     });

@@ -27,7 +27,10 @@ import { tracking } from '@/track/tracking';
 import { SettingsAnalyticsRuntime } from '@/track/settingsAnalytics/SettingsAnalyticsRuntime';
 import { syncRestore } from '@/sync/sync';
 import { storage } from '@/sync/domains/state/storage';
-import { getActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
+import {
+    clearActiveViewingSessionsForNonSessionRoute,
+    getActiveViewingSessionId,
+} from '@/sync/domains/session/activeViewingSession';
 import { NotificationsSettingsV1Schema } from '@happier-dev/protocol';
 import { useTrackScreens } from '@/track/useTrackScreens';
 import { RealtimeProvider } from '@/realtime/RealtimeProvider';
@@ -697,6 +700,10 @@ function AppBoot(props: {
     const isTerminalConnectRoute = isTerminalConnectWebPathname(pathname);
     const [initState, setInitState] = React.useState<{ credentials: AuthCredentials | null } | null>(null);
     const restartBugReportCheckedRef = React.useRef(false);
+
+    React.useEffect(() => {
+        clearActiveViewingSessionsForNonSessionRoute(pathname);
+    }, [pathname]);
 
     React.useEffect(() => {
         let cancelled = false;
