@@ -1,6 +1,10 @@
 import type { ResumeCapabilityOptions } from '@/agents/runtime/resumeCapabilities';
 import type { PermissionModeOverrideForSpawn } from '@/sync/domains/permissions/permissionModeOverride';
-import type { BusySteerSendPolicy, MessageSendMode } from '@/sync/domains/session/control/submitMode';
+import type {
+    BusySteerSendPolicy,
+    MessageSendMode,
+    SessionMessageDirectBypassReason,
+} from '@/sync/domains/session/control/submitMode';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { ResumeSessionOptions, ResumeSessionResult } from '@/sync/ops/sessions';
 
@@ -46,6 +50,17 @@ export type SessionSubmitWakeTargetOverride = Readonly<{
     directory?: string | null;
 }>;
 
+export type SessionMessageCallerSurface =
+    | 'session_composer'
+    | 'session_attachment_composer'
+    | 'session_attachment_review_comment_composer'
+    | 'session_review_comment_composer'
+    | 'plan_output_adopt'
+    | 'review_findings_apply'
+    | 'participant_composer'
+    | 'message_option'
+    | 'sync_submit_message';
+
 export type SubmitSessionUserMessageOptions = Readonly<{
     sessionId: string;
     session: Session;
@@ -64,6 +79,7 @@ export type SubmitSessionUserMessageOptions = Readonly<{
     serverId?: string | null;
     requestRemoteControlAfterPendingEnqueue?: boolean;
     onOutboundHandoff?: (handoff: SubmitSessionOutboundHandoff) => void;
+    callerSurface?: SessionMessageCallerSurface | null;
     nowMs?: number;
 }>;
 
@@ -80,6 +96,8 @@ export type DirectMessageLocalPendingProjection = Readonly<{
     localId: string;
 }>;
 
+export type DirectMessageBypassReason = SessionMessageDirectBypassReason;
+
 export interface SessionSubmitPort {
     enqueuePendingMessage(
         sessionId: string,
@@ -95,10 +113,15 @@ export interface SessionSubmitPort {
         options?: Readonly<{
             profileId?: string | null;
             localId?: string | null;
+            bypassPendingQueueReason?: DirectMessageBypassReason;
             onLocalPendingProjectionCreated?: (event: DirectMessageLocalPendingProjection) => void;
         }>,
     ): Promise<DirectMessageSubmitResult>;
     resumeSession(options: ResumeSessionOptions): Promise<ResumeSessionResult>;
+    refreshSessionForSubmit?(
+        sessionId: string,
+        options?: Readonly<{ serverId?: string | null }>,
+    ): Promise<Session | null | undefined>;
     abortSession?(sessionId: string): Promise<void>;
     switchSessionControlToRemote?(sessionId: string): Promise<void>;
     canWakeMachineId?(machineId: string): boolean;

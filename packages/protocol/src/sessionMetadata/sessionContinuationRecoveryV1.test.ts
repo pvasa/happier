@@ -33,6 +33,78 @@ describe('sessionContinuationRecoveryV1', () => {
           'generation-1:restart-1': {
             v: 1,
             attemptId: 'generation-1:restart-1',
+            status: 'awaiting_provider_activity',
+            failureAtMs: 1_000,
+            updatedAtMs: 1_200,
+            sentAtMs: 1_200,
+            resumePromptMode: 'standard',
+            continuationRequired: true,
+          },
+        },
+      },
+    })).toBe(true);
+
+    expect(isSessionContinuationRecoveryBlockingPendingDrain({
+      sessionContinuationRecoveryV1: {
+        v: 1,
+        attemptsById: {
+          'generation-1:restart-1': {
+            v: 1,
+            attemptId: 'generation-1:restart-1',
+            status: 'provider_activity_observed',
+            failureAtMs: 1_000,
+            updatedAtMs: 1_300,
+            sentAtMs: 1_200,
+            resumePromptMode: 'standard',
+            continuationRequired: true,
+          },
+        },
+      },
+    })).toBe(false);
+
+    expect(isSessionContinuationRecoveryBlockingPendingDrain({
+      sessionContinuationRecoveryV1: {
+        v: 1,
+        attemptsById: {
+          'generation-1:restart-1': {
+            v: 1,
+            attemptId: 'generation-1:restart-1',
+            status: 'provider_activity_timeout',
+            failureAtMs: 1_000,
+            updatedAtMs: 7_000,
+            sentAtMs: 1_200,
+            resumePromptMode: 'standard',
+            continuationRequired: true,
+            errorCode: 'provider_activity_timeout',
+          },
+        },
+      },
+    })).toBe(false);
+
+    expect(isSessionContinuationRecoveryBlockingPendingDrain({
+      sessionContinuationRecoveryV1: {
+        v: 1,
+        attemptsById: {
+          'generation-1:restart-1': {
+            v: 1,
+            attemptId: 'generation-1:restart-1',
+            status: 'suppressed_no_interrupted_turn',
+            failureAtMs: 1_000,
+            updatedAtMs: 1_300,
+            resumePromptMode: 'standard',
+            continuationRequired: false,
+          },
+        },
+      },
+    })).toBe(false);
+
+    expect(isSessionContinuationRecoveryBlockingPendingDrain({
+      sessionContinuationRecoveryV1: {
+        v: 1,
+        attemptsById: {
+          'generation-1:restart-1': {
+            v: 1,
+            attemptId: 'generation-1:restart-1',
             status: 'sent',
             failureAtMs: 1_000,
             updatedAtMs: 1_200,

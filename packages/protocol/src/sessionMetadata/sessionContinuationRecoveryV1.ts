@@ -9,7 +9,11 @@ export type SessionContinuationResumePromptModeV1 =
 export const SessionContinuationRecoveryAttemptStatusV1Schema = z.enum([
   'pending_provider_context',
   'sending',
+  'awaiting_provider_activity',
+  'provider_activity_observed',
+  'provider_activity_timeout',
   'sent',
+  'suppressed_no_interrupted_turn',
   'suppressed_newer_user_input',
   'retry_required',
   'continuity_failed',
@@ -25,6 +29,7 @@ export const SessionContinuationRecoveryAttemptV1Schema = z
     failureAtMs: z.number().int().nonnegative(),
     updatedAtMs: z.number().int().nonnegative(),
     resumePromptMode: SessionContinuationResumePromptModeV1Schema,
+    continuationRequired: z.boolean().optional(),
     sentAtMs: z.number().int().nonnegative().optional(),
     errorCode: z.string().trim().min(1).optional(),
   })
@@ -43,6 +48,7 @@ export type SessionContinuationRecoveryV1 = z.infer<typeof SessionContinuationRe
 const blockingStatuses = new Set<SessionContinuationRecoveryAttemptStatusV1>([
   'pending_provider_context',
   'sending',
+  'awaiting_provider_activity',
 ]);
 
 export function isSessionContinuationRecoveryBlockingPendingDrain(metadata: unknown): boolean {

@@ -1,4 +1,5 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import type { SessionMessageDirectBypassReason } from '@/sync/domains/session/control/submitMode';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
@@ -122,7 +123,11 @@ function getDefaultActiveSync() {
             text: string,
             displayText?: string,
             metaOverrides?: Record<string, unknown>,
-            options?: Readonly<{ profileId?: string | null; localId?: string | null }>,
+            options?: Readonly<{
+                profileId?: string | null;
+                localId?: string | null;
+                bypassPendingQueueReason?: SessionMessageDirectBypassReason;
+            }>,
         ) => {
             if (typeof sync.sendMessage === 'function') {
                 await sync.sendMessage(sessionId, text, displayText, metaOverrides, options);
@@ -223,8 +228,9 @@ export function createFollowUpSpawnedSessionWithServerScope(deps?: Readonly<{
                             ? {
                                 ...(params.profileId ? { profileId: params.profileId } : {}),
                                 ...(params.messageLocalId ? { localId: params.messageLocalId } : {}),
+                                bypassPendingQueueReason: 'spawned_session_follow_up',
                             }
-                            : undefined,
+                            : { bypassPendingQueueReason: 'spawned_session_follow_up' },
                     );
                     return;
                 }

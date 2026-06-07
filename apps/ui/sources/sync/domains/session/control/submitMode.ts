@@ -7,6 +7,38 @@ export type MessageSendMode = 'agent_queue' | 'interrupt' | 'server_pending';
 
 export type BusySteerSendPolicy = 'steer_immediately' | 'server_pending';
 
+export const DEFAULT_BUSY_STEER_SEND_POLICY: BusySteerSendPolicy = 'steer_immediately';
+
+export type SessionMessageDeliveryIntent =
+    | 'default'
+    | 'explicit_pending'
+    | 'explicit_immediate'
+    | 'interrupt';
+
+export type PendingQueueSubmitSupportState =
+    | 'supported'
+    | 'unknown_session'
+    | 'unknown_pending_version'
+    | 'unsupported_cli_version';
+
+export type SessionMessageDirectBypassReason =
+    | 'selected_direct'
+    | 'force_immediate'
+    | 'interrupt'
+    | 'subagent_control_command'
+    | 'voice_turn_immediate'
+    | 'voice_post_process'
+    | 'server_scoped_rpc_active'
+    | 'spawned_session_follow_up';
+
+export type SessionMessageDeliveryDecision = Readonly<{
+    mode: MessageSendMode;
+    intent: SessionMessageDeliveryIntent;
+    reason: string;
+    pendingSupportState: PendingQueueSubmitSupportState;
+    directBypassReason?: SessionMessageDirectBypassReason;
+}>;
+
 type SessionSubmitRuntimeState = Readonly<{
     localControlBlocksDirectSubmit: boolean;
     isBusy: boolean;
@@ -61,24 +93,94 @@ export function canDirectSubmitUserMessageNow(opts: {
 }
 
 export function isPendingQueueSubmitKnownUnsupported(session: Session | null): boolean {
-    const cliVersion = session?.metadata?.version;
-    const trimmedCliVersion = typeof cliVersion === 'string' ? cliVersion.trim() : '';
-    return Boolean(trimmedCliVersion)
-        && !isVersionSupported(trimmedCliVersion, MINIMUM_CLI_PENDING_QUEUE_V2_VERSION);
+    return getPendingQueueSubmitSupportState(session) === 'unsupported_cli_version';
 }
 
-export function chooseSubmitMode(opts: {
+export function getPendingQueueSubmitSupportState(session: Session | null): PendingQueueSubmitSupportState {
+    if (!session) {
+        return 'unknown_session';
+    }
+
+    if (typeof session.pendingVersion !== 'number') {
+        return 'unknown_pending_version';
+    }
+
+    const cliVersion = session?.metadata?.version;
+    const trimmedCliVersion = typeof cliVersion === 'string' ? cliVersion.trim() : '';
+    if (trimmedCliVersion && !isVersionSupported(trimmedCliVersion, MINIMUM_CLI_PENDING_QUEUE_V2_VERSION)) {
+        return 'unsupported_cli_version';
+    }
+
+    return 'supported';
+}
+
+function getDeliveryIntent(opts: {
+    configuredMode: MessageSendMode;
+    explicitMode?: MessageSendMode;
+    forceImmediate?: boolean;
+}): SessionMessageDeliveryIntent {
+    const requestedMode = opts.explicitMode ?? opts.configuredMode;
+    if (requestedMode === 'interrupt') {
+        return 'interrupt';
+    }
+    if (opts.forceImmediate === true) {
+        return 'explicit_immediate';
+    }
+    if (opts.explicitMode === 'server_pending') {
+        return 'explicit_pending';
+    }
+    return 'default';
+}
+
+function withDirectReason(
+    decision: Omit<SessionMessageDeliveryDecision, 'directBypassReason'>,
+): SessionMessageDeliveryDecision {
+    if (decision.mode === 'interrupt') {
+        return { ...decision, directBypassReason: 'interrupt' };
+    }
+    if (decision.mode === 'agent_queue') {
+        return {
+            ...decision,
+            directBypassReason: decision.intent === 'explicit_immediate' ? 'force_immediate' : 'selected_direct',
+        };
+    }
+    return decision;
+}
+
+export function decideSessionMessageDelivery(opts: {
     configuredMode: MessageSendMode;
     busySteerSendPolicy?: BusySteerSendPolicy;
     explicitMode?: MessageSendMode;
     session: Session | null;
     nowMs?: number;
-}): MessageSendMode {
+    forceImmediate?: boolean;
+}): SessionMessageDeliveryDecision {
     const configuredMode = opts.configuredMode;
     const requestedMode = opts.explicitMode ?? configuredMode;
-    if (requestedMode === 'interrupt') return 'interrupt';
+    const intent = getDeliveryIntent(opts);
+    const pendingSupportState = getPendingQueueSubmitSupportState(opts.session);
+    if (requestedMode === 'interrupt') {
+        return withDirectReason({
+            mode: 'interrupt',
+            intent,
+            reason: 'interrupt',
+            pendingSupportState,
+        });
+    }
 
     const session = opts.session;
+    if (
+        opts.forceImmediate === true
+        && canDirectSubmitUserMessageNow({ session, nowMs: opts.nowMs })
+    ) {
+        return withDirectReason({
+            mode: 'agent_queue',
+            intent,
+            reason: 'force_immediate_direct',
+            pendingSupportState,
+        });
+    }
+
     // Server-side pending queue V2 support is negotiated via session summary fields.
     // Mixed-version safety: older servers won't include these fields.
     const supportsQueue = typeof session?.pendingVersion === 'number';
@@ -86,7 +188,12 @@ export function chooseSubmitMode(opts: {
         // Missing support metadata is an unknown state, not permission to bypass an
         // explicit queueing intent. Preserve server_pending so callers fail closed
         // through the queue path instead of steering directly.
-        return requestedMode;
+        return withDirectReason({
+            mode: requestedMode,
+            intent,
+            reason: requestedMode === 'server_pending' ? 'pending_support_unknown' : 'pending_support_unknown_preserve_request',
+            pendingSupportState,
+        });
     }
 
     // If we have an explicit CLI version published, gate server_pending on it to avoid
@@ -95,20 +202,35 @@ export function chooseSubmitMode(opts: {
     const trimmedCliVersion = typeof cliVersion === 'string' ? cliVersion.trim() : '';
     if (trimmedCliVersion) {
         if (!isVersionSupported(trimmedCliVersion, MINIMUM_CLI_PENDING_QUEUE_V2_VERSION)) {
-            return requestedMode === 'server_pending' ? 'agent_queue' : requestedMode;
+            return withDirectReason({
+                mode: requestedMode === 'server_pending' ? 'agent_queue' : requestedMode,
+                intent,
+                reason: requestedMode === 'server_pending' ? 'pending_unsupported_cli_fallback' : 'pending_unsupported_cli_preserve_request',
+                pendingSupportState,
+            });
         }
     }
 
     if (opts.explicitMode === 'server_pending') {
-        return 'server_pending';
+        return {
+            mode: 'server_pending',
+            intent,
+            reason: 'explicit_pending',
+            pendingSupportState,
+        };
     }
 
     if (session?.active === false) {
-        return 'server_pending';
+        return {
+            mode: 'server_pending',
+            intent,
+            reason: 'inactive_session',
+            pendingSupportState,
+        };
     }
 
     const runtimeState = deriveSubmitRuntimeState(session, opts.nowMs ?? Date.now());
-    const busySteerSendPolicy: BusySteerSendPolicy = opts.busySteerSendPolicy ?? 'steer_immediately';
+    const busySteerSendPolicy: BusySteerSendPolicy = opts.busySteerSendPolicy ?? DEFAULT_BUSY_STEER_SEND_POLICY;
 
     // Prefer the metadata-backed queue when:
     // - terminal has control (can't safely inject into local stdin),
@@ -127,14 +249,66 @@ export function chooseSubmitMode(opts: {
         && runtimeState.agentReady
         && busySteerSendPolicy === 'steer_immediately'
     ) {
-        return 'agent_queue';
+        return withDirectReason({
+            mode: 'agent_queue',
+            intent,
+            reason: 'busy_steer_immediate',
+            pendingSupportState,
+        });
     }
 
-    if (runtimeState.localControlBlocksDirectSubmit || runtimeState.isBusy || !runtimeState.isOnline || !runtimeState.agentReady) {
-        return 'server_pending';
+    if (runtimeState.localControlBlocksDirectSubmit) {
+        return {
+            mode: 'server_pending',
+            intent,
+            reason: 'local_control_pending',
+            pendingSupportState,
+        };
     }
 
-    return configuredMode;
+    if (runtimeState.isBusy) {
+        return {
+            mode: 'server_pending',
+            intent,
+            reason: 'busy_policy_pending',
+            pendingSupportState,
+        };
+    }
+
+    if (!runtimeState.isOnline) {
+        return {
+            mode: 'server_pending',
+            intent,
+            reason: 'offline_pending',
+            pendingSupportState,
+        };
+    }
+
+    if (!runtimeState.agentReady) {
+        return {
+            mode: 'server_pending',
+            intent,
+            reason: 'agent_not_ready_pending',
+            pendingSupportState,
+        };
+    }
+
+    return withDirectReason({
+        mode: configuredMode,
+        intent,
+        reason: 'configured_mode',
+        pendingSupportState,
+    });
+}
+
+export function chooseSubmitMode(opts: {
+    configuredMode: MessageSendMode;
+    busySteerSendPolicy?: BusySteerSendPolicy;
+    explicitMode?: MessageSendMode;
+    session: Session | null;
+    nowMs?: number;
+}): MessageSendMode {
+    return decideSessionMessageDelivery(opts).mode;
 }
 
 export function chooseForceImmediateSubmitMode(opts: {
@@ -144,12 +318,5 @@ export function chooseForceImmediateSubmitMode(opts: {
     session: Session | null;
     nowMs?: number;
 }): MessageSendMode {
-    const selected = chooseSubmitMode(opts);
-    if (selected !== 'server_pending') {
-        return selected;
-    }
-
-    return canDirectSubmitUserMessageNow({ session: opts.session, nowMs: opts.nowMs })
-        ? 'agent_queue'
-        : 'server_pending';
+    return decideSessionMessageDelivery({ ...opts, forceImmediate: true }).mode;
 }

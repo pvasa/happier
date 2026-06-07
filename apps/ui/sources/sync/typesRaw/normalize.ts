@@ -130,6 +130,18 @@ function isCompactHookLocalCommandStdout(value: unknown): boolean {
     return isCompactHookLocalCommandStdoutText(firstMessageText(value));
 }
 
+function isClaudeLocalCommandText(text: unknown): boolean {
+    if (typeof text !== 'string') return false;
+    const trimmed = text.trim();
+    if (trimmed.startsWith('<local-command-caveat>')) return true;
+    if (trimmed.includes('<command-name>/compact</command-name>')) return true;
+    return isCompactHookLocalCommandStdoutText(trimmed);
+}
+
+function isClaudeLocalCommandTranscriptValue(value: unknown): boolean {
+    return isClaudeLocalCommandText(firstMessageText(value));
+}
+
 function readOriginalStructuredContentData(rawInput: unknown, contentType: 'event' | 'acp'): Record<string, unknown> | null {
     if (!isPlainRecord(rawInput)) return null;
     const content = rawInput.content;
@@ -380,7 +392,7 @@ export function normalizeRawMessage(
     };
 
     if (raw.role === 'user') {
-        if (isCompactHookLocalCommandStdout(raw.content)) {
+        if (isClaudeLocalCommandTranscriptValue(raw.content)) {
             return null;
         }
         return {
@@ -488,7 +500,11 @@ export function normalizeRawMessage(
                 return null;
             }
 
-            if (isCompactHookLocalCommandStdout(raw.content.data)) {
+            if (isClaudeLocalCommandTranscriptValue(raw.content.data)) {
+                return null;
+            }
+
+            if ((raw.content.data as { type?: unknown }).type === 'claude_jsonl_consumed_marker') {
                 return null;
             }
 

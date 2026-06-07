@@ -5,7 +5,7 @@ import type { SessionSubmitPort } from './types';
 
 type SyncSubmitRuntime = Pick<
     typeof defaultSync,
-    'abortSession' | 'enqueuePendingMessage' | 'sendMessage' | 'encryption'
+    'abortSession' | 'enqueuePendingMessage' | 'sendMessage' | 'encryption' | 'refreshSessionForSubmit'
 >;
 
 export function createSyncBackedSubmitPort(syncRuntime: SyncSubmitRuntime = defaultSync): SessionSubmitPort {
@@ -16,6 +16,7 @@ export function createSyncBackedSubmitPort(syncRuntime: SyncSubmitRuntime = defa
             syncRuntime.sendMessage(sessionId, text, displayText, metaOverrides, options),
         abortSession: (sessionId) => syncRuntime.abortSession(sessionId),
         resumeSession: (options) => resumeSession(options),
+        refreshSessionForSubmit: (sessionId, options) => syncRuntime.refreshSessionForSubmit(sessionId, options),
         switchSessionControlToRemote: async (sessionId) => {
             await sessionSwitch(sessionId, 'remote');
         },

@@ -374,6 +374,10 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
         });
     }
 
+    function hasActiveTurn(): boolean {
+        return activeTurn !== null;
+    }
+
     function observeAcpLifecycleMarker(input: Readonly<{
         provider: ACPProvider;
         body: ACPMessageData;
@@ -429,6 +433,7 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
         endSession,
         markRollbackEligible,
         markRolledBack,
+        hasActiveTurn,
         observeAcpLifecycleMarker,
     };
 }

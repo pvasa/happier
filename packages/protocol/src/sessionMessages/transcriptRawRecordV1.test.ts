@@ -321,6 +321,8 @@ describe('TranscriptRawRecordV1Schema', () => {
           groupId: 'codex-main',
           fromProfileId: 'work',
           toProfileId: 'backup',
+          fromProfileLabel: 'Work account',
+          toProfileLabel: 'Backup account',
           reason: 'usage_limit',
           mode: 'hot_apply',
           resetAtMs: 1_000,
@@ -330,6 +332,13 @@ describe('TranscriptRawRecordV1Schema', () => {
     });
 
     expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.content.type === 'event'
+      ? parsed.data.content.data
+      : null).toMatchObject({
+      type: 'connected-service-account-switch',
+      fromProfileLabel: 'Work account',
+      toProfileLabel: 'Backup account',
+    });
   });
 
   it('parses connected-service account switch events with native endpoints', () => {

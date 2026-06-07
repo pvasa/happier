@@ -111,7 +111,10 @@ export function createServerScopedSessionSendMessage(deps?: Partial<Deps>): Read
       deps?.sendMessageActive ??
       (async (sessionId, message, displayText, metaOverrides, options) => {
         const { sync } = await import('@/sync/sync');
-        await sync.sendMessage(sessionId, message, displayText, metaOverrides, options?.localId ? { localId: options.localId } : undefined);
+        await sync.sendMessage(sessionId, message, displayText, metaOverrides, {
+          ...(options?.localId ? { localId: options.localId } : {}),
+          bypassPendingQueueReason: 'server_scoped_rpc_active',
+        });
       }),
   };
 

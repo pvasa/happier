@@ -110,6 +110,69 @@ describe('ApiSessionClient pending queue materialization', () => {
         expect((client as any).shouldAttemptPendingMaterialization?.()).toBe(false);
     });
 
+    it('does not pop pending messages while continuation recovery blocks materialization', async () => {
+        const sessionSocket = createApiSessionSocketStub({
+            connected: true,
+            emitWithAck: async () => ({
+                ok: true,
+                didMaterialize: true,
+                message: { id: 'msg-2', seq: 2, localId: 'local-p1' },
+            }),
+        });
+        const userSocket = createApiSessionSocketStub();
+
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+
+        const client = new ApiSessionClient('fake-token', {
+            ...mockSession,
+            metadata: {
+                sessionContinuationRecoveryV1: {
+                    v: 1,
+                    attemptsById: {
+                        'generation-1:restart-1': {
+                            v: 1,
+                            attemptId: 'generation-1:restart-1',
+                            status: 'pending_provider_context',
+                            failureAtMs: 100,
+                            updatedAtMs: 110,
+                            resumePromptMode: 'standard',
+                        },
+                    },
+                },
+            },
+            pendingCount: 1,
+            pendingVersion: 1,
+        });
+
+        expect((client as any).shouldAttemptPendingMaterialization?.()).toBe(false);
+        await expect(client.popPendingMessage()).resolves.toBe(false);
+        expect(sessionSocket.emitWithAck).not.toHaveBeenCalledWith('pending-materialize-next', expect.anything());
+    });
+
+    it('suppresses pending materialization while the primary session turn is still active', async () => {
+        const sessionSocket = createApiSessionSocketStub({ connected: true });
+        const userSocket = createApiSessionSocketStub();
+
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+
+        const client = new ApiSessionClient('fake-token', {
+            ...mockSession,
+            metadata: {},
+            pendingCount: 1,
+            pendingVersion: 1,
+        });
+
+        await client.sessionTurnLifecycle.beginTurn({ provider: 'codex', providerTurnId: 'turn-1' });
+
+        expect((client as any).shouldAttemptPendingMaterialization?.()).toBe(false);
+        await expect(client.popPendingMessage()).resolves.toBe(false);
+        expect(sessionSocket.emitWithAck).not.toHaveBeenCalledWith('pending-materialize-next', expect.anything());
+
+        await client.sessionTurnLifecycle.completeTurn({ provider: 'codex', providerTurnId: 'turn-1' });
+
+        expect((client as any).shouldAttemptPendingMaterialization?.()).toBe(true);
+    });
+
     it('popPendingMessage skips materialize-next when local pending state is known empty', async () => {
         const sessionSocket = createApiSessionSocketStub({ connected: true });
         const userSocket = createApiSessionSocketStub();
@@ -634,6 +697,128 @@ describe('ApiSessionClient pending queue materialization', () => {
         userUpdateHandler?.(update);
         sessionUpdateHandler?.(update);
         expect(onUserMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('delivers each materialized pending local id once under multi-row drain and duplicate echoes', async () => {
+        const makeEncryptedUser = (text: string) => encodeBase64(encrypt(
+            mockSession.encryptionKey,
+            mockSession.encryptionVariant,
+            {
+                role: 'user',
+                content: { type: 'text', text },
+                meta: { source: 'ui' },
+            },
+        ));
+        const firstEncrypted = makeEncryptedUser('first pending');
+        const secondEncrypted = makeEncryptedUser('second pending');
+        const materializeResponses = [
+            {
+                ok: true,
+                didMaterialize: true,
+                didWrite: true,
+                pendingCount: 1,
+                pendingVersion: 2,
+                message: {
+                    id: 'msg-2',
+                    seq: 2,
+                    localId: 'local-p1',
+                    messageRole: 'user',
+                    content: { t: 'encrypted' as const, c: firstEncrypted },
+                    createdAt: 1_000,
+                    updatedAt: 1_000,
+                },
+            },
+            {
+                ok: true,
+                didMaterialize: true,
+                didWrite: true,
+                pendingCount: 0,
+                pendingVersion: 3,
+                message: {
+                    id: 'msg-3',
+                    seq: 3,
+                    localId: 'local-p2',
+                    messageRole: 'user',
+                    content: { t: 'encrypted' as const, c: secondEncrypted },
+                    createdAt: 1_100,
+                    updatedAt: 1_100,
+                },
+            },
+        ];
+        const sessionSocket = createApiSessionSocketStub({
+            connected: true,
+            emitWithAck: async () => {
+                const next = materializeResponses.shift();
+                if (!next) {
+                    throw new Error('unexpected materialize call');
+                }
+                return next;
+            },
+        });
+        const userSocket = createApiSessionSocketStub({ connected: true });
+
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+
+        const client = new ApiSessionClient('fake-token', {
+            ...mockSession,
+            metadata: {},
+            pendingCount: 2,
+            pendingVersion: 1,
+        });
+        const onUserMessage = vi.fn();
+        client.onUserMessage(onUserMessage);
+
+        await expect(client.popPendingMessage()).resolves.toBe(true);
+        await expect(client.popPendingMessage()).resolves.toBe(true);
+        expect(onUserMessage.mock.calls.map((call) => call[0]?.localId)).toEqual(['local-p1', 'local-p2']);
+
+        const sessionUpdateHandler = sessionSocket.getHandler('update');
+        const userUpdateHandler = userSocket.getHandler('update');
+        expect(typeof sessionUpdateHandler).toBe('function');
+        expect(typeof userUpdateHandler).toBe('function');
+
+        const updates = [
+            {
+                id: 'update-echo-1',
+                seq: 2,
+                createdAt: Date.now(),
+                body: {
+                    t: 'new-message',
+                    sid: mockSession.id,
+                    message: {
+                        id: 'msg-2',
+                        seq: 2,
+                        localId: 'local-p1',
+                        content: { t: 'encrypted', c: firstEncrypted },
+                    },
+                },
+            },
+            {
+                id: 'update-echo-2',
+                seq: 3,
+                createdAt: Date.now(),
+                body: {
+                    t: 'new-message',
+                    sid: mockSession.id,
+                    message: {
+                        id: 'msg-3',
+                        seq: 3,
+                        localId: 'local-p2',
+                        content: { t: 'encrypted', c: secondEncrypted },
+                    },
+                },
+            },
+        ] as any[];
+
+        for (const update of updates) {
+            userUpdateHandler?.(update);
+            sessionUpdateHandler?.(update);
+            userUpdateHandler?.(update);
+        }
+
+        expect(onUserMessage.mock.calls.map((call) => call[0]?.localId)).toEqual(['local-p1', 'local-p2']);
+        await expect(client.popPendingMessage()).resolves.toBe(false);
+        expect(materializeResponses).toHaveLength(0);
     });
 
     it('popPendingMessage falls back to HTTP materialize when socket RPC fails', async () => {

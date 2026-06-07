@@ -28,6 +28,10 @@ function parsePersistedConnectedServices(value: unknown): ResumeSessionBaseOptio
     return parsed.success && parsed.data != null ? parsed.data : undefined;
 }
 
+function parsePersistedConnectedServicesUpdatedAt(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 export function buildResumeSessionBaseOptionsFromSession(opts: {
     sessionId: string;
     session: Session;
@@ -76,6 +80,7 @@ export function buildResumeSessionBaseOptionsFromSession(opts: {
 
     const resume = getAgentVendorResumeId(session.metadata, agentId, resumeCapabilityOptions);
     const connectedServices = parsePersistedConnectedServices(session.metadata?.connectedServices);
+    const connectedServicesUpdatedAt = parsePersistedConnectedServicesUpdatedAt(session.metadata?.connectedServicesUpdatedAt);
 
     return {
         sessionId,
@@ -84,6 +89,7 @@ export function buildResumeSessionBaseOptionsFromSession(opts: {
         backendTarget: { kind: 'builtInAgent', agentId: getAgentCore(agentId).cli.spawnAgent },
         ...(resume ? { resume } : {}),
         ...(connectedServices !== undefined ? { connectedServices } : {}),
+        ...(connectedServices !== undefined && connectedServicesUpdatedAt !== undefined ? { connectedServicesUpdatedAt } : {}),
         ...(session.metadata?.agentRuntimeDescriptorV1 ? { agentRuntimeDescriptorV1: session.metadata.agentRuntimeDescriptorV1 } : {}),
         ...(permissionOverride ? permissionOverride : {}),
         ...(modelOverride ? modelOverride : {}),

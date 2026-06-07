@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ResumeSessionOptions, ResumeSessionResult } from '@/sync/ops/sessions';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { syncReliabilityTelemetry } from '@/sync/runtime/syncReliabilityTelemetry';
 
 type TestWakeStorageState = {
     sessions: Record<string, unknown>;
@@ -85,8 +86,16 @@ function createSession(
 }
 
 type SubmitCall =
+    | { type: 'refresh'; sessionId: string; serverId?: string | null }
     | { type: 'enqueue'; sessionId: string; text: string; displayText?: string; metaOverrides?: Record<string, unknown> }
-    | { type: 'send'; sessionId: string; text: string; displayText?: string; metaOverrides?: Record<string, unknown> }
+    | {
+        type: 'send';
+        sessionId: string;
+        text: string;
+        displayText?: string;
+        metaOverrides?: Record<string, unknown>;
+        bypassPendingQueueReason?: string;
+    }
     | { type: 'resume'; options: ResumeSessionOptions }
     | { type: 'abort'; sessionId: string }
     | { type: 'switchRemote'; sessionId: string };
@@ -99,6 +108,8 @@ function createPort(config: {
     resumeReject?: Error;
     sendReject?: Error;
     canWakeMachine?: boolean;
+    refreshSessionResult?: Session | null;
+    refreshSessionReject?: Error;
 } = {}) {
     const calls: SubmitCall[] = [];
     const port = {
@@ -120,10 +131,11 @@ function createPort(config: {
             options?: Readonly<{
                 profileId?: string | null;
                 localId?: string | null;
+                bypassPendingQueueReason?: string;
                 onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void;
             }>,
         ) => {
-            calls.push({ type: 'send', sessionId, text, displayText, metaOverrides });
+            calls.push({ type: 'send', sessionId, text, displayText, metaOverrides, bypassPendingQueueReason: options?.bypassPendingQueueReason });
             if (config.sendReject) throw config.sendReject;
             options?.onLocalPendingProjectionCreated?.({
                 localId: (config.sendResult && typeof config.sendResult === 'object' && config.sendResult.localId) || 'direct-local-id',
@@ -142,6 +154,11 @@ function createPort(config: {
             calls.push({ type: 'switchRemote', sessionId });
         },
         canWakeMachineId: () => config.canWakeMachine ?? true,
+        refreshSessionForSubmit: async (sessionId: string, options?: Readonly<{ serverId?: string | null }>) => {
+            calls.push({ type: 'refresh', sessionId, serverId: options?.serverId });
+            if (config.refreshSessionReject) throw config.refreshSessionReject;
+            return config.refreshSessionResult ?? null;
+        },
     };
 
     return { calls, port };
@@ -149,6 +166,7 @@ function createPort(config: {
 
 describe('submitSessionUserMessage', () => {
     beforeEach(() => {
+        syncReliabilityTelemetry.reset();
         storageState.current = {
             sessions: {
                 s1: {
@@ -300,6 +318,73 @@ describe('submitSessionUserMessage', () => {
         expect(calls).toEqual([]);
     });
 
+    it('refreshes unknown pending support once before enqueuing', async () => {
+        const subject = await expectSubject();
+        if (!subject) return;
+        const { calls, port } = createPort({
+            refreshSessionResult: createSession({
+                active: false,
+                pendingVersion: 2,
+                metadata: { version: '999.0.0' },
+            }),
+        });
+
+        const result = await subject.submitSessionUserMessage(port, {
+            sessionId: 's1',
+            session: createSession({
+                active: false,
+                pendingVersion: undefined,
+                metadata: { version: '999.0.0' },
+            }),
+            text: 'refresh then queue',
+            configuredMode: 'server_pending',
+            resumeCapabilityOptions: { accountSettings: {} },
+            serverId: 'server-cache',
+        });
+
+        expect(result).toMatchObject({
+            type: 'success',
+            persistence: 'pending',
+        });
+        expect(calls.map((call) => call.type)).toEqual(['refresh', 'enqueue', 'resume']);
+        expect(calls[0]).toEqual({
+            type: 'refresh',
+            sessionId: 's1',
+            serverId: 'server-cache',
+        });
+    });
+
+    it('rejects unknown pending support after refresh without direct-sending or enqueuing', async () => {
+        const subject = await expectSubject();
+        if (!subject) return;
+        const { calls, port } = createPort({
+            refreshSessionResult: createSession({
+                pendingVersion: undefined,
+                metadata: { version: '999.0.0' },
+            }),
+        });
+
+        const result = await subject.submitSessionUserMessage(port, {
+            sessionId: 's1',
+            session: createSession({
+                pendingVersion: undefined,
+                metadata: { version: '999.0.0' },
+            }),
+            text: 'do not strand or direct send',
+            configuredMode: 'server_pending',
+            resumeCapabilityOptions: { accountSettings: {} },
+            serverId: 'server-cache',
+        });
+
+        expect(result).toMatchObject({
+            type: 'rejected',
+            persistence: 'none',
+            wake: { attempted: false, state: 'not_needed' },
+            errorCode: 'PENDING_QUEUE_SUPPORT_UNKNOWN',
+        });
+        expect(calls.map((call) => call.type)).toEqual(['refresh']);
+    });
+
     it('does not let forceImmediate bypass inactive-session pending safety', async () => {
         const subject = await expectSubject();
         if (!subject) return;
@@ -334,6 +419,7 @@ describe('submitSessionUserMessage', () => {
             text: 'send now',
             configuredMode: 'server_pending',
             forceImmediate: true,
+            callerSurface: 'session_composer',
             resumeCapabilityOptions: { accountSettings: {} },
             serverId: 'server-cache',
         });
@@ -348,7 +434,120 @@ describe('submitSessionUserMessage', () => {
             type: 'send',
             sessionId: 's1',
             text: 'send now',
+            bypassPendingQueueReason: 'force_immediate',
         });
+        expect(syncReliabilityTelemetry.snapshot().events).toContainEqual(expect.objectContaining({
+            name: 'ui.sessionMessage.delivery.decision',
+            fields: expect.objectContaining({
+                sessionId: 's1',
+                mode: 'agent_queue',
+                decisionReason: 'force_immediate_direct',
+                configuredMode: 'server_pending',
+                busySteerSendPolicy: 'steer_immediately',
+                callerSurface: 'session_composer',
+                forceImmediate: true,
+                pendingRequested: true,
+                pendingSupportState: 'supported',
+            }),
+        }));
+    });
+
+    it('lets forceImmediate bypass configured pending when pending support is unknown but direct send is safe', async () => {
+        const subject = await expectSubject();
+        if (!subject) return;
+        const { calls, port } = createPort();
+
+        const result = await subject.submitSessionUserMessage(port, {
+            sessionId: 's1',
+            session: createSession({
+                active: true,
+                presence: 'online',
+                agentStateVersion: 1,
+                pendingVersion: undefined,
+            }),
+            text: 'send now during stale snapshot',
+            configuredMode: 'server_pending',
+            forceImmediate: true,
+            resumeCapabilityOptions: { accountSettings: {} },
+            serverId: 'server-cache',
+        });
+
+        expect(result).toMatchObject({
+            type: 'success',
+            persistence: 'transcript_committed',
+            wake: { attempted: false, state: 'not_needed' },
+        });
+        expect(calls.map((call) => call.type)).toEqual(['send']);
+        expect(calls[0]).toMatchObject({
+            type: 'send',
+            bypassPendingQueueReason: 'force_immediate',
+        });
+    });
+
+    it('queues normal busy sends when settings prefer pending even if in-flight steer is available', async () => {
+        const subject = await expectSubject();
+        if (!subject) return;
+        const { calls, port } = createPort();
+
+        const result = await subject.submitSessionUserMessage(port, {
+            sessionId: 's1',
+            session: createSession({
+                active: true,
+                presence: 'online',
+                agentStateVersion: 1,
+                thinking: true,
+                thinkingAt: 1_000,
+                agentState: {
+                    controlledByUser: false,
+                    capabilities: {
+                        inFlightSteer: true,
+                        inFlightSteerSupported: true,
+                        inFlightSteerAvailable: true,
+                    },
+                } as any,
+            }),
+            text: 'queue while busy',
+            configuredMode: 'server_pending',
+            busySteerSendPolicy: 'server_pending',
+            resumeCapabilityOptions: { accountSettings: {} },
+            nowMs: 1_100,
+        });
+
+        expect(result).toMatchObject({
+            type: 'wake_pending',
+            persistence: 'pending',
+            wake: { attempted: false, state: 'not_needed' },
+        });
+        expect(calls.map((call) => call.type)).toEqual(['enqueue']);
+    });
+
+    it('does not make forceImmediate sticky for the next normal pending send', async () => {
+        const subject = await expectSubject();
+        if (!subject) return;
+        const { calls, port } = createPort();
+        const session = createSession({ active: true, presence: 'online', agentStateVersion: 1 });
+
+        await subject.submitSessionUserMessage(port, {
+            sessionId: 's1',
+            session,
+            text: 'send now',
+            configuredMode: 'server_pending',
+            forceImmediate: true,
+            resumeCapabilityOptions: { accountSettings: {} },
+        });
+        const result = await subject.submitSessionUserMessage(port, {
+            sessionId: 's1',
+            session,
+            text: 'normal pending',
+            configuredMode: 'server_pending',
+            resumeCapabilityOptions: { accountSettings: {} },
+        });
+
+        expect(result).toMatchObject({
+            type: 'success',
+            persistence: 'pending',
+        });
+        expect(calls.map((call) => call.type)).toEqual(['send', 'enqueue', 'resume']);
     });
 
     it('aborts before sending interrupt messages', async () => {

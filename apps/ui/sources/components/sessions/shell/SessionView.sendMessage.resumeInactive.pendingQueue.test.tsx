@@ -350,7 +350,10 @@ vi.mock('@/components/voice/surface/VoiceSurface', () => ({
     VoiceSurface: () => null,
 }));
 vi.mock('@/components/sessions/agentInput', () => ({
-    AgentInput: (props: any) => React.createElement('AgentInput', props),
+    AgentInput: (props: any) => React.createElement('AgentInput', {
+        testID: 'session-agent-input',
+        ...props,
+    }),
 }));
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: () => false,
@@ -548,7 +551,12 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
     }
 
     function findAgentInput(screen: Awaited<ReturnType<typeof renderSessionView>>) {
-        return findTestInstanceByTypeWithProps(screen.tree, 'AgentInput' as any, {}) as any;
+        const agentInput = screen.findByTestId('session-agent-input')
+            ?? findTestInstanceByTypeWithProps(screen.tree, 'AgentInput' as any, {});
+        if (!agentInput) {
+            throw new Error('Expected SessionView to render AgentInput');
+        }
+        return agentInput as any;
     }
 
     beforeEach(() => {
@@ -710,42 +718,20 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await screen.unmount();
     });
 
-    it('wakes a server-pending inactive session through the cached owning server when the route server id is stale', async () => {
+    it('renders the unavailable shell instead of falling back to a cached owner when the explicit route server id is stale', async () => {
         sessionMetadataOverrides.current = { version: '0.1.0' };
         machineEncryptionAvailable.current = true;
 
         const screen = await renderSessionView({ routeServerId: 'stale-route-server' });
-
-        pendingFireAndForget.length = 0;
-
-        const agentInput = findAgentInput(screen);
-
-        await act(async () => {
-            agentInput.props.onChangeText('hello');
-        });
-        await act(async () => {
-            agentInput.props.onSend();
-        });
-
-        expect(pendingFireAndForget.length).toBeGreaterThan(0);
-        await act(async () => {
-            await pendingFireAndForget[0];
-        });
-
-        expect(enqueuePendingMessageSpy).toHaveBeenCalledTimes(1);
-        expect(resumeSessionSpy).toHaveBeenCalledWith(
-            expect.objectContaining({
-                serverId: 'server-cache',
-                machineId: 'm-target',
-                directory: '/tmp/target',
-            }),
-        );
-        expect(screen.findByTestId('session-pendingQueue-resumeFailed')).toBeTruthy();
+        expect(screen.findAllByTestId('session-root-unavailable')).toHaveLength(1);
+        expect(screen.findByTestId('session-agent-input')).toBeNull();
+        expect(enqueuePendingMessageSpy).not.toHaveBeenCalled();
+        expect(resumeSessionSpy).not.toHaveBeenCalled();
 
         await screen.unmount();
     });
 
-    it('bypasses server-pending enqueue and direct-sends once when the send action is forced immediate', async () => {
+    it('keeps server-pending enqueue and wake safety when the send action is forced immediate', async () => {
         sessionMetadataOverrides.current = { version: '0.1.0' };
         inactiveSessionUiState.current = {
             noticeKind: 'none',
@@ -770,19 +756,16 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             await pendingFireAndForget[0];
         });
 
-        expect(enqueuePendingMessageSpy).not.toHaveBeenCalled();
+        expect(enqueuePendingMessageSpy).toHaveBeenCalledTimes(1);
+        expect(enqueuePendingMessageSpy).toHaveBeenCalledWith('s1', 'hello now', undefined, undefined);
         expect(submitMessageSpy).not.toHaveBeenCalled();
-        expect(resumeSessionSpy).not.toHaveBeenCalled();
-        expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        expect(sendMessageSpy).toHaveBeenCalledWith(
-            's1',
-            'hello now',
-            undefined,
-            undefined,
+        expect(sendMessageSpy).not.toHaveBeenCalled();
+        expect(resumeSessionSpy).toHaveBeenCalledWith(
             expect.objectContaining({
-                localId: undefined,
-                onLocalPendingProjectionCreated: expect.any(Function),
-                profileId: undefined,
+                serverId: 'server-cache',
+                sessionId: 's1',
+                machineId: 'm-target',
+                directory: '/tmp/target',
             }),
         );
         expect(findAgentInput(screen).props.value).toBe('');
@@ -790,20 +773,13 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await screen.unmount();
     });
 
-    it('restores text when a direct send fails after creating a local pending projection', async () => {
-        sessionMetadataOverrides.current = { version: '0.1.0' };
+    it('restores text and shows the pending queue unsupported warning when the inactive CLI is too old for pending queue V2', async () => {
+        sessionMetadataOverrides.current = { version: '0.0.1' };
         inactiveSessionUiState.current = {
             noticeKind: 'none',
             inactiveStatusTextKey: null,
             shouldShowInput: true,
         };
-        sendMessageSpy.mockImplementationOnce(async (...args: any[]) => {
-            const options = args[4] as
-                | { onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void }
-                | undefined;
-            options?.onLocalPendingProjectionCreated?.({ localId: 'local-direct-id' });
-            throw new Error('direct send failed');
-        });
 
         const screen = await renderSessionView({ routeServerId: 'server-cache' });
         pendingFireAndForget.length = 0;
@@ -814,7 +790,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             agentInput.props.onChangeText('retry this');
         });
         await act(async () => {
-            agentInput.props.onSend({ forceImmediate: true });
+            agentInput.props.onSend();
         });
 
         expect(pendingFireAndForget.length).toBeGreaterThan(0);
@@ -824,31 +800,25 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
 
         agentInput = findAgentInput(screen);
         expect(agentInput.props.value).toBe('retry this');
-        expect(modalMockState.current?.spies.alert).toHaveBeenCalledWith('common.error', 'direct send failed');
+        expect(enqueuePendingMessageSpy).not.toHaveBeenCalled();
+        expect(resumeSessionSpy).not.toHaveBeenCalled();
+        expect(submitMessageSpy).not.toHaveBeenCalled();
+        expect(sendMessageSpy).not.toHaveBeenCalled();
+        expect(modalMockState.current?.spies.alert).toHaveBeenCalledWith(
+            'common.error',
+            'The pending queue is unavailable for this session. Update the agent runtime or send this message immediately.',
+        );
 
         await screen.unmount();
     });
 
-    it('does not restore a failed direct send over a newer draft typed after local projection', async () => {
-        sessionMetadataOverrides.current = { version: '0.1.0' };
+    it('does not overwrite a newer draft after an unsupported pending queue send is rejected', async () => {
+        sessionMetadataOverrides.current = { version: '0.0.1' };
         inactiveSessionUiState.current = {
             noticeKind: 'none',
             inactiveStatusTextKey: null,
             shouldShowInput: true,
         };
-        let rejectSend: ((error: Error) => void) | null = null;
-        const projectionCreated = new Promise<void>((resolveProjection) => {
-            sendMessageSpy.mockImplementationOnce(async (...args: any[]) => {
-                const options = args[4] as
-                    | { onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void }
-                    | undefined;
-                options?.onLocalPendingProjectionCreated?.({ localId: 'local-direct-id' });
-                resolveProjection();
-                return await new Promise<void>((_resolve, reject) => {
-                    rejectSend = reject;
-                });
-            });
-        });
 
         const screen = await renderSessionView({ routeServerId: 'server-cache' });
         pendingFireAndForget.length = 0;
@@ -859,24 +829,14 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             agentInput.props.onChangeText('old draft');
         });
         await act(async () => {
-            agentInput.props.onSend({ forceImmediate: true });
-        });
-
-        await act(async () => {
-            await projectionCreated;
+            agentInput.props.onSend();
         });
 
         agentInput = findAgentInput(screen);
-        expect(agentInput.props.value).toBe('');
+        expect(agentInput.props.value).toBe('old draft');
 
         await act(async () => {
             agentInput.props.onChangeText('new draft');
-        });
-
-        await act(async () => {
-            if (!rejectSend) throw new Error('send did not start');
-            rejectSend(new Error('direct send failed'));
-            await pendingFireAndForget[0];
         });
 
         agentInput = findAgentInput(screen);
@@ -885,7 +845,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await screen.unmount();
     });
 
-    it('uses the legacy direct commit path for inactive sessions when the CLI is too old for pending queue V2', async () => {
+    it('fails closed instead of direct-sending when an inactive session requests pending queueing on an old CLI', async () => {
         sessionMetadataOverrides.current = { version: '0.0.1' };
         resumeSessionSpy.mockResolvedValueOnce({ type: 'success' as const });
 
@@ -909,17 +869,10 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         expect(enqueuePendingMessageSpy).not.toHaveBeenCalled();
         expect(resumeSessionSpy).not.toHaveBeenCalled();
         expect(submitMessageSpy).not.toHaveBeenCalled();
-        expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        expect(sendMessageSpy).toHaveBeenCalledWith(
-            's1',
-            'legacy send',
-            undefined,
-            undefined,
-            expect.objectContaining({
-                localId: undefined,
-                onLocalPendingProjectionCreated: expect.any(Function),
-                profileId: undefined,
-            }),
+        expect(sendMessageSpy).not.toHaveBeenCalled();
+        expect(modalMockState.current?.spies.alert).toHaveBeenCalledWith(
+            'common.error',
+            'The pending queue is unavailable for this session. Update the agent runtime or send this message immediately.',
         );
 
         await screen.unmount();

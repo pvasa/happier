@@ -133,6 +133,7 @@ describe('followUpSpawnedSessionWithServerScope', () => {
             {
                 profileId: 'profile-work',
                 localId: 'first-turn-local',
+                bypassPendingQueueReason: 'spawned_session_follow_up',
             },
         );
     });
@@ -413,7 +414,7 @@ describe('followUpSpawnedSessionWithServerScope', () => {
             'hello from active server',
             undefined,
             undefined,
-            { localId: 'first-turn-local' },
+            { localId: 'first-turn-local', bypassPendingQueueReason: 'spawned_session_follow_up' },
         );
         expect(ensureSessionVisibleForMessageRoute).toHaveBeenCalledWith(
             'sess_target',
@@ -577,7 +578,7 @@ describe('followUpSpawnedSessionWithServerScope', () => {
                     kind: 'attachments.v1',
                 },
             },
-            { profileId: 'profile-work' },
+            { profileId: 'profile-work', bypassPendingQueueReason: 'spawned_session_follow_up' },
         );
     });
 });

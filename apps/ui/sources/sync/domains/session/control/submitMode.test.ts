@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { chooseSubmitMode } from './submitMode';
+import { chooseSubmitMode, decideSessionMessageDelivery } from './submitMode';
 
 describe('chooseSubmitMode', () => {
     const now = 1_000_000;
@@ -236,6 +236,52 @@ describe('chooseSubmitMode', () => {
             } as any,
             nowMs: now,
         } as any)).toBe('server_pending');
+    });
+
+    it('exposes a rich decision for busy sends that stay queued by policy', () => {
+        expect(decideSessionMessageDelivery({
+            configuredMode: 'agent_queue',
+            busySteerSendPolicy: 'server_pending',
+            session: {
+                thinking: true,
+                thinkingAt: now,
+                active: true,
+                presence: 'online',
+                agentStateVersion: 1,
+                agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
+                pendingVersion: 0,
+                pendingCount: 1,
+                metadata: {},
+            } as any,
+            nowMs: now,
+        })).toMatchObject({
+            mode: 'server_pending',
+            intent: 'default',
+            reason: 'busy_policy_pending',
+            pendingSupportState: 'supported',
+        });
+    });
+
+    it('exposes force-immediate as a one-shot explicit direct decision', () => {
+        expect(decideSessionMessageDelivery({
+            configuredMode: 'server_pending',
+            forceImmediate: true,
+            session: {
+                active: true,
+                presence: 'online',
+                agentStateVersion: 1,
+                pendingVersion: 0,
+                pendingCount: 1,
+                metadata: {},
+            } as any,
+            nowMs: now,
+        })).toMatchObject({
+            mode: 'agent_queue',
+            intent: 'explicit_immediate',
+            reason: 'force_immediate_direct',
+            directBypassReason: 'force_immediate',
+            pendingSupportState: 'supported',
+        });
     });
 
     it('does not treat stale thinking as busy when choosing composer delivery', () => {

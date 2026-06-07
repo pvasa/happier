@@ -25,6 +25,29 @@ describe('typesRaw progress record handling', () => {
     expect(normalized).toBeNull();
   });
 
+  it('drops legacy Claude JSONL consumed-marker output records during normalization', () => {
+    const raw: any = {
+      role: 'agent',
+      content: {
+        type: 'output',
+        data: {
+          type: 'claude_jsonl_consumed_marker',
+          reason: 'prompt_echo_suppressed',
+        },
+      },
+      meta: {
+        source: 'cli',
+        happier: { kind: 'claude_jsonl_consumed_marker.v1' },
+      },
+    };
+
+    const parsed = RawRecordSchema.safeParse(raw);
+    expect(parsed.success).toBe(true);
+
+    const normalized = normalizeRawMessage('msg-consumed-marker', 'claude-jsonl:main:user:user-1', 1000, raw);
+    expect(normalized).toBeNull();
+  });
+
   it('accepts codex turn_aborted records and drops them during normalization', () => {
     const raw: any = {
       role: 'agent',

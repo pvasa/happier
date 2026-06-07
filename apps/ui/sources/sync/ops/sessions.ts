@@ -154,6 +154,7 @@ export interface ResumeSessionOptions {
     resume?: string;
     environmentVariables?: Record<string, string>;
     connectedServices?: unknown;
+    connectedServicesUpdatedAt?: number;
     transcriptStorage?: 'direct' | 'persisted';
     attachMetadataIdentityPolicy?: SessionAttachMetadataIdentityPolicy;
     /** Optional explicit server scope for resume spawn routing. */
@@ -232,6 +233,7 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
             resume,
             environmentVariables,
             connectedServices,
+            connectedServicesUpdatedAt,
             transcriptStorage,
             attachMetadataIdentityPolicy,
             permissionMode,
@@ -274,6 +276,9 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
             ...(resume ? { resume } : {}),
             ...(environmentVariables ? { environmentVariables } : {}),
             ...(parsedConnectedServices !== undefined ? { connectedServices: parsedConnectedServices } : {}),
+            ...(parsedConnectedServices !== undefined && typeof connectedServicesUpdatedAt === 'number' && Number.isFinite(connectedServicesUpdatedAt)
+                ? { connectedServicesUpdatedAt }
+                : {}),
             ...(transcriptStorage ? { transcriptStorage } : {}),
             ...(attachMetadataIdentityPolicy ? { attachMetadataIdentityPolicy } : {}),
             ...(permissionMode ? { permissionMode } : {}),

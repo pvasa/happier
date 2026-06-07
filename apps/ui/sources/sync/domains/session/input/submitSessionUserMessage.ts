@@ -1,19 +1,29 @@
 import { getPendingQueueWakeResumeOptions } from '@/sync/domains/pending/pendingQueueWake';
 import {
     canDirectSubmitUserMessageNow,
-    chooseForceImmediateSubmitMode,
-    chooseSubmitMode,
+    decideSessionMessageDelivery,
     isPendingQueueSubmitKnownUnsupported,
+    type SessionMessageDeliveryDecision,
     type MessageSendMode,
 } from '@/sync/domains/session/control/submitMode';
 
 import type {
     DirectMessageSubmitResult,
+    DirectMessageBypassReason,
     PendingMessageSubmitResult,
     SessionSubmitPort,
     SubmitSessionUserMessageOptions,
     SubmitSessionUserMessageResult,
 } from './types';
+import { recordSessionMessageDeliveryDecision } from './sessionMessageDeliveryTelemetry';
+
+type ResolvedSubmitDecision = Readonly<{
+    decision: SessionMessageDeliveryDecision;
+    opts: SubmitSessionUserMessageOptions;
+    supportRefreshAttempted: boolean;
+    supportRefreshSucceeded: boolean;
+    supportRefreshErrorMessage?: string;
+}>;
 
 function getErrorMessage(error: unknown, fallback: string): string {
     return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback;
@@ -25,28 +35,52 @@ function readLocalId(result: PendingMessageSubmitResult | DirectMessageSubmitRes
         : undefined;
 }
 
-function resolveSubmitMode(opts: SubmitSessionUserMessageOptions): MessageSendMode {
-    if (opts.forceImmediate === true) {
-        return chooseForceImmediateSubmitMode({
-            configuredMode: opts.configuredMode,
-            busySteerSendPolicy: opts.busySteerSendPolicy,
-            explicitMode: opts.explicitMode,
-            session: opts.session,
-            nowMs: opts.nowMs,
-        });
-    }
-
-    return chooseSubmitMode({
+function resolveSubmitDecision(opts: SubmitSessionUserMessageOptions): SessionMessageDeliveryDecision {
+    return decideSessionMessageDelivery({
         configuredMode: opts.configuredMode,
         busySteerSendPolicy: opts.busySteerSendPolicy,
         explicitMode: opts.explicitMode,
         session: opts.session,
         nowMs: opts.nowMs,
+        forceImmediate: opts.forceImmediate,
     });
 }
 
 function requestedPendingQueue(opts: SubmitSessionUserMessageOptions): boolean {
     return (opts.explicitMode ?? opts.configuredMode) === 'server_pending';
+}
+
+function isUnknownPendingQueueSupport(decision: SessionMessageDeliveryDecision): boolean {
+    return decision.pendingSupportState === 'unknown_session'
+        || decision.pendingSupportState === 'unknown_pending_version';
+}
+
+function shouldFailClosedForUnknownPendingSupport(
+    opts: SubmitSessionUserMessageOptions,
+    decision: SessionMessageDeliveryDecision,
+): boolean {
+    if (!isUnknownPendingQueueSupport(decision)) {
+        return false;
+    }
+
+    if (
+        decision.intent === 'explicit_immediate'
+        && decision.mode === 'agent_queue'
+        && canDirectSubmitUserMessageNow({ session: opts.session, nowMs: opts.nowMs })
+    ) {
+        return false;
+    }
+
+    return decision.mode === 'server_pending'
+        || requestedPendingQueue(opts)
+        || !canDirectSubmitUserMessageNow({ session: opts.session, nowMs: opts.nowMs });
+}
+
+function shouldRefreshUnknownPendingSupport(
+    opts: SubmitSessionUserMessageOptions,
+    decision: SessionMessageDeliveryDecision,
+): boolean {
+    return shouldFailClosedForUnknownPendingSupport(opts, decision);
 }
 
 function shouldRejectUnsupportedPendingQueue(
@@ -78,6 +112,79 @@ function rejectUnsupportedPendingQueue(): SubmitSessionUserMessageResult {
     };
 }
 
+function rejectUnknownPendingQueueSupport(errorMessage?: string): SubmitSessionUserMessageResult {
+    return {
+        type: 'rejected',
+        persistence: 'none',
+        wake: { attempted: false, state: 'not_needed' },
+        errorCode: 'PENDING_QUEUE_SUPPORT_UNKNOWN',
+        errorMessage: errorMessage
+            ? `The pending queue could not be confirmed for this session: ${errorMessage}`
+            : 'The pending queue could not be confirmed for this session. Try again after the session refreshes or send this message immediately.',
+    };
+}
+
+async function resolveSubmitDecisionWithSupportRefresh(
+    port: SessionSubmitPort,
+    opts: SubmitSessionUserMessageOptions,
+): Promise<ResolvedSubmitDecision> {
+    const decision = resolveSubmitDecision(opts);
+    if (!shouldRefreshUnknownPendingSupport(opts, decision) || !port.refreshSessionForSubmit) {
+        return {
+            decision,
+            opts,
+            supportRefreshAttempted: false,
+            supportRefreshSucceeded: false,
+        };
+    }
+
+    try {
+        const refreshedSession = await port.refreshSessionForSubmit(opts.sessionId, {
+            serverId: opts.serverId ?? null,
+        });
+        if (refreshedSession) {
+            const refreshedOpts = {
+                ...opts,
+                session: refreshedSession,
+            };
+            return {
+                decision: resolveSubmitDecision(refreshedOpts),
+                opts: refreshedOpts,
+                supportRefreshAttempted: true,
+                supportRefreshSucceeded: true,
+            };
+        }
+
+        return {
+            decision,
+            opts,
+            supportRefreshAttempted: true,
+            supportRefreshSucceeded: false,
+        };
+    } catch (error) {
+        return {
+            decision,
+            opts,
+            supportRefreshAttempted: true,
+            supportRefreshSucceeded: false,
+            supportRefreshErrorMessage: getErrorMessage(error, 'session refresh failed'),
+        };
+    }
+}
+
+function getDirectMessageBypassReason(
+    opts: SubmitSessionUserMessageOptions,
+    mode: MessageSendMode,
+): DirectMessageBypassReason {
+    if (mode === 'interrupt') {
+        return 'interrupt';
+    }
+    if (opts.forceImmediate === true) {
+        return 'force_immediate';
+    }
+    return 'selected_direct';
+}
+
 async function switchRemoteAfterPendingEnqueueIfNeeded(
     port: SessionSubmitPort,
     opts: SubmitSessionUserMessageOptions,
@@ -96,6 +203,7 @@ async function switchRemoteAfterPendingEnqueueIfNeeded(
 async function directSend(
     port: SessionSubmitPort,
     opts: SubmitSessionUserMessageOptions,
+    bypassPendingQueueReason: DirectMessageBypassReason,
 ): Promise<SubmitSessionUserMessageResult> {
     try {
         let didMarkOutboundHandoff = false;
@@ -111,15 +219,14 @@ async function directSend(
                 ...(localId ? { localId } : {}),
             });
         };
-        const sendOptions = opts.profileId || opts.localId || opts.onOutboundHandoff
-            ? {
-                profileId: opts.profileId ?? undefined,
-                localId: opts.localId ?? undefined,
-                onLocalPendingProjectionCreated: opts.onOutboundHandoff
-                    ? ({ localId }: { localId: string }) => markOutboundHandoff(localId)
-                    : undefined,
-            }
-            : undefined;
+        const sendOptions = {
+            profileId: opts.profileId ?? undefined,
+            localId: opts.localId ?? undefined,
+            bypassPendingQueueReason,
+            onLocalPendingProjectionCreated: opts.onOutboundHandoff
+                ? ({ localId }: { localId: string }) => markOutboundHandoff(localId)
+                : undefined,
+        };
         const sendResult = await port.sendMessage(
             opts.sessionId,
             opts.text,
@@ -243,23 +350,45 @@ export async function submitSessionUserMessage(
     port: SessionSubmitPort,
     opts: SubmitSessionUserMessageOptions,
 ): Promise<SubmitSessionUserMessageResult> {
-    const mode = resolveSubmitMode(opts);
+    const resolved = await resolveSubmitDecisionWithSupportRefresh(port, opts);
+    const decision = resolved.decision;
+    const effectiveOpts = resolved.opts;
+    const mode = decision.mode;
+    recordSessionMessageDeliveryDecision({
+        sessionId: effectiveOpts.sessionId,
+        session: effectiveOpts.session,
+        selectedMode: mode,
+        decisionReason: decision.reason,
+        configuredMode: effectiveOpts.configuredMode,
+        busySteerSendPolicy: effectiveOpts.busySteerSendPolicy,
+        explicitMode: effectiveOpts.explicitMode,
+        forceImmediate: effectiveOpts.forceImmediate,
+        callerSurface: effectiveOpts.callerSurface,
+        localId: effectiveOpts.localId,
+        nowMs: effectiveOpts.nowMs,
+        supportRefreshAttempted: resolved.supportRefreshAttempted,
+        supportRefreshSucceeded: resolved.supportRefreshSucceeded,
+    });
 
-    if (shouldRejectUnsupportedPendingQueue(opts, mode)) {
+    if (shouldRejectUnsupportedPendingQueue(effectiveOpts, mode)) {
         return rejectUnsupportedPendingQueue();
     }
 
+    if (shouldFailClosedForUnknownPendingSupport(effectiveOpts, decision)) {
+        return rejectUnknownPendingQueueSupport(resolved.supportRefreshErrorMessage);
+    }
+
     if (mode === 'server_pending') {
-        return enqueuePending(port, opts);
+        return enqueuePending(port, effectiveOpts);
     }
 
     if (mode === 'interrupt') {
         try {
-            await port.abortSession?.(opts.sessionId);
+            await port.abortSession?.(effectiveOpts.sessionId);
         } catch {
             // Best effort only; sending the user message still proceeds.
         }
     }
 
-    return directSend(port, opts);
+    return directSend(port, effectiveOpts, decision.directBypassReason ?? getDirectMessageBypassReason(effectiveOpts, mode));
 }

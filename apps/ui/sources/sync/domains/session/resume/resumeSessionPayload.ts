@@ -25,6 +25,7 @@ export type ResumeHappySessionRpcParams = CodexBackendTransportFields & {
     agentRuntimeDescriptorV1?: AgentRuntimeDescriptorV1;
     environmentVariables?: Record<string, string>;
     connectedServices?: SessionAuthoringValueV1['connectedServices'];
+    connectedServicesUpdatedAt?: number;
     transcriptStorage?: 'direct' | 'persisted';
     attachMetadataIdentityPolicy?: SessionAttachMetadataIdentityPolicy;
     permissionMode?: PermissionMode;
@@ -52,6 +53,7 @@ const ResumeHappySessionRpcParamsSchema = z.object({
     agentRuntimeDescriptorV1: AgentRuntimeDescriptorV1Schema.optional(),
     environmentVariables: z.record(z.string(), z.string()).optional(),
     connectedServices: SessionAuthoringValueV1Schema.shape.connectedServices.optional(),
+    connectedServicesUpdatedAt: z.number().optional(),
     transcriptStorage: z.enum(['direct', 'persisted']).optional(),
     attachMetadataIdentityPolicy: SessionAttachMetadataIdentityPolicySchema.optional(),
     permissionMode: z.string().refine((value) => isPermissionMode(value)).optional(),
@@ -75,6 +77,7 @@ export function buildResumeHappySessionRpcParams(input: BuildResumeHappySessionR
         experimentalCodexAcp,
         agentRuntimeDescriptorV1,
         connectedServices,
+        connectedServicesUpdatedAt,
         ...rest
     } = input;
     const normalizedModelId = typeof modelId === 'string' ? modelId.trim() : '';
@@ -91,6 +94,11 @@ export function buildResumeHappySessionRpcParams(input: BuildResumeHappySessionR
         ...rest,
         ...codexTransportFields,
         ...(connectedServices === undefined || connectedServices === null ? {} : { connectedServices }),
+        ...(connectedServices === undefined || connectedServices === null ? {} : (
+            typeof connectedServicesUpdatedAt === 'number' && Number.isFinite(connectedServicesUpdatedAt)
+                ? { connectedServicesUpdatedAt }
+                : {}
+        )),
         ...(() => {
             if (agentRuntimeDescriptorV1) {
                 return { agentRuntimeDescriptorV1 };

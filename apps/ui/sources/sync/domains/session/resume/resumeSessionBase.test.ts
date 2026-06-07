@@ -247,7 +247,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
         });
     });
 
-    it('carries persisted connected-service bindings into resume options', () => {
+    it('carries persisted connected-service bindings and freshness into resume options', () => {
         setCanonicalSessionTarget('m1', '/tmp');
         const connectedServices = {
             v: 1 as const,
@@ -270,6 +270,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
                     flavor: 'claude',
                     claudeSessionId: 'c1',
                     connectedServices,
+                    connectedServicesUpdatedAt: 2468,
                 },
             } as any,
             resumeCapabilityOptions: { accountSettings: {} },
@@ -280,6 +281,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
             backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
             resume: 'c1',
             connectedServices,
+            connectedServicesUpdatedAt: 2468,
         });
     });
 

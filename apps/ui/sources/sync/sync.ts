@@ -172,9 +172,10 @@ import {
     sealSecretsDeep,
 } from './encryption/secretSettings';
 import { didControlReturnToMobile } from './domains/session/control/controlledByUserTransitions';
+import type { SessionMessageDirectBypassReason } from './domains/session/control/submitMode';
 import { buildResumeCapabilityOptionsFromUiState } from '@/agents/registry/registryUiBehavior';
 import { submitSessionUserMessage } from './domains/session/input/submitSessionUserMessage';
-import type { SessionSubmitPort } from './domains/session/input/types';
+import type { SessionMessageCallerSurface, SessionSubmitPort } from './domains/session/input/types';
 import type { SavedSecret } from './domains/settings/savedSecretTypes';
 import type { PermissionMode } from './domains/permissions/permissionTypes';
 import { getPermissionModeOverrideForSpawn } from './domains/permissions/permissionModeOverride';
@@ -1698,6 +1699,22 @@ class Sync {
             await this.getOrCreateMessagesSync(normalized).invalidateAndAwait();
         }
 
+        refreshSessionForSubmit = async (
+            sessionId: string,
+            options?: Readonly<{ serverId?: string | null }>,
+        ): Promise<Session | null> => {
+            const normalized = String(sessionId ?? '').trim();
+            if (!normalized) return null;
+            const serverId = typeof options?.serverId === 'string' && options.serverId.trim().length > 0
+                ? options.serverId.trim()
+                : undefined;
+            await this.ensureSessionVisibleForMessageRoute(normalized, {
+                forceRefresh: true,
+                ...(serverId ? { serverId } : {}),
+            });
+            return storage.getState().sessions[normalized] ?? null;
+        }
+
         /**
          * Hydrate a visible session by id for deep links / hard refreshes.
          *
@@ -1914,6 +1931,7 @@ class Sync {
         options?: Readonly<{
             profileId?: string | null;
             localId?: string | null;
+            bypassPendingQueueReason?: SessionMessageDirectBypassReason;
             onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void;
         }>
     ) {
@@ -2484,7 +2502,15 @@ class Sync {
         });
     }
 
-    async submitMessage(sessionId: string, text: string, displayText?: string, metaOverrides?: Record<string, unknown>): Promise<void> {
+    async submitMessage(
+        sessionId: string,
+        text: string,
+        displayText?: string,
+        metaOverrides?: Record<string, unknown>,
+        options?: Readonly<{
+            callerSurface?: SessionMessageCallerSurface | null;
+        }>,
+    ): Promise<void> {
         let state = storage.getState();
         let session = state.sessions[sessionId] ?? null;
         if (!session) {
@@ -2497,8 +2523,7 @@ class Sync {
             session = state.sessions[sessionId] ?? null;
         }
         if (!session) {
-            await this.sendMessage(sessionId, text, displayText, metaOverrides);
-            return;
+            throw new Error(`Session ${sessionId} not available for pending-aware submit`);
         }
 
         const machineEncryptionReader = this.encryption as Readonly<{
@@ -2514,6 +2539,8 @@ class Sync {
                 this.sendMessage(targetSessionId, targetText, targetDisplayText, targetMetaOverrides, options),
             abortSession: (targetSessionId) => this.abortSession(targetSessionId),
             resumeSession: (options) => resumeSession(options),
+            refreshSessionForSubmit: (targetSessionId, options) =>
+                this.refreshSessionForSubmit(targetSessionId, options),
             ...(canWakeMachineId ? { canWakeMachineId } : {}),
         };
 
@@ -2530,6 +2557,7 @@ class Sync {
                 results: undefined,
             }),
             permissionOverride: getPermissionModeOverrideForSpawn(session),
+            callerSurface: options?.callerSurface ?? 'sync_submit_message',
         });
 
         if (result.type === 'send_failed' || result.type === 'rejected') {

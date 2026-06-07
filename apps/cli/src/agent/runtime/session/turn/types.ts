@@ -86,6 +86,7 @@ export type SessionTurnLifecycle = Readonly<{
     endSession(input?: EndSessionInput): Promise<void>;
     markRollbackEligible(input: MarkRollbackEligibleInput): Promise<void>;
     markRolledBack(input: MarkRolledBackInput): Promise<void>;
+    hasActiveTurn(): boolean;
 }>;
 
 export type ObserveAcpLifecycleMarkerResult = Readonly<{

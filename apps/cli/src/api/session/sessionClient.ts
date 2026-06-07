@@ -756,8 +756,13 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     shouldAttemptPendingMaterialization(): boolean {
-        if (isSessionContinuationRecoveryBlockingPendingDrain(this.metadata)) return false;
+        if (this.isPendingMaterializationBlocked()) return false;
         return this.pendingQueueState.known && this.pendingQueueState.pendingCount > 0;
+    }
+
+    private isPendingMaterializationBlocked(): boolean {
+        return this.sessionTurnLifecycle.hasActiveTurn()
+            || isSessionContinuationRecoveryBlockingPendingDrain(this.metadata);
     }
 
     private syncSessionSnapshotFromServer(opts: { reason: SessionSnapshotRefreshReasonInput }): Promise<void> {
@@ -3069,6 +3074,10 @@ export class ApiSessionClient extends EventEmitter {
             if (isAuthenticationError(error)) {
                 throw error;
             }
+            logger.debug('[pendingQueue] materialize request failed', {
+                sessionId: this.sessionId,
+                errorName: error instanceof Error ? error.name : typeof error,
+            });
             return { didMaterialize: false, result: { type: 'no_pending' } };
         }
         const pendingStateUpdate = derivePendingQueueStateAfterMaterializeResult({
@@ -3082,10 +3091,27 @@ export class ApiSessionClient extends EventEmitter {
         }
 
         if (!materializeResult.didMaterialize) {
+            logger.debug('[pendingQueue] materialize result', {
+                sessionId: this.sessionId,
+                didMaterialize: false,
+                pendingCount: this.pendingQueueState.known ? this.pendingQueueState.pendingCount : undefined,
+                pendingVersion: this.pendingQueueState.known ? this.pendingQueueState.pendingVersion : undefined,
+            });
             return { didMaterialize: false, result: { type: 'no_pending' } };
         }
 
         const deliveredMaterializedMessage = this.deliverMaterializedPendingQueueMessage(materializeResult.message);
+        logger.debug('[pendingQueue] materialize result', {
+            sessionId: this.sessionId,
+            didMaterialize: true,
+            localId: materializeResult.localId ?? materializeResult.message?.localId ?? null,
+            didWrite: materializeResult.didWrite,
+            messageSeq: materializeResult.message?.seq ?? null,
+            messageRole: materializeResult.message?.messageRole ?? null,
+            deliveredMaterializedMessage,
+            pendingCount: this.pendingQueueState.known ? this.pendingQueueState.pendingCount : undefined,
+            pendingVersion: this.pendingQueueState.known ? this.pendingQueueState.pendingVersion : undefined,
+        });
 
         if (materializeResult.localId && !deliveredMaterializedMessage) {
             // Best-effort: recover if we miss socket broadcasts for the committed transcript row.
@@ -3151,6 +3177,9 @@ export class ApiSessionClient extends EventEmitter {
         if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
             return { type: 'no_pending' };
         }
+        if (this.isPendingMaterializationBlocked()) {
+            return { type: 'no_pending' };
+        }
 
         const inner = await this.runMaterializeNextPendingMessageInner();
         return inner.result;
@@ -3161,6 +3190,9 @@ export class ApiSessionClient extends EventEmitter {
             await this.reconcilePendingQueueState({ force: !this.pendingQueueState.known });
         }
         if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
+            return false;
+        }
+        if (this.isPendingMaterializationBlocked()) {
             return false;
         }
 

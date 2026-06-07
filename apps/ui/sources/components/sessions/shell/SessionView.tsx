@@ -100,7 +100,6 @@ import {
     flushSessionDraftValues,
     readSessionDraftValue,
     writeSessionDraftValue,
-    type SessionDraftValueByFieldId,
 } from '@/sync/domains/input/draftValues/sessionDraftValueStore';
 import type { AgentInputLocalUiStateV1 } from '@/sync/domains/input/draftValues/agentInputLocalUiStateStore';
 import { applyPermissionModeSelection } from '@/sync/domains/permissions/permissionModeApply';
@@ -259,6 +258,11 @@ import {
 import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 import { resolveNextOptimisticAcpConfigOptionOverrides } from './resolveNextOptimisticAcpConfigOptionOverrides';
 import { useSessionViewShellSession, useSessionViewShellSessionSeq } from './sessionViewStableSession';
+import {
+    isEmptyPendingMessageComposerSemanticDraftSnapshot,
+    type PendingMessageComposerEditState,
+    type PendingMessageComposerSemanticDraftSnapshot as ComposerSemanticDraftSnapshot,
+} from './pendingMessageComposerEditSnapshot';
 import { useSessionViewedLifecycle } from './view/useSessionViewedLifecycle';
 import { useSessionSurfaceActivation } from './view/useSessionSurfaceActivation';
 import { resolveSessionAuthSurfaceState, type SessionAuthSurfaceState } from './sessionAuthSurfaceState';
@@ -811,11 +815,6 @@ const noopInputComposerRestoreTransientState = () => {};
 
 type AgentInputOnSend = NonNullable<React.ComponentProps<typeof AgentInput>['onSend']>;
 type AgentInputOnFileViewerPress = NonNullable<React.ComponentProps<typeof AgentInput>['onFileViewerPress']>;
-type ComposerSemanticDraftSnapshot = Readonly<{
-    recipient: SessionDraftValueByFieldId['routing.recipient'] | undefined;
-    executionRunDelivery: SessionDraftValueByFieldId['routing.executionRunDelivery'] | undefined;
-    structuredInputMentions: SessionDraftValueByFieldId['structuredInput.mentions'] | undefined;
-}>;
 
 function useStableAgentInputOnSend(handler: AgentInputOnSend): AgentInputOnSend {
     const handlerRef = React.useRef(handler);
@@ -2723,6 +2722,12 @@ function SessionViewLoaded({
         writeSessionAttachmentDrafts(sessionId, attachmentDrafts);
     }, [attachmentDrafts, sessionId]);
 
+    const replaceSessionAttachmentDrafts = React.useCallback((drafts: readonly AttachmentDraft[]) => {
+        attachmentDraftsSnapshotRef.current = drafts;
+        writeSessionAttachmentDrafts(sessionId, drafts);
+        attachmentDraftManager.replaceDrafts(drafts);
+    }, [attachmentDraftManager, sessionId]);
+
     const applySessionAttachmentDraftPatch = React.useCallback((
         id: string,
         patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>,
@@ -2841,43 +2846,11 @@ function SessionViewLoaded({
     React.useEffect(() => {
         messageRef.current = message;
     }, [message]);
-    const [pendingMessageEdit, setPendingMessageEdit] = React.useState<Readonly<{
-        pendingId: string;
-        previousDraftText: string;
-        loadedText: string;
-    }> | null>(null);
+    const [pendingMessageEdit, setPendingMessageEdit] = React.useState<PendingMessageComposerEditState | null>(null);
     const pendingMessageEditRef = React.useRef(pendingMessageEdit);
     React.useEffect(() => {
         pendingMessageEditRef.current = pendingMessageEdit;
     }, [pendingMessageEdit]);
-    const cancelPendingMessageEdit = React.useCallback(() => {
-        const edit = pendingMessageEditRef.current;
-        if (!edit) return;
-        setPendingMessageEdit(null);
-        setDraftValue(edit.previousDraftText);
-    }, [setDraftValue]);
-    const handleEditPendingMessage = React.useCallback<NonNullable<ChatListProps['onEditPendingMessage']>>((request) => {
-        const previousDraftText = pendingMessageEditRef.current?.previousDraftText ?? messageRef.current;
-        setPendingMessageEdit({
-            pendingId: request.id,
-            previousDraftText,
-            loadedText: request.text,
-        });
-        setDraftValue(request.text);
-    }, [setDraftValue]);
-    React.useEffect(() => {
-        const edit = pendingMessageEditRef.current;
-        if (!edit) return;
-        const stillQueued = pendingMessages.some((pending) =>
-            pending.id === edit.pendingId || pending.localId === edit.pendingId
-        );
-        if (stillQueued) return;
-
-        setPendingMessageEdit(null);
-        if (messageRef.current === edit.loadedText) {
-            setDraftValue(edit.previousDraftText);
-        }
-    }, [pendingMessages, setDraftValue]);
     const inputComposerClearTransientStateRef = React.useRef<() => void>(noopInputComposerClearTransientState);
     const inputComposerCaptureTransientStateRef = React.useRef<() => AgentInputLocalUiStateV1 | null>(
         noopInputComposerCaptureTransientState,
@@ -2938,6 +2911,95 @@ function SessionViewLoaded({
             lifecycle: 'composerCleared',
         });
     }, [activeServerAccountScope, sessionId]);
+    const restorePendingEditAttachmentDraftsIfSafe = React.useCallback((edit: PendingMessageComposerEditState) => {
+        if (attachmentDraftsSnapshotRef.current.length !== 0) return;
+        replaceSessionAttachmentDrafts(edit.previousAttachmentDrafts);
+    }, [replaceSessionAttachmentDrafts]);
+    const restorePendingEditSemanticDraftsIfSafe = React.useCallback((edit: PendingMessageComposerEditState) => {
+        if (!isEmptyPendingMessageComposerSemanticDraftSnapshot(captureComposerSemanticDraftSnapshot())) return;
+        restoreSemanticDraftValuesFromSnapshot(edit.previousSemanticDraftSnapshot);
+    }, [captureComposerSemanticDraftSnapshot, restoreSemanticDraftValuesFromSnapshot]);
+    const restorePendingEditComposerSnapshotIfSafe = React.useCallback((edit: PendingMessageComposerEditState) => {
+        setDraftValue(edit.previousDraftText);
+        restorePendingEditAttachmentDraftsIfSafe(edit);
+        restorePendingEditSemanticDraftsIfSafe(edit);
+        inputComposerRestoreTransientStateRef.current(edit.previousTransientInputState);
+    }, [
+        restorePendingEditAttachmentDraftsIfSafe,
+        restorePendingEditSemanticDraftsIfSafe,
+        setDraftValue,
+    ]);
+    const restorePendingEditNonTextComposerSnapshotIfSafe = React.useCallback((edit: PendingMessageComposerEditState) => {
+        restorePendingEditAttachmentDraftsIfSafe(edit);
+        restorePendingEditSemanticDraftsIfSafe(edit);
+        inputComposerRestoreTransientStateRef.current(edit.previousTransientInputState);
+    }, [
+        restorePendingEditAttachmentDraftsIfSafe,
+        restorePendingEditSemanticDraftsIfSafe,
+    ]);
+    const restorePendingEditComposerSnapshotIfSafeRef = React.useRef(restorePendingEditComposerSnapshotIfSafe);
+    React.useEffect(() => {
+        restorePendingEditComposerSnapshotIfSafeRef.current = restorePendingEditComposerSnapshotIfSafe;
+    }, [restorePendingEditComposerSnapshotIfSafe]);
+    const restorePendingEditNonTextComposerSnapshotIfSafeRef = React.useRef(restorePendingEditNonTextComposerSnapshotIfSafe);
+    React.useEffect(() => {
+        restorePendingEditNonTextComposerSnapshotIfSafeRef.current = restorePendingEditNonTextComposerSnapshotIfSafe;
+    }, [restorePendingEditNonTextComposerSnapshotIfSafe]);
+    const cancelPendingMessageEdit = React.useCallback(() => {
+        const edit = pendingMessageEditRef.current;
+        if (!edit) return;
+        setPendingMessageEdit(null);
+        restorePendingEditComposerSnapshotIfSafe(edit);
+    }, [restorePendingEditComposerSnapshotIfSafe]);
+    const handleEditPendingMessage = React.useCallback<NonNullable<ChatListProps['onEditPendingMessage']>>((request) => {
+        const previousDraftText = pendingMessageEditRef.current?.previousDraftText ?? messageRef.current;
+        const previousAttachmentDrafts = pendingMessageEditRef.current?.previousAttachmentDrafts ?? attachmentDraftsSnapshotRef.current;
+        const previousSemanticDraftSnapshot = pendingMessageEditRef.current?.previousSemanticDraftSnapshot
+            ?? captureComposerSemanticDraftSnapshot();
+        const previousTransientInputState = pendingMessageEditRef.current?.previousTransientInputState
+            ?? inputComposerCaptureTransientStateRef.current();
+        setPendingMessageEdit({
+            pendingId: request.id,
+            previousDraftText,
+            previousAttachmentDrafts,
+            previousSemanticDraftSnapshot,
+            previousTransientInputState,
+            loadedText: request.text,
+        });
+        replaceSessionAttachmentDrafts([]);
+        clearSemanticDraftValuesAfterAcceptedComposerClear();
+        inputComposerClearTransientStateRef.current();
+        setDraftValue(request.text);
+    }, [
+        captureComposerSemanticDraftSnapshot,
+        clearSemanticDraftValuesAfterAcceptedComposerClear,
+        replaceSessionAttachmentDrafts,
+        setDraftValue,
+    ]);
+    React.useEffect(() => {
+        const edit = pendingMessageEditRef.current;
+        if (!edit) return;
+        const stillQueued = pendingMessages.some((pending) =>
+            pending.id === edit.pendingId || pending.localId === edit.pendingId
+        );
+        if (stillQueued) return;
+
+        setPendingMessageEdit(null);
+        if (messageRef.current === edit.loadedText) {
+            restorePendingEditComposerSnapshotIfSafe(edit);
+        } else {
+            restorePendingEditNonTextComposerSnapshotIfSafe(edit);
+        }
+    }, [pendingMessages, restorePendingEditComposerSnapshotIfSafe, restorePendingEditNonTextComposerSnapshotIfSafe]);
+    React.useEffect(() => () => {
+        const edit = pendingMessageEditRef.current;
+        if (!edit) return;
+        if (messageRef.current === edit.loadedText) {
+            restorePendingEditComposerSnapshotIfSafeRef.current(edit);
+        } else {
+            restorePendingEditNonTextComposerSnapshotIfSafeRef.current(edit);
+        }
+    }, []);
 
     // Handle dismissing CLI version warning
     const handleDismissCliWarning = React.useCallback(() => {
@@ -3635,7 +3697,7 @@ function SessionViewLoaded({
                     await sync.updatePendingMessage(sessionId, activePendingEdit.pendingId, nextText);
                     if (pendingMessageEditRef.current?.pendingId === activePendingEdit.pendingId) {
                         setPendingMessageEdit(null);
-                        setDraftValue(activePendingEdit.previousDraftText);
+                        restorePendingEditComposerSnapshotIfSafe(activePendingEdit);
                     }
                 } catch (e) {
                     Modal.alert(t('common.error'), e instanceof Error ? e.message : t('session.pendingMessages.errors.updateFailed'));
@@ -3715,9 +3777,7 @@ function SessionViewLoaded({
                 return didClear;
             };
             const restoreAttachmentDraftsFromSnapshot = (drafts: readonly AttachmentDraft[]) => {
-                attachmentDraftsSnapshotRef.current = drafts;
-                writeSessionAttachmentDrafts(sessionId, drafts);
-                attachmentDraftManager.replaceDrafts(drafts);
+                replaceSessionAttachmentDrafts(drafts);
             };
             const restoreAfterFailedOutboundHandoff = (attachmentDraftsForRestore?: readonly AttachmentDraft[]) => {
                 const didRestore = restoreComposerAfterFailedOutboundHandoff({
@@ -3869,6 +3929,9 @@ function SessionViewLoaded({
                             permissionOverride: getPermissionModeOverrideForSpawn(session),
                             serverId: capabilityServerId,
                             requestRemoteControlAfterPendingEnqueue: shouldRequestRemoteControlAfterPendingEnqueue(session, cliAuthStatus?.state ?? null),
+                            callerSurface: shouldSendReviewComments
+                                ? 'session_attachment_review_comment_composer'
+                                : 'session_attachment_composer',
                             onOutboundHandoff: (handoff) => {
                                 clearAttachmentsAfterProjectionHandoff();
                                 if (handoff.persistence === 'pending') {
@@ -4065,6 +4128,9 @@ function SessionViewLoaded({
                         permissionOverride: getPermissionModeOverrideForSpawn(session),
                         serverId: capabilityServerId,
                         requestRemoteControlAfterPendingEnqueue: shouldRequestRemoteControlAfterPendingEnqueue(session, cliAuthStatus?.state ?? null),
+                        callerSurface: shouldSendReviewComments
+                            ? 'session_review_comment_composer'
+                            : 'session_composer',
                         onOutboundHandoff: (handoff) => {
                             clearAfterOutboundHandoff();
                             if (handoff.persistence === 'pending') {

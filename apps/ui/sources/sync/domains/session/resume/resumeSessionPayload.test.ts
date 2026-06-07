@@ -148,7 +148,7 @@ describe('buildResumeHappySessionRpcParams', () => {
         });
     });
 
-    test('includes connectedServices when provided', () => {
+    test('includes connectedServices and freshness when provided', () => {
         const connectedServices = {
             v: 1,
             bindingsByServiceId: {
@@ -163,12 +163,14 @@ describe('buildResumeHappySessionRpcParams', () => {
             directory: '/tmp',
             backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
             connectedServices,
+            connectedServicesUpdatedAt: 1234,
         } as any)).toEqual({
             type: 'resume-session',
             sessionId: 's1',
             directory: '/tmp',
             backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
             connectedServices,
+            connectedServicesUpdatedAt: 1234,
         });
     });
 

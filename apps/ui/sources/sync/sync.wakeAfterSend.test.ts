@@ -358,4 +358,20 @@ describe('sync.sendMessage wake-after-send', () => {
             expect.anything(),
         );
     });
+
+    it('rejects submitMessage when the session cannot be hydrated instead of falling back to direct send', async () => {
+        const sessionId = 's_missing_pending_submit';
+        storage.getState().applySettings({
+            ...storage.getState().settings,
+            sessionMessageSendMode: 'server_pending',
+        }, 1);
+
+        const { sync } = await import('./sync');
+        const sendMessageSpy = vi.spyOn(sync, 'sendMessage').mockRejectedValue(new Error('direct fallback should not run'));
+        vi.spyOn(apiSocket, 'request').mockRejectedValue(new Error('session unavailable'));
+
+        await expect(sync.submitMessage(sessionId, 'should stay queued')).rejects.toThrow(/session.*not.*available|session.*not.*found/i);
+
+        expect(sendMessageSpy).not.toHaveBeenCalled();
+    });
 });

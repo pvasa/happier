@@ -386,35 +386,35 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         const { message, index, renderDragHandle } = args;
         const text = getPendingText(message).trim();
         const isCollapsible = collapseThresholdChars > 0 && text.length >= collapseThresholdChars;
-	        const isExpanded = expandedMessageIds[message.id] === true || !isCollapsible;
+        const isExpanded = expandedMessageIds[message.id] === true || !isCollapsible;
 
-	        const menuKey = `active:${message.id}`;
-	        const menuOpen = openMenuKey === menuKey;
-	        const hasDecryptFailure = message.pendingDecryptFailure?.kind === 'decrypt_failed';
-	        const hoveredIndex =
-	            hoveredMessageId && pendingIndexById[hoveredMessageId] !== undefined
-	                ? pendingIndexById[hoveredMessageId]!
-	                : null;
+        const menuKey = `active:${message.id}`;
+        const menuOpen = openMenuKey === menuKey;
+        const hasDecryptFailure = message.pendingDecryptFailure?.kind === 'decrypt_failed';
+        const hoveredIndex =
+            hoveredMessageId && pendingIndexById[hoveredMessageId] !== undefined
+                ? pendingIndexById[hoveredMessageId]!
+                : null;
         const hideChipBecauseNextHovered =
             isWeb && hoveredIndex !== null && hoveredIndex + 1 === index && hoveredMessageId !== message.id;
         const visualState = getPendingMessageVisualState(message, { materializingLocalIds });
 
-	        const menuItems = (() => {
-	            const items: DropdownMenuItem[] = [];
-	            items.push({ id: 'edit', title: t('session.pendingMessages.actions.edit'), icon: <Ionicons name="pencil-outline" size={16} color={theme.colors.text.secondary} /> });
-	            items.push({ id: 'remove', title: t('common.remove'), icon: <Ionicons name="trash-outline" size={16} color={theme.colors.text.secondary} /> });
-	            if (canSteerNow && !hasDecryptFailure) {
-	                items.push({ id: 'steerNow', title: t('session.pendingMessages.actions.steerNow'), icon: <Ionicons name="navigate-outline" size={16} color={theme.colors.text.secondary} /> });
-	            }
-	            if (canSendNow && !hasDecryptFailure) {
-	                items.push({
-	                    id: 'sendNow',
-	                    title: canSteerNow ? t('session.pendingMessages.actions.sendNowInterrupt') : t('session.pendingMessages.actions.sendNow'),
-	                    icon: <Ionicons name="paper-plane-outline" size={16} color={theme.colors.text.secondary} />,
-	                });
-	            }
-	            return items;
-	        })();
+        const menuItems = (() => {
+            const items: DropdownMenuItem[] = [];
+            items.push({ id: 'edit', title: t('session.pendingMessages.actions.edit'), icon: <Ionicons name="pencil-outline" size={16} color={theme.colors.text.secondary} /> });
+            items.push({ id: 'remove', title: t('common.remove'), icon: <Ionicons name="trash-outline" size={16} color={theme.colors.text.secondary} /> });
+            if (canSteerNow && !hasDecryptFailure) {
+                items.push({ id: 'steerNow', title: t('session.pendingMessages.actions.steerNow'), icon: <Ionicons name="navigate-outline" size={16} color={theme.colors.text.secondary} /> });
+            }
+            if (canSendNow && !hasDecryptFailure) {
+                items.push({
+                    id: 'sendNow',
+                    title: canSteerNow ? t('session.pendingMessages.actions.sendNowInterrupt') : t('session.pendingMessages.actions.sendNow'),
+                    icon: <Ionicons name="paper-plane-outline" size={16} color={theme.colors.text.secondary} />,
+                });
+            }
+            return items;
+        })();
 
         return (
             <DropdownMenu
@@ -546,23 +546,23 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                     onPress={() => handleRemove(message.id)}
                                     tone="destructive"
                                 />
-	                                {canSteerNow && !hasDecryptFailure ? (
-	                                    <IconAction
-	                                        testID={`pendingMessages.steerNow:${message.id}`}
-	                                        accessibilityLabel={t('session.pendingMessages.actions.steerNow')}
-	                                        icon="navigate-outline"
-	                                        onPress={() => handleSteerNow(message)}
-	                                    />
-	                                ) : null}
-	                                {canSendNow && !hasDecryptFailure ? (
-	                                    <IconAction
-	                                        testID={`pendingMessages.sendNow:${message.id}`}
-	                                        accessibilityLabel={canSteerNow ? t('session.pendingMessages.actions.sendNowInterrupt') : t('session.pendingMessages.actions.sendNow')}
-	                                        icon="paper-plane-outline"
-	                                        onPress={() => handleSendNow(message)}
-	                                    />
-	                                ) : null}
-	                            </View>
+                                {canSteerNow && !hasDecryptFailure ? (
+                                    <IconAction
+                                        testID={`pendingMessages.steerNow:${message.id}`}
+                                        accessibilityLabel={t('session.pendingMessages.actions.steerNow')}
+                                        icon="navigate-outline"
+                                        onPress={() => handleSteerNow(message)}
+                                    />
+                                ) : null}
+                                {canSendNow && !hasDecryptFailure ? (
+                                    <IconAction
+                                        testID={`pendingMessages.sendNow:${message.id}`}
+                                        accessibilityLabel={canSteerNow ? t('session.pendingMessages.actions.sendNowInterrupt') : t('session.pendingMessages.actions.sendNow')}
+                                        icon="paper-plane-outline"
+                                        onPress={() => handleSendNow(message)}
+                                    />
+                                ) : null}
+                            </View>
                         ) : props.pendingMessages.length > 1 ? (
                             <View style={styles.messageActionContainer}>
                                 {renderDragHandle({

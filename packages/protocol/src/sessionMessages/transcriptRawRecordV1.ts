@@ -580,6 +580,8 @@ const AgentEventSchema = z.discriminatedUnion('type', [
       groupId: ConnectedServiceAuthGroupIdSchema.nullable(),
       fromProfileId: ConnectedServiceProfileIdSchema.nullable(),
       toProfileId: ConnectedServiceProfileIdSchema.nullable(),
+      fromProfileLabel: z.string().trim().min(1).nullable().optional(),
+      toProfileLabel: z.string().trim().min(1).nullable().optional(),
       reason: ConnectedServiceAccountSwitchReasonSchema,
       mode: ConnectedServiceAccountSwitchModeSchema,
       resetAtMs: z.number().int().nonnegative().optional(),
