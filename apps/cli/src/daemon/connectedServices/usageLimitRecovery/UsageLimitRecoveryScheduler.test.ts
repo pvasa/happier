@@ -188,6 +188,49 @@ describe('UsageLimitRecoveryScheduler', () => {
     expect(SessionUsageLimitRecoveryV1Schema.safeParse(scheduler.read('session-1')).success).toBe(true);
   });
 
+  it('persists an updated selected auth when recovery must wait for the new candidate', async () => {
+    const scheduler = new UsageLimitRecoveryScheduler({
+      nowMs: () => 2_000,
+      recover: async (intent) => {
+        if (intent.selectedAuth.kind !== 'group') throw new Error('expected group intent');
+        return {
+          status: 'wait',
+          nextCheckAtMs: 2_000,
+          selectedAuth: {
+            ...intent.selectedAuth,
+            profileId: 'fresh-member',
+          },
+        };
+      },
+    });
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'limit',
+      resetAtMs: 2_000,
+      selectedAuth: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        profileId: 'old-member',
+      },
+    });
+
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'timer' })).resolves.toEqual({
+      status: 'waiting',
+    });
+
+    expect(scheduler.read('session-1')).toMatchObject({
+      status: 'waiting',
+      selectedAuth: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        profileId: 'fresh-member',
+      },
+    });
+    expect(SessionUsageLimitRecoveryV1Schema.safeParse(scheduler.read('session-1')).success).toBe(true);
+  });
+
   it('records a daemon restart diagnostic before resuming usage-limit recovery', async () => {
     const records: unknown[] = [];
     const resume = vi.fn(async () => {});

@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ConnectedServiceBindingsV1Schema,
+  type ConnectedServiceBindingsV1,
+} from '@happier-dev/protocol';
+
+import {
   HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
   HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
   readConnectedServiceMaterializedEnvKeysFromEnv,
   resolveConnectedServiceRuntimeAuthContextFromEnv,
+  resolveConnectedServiceRuntimeAuthContextFromSessionMetadata,
   resolveConnectedServiceRuntimeAuthContextFromSelection,
   serializeConnectedServiceMaterializedEnvKeys,
 } from './connectedServiceChildEnvironment';
@@ -50,6 +56,29 @@ describe('connectedServiceChildEnvironment runtime auth context', () => {
     }, 'openai-codex')).toEqual({
       serviceId: 'openai-codex',
       profileId: 'bot',
+      groupId: 'happier',
+    });
+  });
+
+  it('resolves the current connected-service binding from session metadata', () => {
+    const connectedServices = {
+      v: 1,
+      bindingsByServiceId: {
+        'openai-codex': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'happier',
+          profileId: 'backup',
+        },
+      },
+    } satisfies ConnectedServiceBindingsV1;
+    expect(ConnectedServiceBindingsV1Schema.safeParse(connectedServices).success).toBe(true);
+
+    expect(resolveConnectedServiceRuntimeAuthContextFromSessionMetadata({
+      getMetadataSnapshot: () => ({ connectedServices }),
+    }, 'openai-codex')).toEqual({
+      serviceId: 'openai-codex',
+      profileId: 'backup',
       groupId: 'happier',
     });
   });

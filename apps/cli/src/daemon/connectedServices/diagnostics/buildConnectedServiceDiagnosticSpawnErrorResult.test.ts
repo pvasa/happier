@@ -9,6 +9,7 @@ import {
 
 import { buildConnectedServiceUxDiagnostic } from './connectedServiceUxDiagnostics';
 import {
+  buildConnectedServiceCredentialRefreshSpawnErrorResult,
   buildConnectedServiceDiagnosticSpawnValidationErrorResult,
   buildConnectedServiceMaterializationSpawnErrorResult,
 } from './buildConnectedServiceDiagnosticSpawnErrorResult';
@@ -102,5 +103,55 @@ describe('buildConnectedServiceDiagnosticSpawnValidationErrorResult', () => {
         entryName: 'user:sessions:claude_code',
       },
     });
+  });
+
+  it('builds a reconnect-required spawn diagnostic without leaking raw credential material', () => {
+    const result = buildConnectedServiceCredentialRefreshSpawnErrorResult({
+      agentId: 'claude',
+      error: Object.assign(new Error('raw refresh token should not be copied'), {
+        name: 'ConnectedServiceSpawnCredentialRefreshError',
+        kind: 'reconnect_required',
+        serviceId: 'claude-subscription',
+        profileId: 'batiplus',
+        diagnostic: {
+          serviceId: 'claude-subscription',
+          profileId: 'batiplus',
+          reason: 'spawn_preflight',
+          status: 'refresh_failed',
+          category: 'invalid_grant',
+          refreshToken: 'must-not-leak',
+        },
+      }),
+    });
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error('expected reconnect-required spawn diagnostic');
+    }
+
+    expect(result).toMatchObject({
+      type: 'error',
+      errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      errorMessage: 'connected_service_credential_reconnect_required',
+    });
+    expect(isConnectedServiceUxDiagnosticSpawnErrorDetail(result.errorDetail)).toBe(true);
+    if (!isConnectedServiceUxDiagnosticSpawnErrorDetail(result.errorDetail)) {
+      throw new Error('expected connected-service diagnostic spawn detail');
+    }
+    expect(result.errorDetail.uxDiagnostic).toMatchObject({
+      code: 'connected_service_credential_reconnect_required',
+      failurePhase: 'materialization',
+      source: 'spawn_resume',
+      serviceId: 'claude-subscription',
+      agentId: 'claude',
+      profileId: 'batiplus',
+      retryable: false,
+      suggestedActions: ['reconnect_profile', 'open_connected_accounts'],
+      diagnostics: {
+        reason: 'spawn_preflight',
+        refreshStatus: 'refresh_failed',
+        refreshCategory: 'invalid_grant',
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('must-not-leak');
   });
 });

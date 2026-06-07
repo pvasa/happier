@@ -199,4 +199,28 @@ describe('ConnectedServiceUxDiagnosticV1', () => {
 
     expect(diagnostic.success).toBe(true);
   });
+
+  it('accepts a provider-agnostic credential reconnect diagnostic', () => {
+    const diagnostic = ConnectedServiceUxDiagnosticV1Schema.safeParse({
+      code: 'connected_service_credential_reconnect_required',
+      failurePhase: 'materialization',
+      source: 'spawn_resume',
+      serviceId: 'claude-subscription',
+      providerId: 'claude',
+      agentId: 'claude',
+      profileId: 'batiplus',
+      retryable: false,
+      suggestedActions: [
+        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.reconnectProfile,
+        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.openConnectedAccounts,
+      ],
+      diagnostics: {
+        reason: 'spawn_preflight',
+        refreshStatus: 'refresh_failed',
+        refreshCategory: 'invalid_grant',
+      },
+    });
+
+    expect(diagnostic.success).toBe(true);
+  });
 });

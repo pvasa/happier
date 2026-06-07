@@ -1,4 +1,9 @@
-import type { ConnectedServiceId } from '@happier-dev/protocol';
+import {
+  ConnectedServiceBindingsV1Schema,
+  type ConnectedServiceBindingSelectionV1,
+  type ConnectedServiceId,
+  type ConnectedServiceProfileId,
+} from '@happier-dev/protocol';
 
 import type { ConnectedServiceResolvedSelection } from './materialize/materializeConnectedServicesForSpawn';
 
@@ -27,6 +32,10 @@ export type ConnectedServiceRuntimeAuthContext = Readonly<{
   serviceId: ConnectedServiceId;
   profileId: string | null;
   groupId: string | null;
+}>;
+
+export type ConnectedServiceRuntimeAuthMetadataSession = Readonly<{
+  getMetadataSnapshot?: () => unknown;
 }>;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -181,4 +190,42 @@ export function resolveConnectedServiceRuntimeAuthContextFromEnv(
     findConnectedServiceChildSelection(env, serviceId),
     serviceId,
   );
+}
+
+export function findConnectedServiceBindingSelectionFromSessionMetadata(
+  session: ConnectedServiceRuntimeAuthMetadataSession,
+  serviceId: ConnectedServiceId,
+): ConnectedServiceBindingSelectionV1 | null {
+  const metadata = typeof session.getMetadataSnapshot === 'function' ? session.getMetadataSnapshot() : null;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+
+  const rawBindings = (metadata as Record<string, unknown>).connectedServices;
+  const parsed = ConnectedServiceBindingsV1Schema.safeParse(rawBindings);
+  if (!parsed.success) return null;
+
+  return parsed.data.bindingsByServiceId[serviceId] ?? null;
+}
+
+export function resolveConnectedServiceRuntimeAuthContextFromSessionMetadata(
+  session: ConnectedServiceRuntimeAuthMetadataSession,
+  serviceId: ConnectedServiceId,
+): ConnectedServiceRuntimeAuthContext {
+  const binding = findConnectedServiceBindingSelectionFromSessionMetadata(session, serviceId);
+  if (!binding || binding.source !== 'connected') {
+    return { serviceId, profileId: null, groupId: null };
+  }
+
+  if (binding.selection === 'group') {
+    return {
+      serviceId,
+      profileId: binding.profileId ?? null,
+      groupId: binding.groupId,
+    };
+  }
+
+  return {
+    serviceId,
+    profileId: binding.profileId as ConnectedServiceProfileId,
+    groupId: null,
+  };
 }

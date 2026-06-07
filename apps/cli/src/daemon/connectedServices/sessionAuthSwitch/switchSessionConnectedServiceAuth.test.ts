@@ -898,6 +898,110 @@ describe('switchSessionConnectedServiceAuth', () => {
     }));
   });
 
+  it('does not hot-apply an unchanged group binding when the tracked runtime already adopted the expected generation', async () => {
+    const tracked = trackedSession({
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        connectedServices: {
+          v: 1,
+          bindingsByServiceId: {
+            anthropic: {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'work',
+              profileId: 'group-active',
+            },
+          },
+        },
+        connectedServiceMaterializationIdentityV1: materializationIdentity,
+        environmentVariables: {
+          [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+            kind: 'group',
+            serviceId: 'anthropic',
+            groupId: 'work',
+            activeProfileId: 'group-active',
+            fallbackProfileId: 'group-active',
+            generation: 67,
+          }]),
+        },
+      },
+    });
+    const materializeRuntimeAuthSelection = vi.fn(async () => ({ kind: 'materialized' }));
+    const resolveContinuity = vi.fn(async () => ({ mode: 'hot_apply' as const }));
+    const hotApply = vi.fn(async () => ({ ok: true as const }));
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
+    const verifyProviderAccountAdoption = vi.fn(async () => ({
+      status: 'verified' as const,
+      reason: 'test_verified',
+    }));
+    const emitSessionEvent = vi.fn();
+
+    const result = await switchSessionConnectedServiceAuth({
+      core: createCore(),
+      getChildren: () => [tracked],
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'anthropic',
+          profiles: [{ profileId: 'group-active', status: 'connected' }],
+        }),
+        getConnectedServiceAuthGroup: async () => group({
+          activeProfileId: 'group-active',
+          generation: 67,
+        }),
+      },
+      resolveContinuity,
+      materializeRuntimeAuthSelection,
+      restartSession: vi.fn(),
+      hotApply,
+      recoverAfterRuntimeAuthSwitch: async () => ({ ok: true }),
+      continueAfterRuntimeAuthSwitch,
+      verifyProviderAccountAdoption,
+      persistSessionBindings: vi.fn(),
+      registerHotApplyTargets: vi.fn(),
+      emitSessionEvent,
+      request: {
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        expectedGroupGenerationByServiceId: { anthropic: 67 },
+        bindings: {
+          v: 1,
+          bindingsByServiceId: {
+            anthropic: {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'work',
+              profileId: 'group-active',
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      action: 'unchanged',
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          anthropic: {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'work',
+            profileId: 'group-active',
+          },
+        },
+      },
+      continuityByServiceId: {},
+    });
+    expect(materializeRuntimeAuthSelection).not.toHaveBeenCalled();
+    expect(resolveContinuity).not.toHaveBeenCalled();
+    expect(hotApply).not.toHaveBeenCalled();
+    expect(verifyProviderAccountAdoption).not.toHaveBeenCalled();
+    expect(continueAfterRuntimeAuthSwitch).not.toHaveBeenCalled();
+    expect(emitSessionEvent).not.toHaveBeenCalled();
+  });
+
   it('escalates unchanged group hot-apply adoption mismatch to restart and defers proof to the respawned runtime', async () => {
     const tracked = trackedSession({
       spawnOptions: {

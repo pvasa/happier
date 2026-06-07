@@ -11,6 +11,36 @@ import type { CatalogAgentId } from '@/backends/types';
 import type { ConnectedServicesMaterializationDiagnostic } from '../materialize/providerMaterializerTypes';
 import { buildConnectedServiceUxDiagnostic } from './connectedServiceUxDiagnostics';
 
+type ConnectedServiceCredentialRefreshSpawnError = Readonly<{
+  name?: unknown;
+  kind?: unknown;
+  serviceId?: unknown;
+  profileId?: unknown;
+  diagnostic?: unknown;
+}>;
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function readStringField(record: Record<string, unknown> | null, key: string): string {
+  return record ? readString(record[key]) : '';
+}
+
+function readCredentialRefreshSpawnError(error: unknown): ConnectedServiceCredentialRefreshSpawnError | null {
+  const record = readRecord(error);
+  if (!record) return null;
+  if (readString(record.name) !== 'ConnectedServiceSpawnCredentialRefreshError') return null;
+  if (readString(record.kind) !== 'reconnect_required') return null;
+  return record;
+}
+
 export function buildConnectedServiceDiagnosticSpawnValidationErrorResult(input: Readonly<{
   errorMessage: string;
   uxDiagnostic: ConnectedServiceUxDiagnosticV1;
@@ -24,6 +54,40 @@ export function buildConnectedServiceDiagnosticSpawnValidationErrorResult(input:
       uxDiagnostic: input.uxDiagnostic,
     },
   };
+}
+
+export function buildConnectedServiceCredentialRefreshSpawnErrorResult(input: Readonly<{
+  agentId: CatalogAgentId;
+  error: unknown;
+}>): Extract<SpawnSessionResult, { type: 'error' }> | null {
+  const error = readCredentialRefreshSpawnError(input.error);
+  if (!error) return null;
+
+  const diagnostic = readRecord(error.diagnostic);
+  const serviceId = readString(error.serviceId) || readStringField(diagnostic, 'serviceId');
+  const profileId = readString(error.profileId) || readStringField(diagnostic, 'profileId');
+  const reason = readStringField(diagnostic, 'reason') || 'spawn_preflight';
+  const refreshStatus = readStringField(diagnostic, 'status') || null;
+  const refreshCategory = readStringField(diagnostic, 'category') || null;
+  const code = CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.connectedServiceCredentialReconnectRequired;
+
+  return buildConnectedServiceDiagnosticSpawnValidationErrorResult({
+    errorMessage: code,
+    uxDiagnostic: buildConnectedServiceUxDiagnostic({
+      code,
+      failurePhase: 'materialization',
+      source: 'spawn_resume',
+      agentId: input.agentId,
+      ...(serviceId ? { serviceId } : {}),
+      ...(profileId ? { profileId } : {}),
+      retryable: false,
+      diagnostics: {
+        reason,
+        refreshStatus,
+        refreshCategory,
+      },
+    }),
+  });
 }
 
 export function buildConnectedServiceMaterializationSpawnErrorResult(input: Readonly<{

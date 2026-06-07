@@ -1290,6 +1290,38 @@ function resolveUnchangedRematerializeServiceId(input: Readonly<{
     });
 }
 
+function readExpectedGroupGenerationForService(input: Readonly<{
+  request: SessionConnectedServiceAuthSwitchRequest;
+  serviceId: ConnectedServiceId;
+}>): number | null {
+  const value = input.request.expectedGroupGenerationByServiceId?.[input.serviceId];
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  return Math.trunc(value);
+}
+
+function hasTrackedRuntimeAlreadyAdoptedExpectedGroupGeneration(input: Readonly<{
+  request: SessionConnectedServiceAuthSwitchRequest;
+  tracked: TrackedSession;
+  serviceId: ConnectedServiceId;
+  next: EffectiveBinding;
+}>): boolean {
+  if (input.request.rematerializeServiceId) return false;
+  if (input.next.source !== 'connected' || input.next.selection !== 'group') return false;
+  const expectedGeneration = readExpectedGroupGenerationForService({
+    request: input.request,
+    serviceId: input.serviceId,
+  });
+  if (expectedGeneration === null) return false;
+
+  const selection = readConnectedServiceChildSelectionsFromEnv(
+    input.tracked.spawnOptions?.environmentVariables ?? {},
+  ).find((candidate) => candidate.serviceId === input.serviceId);
+  if (!selection || selection.kind !== 'group') return false;
+  return selection.groupId === input.next.groupId
+    && selection.activeProfileId === input.next.profileId
+    && selection.generation === expectedGeneration;
+}
+
 async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
   request: SessionConnectedServiceAuthSwitchRequest;
   tracked: TrackedSession;
@@ -1318,6 +1350,20 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
 
   const next = input.nextByServiceId.get(serviceId);
   if (!next || next.source !== 'connected') {
+    return {
+      ok: true,
+      action: 'unchanged',
+      normalizedBindings: input.normalizedBindings,
+      continuityByServiceId: {},
+      warnings: [],
+    };
+  }
+  if (hasTrackedRuntimeAlreadyAdoptedExpectedGroupGeneration({
+    request: input.request,
+    tracked: input.tracked,
+    serviceId,
+    next,
+  })) {
     return {
       ok: true,
       action: 'unchanged',

@@ -22,7 +22,12 @@ export type UsageLimitRecoveryIntent = SessionUsageLimitRecoveryV1;
 
 type RecoveryResult =
   | Readonly<{ status: 'ready'; selectedAuth?: SessionUsageLimitRecoveryAuthSelectionV1 }>
-  | Readonly<{ status: 'wait'; nextCheckAtMs: number; lastProbeError?: string | null }>
+  | Readonly<{
+      status: 'wait';
+      nextCheckAtMs: number;
+      lastProbeError?: string | null;
+      selectedAuth?: SessionUsageLimitRecoveryAuthSelectionV1;
+    }>
   | Readonly<{ status: 'exhausted'; lastProbeError?: string | null }>;
 
 export type UsageLimitRecoveryIntentStore = Readonly<{
@@ -168,6 +173,7 @@ export class UsageLimitRecoveryScheduler {
             status: 'waiting' as const,
             nextCheckAtMs: recovery.nextCheckAtMs,
             lastProbeError: recovery.lastProbeError ?? null,
+            selectedAuth: recovery.selectedAuth ?? intent.selectedAuth,
           },
         };
       },
