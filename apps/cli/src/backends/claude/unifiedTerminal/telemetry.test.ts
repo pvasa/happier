@@ -30,6 +30,41 @@ describe('createClaudeUnifiedTelemetrySink', () => {
     });
   });
 
+  it('does not write zellij screen dump contents to host-dead telemetry', async () => {
+    const debug = vi.fn();
+    const { emitClaudeUnifiedHostDead } = await import('./telemetry');
+    const sink = createClaudeUnifiedTelemetrySink({
+      logger: { debug },
+    });
+
+    emitClaudeUnifiedHostDead(sink, {
+      hostKind: 'zellij',
+      sessionName: 'happier-claude',
+      paneId: 'terminal_1',
+      liveness: {
+        paneAlive: false,
+        paneDead: true,
+        paneCurrentCommand: '/managed/node',
+        paneExitStatus: 127,
+        paneScreenDumpCaptured: true,
+        paneScreenDumpTruncated: true,
+        paneScreenDumpError: 'dump failed with SECRET_TOKEN=raw-secret',
+        observedAt: 123,
+      },
+    });
+
+    expect(debug).toHaveBeenCalledWith('[claude-unified-telemetry]', expect.objectContaining({
+      event: 'unified.session.host_dead',
+      paneScreenDumpCaptured: true,
+      paneScreenDumpTruncated: true,
+      paneScreenDumpErrorCaptured: true,
+    }));
+    const payload = JSON.stringify(debug.mock.calls[0]?.[1]);
+    expect(payload).not.toContain('terminal prompt with user text');
+    expect(payload).not.toContain('raw-secret');
+    expect(payload).not.toContain('paneScreenDump":"');
+  });
+
   it('includes zellij pane exit details in host-dead telemetry', async () => {
     const debug = vi.fn();
     const { emitClaudeUnifiedHostDead } = await import('./telemetry');

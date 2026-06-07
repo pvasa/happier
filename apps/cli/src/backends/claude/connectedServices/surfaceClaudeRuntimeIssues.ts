@@ -80,18 +80,18 @@ export async function surfaceClaudeConnectedServiceRuntimeAuthFailure(
     session: RuntimeIssueSession,
     error: unknown,
     logPrefix: string,
-): Promise<void> {
+): Promise<boolean> {
     const selection =
         findConnectedServiceChildSelection(process.env, 'claude-subscription')
         ?? findConnectedServiceChildSelection(process.env, 'anthropic')
         ?? null;
-    if (!selection) return;
+    if (!selection) return false;
 
     const classification = classifyClaudeConnectedServiceRuntimeAuthFailure({
         error,
         selection,
     });
-    if (!classification) return;
+    if (!classification) return false;
 
     const issue: SessionRuntimeIssueV1 = {
         v: 1,
@@ -127,4 +127,5 @@ export async function surfaceClaudeConnectedServiceRuntimeAuthFailure(
             return Boolean(session.client.sendSessionEvent);
         },
     });
+    return true;
 }

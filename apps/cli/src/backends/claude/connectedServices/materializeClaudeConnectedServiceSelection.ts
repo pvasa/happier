@@ -9,8 +9,9 @@ import type { ConnectedServiceResolvedSelection } from '@/daemon/connectedServic
 
 import { materializeClaudeAnthropicApiKeyAuth } from './materializeClaudeAnthropicApiKeyAuth';
 import {
-  diagnoseClaudeCodeNativeAuthMaterialization,
-  materializeClaudeCodeNativeAuth,
+  materializeClaudeSubscriptionNativeAuthHome,
+  type ClaudeSubscriptionNativeAuthIdentityDiagnostic,
+  type ClaudeSubscriptionNativeAuthSelectionDescriptor,
 } from './nativeAuth/materializeClaudeCodeNativeAuth';
 import { resolveClaudeConnectedServiceStableConfigDir } from './resolveClaudeConnectedServiceStableAuthDir';
 import { syncClaudeConnectedServiceHome } from './syncClaudeConnectedServiceHome';
@@ -24,7 +25,29 @@ export type ClaudeConnectedServiceSelectionMaterialization = Readonly<{
   env: Record<string, string>;
   targetMaterializedRoot: string;
   diagnostics: readonly ConnectedServicesMaterializationDiagnostic[];
+  identityDiagnostic?: ClaudeSubscriptionNativeAuthIdentityDiagnostic;
 }>;
+
+function buildClaudeSubscriptionNativeAuthSelectionDescriptor(params: Readonly<{
+  fallbackProfileId: string;
+  selection: ConnectedServiceResolvedSelection | null | undefined;
+}>): ClaudeSubscriptionNativeAuthSelectionDescriptor {
+  if (params.selection?.kind === 'group') {
+    return {
+      kind: 'group',
+      serviceId: 'claude-subscription',
+      groupId: params.selection.groupId,
+      activeProfileId: params.selection.activeProfileId,
+      fallbackProfileId: params.selection.fallbackProfileId,
+      generation: params.selection.generation,
+    };
+  }
+  return {
+    kind: 'profile',
+    serviceId: 'claude-subscription',
+    profileId: params.selection?.kind === 'profile' ? params.selection.profileId : params.fallbackProfileId,
+  };
+}
 
 export async function materializeClaudeConnectedServiceSelection(params: Readonly<{
   activeServerDir: string;
@@ -45,32 +68,22 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
   if (!claudeConfigDir) return null;
 
   if (params.serviceId === 'claude-subscription') {
-    const nativeAuthDiagnostics = diagnoseClaudeCodeNativeAuthMaterialization({
+    const materialized = await materializeClaudeSubscriptionNativeAuthHome({
       record: params.record,
-    });
-    if (nativeAuthDiagnostics.length > 0) {
-      return {
-        env: { CLAUDE_CONFIG_DIR: claudeConfigDir },
-        targetMaterializedRoot: claudeConfigDir,
-        diagnostics: nativeAuthDiagnostics,
-      };
-    }
-
-    const syncResult = await syncClaudeConnectedServiceHome({
+      targetClaudeConfigDir: claudeConfigDir,
       sourceEnv: params.processEnv,
-      targetDir: claudeConfigDir,
       accountSettings: params.accountSettings ?? null,
       sessionDirectory: params.sessionDirectory ?? null,
-      preserveNativeCredentialFile: true,
-    });
-    const materialized = await materializeClaudeCodeNativeAuth({
-      record: params.record,
-      claudeConfigDir,
+      selectionDescriptor: buildClaudeSubscriptionNativeAuthSelectionDescriptor({
+        fallbackProfileId: params.fallbackProfileId,
+        selection: params.selection ?? null,
+      }),
     });
     return {
       env: materialized.env,
       targetMaterializedRoot: claudeConfigDir,
-      diagnostics: [...syncResult.diagnostics, ...materialized.diagnostics],
+      diagnostics: materialized.diagnostics,
+      identityDiagnostic: materialized.identityDiagnostic,
     };
   }
 

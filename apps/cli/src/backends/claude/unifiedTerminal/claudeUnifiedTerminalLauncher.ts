@@ -24,6 +24,8 @@ function shouldForegroundAttachTerminal(): boolean {
   return process.stdin.isTTY === true && process.stdout.isTTY === true;
 }
 
+const CLAUDE_UNIFIED_TERMINAL_AUTH_FAILURE_HOST_DEATH_WINDOW_MS = 5_000;
+
 function startForegroundAttach(params: Readonly<{
   sessionId: string;
   terminal: NonNullable<TerminalAttachmentInfo['terminal']>;
@@ -57,6 +59,15 @@ function sendUnifiedTerminalHostDeadMessage(session: Session): void {
     type: 'message',
     message: 'Claude unified terminal host is not alive. The terminal process exited before Happier could send your prompt.',
   });
+}
+
+function isRecentClaudeUnifiedTerminalAuthFailure(params: Readonly<{
+  authFailureAtMs: number | null;
+  nowMs: number;
+}>): boolean {
+  return params.authFailureAtMs !== null
+    && params.nowMs - params.authFailureAtMs >= 0
+    && params.nowMs - params.authFailureAtMs <= CLAUDE_UNIFIED_TERMINAL_AUTH_FAILURE_HOST_DEATH_WINDOW_MS;
 }
 
 async function flushUnifiedStartupFailureSurface(session: Session, reason: string): Promise<void> {
@@ -96,6 +107,7 @@ export async function claudeUnifiedTerminalLauncher(
   const initialPrompt = extractClaudeTerminalInitialPrompt(session.claudeArgs);
   let initialPromptPending = typeof initialPrompt.prompt === 'string';
   const transcriptProjector = createClaudeSessionTranscriptProjector({ session, logPrefix: '[unified]' });
+  let lastSurfacedRuntimeAuthFailureAtMs: number | null = null;
   const readyHandler = createClaudeReadyHandler({
     session: session.client,
     pushSender: session.pushSender,
@@ -241,7 +253,10 @@ export async function claudeUnifiedTerminalLauncher(
       onUsageLimitDetails: surfaceRateLimit,
       onRuntimeAuthFailureEvent: async (error) => {
         try {
-          await surfaceClaudeConnectedServiceRuntimeAuthFailure(session, error, '[unified]');
+          const surfaced = await surfaceClaudeConnectedServiceRuntimeAuthFailure(session, error, '[unified]');
+          if (surfaced) {
+            lastSurfacedRuntimeAuthFailureAtMs = Date.now();
+          }
         } finally {
           binding.notePromptTurnTerminal();
         }
@@ -257,6 +272,15 @@ export async function claudeUnifiedTerminalLauncher(
   } catch (error) {
     if (isClaudeUnifiedTerminalHostDeadError(error)) {
       session.onThinkingChange(false);
+      if (isRecentClaudeUnifiedTerminalAuthFailure({
+        authFailureAtMs: lastSurfacedRuntimeAuthFailureAtMs,
+        nowMs: Date.now(),
+      })) {
+        logger.debug('[unified]: terminal host died after Claude auth failure; keeping auth diagnostic primary');
+        await flushUnifiedStartupFailureSurface(session, 'host_dead_after_auth_failure');
+        binding.notePromptTurnTerminal();
+        throw error;
+      }
       await surfacePrimarySessionRuntimeIssue({
         provider: 'claude',
         cause: 'process_exit',

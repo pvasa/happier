@@ -920,6 +920,76 @@ describe('claudeUnifiedTerminalLauncher', () => {
     });
   });
 
+  it('keeps provider auth evidence primary when terminal host death follows in the same failure window', async () => {
+    setProcessTty(false);
+    const previousSelectionEnv = process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
+    process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] = JSON.stringify([{
+      kind: 'group',
+      serviceId: 'claude-subscription',
+      groupId: 'claude',
+      activeProfileId: 'claude-main',
+      fallbackProfileId: 'claude-main',
+      generation: 1,
+    }]);
+    const session = createSession();
+    const hostDeadError = Object.assign(new Error('Claude unified terminal host is not alive'), {
+      code: 'claude_unified_terminal_host_dead',
+    });
+    mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (opts: {
+      onRuntimeAuthFailureEvent?: (error: unknown) => void | Promise<void>;
+    }) => {
+      expect(opts.onRuntimeAuthFailureEvent).toBeTypeOf('function');
+      await opts.onRuntimeAuthFailureEvent?.({
+        type: 'assistant',
+        isApiErrorMessage: true,
+        error: 'authentication_failed',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Not logged in · Please run /login' }],
+        },
+      });
+      throw hostDeadError;
+    });
+
+    try {
+      await expect(claudeUnifiedTerminalLauncher(session, {
+        initialMode: {
+          permissionMode: 'default',
+          claudeUnifiedTerminalHost: 'zellij',
+        },
+      })).rejects.toBe(hostDeadError);
+    } finally {
+      if (previousSelectionEnv === undefined) {
+        delete process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
+      } else {
+        process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] = previousSelectionEnv;
+      }
+    }
+
+    expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledTimes(1);
+    expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
+      provider: 'claude',
+      issue: expect.objectContaining({
+        code: 'auth_error',
+        source: 'auth_error',
+        provider: 'claude',
+      }),
+    });
+    expect(session.client.sessionTurnLifecycle?.failTurn).not.toHaveBeenCalledWith({
+      provider: 'claude',
+      issue: expect.objectContaining({
+        code: 'provider_process_exit',
+        source: 'provider_process_exit',
+      }),
+    });
+    expect(session.client.sendSessionEvent).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'message',
+      message: expect.stringContaining('Claude unified terminal host is not alive'),
+    }));
+    expect(session.client.flush).toHaveBeenCalledTimes(1);
+    expect(session.onThinkingChange).toHaveBeenCalledWith(false);
+  });
+
   it('surfaces unified transcript provider API errors through the session runtime issue path', async () => {
     setProcessTty(false);
     const session = createSession();

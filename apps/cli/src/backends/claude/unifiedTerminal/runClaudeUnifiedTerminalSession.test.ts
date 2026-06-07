@@ -1876,11 +1876,106 @@ describe('runClaudeUnifiedTerminalSession', () => {
     expect(adapter.dispose).not.toHaveBeenCalled();
   });
 
-  it('fails instead of waiting forever when the terminal host dies after prompt injection', async () => {
-      const abortController = createAbortableSignal();
-      const injected: string[] = [];
-      const telemetry = { emit: vi.fn() };
-      let paneAlive = true;
+  it('treats prompt-input SessionEnd followed by clean terminal exit as graceful shutdown', async () => {
+    const abortController = createAbortableSignal();
+    const telemetry = { emit: vi.fn() };
+    let paneAlive = true;
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const handle: TerminalHostHandle = {
+      kind: 'zellij',
+      sessionName: 'happier-claude-session-test',
+      paneId: 'terminal_1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'zellij',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async () => ({ status: 'injected', at: Date.now(), bytesWritten: 0 }) as const),
+      evaluateLiveness: vi.fn(async () => (paneAlive
+        ? { paneAlive: true, observedAt: Date.now() }
+        : {
+            paneAlive: false,
+            paneDead: true,
+            paneCurrentCommand: '/managed/node',
+            paneExitStatus: 0,
+            observedAt: Date.now(),
+          })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'zellij',
+      },
+      nextMessage: async () => null,
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({
+        spawnArgv: ['/bin/claude'],
+        spawnEnv: {},
+      }),
+      createSessionName: () => 'happier-claude-session-test',
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      telemetry,
+      lifecycleCompletionQuiescenceMs: 0,
+    });
+
+    try {
+      await waitUntil(() => typeof subscribedHook === 'function', 5_000);
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+      hook({
+        hook_event_name: 'SessionStart',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      hook({
+        hook_event_name: 'SessionEnd',
+        session_id: 'claude-session-id',
+        reason: 'prompt_input_exit',
+      });
+      paneAlive = false;
+
+      const result = await Promise.race([
+        sessionPromise
+          .then(() => ({ kind: 'resolved' as const }))
+          .catch((error: unknown) => ({ kind: 'error' as const, error })),
+        new Promise<{ kind: 'timeout' }>((resolve) => {
+          setTimeout(() => resolve({ kind: 'timeout' }), 1_200);
+        }),
+      ]);
+
+      expect(result).toEqual({ kind: 'resolved' });
+      expect(telemetry.emit).not.toHaveBeenCalledWith(expect.objectContaining({
+        name: 'unified.session.host_dead',
+      }));
+      expect(adapter.dispose).toHaveBeenCalledWith(handle);
+    } finally {
+      abortController.abort();
+      await sessionPromise.catch(() => undefined);
+    }
+  });
+
+  it('fails instead of waiting forever when the terminal host stays dead after prompt injection', async () => {
+    const abortController = createAbortableSignal();
+    const injected: string[] = [];
+    const telemetry = { emit: vi.fn() };
+    let paneAlive = true;
+    let deadLivenessCalls = 0;
     const handle: TerminalHostHandle = {
       kind: 'zellij',
       sessionName: 'happier-claude-session-test',
@@ -1899,7 +1994,10 @@ describe('runClaudeUnifiedTerminalSession', () => {
         injected.push(input.text);
         return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
       }),
-      evaluateLiveness: vi.fn(async () => ({ paneAlive, observedAt: Date.now() })),
+      evaluateLiveness: vi.fn(async () => {
+        if (!paneAlive) deadLivenessCalls += 1;
+        return { paneAlive, observedAt: Date.now() };
+      }),
       captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
@@ -1936,27 +2034,28 @@ describe('runClaudeUnifiedTerminalSession', () => {
           .then(() => ({ kind: 'resolved' as const }))
           .catch((error: unknown) => ({ kind: 'error' as const, error })),
         new Promise<{ kind: 'timeout' }>((resolve) => {
-          setTimeout(() => resolve({ kind: 'timeout' }), 1_200);
+          setTimeout(() => resolve({ kind: 'timeout' }), 3_000);
         }),
       ]);
 
-        expect(result).toMatchObject({
-          kind: 'error',
-          error: {
-            code: 'claude_unified_terminal_host_dead',
-          },
-        });
-        expect(telemetry.emit).toHaveBeenCalledWith({
-          name: 'unified.session.host_dead',
-          properties: {
-            hostKind: 'zellij',
-            sessionName: 'happier-claude-session-test',
-            paneId: 'terminal_1',
-            paneAlive: false,
-            observedAt: expect.any(Number),
-          },
-        });
-        expect(adapter.dispose).toHaveBeenCalledWith(handle);
+      expect(result).toMatchObject({
+        kind: 'error',
+        error: {
+          code: 'claude_unified_terminal_host_dead',
+        },
+      });
+      expect(deadLivenessCalls).toBeGreaterThanOrEqual(2);
+      expect(telemetry.emit).toHaveBeenCalledWith({
+        name: 'unified.session.host_dead',
+        properties: {
+          hostKind: 'zellij',
+          sessionName: 'happier-claude-session-test',
+          paneId: 'terminal_1',
+          paneAlive: false,
+          observedAt: expect.any(Number),
+        },
+      });
+      expect(adapter.dispose).toHaveBeenCalledWith(handle);
     } finally {
       abortController.abort();
       await sessionPromise.catch(() => undefined);
@@ -2031,7 +2130,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
           .then(() => ({ kind: 'resolved' as const }))
           .catch((error: unknown) => ({ kind: 'error' as const, error })),
         new Promise<{ kind: 'timeout' }>((resolve) => {
-          setTimeout(() => resolve({ kind: 'timeout' }), 1_200);
+          setTimeout(() => resolve({ kind: 'timeout' }), 3_000);
         }),
       ]);
 
@@ -2051,6 +2150,86 @@ describe('runClaudeUnifiedTerminalSession', () => {
         }),
       });
       expect(adapter.dispose).toHaveBeenCalledWith(handle);
+    } finally {
+      abortController.abort();
+      await sessionPromise.catch(() => undefined);
+    }
+  });
+
+  it('survives a single transient terminal liveness probe failure after prompt injection', async () => {
+    const abortController = createAbortableSignal();
+    const injected: string[] = [];
+    const telemetry = { emit: vi.fn() };
+    let throwRemaining = 0;
+    const handle: TerminalHostHandle = {
+      kind: 'zellij',
+      sessionName: 'happier-claude-session-test',
+      paneId: 'terminal_1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'zellij',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injected.push(input.text);
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => {
+        if (throwRemaining > 0) {
+          throwRemaining -= 1;
+          throw new Error('zellij list-panes failed: transient timeout');
+        }
+        return { paneAlive: true, observedAt: Date.now() };
+      }),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let consumed = false;
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage: async () => {
+        if (consumed) return null;
+        consumed = true;
+        return {
+          message: 'hello',
+          mode: {
+            permissionMode: 'default',
+            claudeUnifiedTerminalHost: 'zellij',
+          },
+        };
+      },
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({
+        spawnArgv: ['/bin/claude'],
+        spawnEnv: {},
+      }),
+      createSessionName: () => 'happier-claude-session-test',
+      telemetry,
+    });
+
+    try {
+      await waitUntil(() => injected.length === 1);
+      throwRemaining = 1;
+      const result = await Promise.race([
+        sessionPromise
+          .then(() => ({ kind: 'resolved' as const }))
+          .catch((error: unknown) => ({ kind: 'error' as const, error })),
+        new Promise<{ kind: 'timeout' }>((resolve) => {
+          setTimeout(() => resolve({ kind: 'timeout' }), 1_500);
+        }),
+      ]);
+
+      expect(result).toEqual({ kind: 'timeout' });
+      expect(telemetry.emit).not.toHaveBeenCalledWith(expect.objectContaining({
+        name: 'unified.session.host_dead',
+      }));
     } finally {
       abortController.abort();
       await sessionPromise.catch(() => undefined);

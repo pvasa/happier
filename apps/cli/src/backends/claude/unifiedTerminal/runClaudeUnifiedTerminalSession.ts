@@ -11,6 +11,7 @@ import {
 import {
   createClaudeUnifiedHookLifecycleBridge,
   type ClaudeUnifiedPromptTurnTerminalEvent,
+  type ClaudeUnifiedSessionEndEvent,
   type ClaudeUnifiedSessionHookSubscription,
 } from './createClaudeUnifiedHookLifecycleBridge';
 import { createClaudeUnifiedTranscriptBridge } from './createClaudeUnifiedTranscriptBridge';
@@ -222,6 +223,14 @@ async function removeUnreadLaunchSpec(spawn: ClaudeUnifiedTerminalSpawn): Promis
   if (basename(specDir).startsWith('happier-terminal-launch-')) {
     await rmdir(specDir).catch(() => undefined);
   }
+}
+
+function isClaudePromptInputExit(event: ClaudeUnifiedSessionEndEvent): boolean {
+  return event.reason === 'prompt_input_exit';
+}
+
+function isCleanTerminalExit(liveness: Readonly<{ paneExitStatus?: number | undefined }>): boolean {
+  return liveness.paneExitStatus === 0;
 }
 
 function waitForAnyAbort(signals: readonly AbortSignal[]): Promise<void> {
@@ -478,6 +487,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
   const processSignalAbortController = new AbortController();
   let fatalRuntimeError: unknown = null;
   let startupHostLivenessGraceActive = true;
+  let expectedPromptInputExit = false;
   let preHandleProcessSignalCleanupRan = false;
   let concreteHostDisposedByProcessSignal = false;
   const endStartupHostLivenessGrace = (): void => {
@@ -616,6 +626,11 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             onRuntimeAuthFailureEvent: opts.onRuntimeAuthFailureEvent,
             onProviderPromptStarted: opts.onProviderPromptStarted,
             onPromptTurnTerminal: opts.onPromptTurnTerminal,
+            onSessionEnd: (event) => {
+              if (isClaudePromptInputExit(event)) {
+                expectedPromptInputExit = true;
+              }
+            },
           })
         : undefined;
       const transcriptBridge = opts.onMessage || opts.onSessionFound
@@ -670,6 +685,12 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             pollIntervalMs: configuration.claudeUnifiedTerminalHostLivenessPollMs,
             startupGraceMs: configuration.claudeUnifiedTerminalStartupReadinessTimeoutMs,
             startupGraceActive: () => startupHostLivenessGraceActive,
+            isExpectedHostExit: (liveness) => expectedPromptInputExit && isCleanTerminalExit(liveness),
+            onHostExited: () => {
+              if (!runtimeAbortController.signal.aborted) {
+                runtimeAbortController.abort('claude-unified-terminal-graceful-exit');
+              }
+            },
             onHostDead: (error) => {
               fatalRuntimeError ??= error;
               runtimeAbortController.abort(error);

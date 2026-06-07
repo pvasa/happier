@@ -1,4 +1,5 @@
 import type { TerminalHostAdapter, TerminalHostHandle, TerminalHostLiveness } from '@/integrations/terminalHost/_types';
+import { sanitizeTerminalHostDiagnosticText } from '@/integrations/terminalHost/sanitizeTerminalHostDiagnosticText';
 
 import { ClaudeUnifiedTerminalHostDeadError } from './createClaudeUnifiedController';
 import type { ClaudeUnifiedStartableDisposable } from './_types';
@@ -10,10 +11,31 @@ function wait(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+function mergeDeadLivenessDiagnostics(
+  pending: TerminalHostLiveness,
+  latest: TerminalHostLiveness,
+): TerminalHostLiveness {
+  return { ...pending, ...latest };
+}
+
+function createProbeFailureLiveness(
+  error: unknown,
+  observedAt: number,
+): TerminalHostLiveness {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    paneAlive: false,
+    paneScreenDumpError: sanitizeTerminalHostDiagnosticText(message),
+    observedAt,
+  };
+}
+
 export function createClaudeUnifiedHostLivenessBridge(opts: Readonly<{
   hostAdapter: Pick<TerminalHostAdapter, 'evaluateLiveness'>;
   handle: TerminalHostHandle;
   onHostDead: (error: ClaudeUnifiedTerminalHostDeadError) => void | Promise<void>;
+  onHostExited?: ((liveness: TerminalHostLiveness) => void | Promise<void>) | undefined;
+  isExpectedHostExit?: ((liveness: TerminalHostLiveness) => boolean) | undefined;
   telemetry?: ClaudeUnifiedTelemetrySink | undefined;
   pollIntervalMs?: number | undefined;
   startupGraceMs?: number | undefined;
@@ -27,6 +49,13 @@ export function createClaudeUnifiedHostLivenessBridge(opts: Readonly<{
   let started = false;
   let reported = false;
   let startedAtMs = 0;
+  let pendingDeadLiveness: TerminalHostLiveness | null = null;
+
+  const reportHostExited = async (liveness: TerminalHostLiveness): Promise<void> => {
+    if (reported || disposed) return;
+    reported = true;
+    await opts.onHostExited?.(liveness);
+  };
 
   const reportHostDead = async (liveness?: TerminalHostLiveness | undefined): Promise<void> => {
     if (reported || disposed) return;
@@ -50,16 +79,31 @@ export function createClaudeUnifiedHostLivenessBridge(opts: Readonly<{
     while (!disposed && !abortSignal.aborted) {
       await wait(pollIntervalMs);
       if (disposed || abortSignal.aborted) return;
-      const liveness = await opts.hostAdapter.evaluateLiveness(opts.handle);
+      let liveness: TerminalHostLiveness;
+      try {
+        liveness = await opts.hostAdapter.evaluateLiveness(opts.handle);
+      } catch (error) {
+        liveness = createProbeFailureLiveness(error, nowMs());
+      }
       if (disposed || abortSignal.aborted) return;
       if (!liveness.paneAlive) {
         const graceActive = opts.startupGraceActive?.() ?? true;
         if (graceActive && startupGraceMs > 0 && nowMs() - startedAtMs < startupGraceMs) {
+          pendingDeadLiveness = null;
           continue;
         }
-        await reportHostDead(liveness);
+        if (opts.isExpectedHostExit?.(liveness) === true) {
+          await reportHostExited(liveness);
+          return;
+        }
+        if (pendingDeadLiveness === null) {
+          pendingDeadLiveness = liveness;
+          continue;
+        }
+        await reportHostDead(mergeDeadLivenessDiagnostics(pendingDeadLiveness, liveness));
         return;
       }
+      pendingDeadLiveness = null;
     }
   };
 
@@ -68,9 +112,7 @@ export function createClaudeUnifiedHostLivenessBridge(opts: Readonly<{
       if (disposed || started) return;
       started = true;
       startedAtMs = nowMs();
-      return monitor(abortSignal).catch(async () => {
-        await reportHostDead();
-      });
+      return monitor(abortSignal);
     },
     dispose() {
       disposed = true;

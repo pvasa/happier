@@ -46,6 +46,9 @@ export type ClaudeUnifiedTelemetryEvent =
             panePid?: number | undefined;
             paneCurrentCommand?: string | undefined;
             paneExitStatus?: number | undefined;
+            paneScreenDumpCaptured?: boolean | undefined;
+            paneScreenDumpTruncated?: boolean | undefined;
+            paneScreenDumpErrorCaptured?: boolean | undefined;
             observedAt: number;
           }>;
         }>
@@ -157,6 +160,9 @@ export function emitClaudeUnifiedHostDead(
       ...(params.liveness?.panePid !== undefined ? { panePid: params.liveness.panePid } : {}),
       ...(params.liveness?.paneCurrentCommand ? { paneCurrentCommand: params.liveness.paneCurrentCommand } : {}),
       ...(params.liveness?.paneExitStatus !== undefined ? { paneExitStatus: params.liveness.paneExitStatus } : {}),
+      ...(params.liveness?.paneScreenDumpCaptured ? { paneScreenDumpCaptured: true } : {}),
+      ...(params.liveness?.paneScreenDumpTruncated !== undefined ? { paneScreenDumpTruncated: params.liveness.paneScreenDumpTruncated } : {}),
+      ...(params.liveness?.paneScreenDumpError ? { paneScreenDumpErrorCaptured: true } : {}),
       observedAt: params.liveness?.observedAt ?? Date.now(),
     },
   });

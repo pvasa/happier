@@ -32,6 +32,11 @@ export type ClaudeUnifiedPromptTurnTerminalEvent = Readonly<{
   detail?: string | undefined;
 }>;
 
+export type ClaudeUnifiedSessionEndEvent = Readonly<{
+  reason: string | null;
+  source: string;
+}>;
+
 function disposeSubscription(dispose: (() => void) | null): void {
   if (!dispose) return;
   dispose();
@@ -40,6 +45,11 @@ function disposeSubscription(dispose: (() => void) | null): void {
 function readHookEventName(data: SessionHookData): string {
   const raw = data.hook_event_name ?? data.hookEventName;
   return typeof raw === 'string' ? raw : '';
+}
+
+function readHookString(data: SessionHookData, key: string): string {
+  const raw = data[key];
+  return typeof raw === 'string' ? raw.trim() : '';
 }
 
 export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
@@ -52,6 +62,7 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
   onRuntimeAuthFailureEvent?: ((error: unknown) => void | Promise<void>) | undefined;
   onProviderPromptStarted?: (() => void | Promise<void>) | undefined;
   onPromptTurnTerminal?: ((event: ClaudeUnifiedPromptTurnTerminalEvent) => void | Promise<void>) | undefined;
+  onSessionEnd?: ((event: ClaudeUnifiedSessionEndEvent) => void | Promise<void>) | undefined;
 }>): ClaudeUnifiedHookLifecycleBridge {
   let disposed = false;
   let unsubscribe: (() => void) | null = null;
@@ -141,6 +152,21 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
     }
   };
 
+  const observeSessionEnd = (data: SessionHookData): void => {
+    if (!opts.onSessionEnd) return;
+    const reason = readHookString(data, 'reason');
+    try {
+      void Promise.resolve(opts.onSessionEnd({
+        reason: reason || null,
+        source: 'claude_hook',
+      })).catch((error) => {
+        logger.debug('[unified]: failed to run Claude unified terminal session-end side effect', error);
+      });
+    } catch (error) {
+      logger.debug('[unified]: failed to run Claude unified terminal session-end side effect', error);
+    }
+  };
+
   const settleTerminalSnapshot = async (
     snapshot: Readonly<{
       terminal: boolean;
@@ -206,6 +232,9 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
           || hookEventName === 'SessionEnd'
         ) {
           observePermissionReleased({ redrain: false });
+        }
+        if (hookEventName === 'SessionEnd') {
+          observeSessionEnd(data);
         }
         if (hookEventName === 'StopFailure') {
           observeStopFailureRuntimeIssue(data);
