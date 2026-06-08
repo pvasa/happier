@@ -169,6 +169,7 @@ vi.mock('@/configuration', () => ({
   configuration: {
     privateKeyFile: '/tmp/key',
     happyHomeDir: '/tmp/happy-home',
+    activeServerDir: '/tmp/happy-home/servers/active',
     currentCliVersion: '0.0.0-test',
     serverUrl: 'http://localhost:9999',
     daemonSpawnExistingSessionWaitForExitMs: 5_000,
@@ -273,37 +274,44 @@ vi.mock('./platform/windows/spawnHappyCliWindowsTerminal', () => ({
   startHappySessionInWindowsTerminal: vi.fn(async () => ({ ok: true, pid: 8888 })),
 }));
 
-vi.mock('@/backends/catalog', () => ({
-  AGENTS: {
-    codex: {
-      id: 'codex',
-      cliSubcommand: 'codex',
-      vendorResumeSupport: 'supported',
+vi.mock('@/backends/catalog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/backends/catalog')>();
+  return {
+    ...actual,
+    AGENTS: {
+      ...actual.AGENTS,
+      codex: {
+        ...actual.AGENTS.codex,
+        id: 'codex',
+        cliSubcommand: 'codex',
+        vendorResumeSupport: 'supported',
+      },
+      claude: {
+        ...actual.AGENTS.claude,
+        id: 'claude',
+        cliSubcommand: 'claude',
+        vendorResumeSupport: 'supported',
+      },
     },
-    claude: {
-      id: 'claude',
-      cliSubcommand: 'claude',
+    requireCatalogEntry: vi.fn((agentId: string = 'codex') => ({
+      id: agentId === 'claude' ? 'claude' : 'codex',
+      cliSubcommand: agentId === 'claude' ? 'claude' : 'codex',
       vendorResumeSupport: 'supported',
-    },
-  },
-  requireCatalogEntry: vi.fn((agentId: string = 'codex') => ({
-    id: agentId === 'claude' ? 'claude' : 'codex',
-    cliSubcommand: agentId === 'claude' ? 'claude' : 'codex',
-    vendorResumeSupport: 'supported',
-  })),
-  getVendorResumeSupport: vi.fn(async () => () => true),
-  resolveConnectedServiceSwitchContinuity: vi.fn(async (_agentId: string, { serviceId }: { serviceId: string }) => (
-    serviceId === 'anthropic' || serviceId === 'claude-subscription'
-      ? { mode: 'restart_same_home' }
-      : { mode: 'unsupported', reason: 'unsupported_service' }
-  )),
-  resolveAgentCliSubcommand: vi.fn((agentId: string = 'codex') => (agentId === 'claude' ? 'claude' : 'codex')),
-  resolveCatalogAgentId: vi.fn((agentId: string = 'codex') => (agentId === 'claude' ? 'claude' : 'codex')),
-  resolveCatalogAgentIdForCliSubcommand: vi.fn((subcommand: string) => {
-    const normalized = subcommand.trim();
-    return normalized === 'opencode' ? 'opencode' : normalized === 'claude' ? 'claude' : 'codex';
-  }),
-}));
+    })),
+    getVendorResumeSupport: vi.fn(async () => () => true),
+    resolveConnectedServiceSwitchContinuity: vi.fn(async (_agentId: string, { serviceId }: { serviceId: string }) => (
+      serviceId === 'anthropic' || serviceId === 'claude-subscription'
+        ? { mode: 'restart_same_home' }
+        : { mode: 'unsupported', reason: 'unsupported_service' }
+    )),
+    resolveAgentCliSubcommand: vi.fn((agentId: string = 'codex') => (agentId === 'claude' ? 'claude' : 'codex')),
+    resolveCatalogAgentId: vi.fn((agentId: string = 'codex') => (agentId === 'claude' ? 'claude' : 'codex')),
+    resolveCatalogAgentIdForCliSubcommand: vi.fn((subcommand: string) => {
+      const normalized = subcommand.trim();
+      return normalized === 'opencode' ? 'opencode' : normalized === 'claude' ? 'claude' : 'codex';
+    }),
+  };
+});
 
 vi.mock('@/persistence', () => ({
   writeDaemonState: vi.fn(),
@@ -316,9 +324,13 @@ vi.mock('@/session/metadata/updateSessionMetadataWithRetry', () => ({
   updateSessionMetadataWithRetry: updateSessionMetadataWithRetryMock,
 }));
 
-vi.mock('./connectedServices/resolveConnectedServiceAuthForSpawn', () => ({
-  resolveConnectedServiceAuthForSpawn: resolveConnectedServiceAuthForSpawnMock,
-}));
+vi.mock('./connectedServices/resolveConnectedServiceAuthForSpawn', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./connectedServices/resolveConnectedServiceAuthForSpawn')>();
+  return {
+    ...actual,
+    resolveConnectedServiceAuthForSpawn: resolveConnectedServiceAuthForSpawnMock,
+  };
+});
 
 vi.mock('./controlClient', () => ({
   cleanupDaemonState: vi.fn(async () => {}),
@@ -1426,10 +1438,11 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       });
 
       expect(result).toEqual({ type: 'success', sessionId: 'sess_already_running' });
-      expect(fetchSessionByIdCompat).toHaveBeenCalledWith({
+      expect(fetchSessionByIdCompat).toHaveBeenCalledWith(expect.objectContaining({
         token: 'token-daemon',
         sessionId: 'sess_already_running',
-      });
+        reason: 'manual-recovery',
+      }));
       expect(trackedSessionCapture.current.get(12345)?.spawnOptions).toMatchObject({
         existingSessionId: 'sess_already_running',
         permissionMode: 'yolo',
