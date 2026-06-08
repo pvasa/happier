@@ -26,3 +26,11 @@ test('root provider aliases expose Cursor smoke and extended presets', () => {
     'yarn workspace @happier-dev/tests providers:cursor:extended',
   );
 });
+
+test('root policy self-test covers workflow schedule policy', () => {
+  assert.match(
+    rootPackage.scripts?.['test:policy:self'] ?? '',
+    /scripts\/testing\/workflowSchedulePolicy\.test\.ts/,
+    'test:policy:self should run workflow schedule policy checks',
+  );
+});

@@ -328,7 +328,16 @@ function main() {
     cwd: uiDir,
     env: { ...process.env, APP_ENV: process.env.APP_ENV ?? appEnvironment, NODE_ENV: process.env.NODE_ENV ?? nodeEnvironment },
   });
-  run(opts, 'yarn', ['typecheck'], { cwd: uiDir });
+  run(opts, 'yarn', ['typecheck'], {
+    cwd: uiDir,
+    env: applyExpoNodeHeapEnv({
+      ...process.env,
+      APP_ENV: process.env.APP_ENV ?? appEnvironment,
+      NODE_ENV: process.env.NODE_ENV ?? nodeEnvironment,
+    }, {
+      envKey: 'HAPPIER_PIPELINE_EXPO_MAX_OLD_SPACE_SIZE_MB',
+    }),
+  });
 
   const message = resolvePreviewMessage(normalizedEnvironment, values.message, opts);
   if (!message) fail(`Missing Expo update message for ${normalizedEnvironment} OTA update.`);

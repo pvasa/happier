@@ -95,7 +95,7 @@
     "test:server:db-contract:docker": "yarn -s test:db-contract:docker",
     "test:wiring:self": "node --experimental-strip-types --test scripts/testing/lib/fallowLocalTooling.test.ts scripts/testing/lib/testLaneMap.test.ts scripts/testing/lib/workflowScriptParity.test.ts scripts/testing/validateTestWiring.test.ts",
     "test:wiring": "node --experimental-strip-types ./scripts/testing/validateTestWiring.ts",
-    "test:policy:self": "node --experimental-strip-types --test scripts/testing/lib/testPolicyRules.test.ts scripts/testing/validateTestPolicy.test.ts scripts/testing/migrations/lib/*.test.ts",
+    "test:policy:self": "node --experimental-strip-types --test scripts/testing/lib/testPolicyRules.test.ts scripts/testing/validateTestPolicy.test.ts scripts/testing/workflowSchedulePolicy.test.ts scripts/testing/migrations/lib/*.test.ts",
     "test:policy": "node --experimental-strip-types ./scripts/testing/validateTestPolicy.ts",
     "test:inventory": "node --experimental-strip-types ./scripts/testing/validateTestInventory.ts",
     "test:migration:inventory": "node --experimental-strip-types ./scripts/testing/migrations/validateMigrationInventory.ts",

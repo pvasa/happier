@@ -49,6 +49,7 @@ function createExpoOtaStubEnvironment(prefix) {
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       `echo "$*" >> ${JSON.stringify(paths.yarnLogPath)}`,
+      `echo "NODE_OPTIONS=${'${NODE_OPTIONS:-}'}" >> ${JSON.stringify(paths.yarnLogPath)}`,
       'exit 0',
       '',
     ].join('\n'),
@@ -134,6 +135,15 @@ test('expo ota update raises the Node heap limit for EAS update by default', () 
 
   const npxLog = fs.readFileSync(stub.npxLogPath, 'utf8');
   assert.match(npxLog, /NODE_OPTIONS=.*--max-old-space-size=8192/);
+});
+
+test('expo ota update raises the Node heap limit for UI typecheck by default', () => {
+  const stub = runExpoOtaUpdateWithStubbedCommands({
+    prefix: 'happier-pipeline-eas-ota-typecheck-heap-default-',
+  });
+
+  const yarnLog = fs.readFileSync(stub.yarnLogPath, 'utf8');
+  assert.match(yarnLog, /typecheck\nNODE_OPTIONS=.*--max-old-space-size=8192/);
 });
 
 test('expo ota update respects explicit Expo heap overrides for EAS update', () => {
