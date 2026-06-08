@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
-import { JsonlFollower } from '@/agent/localControl/jsonlFollower';
+import { createJsonlFollowController, type JsonlFollowController } from '@/agent/localControl/jsonlFollowController';
+import { DEFAULT_JSONL_FOLLOW_POLICY, normalizeJsonlFollowPolicy, type JsonlFollowPolicyInput, type JsonlFollowPolicyV1 } from '@/agent/localControl/jsonlFollowPolicy';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { collectCodexSessionRolloutFiles } from '../directSessions/collectCodexSessionRolloutFiles';
 import { createCodexSyntheticSubagentTracker } from '../collaboration/createCodexSyntheticSubagentTracker';
@@ -19,8 +20,10 @@ type SubagentMirrorState = {
     prompt: string | null;
     nickname: string | null;
     role: string | null;
-    follower: JsonlFollower | null;
+    controller: JsonlFollowController | null;
     discoveryTimer: NodeJS.Timeout | null;
+    createdAtMs: number;
+    lastTouchedAtMs: number;
 };
 
 function resolveCodexHomeFromRolloutFilePath(filePath: string): string | null {
@@ -36,11 +39,13 @@ function resolveCodexHomeFromRolloutFilePath(filePath: string): string | null {
 }
 
 export class CodexRolloutMirror {
-    private follower: JsonlFollower | null = null;
+    private controller: JsonlFollowController | null = null;
     private readonly itemTranscriptBridge;
     private readonly syntheticSubagentTracker;
     private readonly rolloutSemanticTracker = createCodexRolloutSemanticTracker();
     private readonly subagentMirrorByThreadId = new Map<string, SubagentMirrorState>();
+    private readonly closedSubagentThreadIds = new Map<string, number>();
+    private readonly followPolicy: JsonlFollowPolicyV1;
     private stopped = false;
 
     constructor(
@@ -51,8 +56,10 @@ export class CodexRolloutMirror {
             debug: boolean;
             onCodexSessionId: (id: string) => void | Promise<void>;
             onTurnLifecycleEvent?: (event: LocalTurnLifecycleEvent) => void | Promise<void>;
+            followPolicy?: JsonlFollowPolicyInput;
         },
     ) {
+        this.followPolicy = normalizeJsonlFollowPolicy(opts.followPolicy, DEFAULT_JSONL_FOLLOW_POLICY.activeBurstPollIntervalMs);
         this.itemTranscriptBridge = createKeyedStreamedTranscriptBridge<{
             streamKey: string;
             sidechainId: string | null;
@@ -68,35 +75,36 @@ export class CodexRolloutMirror {
     }
 
     async start(): Promise<void> {
-        if (this.follower) return;
+        if (this.controller) return;
         this.stopped = false;
-        const follower = new JsonlFollower({
+        const controller = createJsonlFollowController({
             filePath: this.opts.filePath,
-            pollIntervalMs: 250,
+            pollPolicy: this.followPolicy,
             startAtEnd: false,
             onJson: (value) => this.onJson(value),
         });
-        this.follower = follower;
-        await follower.start();
-        if (this.follower !== follower) {
-            await follower.stop();
+        this.controller = controller;
+        await controller.start();
+        if (this.controller !== controller) {
+            await controller.stop();
         }
     }
 
     async stop(): Promise<void> {
         this.stopped = true;
-        const follower = this.follower;
-        this.follower = null;
-        await follower?.stop();
+        const controller = this.controller;
+        this.controller = null;
+        await controller?.stop();
 
         const subagentStates = Array.from(this.subagentMirrorByThreadId.values());
         this.subagentMirrorByThreadId.clear();
+        this.closedSubagentThreadIds.clear();
         for (const state of subagentStates) {
             if (state.discoveryTimer) {
                 clearInterval(state.discoveryTimer);
             }
         }
-        await Promise.all(subagentStates.map((state) => state.follower?.stop() ?? Promise.resolve()));
+        await Promise.all(subagentStates.map((state) => state.controller?.stop() ?? Promise.resolve()));
         await this.itemTranscriptBridge.flushAll({ reason: 'turn-end' });
     }
 
@@ -112,15 +120,19 @@ export class CodexRolloutMirror {
     }
 
     private async ensureSubagentMirror(action: Extract<CodexRolloutAction, { type: 'subagent-spawn' }>): Promise<void> {
+        if (this.closedSubagentThreadIds.has(action.threadId)) return;
         if (this.subagentMirrorByThreadId.has(action.threadId)) return;
 
+        const now = Date.now();
         const state: SubagentMirrorState = {
             threadId: action.threadId,
             prompt: action.prompt,
             nickname: action.nickname,
             role: action.role,
-            follower: null,
+            controller: null,
             discoveryTimer: null,
+            createdAtMs: now,
+            lastTouchedAtMs: now,
         };
         this.subagentMirrorByThreadId.set(action.threadId, state);
         this.syntheticSubagentTracker.ensureStarted({
@@ -134,7 +146,7 @@ export class CodexRolloutMirror {
         if (!codexHome) return;
 
         const startFollowerIfReady = async (): Promise<void> => {
-            if (this.stopped || state.follower) return;
+            if (this.stopped || state.controller) return;
             const files = await collectCodexSessionRolloutFiles({
                 codexHome,
                 remoteSessionId: action.threadId,
@@ -147,24 +159,26 @@ export class CodexRolloutMirror {
                 state.discoveryTimer = null;
             }
 
-            const childFollower = new JsonlFollower({
+            const childController = createJsonlFollowController({
                 filePath: latestFile.filePath,
-                pollIntervalMs: 250,
+                pollPolicy: this.followPolicy,
                 startAtEnd: false,
+                onClosed: () => this.closeSubagentMirror(action.threadId),
                 onJson: (value) => this.onSubagentJson(action.threadId, value),
             });
-            state.follower = childFollower;
-            await childFollower.start();
-            if (this.stopped || state.follower !== childFollower) {
-                await childFollower.stop();
+            state.controller = childController;
+            await childController.start();
+            if (this.stopped || state.controller !== childController) {
+                await childController.stop();
             }
+            this.enforceSubagentFollowerCaps();
         };
 
         await startFollowerIfReady();
-        if (!state.follower && !this.stopped) {
+        if (!state.controller && !this.stopped) {
             state.discoveryTimer = setInterval(() => {
                 void startFollowerIfReady();
-            }, 250);
+            }, this.followPolicy.missingFileRetryIntervalMs);
             state.discoveryTimer.unref?.();
         }
     }
@@ -242,6 +256,7 @@ export class CodexRolloutMirror {
                         threadId: action.threadId,
                         status: action.status,
                     });
+                    this.markSubagentMirrorCompleted(action.threadId);
                     continue;
                 }
                 await this.flushTranscriptBoundary(context);
@@ -282,6 +297,10 @@ export class CodexRolloutMirror {
     }
 
     private async onSubagentJson(threadId: string, value: unknown): Promise<void> {
+        const state = this.subagentMirrorByThreadId.get(threadId);
+        if (state) {
+            state.lastTouchedAtMs = Date.now();
+        }
         const actions = mapCodexRolloutEventToActions(value, { debug: this.opts.debug });
         for (const action of actions) {
             for (const normalizedAction of this.rolloutSemanticTracker.consume(action)) {
@@ -290,6 +309,55 @@ export class CodexRolloutMirror {
                     streamScopeId: threadId,
                 });
             }
+        }
+    }
+
+    private markSubagentMirrorCompleted(threadId: string): void {
+        const state = this.subagentMirrorByThreadId.get(threadId);
+        if (!state) return;
+        if (state.discoveryTimer) {
+            clearInterval(state.discoveryTimer);
+            state.discoveryTimer = null;
+        }
+        state.controller?.markCompleted();
+    }
+
+    private closeSubagentMirror(threadId: string): void {
+        const state = this.subagentMirrorByThreadId.get(threadId);
+        if (state?.discoveryTimer) {
+            clearInterval(state.discoveryTimer);
+            state.discoveryTimer = null;
+        }
+        this.subagentMirrorByThreadId.delete(threadId);
+        this.rememberClosedSubagentThreadId(threadId);
+    }
+
+    private rememberClosedSubagentThreadId(threadId: string): void {
+        this.closedSubagentThreadIds.delete(threadId);
+        this.closedSubagentThreadIds.set(threadId, Date.now());
+        while (this.closedSubagentThreadIds.size > this.followPolicy.maxClosedFollowerRecordsPerSession) {
+            const oldest = this.closedSubagentThreadIds.keys().next().value;
+            if (typeof oldest !== 'string') break;
+            this.closedSubagentThreadIds.delete(oldest);
+        }
+    }
+
+    private enforceSubagentFollowerCaps(): void {
+        const activeStates = [...this.subagentMirrorByThreadId.values()]
+            .filter((state) => state.controller?.getState() === 'active')
+            .sort(compareSubagentStatesForEviction);
+        while (activeStates.length > this.followPolicy.maxActiveFollowersPerSession) {
+            const state = activeStates.shift();
+            state?.controller?.markIdle();
+        }
+
+        const idleStates = [...this.subagentMirrorByThreadId.values()]
+            .filter((state) => state.controller?.getState() === 'idle')
+            .sort(compareSubagentStatesForEviction);
+        while (idleStates.length > this.followPolicy.maxIdleFollowersPerSession) {
+            const state = idleStates.shift();
+            if (!state?.controller) break;
+            void state.controller.stop();
         }
     }
 
@@ -304,4 +372,8 @@ export class CodexRolloutMirror {
             }
         }
     }
+}
+
+function compareSubagentStatesForEviction(left: SubagentMirrorState, right: SubagentMirrorState): number {
+    return (left.lastTouchedAtMs - right.lastTouchedAtMs) || (left.createdAtMs - right.createdAtMs);
 }
