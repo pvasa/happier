@@ -35,8 +35,7 @@ import { getToolName } from "./utils/getToolName";
 import { syncClaudePermissionModeFromMetadata } from "./utils/syncPermissionModeFromMetadata";
 import { resolveClaudeSdkPermissionModeFromEnhancedMode } from "./utils/permissionMode";
 import { formatErrorForUi } from '@/ui/formatErrorForUi';
-import { createSessionProviderInputConsumer } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
-import { resolveSessionPendingQueueMaxPopPerWake } from '@/agent/runtime/sessionInput/pendingQueueDrainPolicy';
+import { createClaudePendingAwareInputConsumer } from './createClaudePendingAwareInputConsumer';
 import type { MessageBatch } from '@/agent/runtime/sessionInput/types';
 import { resolveClaudeRemoteQueuedPromptWithReplaySeed } from '@/backends/claude/remote/resolveClaudeRemoteQueuedPromptWithReplaySeed';
 import { cleanupStdinAfterInk } from '@/ui/ink/cleanupStdinAfterInk';
@@ -960,10 +959,6 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             let unifiedTerminalLaunchOptionsHash: string | null = null;
             let lastUnifiedTerminalRestartOnlyNoticeHash: string | null = null;
             let readyTurnContext: ReadyNotificationTurnContext | undefined;
-            const materializeNextPendingMessageSafely =
-                typeof session.client.materializeNextPendingMessageSafely === 'function'
-                    ? session.client.materializeNextPendingMessageSafely.bind(session.client)
-                    : null;
             const beginReadyNotificationTurn = () => {
                 if (typeof session.client.beginTurnAssistantTextSnapshot !== 'function') return;
                 const startSeqExclusive = typeof session.client.getLastObservedMessageSeq === 'function'
@@ -1046,35 +1041,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 || hasQueuedUnifiedTerminalPrompt();
             let surfaceUnifiedTerminalRuntimeIssue: (error: unknown) => Promise<boolean> = async () => false;
             try {
-                const inputConsumer = createSessionProviderInputConsumer<EnhancedMode, string>({
-                    messageQueue: session.queue,
-                    session: {
-                        ...(materializeNextPendingMessageSafely
-                            ? {
-                                materializeNextPendingMessageSafely: async (materializeOpts) => {
-                                    if (session.queue.size() > 0) return { type: 'no_pending' as const };
-                                    return await materializeNextPendingMessageSafely(materializeOpts);
-                                },
-                            }
-                            : {}),
-                        popPendingMessage: async () => {
-                            // Only materialize pending items when there are no committed transcript messages
-                            // queued locally; committed messages must be processed first.
-                            if (session.queue.size() > 0) return false;
-                            if (!materializeNextPendingMessageSafely) {
-                                return await session.client.popPendingMessage();
-                            }
-                            return (await materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).type === 'materialized';
-                        },
-                        shouldAttemptPendingMaterialization: () =>
-                            session.queue.size() <= 0
-                            && (session.client.shouldAttemptPendingMaterialization?.() ?? true),
-                        reconcilePendingQueueState: async (opts) => {
-                            await session.client.reconcilePendingQueueState?.(opts);
-                        },
-                        waitForMetadataUpdate: (signal) => session.client.waitForMetadataUpdate(signal),
-                    },
-                    pendingDrainMaxPopPerWake: resolveSessionPendingQueueMaxPopPerWake(session.accountSettings ?? null),
+                const inputConsumer = createClaudePendingAwareInputConsumer(session, {
                     onMetadataUpdate: () => {
                         const updated = syncClaudePermissionModeFromMetadata({ session, permissionHandler });
                         if (updated) {
