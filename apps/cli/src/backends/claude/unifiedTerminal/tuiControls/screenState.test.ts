@@ -1,0 +1,785 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  isClaudeScreenReadyForInput,
+  isSafeWindowForModeCycle,
+  isSafeWindowForSlashControl,
+  parseClaudeScreenState,
+  resolveClaudeScreenInFlightSteerVeto,
+} from './screenState';
+
+/**
+ * Fixtures are derived from the live probe captures documented in
+ * `.reviews/20260610-claude-unified-independent-audit/probes/probe-log.md` (Claude Code 2.1.170, tmux).
+ * Markers: `⏵⏵ accept edits on`, `⏸ plan mode on`, `⏵⏵ auto mode on`, `Switch model?` dialog,
+ * `Press up to edit queued messages` banner, `Set model to … saved as your default` confirmation.
+ */
+const CLAUDE_2_1_170 = {
+  idleDefault: [
+    '',
+    ' What would you like to work on?',
+    '',
+    '╭───────────────────────────────────────────────╮',
+    '│ >                                               │',
+    '╰───────────────────────────────────────────────╯',
+    '  ? for shortcuts',
+  ].join('\n'),
+  idleAcceptEdits: [
+    '╭───────────────────────────────────────────────╮',
+    '│ >                                               │',
+    '╰───────────────────────────────────────────────╯',
+    '  ⏵⏵ accept edits on (shift+tab to cycle)',
+  ].join('\n'),
+  idlePlan: [
+    '╭───────────────────────────────────────────────╮',
+    '│ >                                               │',
+    '╰───────────────────────────────────────────────╯',
+    '  ⏸ plan mode on (shift+tab to cycle)',
+  ].join('\n'),
+  idleAuto: [
+    '╭───────────────────────────────────────────────╮',
+    '│ >                                               │',
+    '╰───────────────────────────────────────────────╯',
+    '  ⏵⏵ auto mode on (shift+tab to cycle)',
+  ].join('\n'),
+  generating: [
+    '● Counting to thirty…',
+    '  1 2 3 4 5',
+    '',
+    '✶ Forging… (12s · esc to interrupt)',
+  ].join('\n'),
+  queuedMessageWhileGenerating: [
+    '● Counting to thirty…',
+    '✶ Forging… (14s · esc to interrupt)',
+    '',
+    '  ▐ /model claude-haiku-4-5-20251001',
+    '  Press up to edit queued messages',
+  ].join('\n'),
+  switchModelDialog: [
+    'Switch model?',
+    'Reading from cache may produce different results.',
+    '',
+    '❯ 1. Yes, switch',
+    '  2. No, go back',
+  ].join('\n'),
+  modelConfirmation: [
+    '╭───────────────────────────────────────────────╮',
+    '│ >                                               │',
+    '╰───────────────────────────────────────────────╯',
+    'Set model to Sonnet 4.6 and saved as your default for new sessions',
+    '  ⏵⏵ accept edits on (shift+tab to cycle)',
+  ].join('\n'),
+  permissionPrompt: [
+    'Bash(curl http://localhost/a)',
+    '',
+    'Do you want to proceed?',
+    '❯ 1. Yes',
+    '  2. Yes, and don’t ask again',
+    '  3. No, tell Claude what to do differently',
+  ].join('\n'),
+  permissionsEditor: [
+    'Permission rules',
+    'Manage allow and deny rules for tools.',
+    '',
+    '  Allow  Bash(ls:*)',
+    '  Deny   Bash(rm:*)',
+  ].join('\n'),
+  trustFolderPrompt: [
+    'Do you trust the files in this folder?',
+    '❯ 1. Yes, proceed',
+    '  2. No, exit',
+  ].join('\n'),
+  slashPicker: [
+    '╭───────────────────────────────────────────────╮',
+    '│ > /mod                                          │',
+    '╰───────────────────────────────────────────────╯',
+    '  /model     Change the model for this session',
+    '  /mcp       Manage MCP servers',
+  ].join('\n'),
+  userDraft: [
+    '╭───────────────────────────────────────────────╮',
+    '│ > please refactor the parser before we ship     │',
+    '╰───────────────────────────────────────────────╯',
+    '  ? for shortcuts',
+  ].join('\n'),
+} as const;
+
+describe('parseClaudeScreenState — mode markers (default by absence)', () => {
+  it('detects default mode by the absence of any cycle marker', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.idleDefault);
+    expect(state.modeMarker).toBe('default');
+    expect(state.inputBoxInteractive).toBe(true);
+    expect(state.generating).toBe(false);
+  });
+
+  it('detects accept edits, plan, and auto markers', () => {
+    expect(parseClaudeScreenState(CLAUDE_2_1_170.idleAcceptEdits).modeMarker).toBe('acceptEdits');
+    expect(parseClaudeScreenState(CLAUDE_2_1_170.idlePlan).modeMarker).toBe('plan');
+    expect(parseClaudeScreenState(CLAUDE_2_1_170.idleAuto).modeMarker).toBe('auto');
+  });
+});
+
+describe('parseClaudeScreenState — generation and queued banners', () => {
+  it('detects active generation via the esc-to-interrupt marker', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.generating);
+    expect(state.generating).toBe(true);
+    expect(state.inputBoxInteractive).toBe(false);
+  });
+
+  // Live capture 2026-06-11 (zellij, incident cmq8y3nlx steering vetoes): the real spinner line can
+  // omit "esc to interrupt" entirely (`✽ Billowing… (10m 24s · ↓ 20.4k tokens)`), and the composer
+  // stays visible below it. Generating must be detected from the spinner-line shape itself.
+  it('detects generation from a real spinner line WITHOUT the esc-to-interrupt suffix', () => {
+    const liveCapture = [
+      '⏺ Agent "Research FlashList v2 known issues"',
+      'completed · 9m 35s',
+      '     (ctrl+b to run in background)',
+      '',
+      '✽ Billowing… (10m 24s · ↓ 20.4k tokens)',
+      '  ⎿  Tip: Use /btw to ask a quick side question',
+      '     without interrupting Claude’s current work',
+      '',
+      '────────────────────────────────────────────────',
+      '❯ ',
+      '────────────────────────────────────────────────',
+      '',
+      '  ⏵⏵ auto mode on (shift+tab to cycle)',
+    ].join('\n');
+    const state = parseClaudeScreenState(liveCapture);
+    expect(state.generating).toBe(true);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+  });
+
+  it('does not mistake a completion line (no parens) for generation', () => {
+    const state = parseClaudeScreenState('✻ Crunched for 6s\n╭───╮\n│ ❯   │\n╰───╯');
+    expect(state.generating).toBe(false);
+  });
+
+  it('detects the queued-message banner shown when a slash command is typed mid-generation', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.queuedMessageWhileGenerating);
+    expect(state.queuedMessageBannerVisible).toBe(true);
+    expect(state.generating).toBe(true);
+  });
+});
+
+describe('parseClaudeScreenState — dialogs and editors', () => {
+  it('detects the Switch model? confirmation dialog', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.switchModelDialog);
+    expect(state.switchModelDialogVisible).toBe(true);
+  });
+
+  it('detects the native permission prompt', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.permissionPrompt);
+    expect(state.permissionPromptVisible).toBe(true);
+  });
+
+  it('recognizes the /permissions editor screen (veto target, never a mode setter)', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.permissionsEditor);
+    expect(state.permissionEditorOpen).toBe(true);
+  });
+
+  it('detects the trust-folder prompt', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.trustFolderPrompt);
+    expect(state.trustFolderPromptVisible).toBe(true);
+  });
+
+  it('detects the slash command picker', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.slashPicker);
+    expect(state.slashPickerOpen).toBe(true);
+  });
+
+  it('detects a visible user draft in the composer', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.userDraft);
+    expect(state.userDraftPresent).toBe(true);
+  });
+});
+
+// Live runner capture 2026-06-12 (Claude Code 2.1.174, zellij, fresh-dir spawn pid-45964): the
+// EMPTY composer renders a rotating `Try "<hint>"` placeholder before the first message. Parsing
+// it as a user draft starved startup readiness forever and killed fresh-dir session creation
+// (QA-C funnel finding; see qa/QA-B.md F4).
+const CLAUDE_2_1_174_FRESH_PLACEHOLDER = [
+  ' ⚠ 1 setup issue: statusline · /doctor',
+  '',
+  ' ▎ Fable 5 is here! Our newest model for',
+  ' ▎ complex, long-running work.',
+  '',
+  '────────────────────────────────────────────────',
+  '❯ Try "refactor <filepath>"',
+  '────────────────────────────────────────────────',
+  '',
+  '  ← for agents',
+].join('\n');
+
+describe('parseClaudeScreenState — empty-composer placeholder hint (2.1.174 fresh session)', () => {
+  it('treats the Try "<hint>" placeholder as an EMPTY composer, not a user draft', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_174_FRESH_PLACEHOLDER);
+    expect(state.composerContent).toBe('');
+    expect(state.userDraftPresent).toBe(false);
+  });
+
+  it('keeps the placeholder screen ready for input and safe for controls/steering', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_174_FRESH_PLACEHOLDER);
+    expect(isClaudeScreenReadyForInput(state)).toBe(true);
+    expect(isSafeWindowForSlashControl(state)).toBe(true);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBeNull();
+  });
+
+  it('still treats REAL typed text starting with Try but not quote-wrapped as a draft', () => {
+    const typed = CLAUDE_2_1_174_FRESH_PLACEHOLDER.replace(
+      '❯ Try "refactor <filepath>"',
+      '❯ Try harder on the parser fix',
+    );
+    const state = parseClaudeScreenState(typed);
+    expect(state.userDraftPresent).toBe(true);
+  });
+
+  it('treats the typographic-quote placeholder variant as empty as well', () => {
+    const curly = CLAUDE_2_1_174_FRESH_PLACEHOLDER.replace(
+      '❯ Try "refactor <filepath>"',
+      '❯ Try “fix typecheck errors”',
+    );
+    const state = parseClaudeScreenState(curly);
+    expect(state.userDraftPresent).toBe(false);
+    expect(state.composerContent).toBe('');
+  });
+});
+
+// Live runner capture 2026-06-12 (Claude Code 2.1.174, zellij `dump-screen --ansi`, runner
+// pid 56672): after a background command completes, the EMPTY composer renders a rotating
+// CONTEXTUAL suggestion (`❯ check the output`) with arbitrary text — no `Try "<hint>"` quoting —
+// so the only honest discriminator is the DIM (SGR 2) styling Claude Code uses for placeholder
+// text. Parsing it as a user draft blocked every pending injection forever (QA-B F6).
+const ESC = String.fromCharCode(0x1b);
+const CLAUDE_2_1_174_DIM_SUGGESTION_ANSI = [
+  `${ESC}[m⏺ Background command "Run sleep and echo command`,
+  'in background" completed (exit code 0)',
+  '',
+  '⏺ B2-ok',
+  '',
+  `${ESC}[38;2;136;136;136m────────────────────────────────────────────────${ESC}[m`,
+  // Exact live byte shape: reset, glyph, NBSP, SGR resets, then DIM (2) before the hint text.
+  `${ESC}[m❯ ${ESC}[39m${ESC}[49m${ESC}[29m${ESC}[28m${ESC}[27m${ESC}[25m${ESC}[25m${ESC}[22m${ESC}[24m${ESC}[2m${ESC}[23mcheck the output`,
+  `${ESC}[38;2;136;136;136m────────────────────────────────────────────────${ESC}[m`,
+  '',
+  '  ⏵⏵ accept edits on (shift+tab to cycle)',
+].join('\n');
+
+describe('parseClaudeScreenState — dim contextual suggestion placeholder (2.1.174, ANSI capture)', () => {
+  it('treats DIM-styled composer text as an EMPTY composer, not a user draft', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_174_DIM_SUGGESTION_ANSI);
+    expect(state.composerContent).toBe('');
+    expect(state.userDraftPresent).toBe(false);
+  });
+
+  it('keeps the dim-suggestion screen ready for input and safe for controls/steering', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_174_DIM_SUGGESTION_ANSI);
+    expect(isClaudeScreenReadyForInput(state)).toBe(true);
+    expect(isSafeWindowForSlashControl(state)).toBe(true);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBeNull();
+  });
+
+  it('keeps NON-dim composer text a draft even when other lines carry styling', () => {
+    const typed = CLAUDE_2_1_174_DIM_SUGGESTION_ANSI.replace(
+      `${ESC}[2m${ESC}[23mcheck the output`,
+      `${ESC}[22m${ESC}[23mcheck the output`,
+    );
+    const state = parseClaudeScreenState(typed);
+    expect(state.userDraftPresent).toBe(true);
+    expect(state.composerContent).toBe('check the output');
+  });
+
+  it('keeps un-styled captures fail-closed: same text without ANSI stays a draft', () => {
+    const plain = [
+      '⏺ B2-ok',
+      '',
+      '────────────────────────────────────────────────',
+      '❯ check the output',
+      '────────────────────────────────────────────────',
+    ].join('\n');
+    const state = parseClaudeScreenState(plain);
+    expect(state.userDraftPresent).toBe(true);
+  });
+
+  it('a dim SGR cancelled by 22 before the content does not read as placeholder', () => {
+    const cancelled = CLAUDE_2_1_174_DIM_SUGGESTION_ANSI.replace(
+      `${ESC}[2m${ESC}[23mcheck the output`,
+      `${ESC}[2m${ESC}[22mcheck the output`,
+    );
+    const state = parseClaudeScreenState(cancelled);
+    expect(state.userDraftPresent).toBe(true);
+  });
+});
+
+// Live probe capture 2026-06-11 (Claude Code 2.1.173, tmux, probes/lane-n): `/effort high` on a
+// conversation cached at a different effort opens a confirmation dialog instead of applying.
+const CLAUDE_2_1_173 = {
+  effortChangeDialog: [
+    '❯ /effort low',
+    '  ⎿  Set effort level to low (saved as your default for new sessions): Quick, straightforward implementation',
+    '     with minimal overhead',
+    '',
+    '▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔',
+    '   Change effort level?',
+    '   Your next response will be slower and use more tokens',
+    '',
+    '   This conversation is cached for the current effort level. Switching to high means the full history gets',
+    '   re-read on your next message.',
+    '',
+    '   ❯ 1. Yes, switch to high',
+    '     2. No, go back',
+  ].join('\n'),
+  effortKept: [
+    '❯ /effort low',
+    '  ⎿  Set effort level to low (saved as your default for new sessions): Quick, straightforward implementation',
+    '     with minimal overhead',
+    '',
+    '❯ /effort high',
+    '  ⎿  Kept effort level as low',
+    '──────────────────────────────',
+    '❯ ',
+    '──────────────────────────────',
+  ].join('\n'),
+  effortSetAfterStaleSet: [
+    '❯ /effort low',
+    '  ⎿  Set effort level to low (saved as your default for new sessions): Quick, straightforward implementation',
+    '     with minimal overhead',
+    '',
+    '❯ /effort high',
+    '  ⎿  Set effort level to high (saved as your default for new sessions): Comprehensive implementation with',
+    '     extensive testing and documentation',
+    '──────────────────────────────',
+    '❯ ',
+    '──────────────────────────────',
+  ].join('\n'),
+} as const;
+
+describe('parseClaudeScreenState — effort change confirmation dialog (incident cmq8y3nlx, L6)', () => {
+  it('detects the Change effort level? dialog with its target level and blocks the safe window', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_173.effortChangeDialog);
+    expect(state.effortChangeDialogVisible).toBe(true);
+    expect(state.effortChangeDialogTarget).toBe('high');
+    expect(state.inputBoxInteractive).toBe(false);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+    expect(isSafeWindowForModeCycle(state)).toBe(false);
+    expect(isClaudeScreenReadyForInput(state)).toBe(false);
+  });
+
+  it('does not treat the dialog screen as verified via stale scrollback confirmations', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_173.effortChangeDialog);
+    // The scrollback still shows "Set effort level to low"; the dialog screen must not read as a
+    // clean interactive composer where that stale text could pass for verification.
+    expect(state.inputBoxInteractive).toBe(false);
+  });
+
+  it('does not flag the dialog on a screen that merely echoes kept/set confirmation rows', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_173.effortKept);
+    expect(state.effortChangeDialogVisible).toBe(false);
+    expect(state.inputBoxInteractive).toBe(true);
+    expect(isSafeWindowForSlashControl(state)).toBe(true);
+  });
+
+  it('reports the latest effort confirmation as kept when the dialog was declined', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_173.effortKept);
+    expect(state.latestEffortConfirmation).toEqual({ kind: 'kept', level: 'low' });
+  });
+
+  it('prefers the LATEST set-confirmation when older ones linger in scrollback', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_173.effortSetAfterStaleSet);
+    expect(state.latestEffortConfirmation).toEqual({ kind: 'set', level: 'high' });
+    expect(state.visibleEffort).toBe('high');
+  });
+
+  it('does not mistake a transcript prompt echo above an empty composer for a user draft', () => {
+    // Live capture 2026-06-11: executed prompts echo as `❯ reply OK again` rows in the transcript;
+    // the REAL composer is the last composer line at the bottom of the screen.
+    const state = parseClaudeScreenState([
+      '❯ reply OK again',
+      '',
+      '⏺ OK. Ready when you are.',
+      '──────────────────────────────',
+      '❯ ',
+      '──────────────────────────────',
+    ].join('\n'));
+    expect(state.userDraftPresent).toBe(false);
+    expect(state.inputBoxInteractive).toBe(true);
+    expect(isSafeWindowForSlashControl(state)).toBe(true);
+  });
+
+  it('vetoes in-flight steering while the effort dialog is visible (typed text would answer it)', () => {
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_173.effortChangeDialog)))
+      .toBe('effort_change_dialog');
+  });
+});
+
+describe('parseClaudeScreenState — visible model/effort verification text', () => {
+  it('reads the model from the /model success confirmation text', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.modelConfirmation);
+    expect(state.visibleModel).toBe('Sonnet 4.6');
+  });
+
+  it('reads the effort from /effort success confirmation text', () => {
+    const state = parseClaudeScreenState('Set reasoning effort to high\n  >');
+    expect(state.visibleEffort).toBe('high');
+  });
+
+  // Real Claude Code 2.1.170 confirmation text (QA probe): "Set effort level to low".
+  it('reads the effort from the real "Set effort level to <x>" confirmation text', () => {
+    const state = parseClaudeScreenState('Set effort level to low (saved as your default for new sessions)\n  ❯');
+    expect(state.visibleEffort).toBe('low');
+  });
+
+  // Ultracode is selected through the /effort menu; the confirmation reuses the effort wording.
+  // Exact live text is a probe item — the regex accepts any single lowercase word.
+  it('reads ultracode from the effort confirmation text', () => {
+    const state = parseClaudeScreenState('Set effort level to ultracode\n  ❯');
+    expect(state.visibleEffort).toBe('ultracode');
+  });
+
+  it('reads a [1m]-suffixed model id from the /model confirmation text', () => {
+    const withSuffix = parseClaudeScreenState('Set model to claude-sonnet-4-6[1m]\n  ❯');
+    expect(withSuffix.visibleModel).toBe('claude-sonnet-4-6[1m]');
+    // The TUI may also echo the variant without the suffix; verification stays tolerant by
+    // treating any non-null echoed model as the effective value (no equality pinning).
+    const saved = parseClaudeScreenState('Set model to claude-sonnet-4-6[1m] and saved as your default\n  ❯');
+    expect(saved.visibleModel).toBe('claude-sonnet-4-6[1m]');
+  });
+});
+
+// Real Claude Code 2.1.170 renders the composer prompt as `❯` (U+276F), not ASCII `>` or `›`.
+// The synthetic G8 fixtures used `>`, masking this against the real TUI (QA probe HIGH finding).
+describe('parseClaudeScreenState — real 2.1.170 composer glyph', () => {
+  const realIdle = [
+    '╭───────────────────────────────────────────────╮',
+    '│ ❯                                               │',
+    '╰───────────────────────────────────────────────╯',
+    '  ? for shortcuts',
+  ].join('\n');
+
+  it('treats the real `❯` composer as an interactive input box', () => {
+    const state = parseClaudeScreenState(realIdle);
+    expect(state.inputBoxInteractive).toBe(true);
+    expect(isSafeWindowForSlashControl(state)).toBe(true);
+  });
+
+  it('recognizes the real permissions editor heading (Permissions / Recently denied / Allow / Ask / Deny)', () => {
+    const state = parseClaudeScreenState('  Permissions  Recently denied   Allow   Ask   Deny   Workspace');
+    expect(state.permissionEditorOpen).toBe(true);
+  });
+});
+
+describe('safe-window predicates', () => {
+  it('treats an idle interactive composer as a safe window for slash controls and mode cycling', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.idleDefault);
+    expect(isSafeWindowForSlashControl(state)).toBe(true);
+    expect(isSafeWindowForModeCycle(state)).toBe(true);
+  });
+
+  it('vetoes slash controls and mode cycling during generation', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_170.generating);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+    expect(isSafeWindowForModeCycle(state)).toBe(false);
+  });
+
+  it('vetoes controls while a user draft, slash picker, or dialog is visible', () => {
+    expect(isSafeWindowForSlashControl(parseClaudeScreenState(CLAUDE_2_1_170.userDraft))).toBe(false);
+    expect(isSafeWindowForSlashControl(parseClaudeScreenState(CLAUDE_2_1_170.slashPicker))).toBe(false);
+    expect(isSafeWindowForSlashControl(parseClaudeScreenState(CLAUDE_2_1_170.permissionPrompt))).toBe(false);
+    expect(isSafeWindowForModeCycle(parseClaudeScreenState(CLAUDE_2_1_170.switchModelDialog))).toBe(false);
+  });
+
+  it('vetoes controls on an unknown/non-interactive screen', () => {
+    const state = parseClaudeScreenState('some heavy resume transcript with no composer');
+    expect(state.inputBoxInteractive).toBe(false);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+    expect(isSafeWindowForModeCycle(state)).toBe(false);
+  });
+});
+
+describe('in-flight steer veto (D19)', () => {
+  it('treats an actively-generating screen with a clean composer as safe to steer', () => {
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_170.generating))).toBeNull();
+    // A queued-message banner means Claude is already queueing typed input; steering more is native behavior.
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_170.queuedMessageWhileGenerating))).toBeNull();
+  });
+
+  it('vetoes dialogs, editors, pickers, and drafts', () => {
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_170.permissionPrompt))).toBe('permission_prompt');
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_170.trustFolderPrompt))).toBe('trust_prompt');
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_170.switchModelDialog))).toBe('switch_model_dialog');
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_170.permissionsEditor))).toBe('permission_editor');
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_170.slashPicker))).toBe('slash_picker');
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_170.userDraft))).toBe('user_draft');
+  });
+
+  it('vetoes a mid-generation user draft in the composer', () => {
+    const generatingWithDraft = [
+      '● Counting to thirty…',
+      '✶ Forging… (12s · esc to interrupt)',
+      '╭───────────────────────────────────────────────╮',
+      '│ > half-typed user thought                       │',
+      '╰───────────────────────────────────────────────╯',
+    ].join('\n');
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(generatingWithDraft))).toBe('user_draft');
+  });
+
+  // D19b: steering is "deliver unless hard-blocked", not "only while generating". An idle
+  // interactive composer is SAFE — typing there submits as the next message, exactly like a user
+  // typing in the attached TUI. Real-world case: an orchestrator session whose turn is running but
+  // whose TUI sits idle while background agents work.
+  it('treats an idle interactive composer as safe to steer (D19b)', () => {
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_170.idleDefault))).toBeNull();
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_170.idleAuto))).toBeNull();
+  });
+
+  it('vetoes unknown and transcript-only screens with no interactive composer (fail closed)', () => {
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(
+      'Resuming session abc123 from on-disk history…\n(rendered 3,128 lines of prior transcript; input not yet ready)',
+    ))).toBe('no_interactive_composer');
+  });
+});
+
+describe('startup readiness predicate (D15 shared-parser unification)', () => {
+  it('treats a boxed idle composer and mode-marked composer as ready for input', () => {
+    expect(isClaudeScreenReadyForInput(parseClaudeScreenState(CLAUDE_2_1_170.idleDefault))).toBe(true);
+    expect(isClaudeScreenReadyForInput(parseClaudeScreenState(CLAUDE_2_1_170.idleAcceptEdits))).toBe(true);
+    expect(isClaudeScreenReadyForInput(parseClaudeScreenState(CLAUDE_2_1_170.idleAuto))).toBe(true);
+  });
+
+  it('does not declare readiness during generation, dialogs, drafts, slash pickers, or heavy resume', () => {
+    expect(isClaudeScreenReadyForInput(parseClaudeScreenState(CLAUDE_2_1_170.generating))).toBe(false);
+    expect(isClaudeScreenReadyForInput(parseClaudeScreenState(CLAUDE_2_1_170.switchModelDialog))).toBe(false);
+    expect(isClaudeScreenReadyForInput(parseClaudeScreenState(CLAUDE_2_1_170.permissionPrompt))).toBe(false);
+    expect(isClaudeScreenReadyForInput(parseClaudeScreenState(CLAUDE_2_1_170.userDraft))).toBe(false);
+    expect(isClaudeScreenReadyForInput(parseClaudeScreenState(CLAUDE_2_1_170.slashPicker))).toBe(false);
+    expect(isClaudeScreenReadyForInput(parseClaudeScreenState(
+      'Resuming session abc123 from on-disk history…\n(rendered 3,128 lines of prior transcript; input not yet ready)',
+    ))).toBe(false);
+  });
+});
+
+describe('parseClaudeScreenState — unrecognized confirmation dialogs (P-B fail-closed)', () => {
+  // Shape mirrors the live 2.1.170/2.1.173 selection dialogs (`Switch model?` / `Change effort
+  // level?`): a `❯`-marked numbered option list. An UNRECOGNIZED heading must fail closed —
+  // typing or Escape could answer/decline it (incident cmq8y3nlx class).
+  const unrecognizedDialog = [
+    ' Reset conversation cache?',
+    ' Your next response may be slower',
+    '',
+    ' ❯ 1. Yes, reset it',
+    '   2. No, go back',
+  ].join('\n');
+
+  it('detects an unrecognized ❯-numbered confirmation dialog and blocks every safe window', () => {
+    const state = parseClaudeScreenState(unrecognizedDialog);
+    expect(state.unrecognizedConfirmationDialogVisible).toBe(true);
+    expect(state.inputBoxInteractive).toBe(false);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+    expect(isSafeWindowForModeCycle(state)).toBe(false);
+    expect(isClaudeScreenReadyForInput(state)).toBe(false);
+  });
+
+  it('blocks the safe window even when a footer mode marker is visible (marker must not imply a composer)', () => {
+    const state = parseClaudeScreenState([unrecognizedDialog, '', '  ⏵⏵ accept edits on'].join('\n'));
+    expect(state.unrecognizedConfirmationDialogVisible).toBe(true);
+    expect(state.inputBoxInteractive).toBe(false);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+  });
+
+  it('does not flag RECOGNIZED dialogs (switch model / effort change) as unrecognized', () => {
+    expect(parseClaudeScreenState(CLAUDE_2_1_170.switchModelDialog).unrecognizedConfirmationDialogVisible).toBe(false);
+    expect(parseClaudeScreenState(CLAUDE_2_1_173.effortChangeDialog).unrecognizedConfirmationDialogVisible).toBe(false);
+  });
+
+  it('does not flag RECOGNIZED permission/trust prompts (owned by the permission flow, not controls)', () => {
+    expect(parseClaudeScreenState(CLAUDE_2_1_170.permissionPrompt).unrecognizedConfirmationDialogVisible).toBe(false);
+    expect(parseClaudeScreenState(CLAUDE_2_1_170.trustFolderPrompt).unrecognizedConfirmationDialogVisible).toBe(false);
+  });
+
+  it('does not flag an idle composer or a plain transcript echo screen', () => {
+    expect(parseClaudeScreenState(CLAUDE_2_1_170.idleDefault).unrecognizedConfirmationDialogVisible).toBe(false);
+    expect(parseClaudeScreenState([
+      '❯ reply OK again',
+      '──────────────────────────────',
+      '❯ ',
+      '──────────────────────────────',
+    ].join('\n')).unrecognizedConfirmationDialogVisible).toBe(false);
+  });
+
+  it('vetoes in-flight steering on an unrecognized confirmation dialog (typed text would answer it)', () => {
+    expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(unrecognizedDialog)))
+      .toBe('unrecognized_confirmation_dialog');
+  });
+});
+
+describe('composer content exposure (incident cmq7pyqkj, U1)', () => {
+  it('exposes the exact composer content for command-equality checks', () => {
+    const state = parseClaudeScreenState([
+      '╭───────────────────────────────────────╮',
+      '│ > /effort medium/effort medium        │',
+      '╰───────────────────────────────────────╯',
+    ].join('\n'));
+    expect(state.composerContent).toBe('/effort medium/effort medium');
+  });
+
+  it('reads the BOTTOM composer line, not an executed-prompt echo above it', () => {
+    const state = parseClaudeScreenState([
+      '❯ /effort medium',
+      '  ⎿  Set effort level to medium (saved as your default for new sessions)',
+      '╭─────╮',
+      '│ >   │',
+      '╰─────╯',
+    ].join('\n'));
+    expect(state.composerContent).toBe('');
+  });
+
+  it('returns null when no composer line is present', () => {
+    expect(parseClaudeScreenState('✶ Forging… (10s · esc to interrupt)').composerContent).toBeNull();
+  });
+});
+
+// Live capture 2026-06-12 (Claude Code 2.1.x, zellij pane 48 cols, runner pid 20327): a long
+// composer draft soft-wraps onto indented continuation lines inside the composer box. Capturing
+// only the `❯` line truncated the draft, so an own-injected leftover could never exact-match the
+// own-text registry (guard misclassified it foreign_draft → injection starvation, C11).
+describe('parseClaudeScreenState — soft-wrapped composer draft (C11)', () => {
+  const WRAPPED = [
+    '⏺ BRAVO',
+    '────────────────────────────────────────────────',
+    '❯ QA-C11 M1: reply with exactly the word ALPHA',
+    '  and nothing else',
+    '────────────────────────────────────────────────',
+    '  ⏵⏵ bypass permissions on (shift+tab to',
+  ].join('\n');
+
+  it('captures the FULL wrapped draft including continuation lines', () => {
+    const state = parseClaudeScreenState(WRAPPED);
+    expect(state.userDraftPresent).toBe(true);
+    expect(state.composerContent).toBe(
+      'QA-C11 M1: reply with exactly the word ALPHA\nand nothing else',
+    );
+  });
+
+  it('does not bleed continuation capture past the composer bottom border', () => {
+    const state = parseClaudeScreenState(WRAPPED);
+    expect(state.composerContent).not.toContain('bypass permissions');
+  });
+
+  it('captures wrapped drafts inside box-bordered composers as well', () => {
+    const state = parseClaudeScreenState([
+      '╭──────────────────────────────╮',
+      '│ ❯ first wrapped segment      │',
+      '│   second wrapped segment     │',
+      '╰──────────────────────────────╯',
+    ].join('\n'));
+    expect(state.composerContent).toBe('first wrapped segment\nsecond wrapped segment');
+  });
+
+  it('keeps single-line drafts and empty composers unchanged', () => {
+    const single = parseClaudeScreenState([
+      '──────────────',
+      '❯ short draft',
+      '──────────────',
+    ].join('\n'));
+    expect(single.composerContent).toBe('short draft');
+    const empty = parseClaudeScreenState([
+      '──────────────',
+      '❯ ',
+      '──────────────',
+      '  ⏵⏵ bypass permissions on',
+    ].join('\n'));
+    expect(empty.composerContent).toBe('');
+  });
+});
+
+// Live capture 2026-06-12 11:50 (orchestrator runner pid 58731, zellij dump): the AGENTS panel
+// ("← for agents", `↑/↓ to select · Enter to view`) renders its selection cursor as
+// `❯ ◯ <agent-type> <title>` rows. The cursor row parsed as a composer draft → false `user_draft`
+// steer veto with a misleading "clear the draft in the terminal" notice (draftLength flapped 29/41
+// as the list redrew). Typing/Enter on this screen drives the SELECTOR, never the composer.
+describe('parseClaudeScreenState — agents selection panel (live 11:36 incident)', () => {
+  const AGENTS_PANEL = [
+    '─────────────────────────────────────────────',
+    '  ⏵⏵ bypass permissions on · 9 shells · ← for agents',
+    '  ⏺ main                                  ↑/↓ to select · Enter to view',
+    '❯ ◯ general-purpose  QA-A lane resume          51m 0s · ↓ 154.0k tokens',
+    '  ◯ general-purpose  QA-B lane resume         50m 53s · ↓ 192.8k tokens',
+    '  ◯ general-purpose  Stale-intent follow-up fix lane   7m 36s · ↓ 151.6k tokens',
+  ].join('\n');
+
+  it('never reads the selection cursor row as a composer draft', () => {
+    const state = parseClaudeScreenState(AGENTS_PANEL);
+    expect(state.userDraftPresent).toBe(false);
+    expect(state.composerContent).toBeNull();
+  });
+
+  it('reports the selection list and blocks steering with a non-draft reason', () => {
+    const state = parseClaudeScreenState(AGENTS_PANEL);
+    expect(state.selectionListVisible).toBe(true);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('selection_list');
+  });
+
+  it('keeps controls/typing blocked while the selector is on screen', () => {
+    const state = parseClaudeScreenState(AGENTS_PANEL);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+    expect(isClaudeScreenReadyForInput(state)).toBe(false);
+  });
+
+  // Live capture 2026-06-12 14:0x (incident cmq9x64qc, runner pid 17342, zellij dump-screen):
+  // while background agents run, Claude renders a PASSIVE tasks footer BELOW the interactive
+  // composer — `⏺ main … ↑/↓ to select · Enter to view` plus non-focused `◯ <agent>` rows (no `❯`
+  // cursor row). Typing on this screen drives the COMPOSER, not the footer, but the bare
+  // `↑/↓ to select` hint matched as a selection list and steer-vetoed `selection_list` for the
+  // entire background-agent wait (user message never delivered). The hint alone, with an
+  // interactive composer on screen, must NOT block; a focused `❯ ◯` cursor row still must.
+  const BACKGROUND_AGENTS_FOOTER_WITH_COMPOSER = [
+    '✻ Waiting for 3 background agents to finish',
+    '',
+    '─────────────────────────────────────────────',
+    '❯ ',
+    '─────────────────────────────────────────────',
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+    '',
+    '  ⏺ main                                  ↑/↓ to select · Enter to view',
+    '  ◯ general-purpose  Analyze Pi SDK vs our plugin SDK      2m 8s · ↓ 121.5k tokens',
+    '  ◯ general-purpose  W6 fix lane: apply review resolutions  1m 5s · ↓ 68.4k tokens',
+  ].join('\n');
+
+  it('does not block steering on the passive background-agents footer when the composer is interactive (incident cmq9x64qc)', () => {
+    const state = parseClaudeScreenState(BACKGROUND_AGENTS_FOOTER_WITH_COMPOSER);
+    expect(state.selectionListVisible).toBe(false);
+    expect(state.composerContent).toBe('');
+    expect(state.userDraftPresent).toBe(false);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBeNull();
+  });
+
+  it('still blocks on the footer hint when NO interactive composer is on screen (fail closed)', () => {
+    const state = parseClaudeScreenState([
+      '  ⏺ main                                  ↑/↓ to select · Enter to view',
+      '  ◯ general-purpose  QA lane resume          51m 0s · ↓ 154.0k tokens',
+    ].join('\n'));
+    expect(state.selectionListVisible).toBe(true);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('selection_list');
+  });
+
+  it('still blocks when the selector cursor row is focused even with a composer visible', () => {
+    const state = parseClaudeScreenState([
+      '❯ ',
+      '  ⏺ main                                  ↑/↓ to select · Enter to view',
+      '❯ ◯ general-purpose  QA lane resume          51m 0s · ↓ 154.0k tokens',
+    ].join('\n'));
+    expect(state.selectionListVisible).toBe(true);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('selection_list');
+  });
+
+  it('does not flag a normal composer screen as a selection list', () => {
+    const state = parseClaudeScreenState([
+      '──────────────',
+      '❯ a real draft',
+      '──────────────',
+      '  ⏵⏵ bypass permissions on',
+    ].join('\n'));
+    expect(state.selectionListVisible).toBe(false);
+    expect(state.userDraftPresent).toBe(true);
+  });
+});

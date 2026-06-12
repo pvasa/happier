@@ -1,0 +1,55 @@
+import { describe, expect, it } from 'vitest';
+
+import { createClaudeOwnComposerTextLog } from './ownComposerTextLog';
+
+describe('createClaudeOwnComposerTextLog (lane X, incident cmq8y3nlx user_draft starvation)', () => {
+  it('matches a draft EXACTLY equal to a recorded injected prompt', () => {
+    const log = createClaudeOwnComposerTextLog();
+    log.record('please continue with the refactor');
+    expect(log.matches('please continue with the refactor')).toBe(true);
+    expect(log.matches('  please continue with the refactor \n')).toBe(true);
+  });
+
+  it('matches any single line of a recorded multiline injection (the composer shows the bottom line)', () => {
+    const log = createClaudeOwnComposerTextLog();
+    log.record('first instruction line\nsecond instruction line\r\nthird line');
+    expect(log.matches('third line')).toBe(true);
+    expect(log.matches('second instruction line')).toBe(true);
+  });
+
+  it('NEVER matches genuine user text, partial overlaps, or empty drafts', () => {
+    const log = createClaudeOwnComposerTextLog();
+    log.record('/effort medium');
+    log.record('please continue');
+    expect(log.matches('medium/effort medium')).toBe(false);
+    expect(log.matches('please continue!')).toBe(false);
+    expect(log.matches('please')).toBe(false);
+    expect(log.matches('')).toBe(false);
+    expect(log.matches('   ')).toBe(false);
+  });
+
+  it('is bounded: oldest entries are evicted beyond the limit', () => {
+    const log = createClaudeOwnComposerTextLog({ limit: 2 });
+    log.record('one');
+    log.record('two');
+    log.record('three');
+    expect(log.matches('one')).toBe(false);
+    expect(log.matches('two')).toBe(true);
+    expect(log.matches('three')).toBe(true);
+  });
+});
+
+describe('createClaudeOwnComposerTextLog — soft-wrapped drafts (C11 live, runner pid 20327)', () => {
+  it('matches a recorded single-line text whose draft rendering soft-wrapped across lines', () => {
+    const log = createClaudeOwnComposerTextLog();
+    log.record('QA-C11 M1: reply with exactly the word ALPHA and nothing else');
+    expect(log.matches('QA-C11 M1: reply with exactly the word ALPHA\nand nothing else')).toBe(true);
+  });
+
+  it('still never matches a wrapped draft whose words differ from any recorded text', () => {
+    const log = createClaudeOwnComposerTextLog();
+    log.record('QA-C11 M1: reply with exactly the word ALPHA and nothing else');
+    expect(log.matches('QA-C11 M1: reply with exactly the word ALPHA\nand nothing more')).toBe(false);
+    expect(log.matches('QA-C11 M1: reply with exactly the word ALPHA')).toBe(false);
+  });
+});
