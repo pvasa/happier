@@ -18,6 +18,8 @@ export type FakeClaudeInvocation = {
 export type FakeClaudeNativeAuthContract = {
   type: 'native_auth_contract';
   invocationId?: string;
+  mode?: 'sdk' | 'local';
+  argv?: string[];
   claudeConfigDir: string;
   credentialsPath: string;
   hasClaudeConfigDirEnv: boolean;
@@ -164,6 +166,9 @@ export async function waitForFakeClaudeNativeAuthContract(
       `logPath=${logPath}`,
       `contracts=${contracts.length}`,
       `last=${last ? JSON.stringify({
+        invocationId: last.invocationId,
+        mode: last.mode,
+        argv: last.argv,
         ok: last.ok,
         hasClaudeConfigDirEnv: last.hasClaudeConfigDirEnv,
         hasHappierClaudeConfigDirEnv: last.hasHappierClaudeConfigDirEnv,

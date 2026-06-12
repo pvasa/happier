@@ -89,4 +89,34 @@ describe('fake Claude CLI fixture', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('answers --version without requiring native OAuth credentials', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-fake-claude-version-'));
+    try {
+      const logPath = join(dir, 'fake-claude.jsonl');
+      const fixturePath = resolve(process.cwd(), 'src/fixtures/fake-claude-code-cli.cjs');
+
+      const res = spawnSync(process.execPath, [fixturePath, '--version'], {
+        cwd: dir,
+        env: {
+          ...process.env,
+          HAPPIER_E2E_FAKE_CLAUDE_LOG: logPath,
+          HAPPIER_E2E_FAKE_CLAUDE_INVOCATION_ID: 'version-preflight',
+          HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID: 'version-session',
+          HAPPIER_E2E_FAKE_CLAUDE_REQUIRE_NATIVE_OAUTH: '1',
+        },
+        encoding: 'utf8',
+      });
+
+      expect(res.status).toBe(0);
+      expect(res.stdout.trim()).toBe('0.0.0-fake');
+
+      const logRaw = await readFile(logPath, 'utf8');
+      const rows = parseJsonLines(logRaw);
+      expect(rows.some((row) => row?.type === 'invocation' && row.invocationId === 'version-preflight')).toBe(true);
+      expect(rows.some((row) => row?.type === 'native_auth_contract')).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

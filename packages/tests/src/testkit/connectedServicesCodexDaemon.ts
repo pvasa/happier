@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { buildConnectedServiceCredentialRecord, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol';
 
 import { createTestAuth, type TestAuth } from './auth';
-import { seedCliAuthForServer } from './cliAuth';
+import { seedCliAuthForServer, seedCliDataKeyAuthForServer } from './cliAuth';
 import { daemonControlPostJson } from './daemon/controlServerClient';
 import { startTestDaemon, type StartedDaemon } from './daemon/daemon';
 import { fetchJson } from './http';
@@ -69,6 +69,9 @@ export type StartedConnectedServicesCodexDaemonFixture = Readonly<{
   daemonServerBaseUrl: string;
   auth: TestAuth;
   accountSecret: Uint8Array;
+  machineId: string;
+  machineKey: Uint8Array | null;
+  daemonEnv: NodeJS.ProcessEnv;
   daemon: StartedDaemon;
   daemonHomeDir: string;
   workspaceDir: string;
@@ -86,10 +89,16 @@ export async function startConnectedServicesCodexDaemon(params: Readonly<{
   refreshToken: string;
   idToken: string | null;
   expiresAt: number;
+  authMode?: 'legacy' | 'dataKey';
+  serverExtraEnv?: Record<string, string>;
   resolveDaemonServerBaseUrl?: (serverBaseUrl: string) => Promise<string>;
 }>): Promise<StartedConnectedServicesCodexDaemonFixture> {
   const startedAt = new Date().toISOString();
-  const server = await startServerLight({ testDir: params.testDir, dbProvider: 'sqlite' });
+  const server = await startServerLight({
+    testDir: params.testDir,
+    dbProvider: 'sqlite',
+    ...(params.serverExtraEnv ? { extraEnv: params.serverExtraEnv } : {}),
+  });
   const serverBaseUrl = server.baseUrl;
   const auth = await createTestAuth(serverBaseUrl);
   const daemonServerBaseUrl = params.resolveDaemonServerBaseUrl
@@ -100,13 +109,28 @@ export async function startConnectedServicesCodexDaemon(params: Readonly<{
   await mkdir(daemonHomeDir, { recursive: true });
   await mkdir(workspaceDir, { recursive: true });
 
+  const authMode = params.authMode ?? 'legacy';
   const secret = Uint8Array.from(randomBytes(32));
-  const { serverId } = await seedCliAuthForServer({
-    cliHome: daemonHomeDir,
-    serverUrl: daemonServerBaseUrl,
-    token: auth.token,
-    secret,
-  });
+  let machineKey: Uint8Array | null = null;
+  const seeded = await (async () => {
+    if (authMode === 'dataKey') {
+      machineKey = Uint8Array.from(randomBytes(32));
+      return await seedCliDataKeyAuthForServer({
+        cliHome: daemonHomeDir,
+        serverUrl: daemonServerBaseUrl,
+        token: auth.token,
+        machineKey,
+      });
+    }
+
+    return await seedCliAuthForServer({
+      cliHome: daemonHomeDir,
+      serverUrl: daemonServerBaseUrl,
+      token: auth.token,
+      secret,
+    });
+  })();
+  const { serverId, machineId } = seeded;
 
   writeTestManifestForServer({
     testDir: params.testDir,
@@ -142,7 +166,7 @@ export async function startConnectedServicesCodexDaemon(params: Readonly<{
   });
   const ciphertext = sealAccountScopedBlobCiphertext({
     kind: 'connected_service_credential',
-    material: { type: 'legacy', secret },
+    material: machineKey ? { type: 'dataKey', machineKey } : { type: 'legacy', secret },
     payload: record,
     randomBytes: (length) => randomBytes(length),
   });
@@ -216,6 +240,9 @@ export async function startConnectedServicesCodexDaemon(params: Readonly<{
     daemonServerBaseUrl,
     auth,
     accountSecret: secret,
+    machineId,
+    machineKey,
+    daemonEnv,
     daemon,
     daemonHomeDir,
     workspaceDir,
@@ -229,6 +256,7 @@ export async function startConnectedServicesCodexDaemon(params: Readonly<{
 export async function spawnConnectedCodexSession(
   fixture: StartedConnectedServicesCodexDaemonFixture,
   sessionId: string,
+  opts?: Readonly<{ environmentVariables?: NodeJS.ProcessEnv }>,
 ) {
   return await daemonControlPostJson<{ success?: boolean; sessionId?: string; error?: string; errorCode?: string }>({
     port: fixture.daemonPort,
@@ -248,6 +276,7 @@ export async function spawnConnectedCodexSession(
         HAPPIER_VARIANT: 'dev',
         HAPPIER_EXPERIMENTAL_CODEX_ACP: '1',
         HAPPIER_CODEX_ACP_BIN: fixture.acpStubProvider,
+        ...(opts?.environmentVariables ?? {}),
       },
       connectedServices: {
         v: 1,

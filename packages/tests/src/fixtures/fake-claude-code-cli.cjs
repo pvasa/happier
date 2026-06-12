@@ -123,6 +123,8 @@ function inspectNativeOauthContract() {
   return {
     type: 'native_auth_contract',
     invocationId,
+    mode,
+    argv: [...argv],
     ts: Date.now(),
     claudeConfigDir,
     credentialsPath,
@@ -316,6 +318,11 @@ safeAppendJsonl(logPath, {
   mcpConfigs,
   mergedMcpServers,
 });
+
+if (argv.includes('--version') || argv.includes('-v')) {
+  process.stdout.write('0.0.0-fake\n');
+  process.exit(0);
+}
 
 if (requireNativeOauth) {
   const nativeAuthContract = inspectNativeOauthContract();
