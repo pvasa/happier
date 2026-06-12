@@ -14,7 +14,7 @@ describe('handleConnectedServiceRuntimeAuthFailure', () => {
       },
       classification: {
         kind: 'usage_limit',
-        limitCategory: 'quota',
+        limitCategory: 'usage_limit',
         serviceId: 'openai-codex',
         profileId: 'work',
         groupId: 'main',
@@ -85,7 +85,7 @@ describe('handleConnectedServiceRuntimeAuthFailure', () => {
       selection: null,
       classification: {
         kind: 'usage_limit',
-        limitCategory: 'quota',
+        limitCategory: 'usage_limit',
         serviceId: 'openai-codex',
         profileId: null,
         groupId: null,
@@ -115,7 +115,7 @@ describe('handleConnectedServiceRuntimeAuthFailure', () => {
     const switchAfterClassifiedFailure = vi.fn();
     const classification = {
       kind: 'usage_limit' as const,
-      limitCategory: 'quota' as const,
+      limitCategory: 'usage_limit' as const,
       serviceId: 'provider-owned-service',
       profileId: null,
       groupId: null,
@@ -161,7 +161,7 @@ describe('handleConnectedServiceRuntimeAuthFailure', () => {
       },
       classification: {
         kind: 'usage_limit',
-        limitCategory: 'quota',
+        limitCategory: 'usage_limit',
         serviceId: 'openai-codex',
         profileId: 'work',
         groupId: 'main',
@@ -189,7 +189,7 @@ describe('handleConnectedServiceRuntimeAuthFailure', () => {
       observedProfileId: 'work',
       retryAfterMs: undefined,
       resetsAtMs: null,
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
       quotaScope: undefined,
       providerLimitId: undefined,
       action: undefined,
@@ -215,7 +215,7 @@ describe('handleConnectedServiceRuntimeAuthFailure', () => {
       },
       classification: {
         kind: 'usage_limit',
-        limitCategory: 'quota',
+        limitCategory: 'usage_limit',
         serviceId: 'openai-codex',
         profileId: 'work',
         groupId: 'main',
@@ -246,7 +246,7 @@ describe('handleConnectedServiceRuntimeAuthFailure', () => {
       observedProfileId: 'work',
       retryAfterMs: 60_000,
       resetsAtMs: null,
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
       quotaScope: 'account',
       providerLimitId: 'weekly',
       action: { kind: 'open_url', url: 'https://chatgpt.com/codex/settings/usage' },

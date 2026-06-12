@@ -5,7 +5,7 @@ export type EffectiveQuotaMeter = NormalizedQuotaMeter & Readonly<{
 }>;
 
 function participatesInPercentageRanking(meter: NormalizedQuotaMeter): boolean {
-  return (meter.limitCategory === 'quota' || meter.limitCategory === 'rate_limit')
+  return (meter.limitCategory === 'usage_limit' || meter.limitCategory === 'rate_limit')
     && meter.reliable
     && meter.applicable
     && meter.remainingPct !== null;

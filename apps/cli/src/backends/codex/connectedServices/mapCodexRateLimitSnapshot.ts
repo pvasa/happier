@@ -36,13 +36,23 @@ function readUtilizationPct(value: unknown): number | null {
   return Math.max(0, Math.min(100, numeric));
 }
 
-function buildMeter(meterId: 'primary' | 'secondary', raw: unknown): ConnectedServiceQuotaMeterV1 | null {
+function readRelativeResetAtMs(record: Record<string, unknown>, nowMs: number): number | null {
+  const seconds = readFiniteNumber(record.resetsInSeconds ?? record.resets_in_seconds);
+  if (seconds === null || seconds < 0) return null;
+  return Math.trunc(nowMs + seconds * 1000);
+}
+
+function buildMeter(meterId: 'primary' | 'secondary', raw: unknown, nowMs: number): ConnectedServiceQuotaMeterV1 | null {
   const record = isRecord(raw) ? raw : null;
   if (!record) return null;
   const utilizationPct = readUtilizationPct(record.usedPercent ?? record.used_percent ?? record.utilizationPct ?? record.utilization_pct);
   const used = readFiniteNumber(record.used ?? record.usedTokens ?? record.used_tokens);
   const limit = readFiniteNumber(record.limit ?? record.tokenLimit ?? record.token_limit);
-  const resetsAt = parseProviderTimestampMs(record.resetsAt ?? record.resets_at ?? record.resetAt ?? record.reset_at);
+  // Absolute reset fields win; legacy relative `resets_in_seconds` shapes are converted
+  // to an absolute timestamp at mapping time (RD-QUO-1) so F0 durable-wait timing and
+  // member providerResetsAtMs carry true reset evidence instead of null.
+  const resetsAt = parseProviderTimestampMs(record.resetsAt ?? record.resets_at ?? record.resetAt ?? record.reset_at)
+    ?? readRelativeResetAtMs(record, nowMs);
   if (utilizationPct === null && used === null && limit === null && resetsAt === null) return null;
   const derivedRemainingPct = utilizationPct !== null
     ? Math.max(0, Math.min(100, 100 - utilizationPct))
@@ -75,6 +85,8 @@ function buildMeter(meterId: 'primary' | 'secondary', raw: unknown): ConnectedSe
 export function mapCodexRateLimitSnapshotToQuotaSnapshot(params: Readonly<{
   serviceId: ConnectedServiceId;
   profileId: ConnectedServiceProfileId;
+  activeAccountId?: string | null;
+  accountLabel?: string | null;
   fetchedAt: number;
   staleAfterMs?: number;
   rawSnapshot: unknown;
@@ -82,10 +94,12 @@ export function mapCodexRateLimitSnapshotToQuotaSnapshot(params: Readonly<{
   const unwrappedSnapshot = unwrapCodexRateLimitSnapshot(params.rawSnapshot);
   const raw = isRecord(unwrappedSnapshot) ? unwrappedSnapshot : {};
   const account = isRecord(raw.account) ? raw.account : {};
+  const relativeResetReferenceMs = Math.max(0, Math.trunc(params.fetchedAt));
   const meters = [
-    buildMeter('primary', raw.primary ?? raw.primary_window ?? raw.primaryWindow),
-    buildMeter('secondary', raw.secondary ?? raw.secondary_window ?? raw.secondaryWindow),
+    buildMeter('primary', raw.primary ?? raw.primary_window ?? raw.primaryWindow, relativeResetReferenceMs),
+    buildMeter('secondary', raw.secondary ?? raw.secondary_window ?? raw.secondaryWindow, relativeResetReferenceMs),
   ].filter((meter): meter is ConnectedServiceQuotaMeterV1 => meter !== null);
+  const activeAccountId = readString(params.activeAccountId);
 
   return ConnectedServiceQuotaSnapshotV1Schema.parse({
     v: 1,
@@ -93,8 +107,14 @@ export function mapCodexRateLimitSnapshotToQuotaSnapshot(params: Readonly<{
     profileId: params.profileId,
     fetchedAt: Math.max(0, Math.trunc(params.fetchedAt)),
     staleAfterMs: params.staleAfterMs ?? CODEX_RATE_LIMIT_SNAPSHOT_STALE_AFTER_MS,
+    providerId: 'codex',
+    ...(activeAccountId ? { activeAccountId } : {}),
+    fetchedAtMs: Math.max(0, Math.trunc(params.fetchedAt)),
+    staleAtMs: Math.max(0, Math.trunc(params.fetchedAt)) + (params.staleAfterMs ?? CODEX_RATE_LIMIT_SNAPSHOT_STALE_AFTER_MS),
+    source: 'in_band_provider_snapshot',
+    confidence: meters.length > 0 ? 'exact' : 'unknown',
     planLabel: readString(raw.planType ?? raw.plan_type),
-    accountLabel: readString(account.email ?? raw.email ?? raw.accountLabel ?? raw.account_label),
+    accountLabel: readString(account.email ?? raw.email ?? raw.accountLabel ?? raw.account_label ?? params.accountLabel),
     meters,
   });
 }

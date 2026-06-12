@@ -9,6 +9,10 @@ import {
 export const SESSION_USAGE_LIMIT_RECOVERY_STATE_FIELD_ID = 'runtime.usageLimitRecovery' as const;
 export const SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY = 'sessionUsageLimitRecoveryV1' as const;
 
+export const SessionUsageLimitRecoveryResumePromptModeV1Schema = z.enum(['standard', 'off', 'custom']);
+export type SessionUsageLimitRecoveryResumePromptModeV1 =
+  z.infer<typeof SessionUsageLimitRecoveryResumePromptModeV1Schema>;
+
 const SessionUsageLimitRecoveryProfileAuthSelectionV1Schema = z
   .object({
     kind: z.literal('profile'),
@@ -22,7 +26,7 @@ const SessionUsageLimitRecoveryGroupAuthSelectionV1Schema = z
     kind: z.literal('group'),
     serviceId: ConnectedServiceIdSchema,
     groupId: ConnectedServiceAuthGroupIdSchema,
-    profileId: ConnectedServiceProfileIdSchema,
+    profileId: ConnectedServiceProfileIdSchema.nullable(),
   })
   .strict();
 
@@ -53,8 +57,50 @@ export const SessionUsageLimitRecoveryV1Schema = z
     attemptCount: z.number().int().nonnegative(),
     maxAttempts: z.number().int().nonnegative(),
     lastProbeError: z.string().trim().min(1).nullable(),
+    resumePromptMode: SessionUsageLimitRecoveryResumePromptModeV1Schema.default('standard'),
     selectedAuth: SessionUsageLimitRecoveryAuthSelectionV1Schema,
   })
   .strict();
 
 export type SessionUsageLimitRecoveryV1 = z.infer<typeof SessionUsageLimitRecoveryV1Schema>;
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function readResumePromptMode(value: unknown): SessionUsageLimitRecoveryResumePromptModeV1 | null {
+  const parsed = SessionUsageLimitRecoveryResumePromptModeV1Schema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function readAccountSettingsResumePromptMode(value: unknown): SessionUsageLimitRecoveryResumePromptModeV1 | null {
+  const accountSettings = readRecord(value);
+  if (!accountSettings) return null;
+
+  const nestedSettings = readRecord(accountSettings.usageLimitRecoverySettingsV1);
+  return readResumePromptMode(nestedSettings?.resumePromptMode)
+    ?? readResumePromptMode(accountSettings.resumePromptMode);
+}
+
+export function resolveSessionUsageLimitRecoveryResumePromptModeV1(input: Readonly<{
+  explicit?: unknown;
+  existingIntent?: unknown;
+  accountSettings?: unknown;
+  groupPolicy?: unknown;
+  providerConfig?: unknown;
+  defaultMode?: unknown;
+}>): SessionUsageLimitRecoveryResumePromptModeV1 {
+  const existingIntent = readRecord(input.existingIntent);
+  const groupPolicy = readRecord(input.groupPolicy);
+  const providerConfig = readRecord(input.providerConfig);
+
+  return readResumePromptMode(input.explicit)
+    ?? readResumePromptMode(existingIntent?.resumePromptMode)
+    ?? readAccountSettingsResumePromptMode(input.accountSettings)
+    ?? readResumePromptMode(groupPolicy?.resumePromptMode)
+    ?? readResumePromptMode(providerConfig?.resumePromptMode)
+    ?? readResumePromptMode(input.defaultMode)
+    ?? 'standard';
+}

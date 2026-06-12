@@ -1,4 +1,3 @@
-import { resolveConnectedServiceGroupHomeDir, resolveConnectedServiceHomeDir } from '@/daemon/connectedServices/homes/resolveConnectedServiceHomeDir';
 import { requireConnectedServiceTokenCredentialRecord } from '@/daemon/connectedServices/shared/connectedServiceCredentialRecord';
 import type { ConnectedServicesProviderMaterializer } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
 import { materializeCodexConnectedServiceAuth } from './materializeCodexConnectedServiceAuth';
@@ -9,22 +8,8 @@ export function createCodexConnectedServicesMaterializer(): ConnectedServicesPro
     const openai = params.recordsByServiceId.get('openai') ?? null;
 
     if (codex) {
-      const selection = params.selectionsByServiceId?.get(codex.serviceId);
-      const stableRootDir = selection?.kind === 'group'
-        ? resolveConnectedServiceGroupHomeDir({
-            activeServerDir: params.activeServerDir,
-            serviceId: codex.serviceId,
-            groupId: selection.groupId,
-            agentId: params.agentId,
-          })
-        : resolveConnectedServiceHomeDir({
-            activeServerDir: params.activeServerDir,
-            serviceId: codex.serviceId,
-            profileId: codex.profileId,
-            agentId: params.agentId,
-          });
       const materialized = await materializeCodexConnectedServiceAuth({
-        rootDir: stableRootDir,
+        rootDir: params.rootDir,
         record: codex,
         accountSettings: params.accountSettings ?? null,
         processEnv: params.processEnv ?? process.env,

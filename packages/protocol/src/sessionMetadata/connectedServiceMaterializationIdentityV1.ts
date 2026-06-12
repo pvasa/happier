@@ -3,19 +3,47 @@ import { z } from 'zod';
 export const CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_METADATA_KEY =
   'connectedServiceMaterializationIdentityV1' as const;
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+/**
+ * The dev tree persists the identity timestamp as `createdAt`; this tree's canonical field is
+ * `createdAtMs`. Accept both on read (sessions roam between trees), keep `createdAtMs` canonical
+ * on output.
+ */
+function normalizeMaterializationIdentityInput(value: unknown): unknown {
+  const record = asRecord(value);
+  if (!record) return value;
+  const { createdAt: legacyCreatedAt, ...rest } = record;
+  if ('createdAtMs' in rest) return rest;
+  if (typeof legacyCreatedAt === 'number') {
+    return {
+      ...rest,
+      createdAtMs: legacyCreatedAt,
+    };
+  }
+  return rest;
+}
+
 export function createConnectedServiceMaterializationIdentityV1Schema(zod: typeof z) {
-  return zod
-    .object({
-      v: zod.literal(1),
-      id: zod
-        .string()
-        .trim()
-        .min(1)
-        .max(128)
-        .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
-      createdAtMs: zod.number().int().nonnegative(),
-    })
-    .passthrough();
+  return zod.preprocess(
+    normalizeMaterializationIdentityInput,
+    zod
+      .object({
+        v: zod.literal(1),
+        id: zod
+          .string()
+          .trim()
+          .min(1)
+          .max(128)
+          .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+        createdAtMs: zod.number().int().nonnegative(),
+      })
+      .passthrough(),
+  );
 }
 
 export const ConnectedServiceMaterializationIdentityV1Schema =

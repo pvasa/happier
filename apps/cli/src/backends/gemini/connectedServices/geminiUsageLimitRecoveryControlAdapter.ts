@@ -21,6 +21,7 @@ import type {
 } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryControlTypes';
 import { deriveUsageLimitRecoveryTiming } from '@/session/usageLimitRecoveryControls/deriveUsageLimitRecoveryTiming';
 import { resolveUsageLimitRecoveryMaxAttemptsExhaustion } from '@/session/usageLimitRecoveryControls/resolveUsageLimitRecoveryMaxAttemptsExhaustion';
+import { resolveUsageLimitRecoverySelectedAuthFromIssue } from '@/session/usageLimitRecoveryControls/usageLimitRecoverySelectedAuth';
 import { createGeminiConnectedServiceRuntimeAuthAdapter } from './createGeminiConnectedServiceRuntimeAuthAdapter';
 
 type MetadataRecord = Record<string, unknown>;
@@ -74,8 +75,11 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(
     return null;
   }
 
-  const connectedService = issueParsed.data.usageLimit.connectedService;
-  if (connectedService?.serviceId !== 'gemini' || !connectedService.profileId) {
+  const selectedAuth = resolveUsageLimitRecoverySelectedAuthFromIssue({
+    issue: issueParsed.data,
+    requiredConnectedServiceId: 'gemini',
+  });
+  if (!selectedAuth) {
     return null;
   }
 
@@ -95,18 +99,8 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(
     attemptCount: 0,
     maxAttempts: DEFAULT_USAGE_LIMIT_RECOVERY_MAX_ATTEMPTS,
     lastProbeError: null,
-    selectedAuth: connectedService.groupId
-      ? {
-        kind: 'group',
-        serviceId: 'gemini',
-        groupId: connectedService.groupId,
-        profileId: connectedService.profileId,
-      }
-      : {
-        kind: 'profile',
-        serviceId: 'gemini',
-        profileId: connectedService.profileId,
-      },
+    resumePromptMode: params.resumePromptMode ?? 'standard',
+    selectedAuth,
   };
 }
 
@@ -130,9 +124,16 @@ function resolveGeminiSelection(
     return { profileId: intent.selectedAuth.profileId, groupId: null };
   }
   if (intent.selectedAuth.kind === 'group' && intent.selectedAuth.serviceId === 'gemini') {
+    if (intent.selectedAuth.profileId === null) return null;
     return { profileId: intent.selectedAuth.profileId, groupId: intent.selectedAuth.groupId };
   }
   return null;
+}
+
+function isGeminiGroupWaitingForSelectedProfile(intent: SessionUsageLimitRecoveryV1): boolean {
+  return intent.selectedAuth.kind === 'group'
+    && intent.selectedAuth.serviceId === 'gemini'
+    && intent.selectedAuth.profileId === null;
 }
 
 function isQuotaSnapshotExhausted(snapshot: ConnectedServiceQuotaSnapshotV1): boolean {
@@ -247,6 +248,16 @@ export function createGeminiUsageLimitRecoveryControlAdapter(deps: Readonly<{
 
       const selection = resolveGeminiSelection(intent);
       if (!selection) {
+        if (isGeminiGroupWaitingForSelectedProfile(intent)) {
+          return {
+            ok: true,
+            status: 'waiting',
+            metadata: {
+              ...params.metadata,
+              [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: intent,
+            },
+          };
+        }
         return stableError('session_usage_limit_recovery_control_connected_service_unavailable');
       }
 

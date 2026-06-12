@@ -14,7 +14,6 @@ describe('runtimeAuthFailureReportOutboxSupersession', () => {
   });
 
   it.each([
-    ['prompt_or_steer'],
     ['task_started'],
     ['assistant_message_end'],
   ] as const)('keeps reports when turn lifecycle event is not an explicit cancellation: %s', (event) => {
@@ -22,6 +21,13 @@ describe('runtimeAuthFailureReportOutboxSupersession', () => {
       kind: 'turn_lifecycle',
       event,
     })).toBe(false);
+  });
+
+  it('clears stale reports when newer user input is accepted for the session', () => {
+    expect(shouldClearRuntimeAuthFailureReportOutboxForSupersession({
+      kind: 'turn_lifecycle',
+      event: 'prompt_or_steer',
+    })).toBe(true);
   });
 
   it('clears stale reports for explicit manual session supersession', () => {
@@ -44,8 +50,14 @@ describe('runtimeAuthFailureReportOutboxSupersession', () => {
       event: { kind: 'turn_lifecycle', event: 'task_started' },
       removeForSession,
     });
+    await clearRuntimeAuthFailureReportOutboxForSupersession({
+      sessionId: 'sess_3',
+      event: { kind: 'turn_lifecycle', event: 'prompt_or_steer' },
+      removeForSession,
+    });
 
-    expect(removeForSession).toHaveBeenCalledTimes(1);
+    expect(removeForSession).toHaveBeenCalledTimes(2);
     expect(removeForSession).toHaveBeenCalledWith('sess_1');
+    expect(removeForSession).toHaveBeenCalledWith('sess_3');
   });
 });

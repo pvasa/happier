@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ConnectedServiceUxDiagnosticV1 } from '@happier-dev/protocol';
+import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY } from '@happier-dev/protocol';
 
 import type { ConnectedServiceRuntimeAuthFailureDaemonReport } from '../reportConnectedServiceRuntimeAuthFailureToDaemon';
 import { projectConnectedServiceRuntimeAuthRecoveryReport } from './connectedServiceRuntimeAuthRecoverySessionEvent';
@@ -91,6 +92,171 @@ describe('projectConnectedServiceRuntimeAuthRecoveryReport', () => {
       genericMessageEmitted: false,
       requiresFallback: false,
       emitted: true,
+    });
+  });
+
+  it('commits exhausted usage-limit recovery metadata when a group fallback reports no eligible member', () => {
+    let nextMetadata: Record<string, unknown> | null = null;
+    const report = {
+      handled: true,
+      report: {
+        ok: true,
+        result: {
+          status: 'switch_attempted',
+          result: {
+            status: 'no_eligible_member',
+          },
+        },
+      },
+      statusCode: 'switch_attempted_no_eligible_member',
+      statusMessage: 'Connected-service account group has no eligible fallback account; waiting for group recovery.',
+      projection: {
+        handled: true,
+        statusCode: 'switch_attempted_no_eligible_member',
+        statusMessage: 'Connected-service account group has no eligible fallback account; waiting for group recovery.',
+        terminal: true,
+      },
+    } satisfies ConnectedServiceRuntimeAuthFailureDaemonReport;
+
+    const result = projectConnectedServiceRuntimeAuthRecoveryReport({
+      report,
+      classification: {
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'codex-main',
+        resetsAtMs: 1_700_000_060_000,
+        retryAfterMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+      commitUsageLimitRecoveryMetadata: ((updater: (metadata: Record<string, unknown>) => Record<string, unknown>) => {
+        nextMetadata = updater({});
+        return true;
+      }) as never,
+    } as never);
+
+    expect(nextMetadata).toMatchObject({
+      [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: {
+        status: 'exhausted',
+        resetAtMs: 1_700_000_060_000,
+        lastProbeError: 'no_eligible_member',
+        selectedAuth: {
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'codex-main',
+          profileId: 'primary',
+        },
+      },
+    });
+    expect(result).toMatchObject({
+      usageLimitMetadataCommitted: true,
+      emitted: true,
+    });
+  });
+
+  it('commits waiting usage-limit recovery metadata for group-exhausted no eligible member with reset timing', () => {
+    let nextMetadata: Record<string, unknown> | null = null;
+    const report = {
+      handled: true,
+      report: {
+        ok: true,
+        result: {
+          status: 'switch_attempted',
+          result: {
+            status: 'no_eligible_member',
+            groupExhausted: true,
+            retryAtMs: 1_700_000_060_000,
+          },
+        },
+      },
+      statusCode: 'switch_attempted_no_eligible_member',
+      statusMessage: 'Connected-service account group has no eligible fallback account; waiting for group recovery.',
+      projection: {
+        handled: true,
+        statusCode: 'switch_attempted_no_eligible_member',
+        statusMessage: 'Connected-service account group has no eligible fallback account; waiting for group recovery.',
+        terminal: false,
+      },
+    } satisfies ConnectedServiceRuntimeAuthFailureDaemonReport;
+
+    projectConnectedServiceRuntimeAuthRecoveryReport({
+      report,
+      classification: {
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'codex-main',
+        resetsAtMs: 1_700_000_060_000,
+        retryAfterMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+      commitUsageLimitRecoveryMetadata: ((updater: (metadata: Record<string, unknown>) => Record<string, unknown>) => {
+        nextMetadata = updater({});
+        return true;
+      }) as never,
+    } as never);
+
+    expect(nextMetadata).toMatchObject({
+      [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: {
+        status: 'waiting',
+        resetAtMs: 1_700_000_060_000,
+        nextCheckAtMs: 1_700_000_060_000,
+        lastProbeError: 'no_eligible_member',
+      },
+    });
+  });
+
+  it('commits usage-limit recovery metadata when the session metadata starts empty', () => {
+    let nextMetadata: Record<string, unknown> | null = null;
+    const report = {
+      handled: true,
+      report: {
+        ok: true,
+        result: {
+          status: 'switch_attempted',
+          result: {
+            status: 'no_eligible_member',
+          },
+        },
+      },
+      statusCode: 'switch_attempted_no_eligible_member',
+      statusMessage: 'Connected-service account group has no eligible fallback account; waiting for group recovery.',
+      projection: {
+        handled: true,
+        statusCode: 'switch_attempted_no_eligible_member',
+        statusMessage: 'Connected-service account group has no eligible fallback account; waiting for group recovery.',
+        terminal: true,
+      },
+    } satisfies ConnectedServiceRuntimeAuthFailureDaemonReport;
+
+    projectConnectedServiceRuntimeAuthRecoveryReport({
+      report,
+      classification: {
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'codex-main',
+        resetsAtMs: 1_700_000_060_000,
+        retryAfterMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+      commitUsageLimitRecoveryMetadata: ((updater: (metadata: Record<string, unknown>) => Record<string, unknown>) => {
+        nextMetadata = updater(null as never);
+        return true;
+      }) as never,
+    } as never);
+
+    expect(nextMetadata).toMatchObject({
+      [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: {
+        status: 'exhausted',
+        lastProbeError: 'no_eligible_member',
+      },
     });
   });
 });

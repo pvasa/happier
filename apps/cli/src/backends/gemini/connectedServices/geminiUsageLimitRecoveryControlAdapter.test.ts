@@ -226,6 +226,56 @@ describe('geminiUsageLimitRecoveryControlAdapter', () => {
     });
   });
 
+  it('preserves group identity when the latest failed usage-limit issue has no active profile id', async () => {
+    const resolveCredential = vi.fn(async () => null);
+    const probeQuota = vi.fn();
+    const adapter = createGeminiUsageLimitRecoveryControlAdapter({ resolveCredential, probeQuota });
+
+    await expect(adapter.checkNow?.(createParams({
+      machineId: 'machine-local',
+      agentRuntimeDescriptorV1: { v: 1, providerId: 'gemini' },
+    }, {
+      latestTurnStatus: 'failed',
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        provider: 'gemini',
+        providerTurnId: 'turn-1',
+        occurredAt: 1_700_000_000_000,
+        usageLimit: {
+          v: 1,
+          resetAtMs: null,
+          retryAfterMs: 120_000,
+          quotaScope: 'account',
+          recoverability: 'wait',
+          connectedService: {
+            serviceId: 'gemini',
+            groupId: 'gemini-main',
+            profileId: null,
+          },
+        },
+      },
+    }))).resolves.toMatchObject({
+      ok: true,
+      status: 'waiting',
+      metadata: {
+        sessionUsageLimitRecoveryV1: {
+          selectedAuth: {
+            kind: 'group',
+            serviceId: 'gemini',
+            groupId: 'gemini-main',
+            profileId: null,
+          },
+        },
+      },
+    });
+    expect(resolveCredential).not.toHaveBeenCalled();
+    expect(probeQuota).not.toHaveBeenCalled();
+  });
+
   it('exhausts stale Gemini recovery intents instead of probing after max attempts', async () => {
     const resolveCredential = vi.fn(async () => createGeminiRecord());
     const probeQuota = vi.fn(async () => ({
@@ -263,6 +313,7 @@ describe('geminiUsageLimitRecoveryControlAdapter', () => {
       attemptCount: 1,
       maxAttempts: 1,
       lastProbeError: null,
+      resumePromptMode: 'standard',
       selectedAuth: {
         kind: 'profile',
         serviceId: 'gemini',

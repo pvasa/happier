@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -62,6 +62,25 @@ function readNumber(value: unknown): number | null {
 
 export function resolveClaudeCodeCredentialsFilePath(claudeConfigDir: string): string {
   return join(claudeConfigDir, '.credentials.json');
+}
+
+function canonicalizeJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJsonValue);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, nested]) => [key, canonicalizeJsonValue(nested)]),
+    );
+  }
+  return value;
+}
+
+export function computeClaudeCodeCredentialFingerprint(payload: unknown): string {
+  const canonical = JSON.stringify(canonicalizeJsonValue(payload));
+  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
 }
 
 export function parseClaudeCodeCredentialFile(value: unknown): ClaudeCodeCredentialFileParseResult {

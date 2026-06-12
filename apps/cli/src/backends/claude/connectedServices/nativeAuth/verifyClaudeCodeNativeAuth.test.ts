@@ -8,9 +8,13 @@ import {
   verifyClaudeCodeNativeAuth,
 } from './verifyClaudeCodeNativeAuth';
 import {
+  computeClaudeCodeCredentialFingerprint,
   resolveClaudeCodeCredentialsFilePath,
   writeClaudeCodeCredentialsFile,
 } from './claudeCodeCredentialFile';
+import {
+  resolveClaudeConnectedServiceHomeProvenancePath,
+} from '../claudeConnectedServiceHomeProvenance';
 
 const NOW_MS = Date.parse('2026-06-06T12:00:00.000Z');
 const FUTURE_EXPIRES_AT_MS = NOW_MS + 60 * 60 * 1000;
@@ -173,5 +177,82 @@ describe('verifyClaudeCodeNativeAuth', () => {
       missingScopes: [],
       credentialPath: join(claudeConfigDir, '.credentials.json'),
     });
+  });
+
+  it('fails closed when materialized credentials do not match the connected-service provenance fingerprint', async () => {
+    const claudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-verify-'));
+    await writeClaudeCodeCredentialsFile({
+      claudeConfigDir,
+      payload: {
+        claudeAiOauth: {
+          accessToken: 'access-secret-placeholder',
+          refreshToken: 'refresh-secret-placeholder',
+          expiresAt: FUTURE_EXPIRES_AT_MS,
+          scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+        },
+      },
+    });
+    await writeFile(
+      resolveClaudeConnectedServiceHomeProvenancePath(claudeConfigDir),
+      `${JSON.stringify({
+        v: 1,
+        serviceId: 'claude-subscription',
+        credentialProfileId: 'profile-a',
+        credentialCreatedAt: 1000,
+        credentialFingerprint: 'sha256:mismatch',
+        selection: { kind: 'profile', profileId: 'profile-a' },
+      })}\n`,
+    );
+
+    const result = await verifyClaudeCodeNativeAuth({ claudeConfigDir, now: NOW_MS });
+
+    expect(result.status).toBe('credential_fingerprint_mismatch');
+    expect(JSON.stringify(result)).not.toContain('secret-placeholder');
+  });
+
+  it('fails closed on darwin when the keychain credential fingerprint differs from the credential file', async () => {
+    const claudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-native-auth-verify-'));
+    const filePayload = {
+      claudeAiOauth: {
+        accessToken: 'access-secret-placeholder',
+        refreshToken: 'refresh-secret-placeholder',
+        expiresAt: FUTURE_EXPIRES_AT_MS,
+        scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+      },
+    };
+    const keychainPayload = {
+      claudeAiOauth: {
+        accessToken: 'different-access-secret-placeholder',
+        refreshToken: 'different-refresh-secret-placeholder',
+        expiresAt: FUTURE_EXPIRES_AT_MS,
+        scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+      },
+    };
+    await writeClaudeCodeCredentialsFile({ claudeConfigDir, payload: filePayload });
+    await writeFile(
+      resolveClaudeConnectedServiceHomeProvenancePath(claudeConfigDir),
+      `${JSON.stringify({
+        v: 1,
+        serviceId: 'claude-subscription',
+        credentialProfileId: 'profile-a',
+        credentialCreatedAt: 1000,
+        credentialFingerprint: computeClaudeCodeCredentialFingerprint(filePayload),
+        selection: { kind: 'profile', profileId: 'profile-a' },
+      })}\n`,
+    );
+    Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM_DESCRIPTOR, value: 'darwin' });
+    vi.doMock('./claudeCodeMacOsKeychain', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./claudeCodeMacOsKeychain')>();
+      return {
+        ...actual,
+        readClaudeCodeMacOsKeychainCredential: vi.fn(async () => keychainPayload),
+      };
+    });
+
+    const { verifyClaudeCodeNativeAuth: verifyUnderDarwin } = await import('./verifyClaudeCodeNativeAuth');
+    const result = await verifyUnderDarwin({ claudeConfigDir, now: NOW_MS });
+
+    expect(result.status).toBe('credential_fingerprint_mismatch');
+    expect(JSON.stringify(result)).not.toContain('secret-placeholder');
   });
 });

@@ -39,6 +39,32 @@ describe('ConnectedServiceRecoveryPolicy', () => {
     });
   });
 
+  it('routes provider capacity (overloaded) to bounded temporary retry instead of account switching', () => {
+    // Incident 2026-06-12 (lane TRANSIENT): "API Error: Overloaded" / 529 is server-side and
+    // account-independent. Switching profiles or restarting the session is never the right
+    // recovery — retry the SAME session with backoff, like temporary throttles.
+    expect(decideConnectedServiceRecovery({
+      actor: 'automatic',
+      issue: {
+        kind: 'capacity',
+        ...baseIssue,
+      },
+      selection: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        activeProfileId: 'primary',
+      },
+    })).toEqual({
+      action: 'temporary_retry',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'main',
+      resetAtMs: null,
+      retryAfterMs: null,
+    });
+  });
+
   it('returns reconnect-required for manual selection of a cached unhealthy profile', () => {
     expect(decideConnectedServiceRecovery({
       actor: 'manual',

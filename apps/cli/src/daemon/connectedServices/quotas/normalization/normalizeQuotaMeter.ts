@@ -66,7 +66,7 @@ export function normalizeQuotaMeter(input: Readonly<{
   return {
     meterId: normalizeString(input.meterId) ?? 'unknown',
     label: normalizeString(input.label) ?? normalizeString(input.meterId) ?? 'Unknown',
-    limitCategory: input.limitCategory ?? 'quota',
+    limitCategory: input.limitCategory ?? 'usage_limit',
     remainingPct: derivedRemainingPct === null ? null : clampPct(derivedRemainingPct),
     utilizationPct: normalizedUtilizationPct,
     resetAtMs: finiteNumber(input.resetAtMs),

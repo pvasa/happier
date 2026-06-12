@@ -4,11 +4,31 @@ import type { ConnectedServiceCredentialRecordV1, ConnectedServiceQuotaMeterV1 }
 import { isRecord, normalizeNonEmptyString, normalizePct, resolveConnectedServiceQuotaAccountLabel } from '../quotaNormalization';
 import { parseRetryAfterHeader } from '../normalization';
 
-function normalizeResetAtMs(value: unknown): number | null {
+const RESET_AT_PLAUSIBILITY_FLOOR_TOLERANCE_MS = 24 * 60 * 60_000;
+
+function normalizeResetAtMs(value: unknown, nowMs: number): number | null {
   const num = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(num) || num <= 0) return null;
   // Heuristic: usage APIs commonly return unix seconds.
-  return num > 1_000_000_000_000 ? Math.trunc(num) : Math.trunc(num * 1000);
+  const epochMs = num > 1_000_000_000_000 ? Math.trunc(num) : Math.trunc(num * 1000);
+  // Sanity floor (RD-QUO-1): a relative-seconds value misparsed as an epoch lands in the
+  // 1970 era. Reject resets implausibly far in the past instead of persisting bogus data.
+  if (epochMs < nowMs - RESET_AT_PLAUSIBILITY_FLOOR_TOLERANCE_MS) return null;
+  return epochMs;
+}
+
+function normalizeWindowResetAtMs(window: Record<string, unknown> | null, nowMs: number): number | null {
+  if (!window) return null;
+  const absolute = normalizeResetAtMs(window.reset_at ?? window.resets_at ?? window.resetAt ?? window.resetsAt, nowMs);
+  if (absolute !== null) return absolute;
+  // Legacy relative shape: seconds-until-reset converted at fetch time.
+  const seconds = typeof window.resets_in_seconds === 'number'
+    ? window.resets_in_seconds
+    : typeof window.resetsInSeconds === 'number'
+      ? window.resetsInSeconds
+      : null;
+  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.trunc(nowMs + seconds * 1000);
 }
 
 function resolveAccountLabel(record: ConnectedServiceCredentialRecordV1): string | null {
@@ -177,7 +197,7 @@ export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
             limit: null,
             unit: 'unknown',
             utilizationPct: sessionPct,
-            resetsAt: normalizeResetAtMs(primary?.reset_at),
+            resetsAt: normalizeWindowResetAtMs(primary, now),
             status: sessionPct === null ? 'unavailable' : 'ok',
             details: {},
           },
@@ -188,7 +208,7 @@ export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
             limit: null,
             unit: 'unknown',
             utilizationPct: weeklyPct,
-            resetsAt: normalizeResetAtMs(secondary?.reset_at),
+            resetsAt: normalizeWindowResetAtMs(secondary, now),
             status: weeklyPct === null ? 'unavailable' : 'ok',
             details: {},
           },

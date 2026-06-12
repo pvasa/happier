@@ -22,7 +22,7 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
 
     expect(result).toMatchObject({
       kind: 'usage_limit',
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
       serviceId: 'openai-codex',
       profileId: 'work',
       groupId: 'pool',
@@ -89,9 +89,7 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
     });
   });
 
-  it('falls back to stable retry wording for structured usage-limit errors without reset metadata', () => {
-    const now = new Date(2026, 4, 27, 7, 20, 0, 0).getTime();
-    const resetAt = new Date(2026, 4, 30, 22, 23, 0, 0).getTime();
+  it('does not use ambiguous stable retry wording as structured usage-limit reset metadata', () => {
 
     const result = classifyCodexConnectedServiceAuthFailure({
       providerErrorPath: true,
@@ -105,12 +103,11 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
       serviceId: 'openai-codex',
       profileId: 'leeroy',
       groupId: 'happier',
-      nowMs: now,
     });
 
     expect(result).toMatchObject({
       kind: 'usage_limit',
-      resetsAtMs: resetAt,
+      resetsAtMs: null,
       retryAfterMs: null,
       source: 'structured_provider_error',
     });
@@ -177,7 +174,7 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
       groupId: null,
     })).toMatchObject({
       kind: 'usage_limit',
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
       source: 'stable_provider_message',
     });
 
@@ -190,9 +187,7 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
     })).toBeNull();
   });
 
-  it('extracts local reset times from stable Codex usage-limit retry wording', () => {
-    const now = new Date(2026, 4, 17, 16, 0, 0, 0).getTime();
-    const resetAt = new Date(2026, 4, 17, 17, 27, 0, 0).getTime();
+  it('does not extract daemon-local reset times from stable Codex usage-limit retry wording', () => {
 
     expect(classifyCodexConnectedServiceAuthFailure({
       providerErrorPath: true,
@@ -200,17 +195,14 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
       serviceId: 'openai-codex',
       profileId: 'work',
       groupId: null,
-      nowMs: now,
     })).toMatchObject({
       kind: 'usage_limit',
-      resetsAtMs: resetAt,
+      resetsAtMs: null,
       source: 'stable_provider_message',
     });
   });
 
-  it('extracts full local reset dates from stable Codex usage-limit retry wording', () => {
-    const now = new Date(2026, 4, 17, 16, 0, 0, 0).getTime();
-    const resetAt = new Date(2026, 4, 27, 15, 55, 0, 0).getTime();
+  it('does not extract daemon-local reset dates from stable Codex usage-limit retry wording', () => {
 
     expect(classifyCodexConnectedServiceAuthFailure({
       providerErrorPath: true,
@@ -218,10 +210,9 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
       serviceId: 'openai-codex',
       profileId: 'work',
       groupId: null,
-      nowMs: now,
     })).toMatchObject({
       kind: 'usage_limit',
-      resetsAtMs: resetAt,
+      resetsAtMs: null,
       source: 'stable_provider_message',
     });
   });
@@ -274,7 +265,7 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
 
     expect(result).toMatchObject({
       kind: 'auth_expired',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'openai-codex',
       profileId: 'codex1',
       groupId: 'happier',
@@ -298,7 +289,7 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
 
     expect(result).toMatchObject({
       kind: 'auth_expired',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'openai-codex',
       profileId: 'codex1',
       groupId: 'happier',
@@ -324,7 +315,7 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
 
     expect(result).toMatchObject({
       kind: 'refresh_failed',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'openai-codex',
       profileId: 'codex1',
       groupId: 'happier',
@@ -347,7 +338,7 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
 
     expect(result).toMatchObject({
       kind: 'refresh_failed',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'openai-codex',
       profileId: 'bot',
       groupId: 'happier',
@@ -370,7 +361,7 @@ describe('classifyCodexConnectedServiceAuthFailure', () => {
 
     expect(result).toMatchObject({
       kind: 'refresh_failed',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'openai-codex',
       profileId: 'batiplus',
       groupId: 'happier',

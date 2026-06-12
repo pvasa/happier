@@ -4,6 +4,7 @@ import type { ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
 
 import { resolveConnectedServiceCredentials } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
 import type { ConnectedServiceRuntimeAuthSelectionMaterializer } from '@/daemon/connectedServices/sessionAuthSwitch/runtimeAuthSelectionMaterializerTypes';
+import { logger } from '@/ui/logger';
 
 import type { OpenCodeConnectedServiceId } from './openCodeConnectedServicePrecedence';
 import { readOpenCodeConnectedServiceId } from './openCodeConnectedServicePrecedence';
@@ -83,7 +84,11 @@ export const materializeOpenCodeConnectedServiceRuntimeAuthSelection: ConnectedS
     credentials: params.credentials,
     api: params.api,
     processEnv: params.processEnv ?? process.env,
-  }).catch(() => null);
+  }).catch((error) => {
+    // Best-effort: a missing prior fingerprint only skips detaching the previous managed server.
+    logger.debug('[opencode] Failed to resolve previous launch fingerprint context for auth switch (non-fatal)', error);
+    return null;
+  });
 
   return {
     ...params.baseSelection,

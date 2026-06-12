@@ -14,6 +14,7 @@ import {
   type ConnectedServiceDaemonRestartDiagnosticRecorder,
 } from '../sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
 import { DurableBackoffRecoveryScheduler } from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
+import type { DurableRecoveryGateResult } from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
 import {
   isRecoveredProviderOutcomeProof,
   type ProviderOutcomeProofKind,
@@ -32,7 +33,12 @@ type RecoveryResult =
       lastProbeError?: string | null;
       selectedAuth?: SessionUsageLimitRecoveryAuthSelectionV1;
     }>
-  | Readonly<{ status: 'exhausted'; lastProbeError?: string | null }>;
+  | Readonly<{ status: 'exhausted'; lastProbeError?: string | null }>
+  /**
+   * The probe proved the intent is stale (e.g. the interrupted turn later
+   * completed normally): cancel terminally without resuming.
+   */
+  | Readonly<{ status: 'superseded'; lastProbeError?: string | null }>;
 
 export type UsageLimitRecoveryIntentStore = Readonly<{
   read(sessionId: string): UsageLimitRecoveryIntent | unknown | null;
@@ -75,8 +81,7 @@ function usageLimitRecoverySelectedAuthMatchesIdentity(input: Readonly<{
   if (input.selectedAuth.kind === 'native') return false;
   if (input.selectedAuth.serviceId !== input.serviceId) return false;
   if (input.selectedAuth.kind === 'group') {
-    return input.selectedAuth.groupId === input.groupId
-      && input.selectedAuth.profileId === input.profileId;
+    return input.selectedAuth.groupId === input.groupId;
   }
   return input.groupId === null && input.selectedAuth.profileId === input.profileId;
 }
@@ -101,6 +106,7 @@ function mergeUsageLimitRecoveryRearm(
   if (!previous || previous.issueFingerprint !== next.issueFingerprint) return next;
   return {
     ...previous,
+    resumePromptMode: next.resumePromptMode,
     selectedAuth: next.selectedAuth,
   };
 }
@@ -127,6 +133,7 @@ export class UsageLimitRecoveryScheduler {
     resume?: (intent: UsageLimitRecoveryIntent) => Promise<void>;
     recordRestartDiagnostic?: ConnectedServiceDaemonRestartDiagnosticRecorder;
     checkNowThrottleMs?: number;
+    gate?: (input: Readonly<{ sessionId: string; intent: UsageLimitRecoveryIntent }>) => DurableRecoveryGateResult;
   }>) {
     this.checkNowRateLimiter = new UsageLimitCheckNowRateLimiter({
       nowMs: deps.nowMs,
@@ -147,6 +154,7 @@ export class UsageLimitRecoveryScheduler {
       terminalRecordRetentionMs: DEFAULT_USAGE_LIMIT_RECOVERY_TERMINAL_RECORD_RETENTION_MS,
       getTerminalPruneReferenceMs: resolveUsageLimitRecoveryPruneReferenceMs,
       exhaustOnMaxAttemptOutcome: false,
+      gate: deps.gate,
       markChecking: (intent, attemptCount) => ({
         ...intent,
         status: 'checking',
@@ -184,6 +192,12 @@ export class UsageLimitRecoveryScheduler {
         if (recovery.status === 'exhausted') {
           return {
             status: 'exhausted',
+            lastError: recovery.lastProbeError ?? null,
+          };
+        }
+        if (recovery.status === 'superseded') {
+          return {
+            status: 'terminal',
             lastError: recovery.lastProbeError ?? null,
           };
         }
@@ -233,12 +247,17 @@ export class UsageLimitRecoveryScheduler {
     resetAtMs: number | null;
     nextCheckAtMs?: number | null;
     maxAttempts?: number;
+    resumePromptMode?: 'standard' | 'off' | 'custom';
     selectedAuth: SessionUsageLimitRecoveryAuthSelectionV1;
   }>): Promise<UsageLimitRecoveryIntent> {
     const nowMs = this.deps.nowMs();
     const maxAttempts = typeof input.maxAttempts === 'number' && Number.isFinite(input.maxAttempts)
       ? Math.max(0, Math.trunc(input.maxAttempts))
       : DEFAULT_USAGE_LIMIT_RECOVERY_MAX_ATTEMPTS;
+    const previous = this.read(input.sessionId);
+    const resumePromptMode = input.resumePromptMode
+      ?? (previous?.issueFingerprint === input.issueFingerprint ? previous.resumePromptMode : undefined)
+      ?? 'standard';
     const intent: UsageLimitRecoveryIntent = {
       v: 1,
       issueFingerprint: input.issueFingerprint,
@@ -249,6 +268,7 @@ export class UsageLimitRecoveryScheduler {
       attemptCount: 0,
       maxAttempts,
       lastProbeError: null,
+      resumePromptMode,
       selectedAuth: input.selectedAuth,
     };
     // Merge against any existing intent so a same-fingerprint resurfacing converges with the

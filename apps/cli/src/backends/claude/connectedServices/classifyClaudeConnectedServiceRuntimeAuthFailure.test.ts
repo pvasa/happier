@@ -27,7 +27,7 @@ describe('classifyClaudeConnectedServiceRuntimeAuthFailure', () => {
 
     expect(classification).toMatchObject({
       kind: 'auth_expired',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'claude-subscription',
       profileId: 'work',
       groupId: 'claude',
@@ -56,7 +56,7 @@ describe('classifyClaudeConnectedServiceRuntimeAuthFailure', () => {
       }),
     ).toMatchObject({
       kind: 'auth_expired',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'claude-subscription',
       profileId: 'work',
     });
@@ -88,7 +88,7 @@ describe('classifyClaudeConnectedServiceRuntimeAuthFailure', () => {
       }),
     ).toMatchObject({
       kind: 'auth_expired',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'claude-subscription',
       profileId: 'work',
       rateLimits: null,
@@ -115,7 +115,7 @@ describe('classifyClaudeConnectedServiceRuntimeAuthFailure', () => {
       }),
     ).toMatchObject({
       kind: 'auth_expired',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'claude-subscription',
       profileId: 'work',
     });
@@ -137,10 +137,111 @@ describe('classifyClaudeConnectedServiceRuntimeAuthFailure', () => {
       }),
     ).toMatchObject({
       kind: 'auth_expired',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'claude-subscription',
       profileId: 'work',
       groupId: 'claude',
+    });
+  });
+
+  it('keeps explicit usage-limit categories when the surfaced meter utilization is below 100', () => {
+    // RD-CLD-5: the rejection is authoritative; a sub-100 surfaced meter (rejection on another
+    // window) must not demote the classification to cooldown-only rate_limit.
+    const details = mapClaudeRateLimitEventToUsageDetails({
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status: 'rejected',
+        rateLimitType: 'weekly',
+        utilization: 95,
+      },
+    });
+
+    expect(
+      classifyClaudeConnectedServiceRuntimeAuthFailure({
+        details,
+        selection,
+      }),
+    ).toMatchObject({
+      kind: 'usage_limit',
+      limitCategory: 'usage_limit',
+    });
+  });
+
+  it('falls back to the sub-100 utilization heuristic only when details carry no explicit category', () => {
+    const details = mapClaudeRateLimitEventToUsageDetails({
+      type: 'assistant',
+      isApiErrorMessage: true,
+      apiErrorStatus: 429,
+      error: 'rate_limited',
+      utilization: 95,
+    });
+
+    expect(details?.limitCategory).toBeUndefined();
+    expect(
+      classifyClaudeConnectedServiceRuntimeAuthFailure({
+        details,
+        selection,
+      }),
+    ).toMatchObject({
+      kind: 'rate_limit',
+      limitCategory: 'rate_limit',
+    });
+  });
+
+  it('parses reset timing from the raw provider payload when mapped details lack it', () => {
+    // INC-4: Claude 429s classified with resetsAtMs:null even when the raw payload carried
+    // parseable reset evidence; group durable waits then degraded to rolling cooldown heuristics.
+    const resetEpochSeconds = 4_102_444_800;
+    const error = {
+      type: 'assistant',
+      isApiErrorMessage: true,
+      apiErrorStatus: 429,
+      error: 'rate_limited',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: `Claude AI usage limit reached|${resetEpochSeconds}` }],
+      },
+    };
+    const details = {
+      ...mapClaudeRateLimitEventToUsageDetails({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour', utilization: 100 },
+      })!,
+      resetAtMs: null,
+      retryAfterMs: null,
+    };
+
+    expect(
+      classifyClaudeConnectedServiceRuntimeAuthFailure({
+        details,
+        error,
+        selection,
+      }),
+    ).toMatchObject({
+      resetsAtMs: resetEpochSeconds * 1000,
+    });
+  });
+
+  it('threads raw payload reset timing through the runtime-auth adapter classification', () => {
+    const resetEpochSeconds = 4_102_444_800;
+    expect(
+      createClaudeConnectedServiceRuntimeAuthAdapter().classifyRuntimeAuthFailure({
+        target: { agentId: 'claude' },
+        error: {
+          type: 'assistant',
+          isApiErrorMessage: true,
+          apiErrorStatus: 429,
+          error: 'rate_limited',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: `Claude AI usage limit reached|${resetEpochSeconds}` }],
+          },
+        },
+        selection,
+      }),
+    ).toMatchObject({
+      kind: 'usage_limit',
+      resetsAtMs: resetEpochSeconds * 1000,
     });
   });
 

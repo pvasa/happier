@@ -4,6 +4,7 @@ import {
   findConnectedServiceChildSelection,
   type ConnectedServiceRuntimeAuthMetadataSession,
 } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import type { ConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/types';
 
 export type OpenAiCodexDaemonRefreshSelectionResolution = Readonly<{
   selection: OpenAiCodexDaemonRefreshSelection;
@@ -68,7 +69,7 @@ export function resolveOpenAiCodexDaemonRefreshSelection(
 
 export function createOpenAiCodexBridgeRefreshFailureClassification(
   resolution: OpenAiCodexDaemonRefreshSelectionResolution,
-): Readonly<Record<string, unknown>> {
+): ConnectedServiceRuntimeFailureClassification {
   const { selection } = resolution;
   return {
     kind: 'refresh_failed',

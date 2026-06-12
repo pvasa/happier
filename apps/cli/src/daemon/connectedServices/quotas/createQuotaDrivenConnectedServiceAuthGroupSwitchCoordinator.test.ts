@@ -78,7 +78,7 @@ function group(activeProfileId: string, generation: number): ConnectedServiceAut
 }
 
 describe('createQuotaDrivenConnectedServiceAuthGroupSwitchCoordinator', () => {
-  it('probes stale group quota snapshots before quota-driven soft-threshold switching', async () => {
+  it('fails closed without restarting when proactive soft-threshold switching has no hot-apply path', async () => {
     const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
     runtimeQuotaSnapshots.recordSnapshot({
       serviceId: 'openai-codex',
@@ -119,9 +119,10 @@ describe('createQuotaDrivenConnectedServiceAuthGroupSwitchCoordinator', () => {
       groupId: 'main',
       reason: 'soft_threshold',
     })).resolves.toMatchObject({
-      status: 'switched',
+      status: 'generation_apply_failed',
       activeProfileId: 'backup',
       generation: 2,
+      errorCode: 'hot_apply_restart_required',
     });
     expect(probeGroupQuotaSnapshots).toHaveBeenCalledWith({
       serviceId: 'openai-codex',
@@ -129,12 +130,7 @@ describe('createQuotaDrivenConnectedServiceAuthGroupSwitchCoordinator', () => {
       profileIds: ['backup'],
       reason: 'soft_threshold',
     });
-    expect(restartSession).toHaveBeenCalledWith(expect.objectContaining({
-      serviceId: 'openai-codex',
-      groupId: 'main',
-      activeProfileId: 'backup',
-      reason: 'soft_threshold',
-    }));
+    expect(restartSession).not.toHaveBeenCalled();
   });
 
   it('routes the proactive switch through applyConnectedServiceAuthGeneration and hot-applies without a bare restart (K2)', async () => {
@@ -200,6 +196,73 @@ describe('createQuotaDrivenConnectedServiceAuthGroupSwitchCoordinator', () => {
       reason: 'soft_threshold',
       switchReason: 'pre_turn_group_policy',
       // Pre-switch active member, threaded so the transcript "from" is the real member, not null.
+      fromProfileId: 'primary',
+    });
+    expect(restartSession).not.toHaveBeenCalled();
+  });
+
+  it('fails closed without restarting when proactive soft-threshold switching only produces metadata updates', async () => {
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    runtimeQuotaSnapshots.recordSnapshot({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'primary',
+      snapshot: quotaSnapshot('primary', 5),
+    });
+    runtimeQuotaSnapshots.recordSnapshot({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'backup',
+      snapshot: quotaSnapshot('backup', 80),
+    });
+
+    const api = {
+      getConnectedServiceAuthGroup: vi.fn(async () => group('primary', 1)),
+      updateConnectedServiceAuthGroupActiveProfile: vi.fn(async () => group('backup', 2)),
+    };
+    const restartSession = vi.fn(async () => {});
+    const applyConnectedServiceAuthGeneration = vi.fn(async () => ({
+      ok: true as const,
+      action: 'metadata_updated' as const,
+    }));
+
+    const coordinator = createQuotaDrivenConnectedServiceAuthGroupSwitchCoordinator({
+      api,
+      runtimeQuotaSnapshots,
+      quotaFreshnessMs: 60_000,
+      nowMs: () => 1_000,
+      restartSession,
+      applyConnectedServiceAuthGeneration,
+      quotaCoordinator: {
+        hydratePersistedQuotaSnapshotsForGroup: vi.fn(async () => {}),
+        probeGroupQuotaSnapshots: vi.fn(async () => {}),
+      },
+    });
+
+    await expect(coordinator.switchBeforeTurn({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'soft_threshold',
+    })).resolves.toEqual({
+      status: 'generation_apply_failed',
+      activeProfileId: 'backup',
+      generation: 2,
+      errorCode: 'hot_apply_restart_required',
+      diagnostics: {
+        attemptedMode: 'spawn_next_turn',
+        policyReason: 'predictive_soft_switch_hot_apply_required',
+      },
+    });
+
+    expect(applyConnectedServiceAuthGeneration).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      activeProfileId: 'backup',
+      generation: 2,
+      reason: 'soft_threshold',
+      switchReason: 'pre_turn_group_policy',
       fromProfileId: 'primary',
     });
     expect(restartSession).not.toHaveBeenCalled();

@@ -1,5 +1,7 @@
 export const USAGE_LIMIT_CHECK_NOW_RATE_LIMITED_CODE = 'probe_rate_limited';
-export const DEFAULT_USAGE_LIMIT_CHECK_NOW_THROTTLE_MS = 5_000;
+// Plan contract (provider-quota-switch-recovery-unification): default daemon check-now
+// throttle is ~30 seconds per key, configurable via env.
+export const DEFAULT_USAGE_LIMIT_CHECK_NOW_THROTTLE_MS = 30_000;
 const USAGE_LIMIT_CHECK_NOW_THROTTLE_MS_ENV = 'HAPPIER_USAGE_LIMIT_CHECK_NOW_THROTTLE_MS';
 
 export type UsageLimitCheckNowRateLimitResult =

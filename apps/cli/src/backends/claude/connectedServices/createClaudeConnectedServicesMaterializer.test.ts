@@ -12,6 +12,7 @@ import {
 } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 
 import { createClaudeConnectedServicesMaterializer } from './createClaudeConnectedServicesMaterializer';
+import { buildClaudeConnectedServiceHomeProvenance } from './claudeConnectedServiceHomeProvenance';
 import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from './nativeAuth/claudeCodeCredentialScopes';
 import { syncClaudeConnectedServiceHome } from './syncClaudeConnectedServiceHome';
 
@@ -397,16 +398,6 @@ describe('createClaudeConnectedServicesMaterializer', () => {
       'claude-config',
     );
     await mkdir(existingTargetDir, { recursive: true });
-    await writeFile(join(existingTargetDir, '.happier-claude-connected-service-home.json'), `${JSON.stringify({
-      v: 1,
-      serviceId: 'claude-subscription',
-      credentialProfileId: 'oauth-profile',
-      credentialCreatedAt: REALISTIC_ISSUED_AT_MS,
-      selection: {
-        kind: 'profile',
-        profileId: 'oauth-profile',
-      },
-    })}\n`);
     await writeFile(join(existingTargetDir, '.claude.json'), `${JSON.stringify({
       oauthAccount: {
         emailAddress: 'target@example.test',
@@ -451,6 +442,16 @@ describe('createClaudeConnectedServicesMaterializer', () => {
         providerEmail: null,
       },
     });
+    await writeFile(join(existingTargetDir, '.happier-claude-connected-service-home.json'), `${JSON.stringify(
+      buildClaudeConnectedServiceHomeProvenance({
+        record,
+        selectionDescriptor: {
+          kind: 'profile',
+          serviceId: 'claude-subscription',
+          profileId: 'oauth-profile',
+        },
+      }),
+    )}\n`);
 
     const materializer = createClaudeConnectedServicesMaterializer();
     const result = await materializer({

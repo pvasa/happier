@@ -7,6 +7,7 @@ import {
 } from './applyCodexConnectedServiceAuthGeneration';
 import { classifyCodexConnectedServiceAuthFailure } from './classifyCodexConnectedServiceAuthFailure';
 import { mapCodexRateLimitSnapshotToQuotaSnapshot } from './mapCodexRateLimitSnapshot';
+import { readCodexRateLimitsSnapshot } from '../appServer/readCodexRateLimitsSnapshot';
 import { refreshCodexChatGptTokensForBridge } from './refreshCodexChatGptTokensForBridge';
 import { verifyCodexConnectedServiceActiveAccount } from './verifyCodexConnectedServiceActiveAccount';
 import type {
@@ -144,15 +145,19 @@ export function createCodexConnectedServiceRuntimeAuthAdapter(): ConnectedServic
           reason: 'codex_quota_probe_unsupported_for_backend_mode',
         };
       }
-      const client = readRecord(selection?.client);
+      const client = readLoginStartClient(selection?.client);
       const record = readCredentialRecord(input);
-      if (!record || !client || typeof client.request !== 'function') {
+      if (!record || !client) {
         return { status: 'unsupported' };
       }
-      const rawSnapshot = await client.request('account/rateLimits/read');
+      const rawSnapshot = await readCodexRateLimitsSnapshot({
+        request: async (_method, params) => await client.request('account/rateLimits/read', params),
+      });
       const quotaSnapshot = mapCodexRateLimitSnapshotToQuotaSnapshot({
         serviceId: 'openai-codex',
         profileId: record.profileId,
+        activeAccountId: record.kind === 'oauth' ? record.oauth.providerAccountId : null,
+        accountLabel: record.kind === 'oauth' ? readString(record.oauth.providerEmail) : null,
         fetchedAt: Date.now(),
         rawSnapshot,
       });

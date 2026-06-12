@@ -38,6 +38,7 @@
 
 import {
   type ProviderOutcomeProofKind,
+  isProviderOutcomeProofKind,
   isRecoveredProviderOutcomeProof,
 } from '../recovery/providerOutcomeProof';
 
@@ -81,22 +82,21 @@ function hasFreshCandidateSelected(switchResult: Readonly<Record<string, unknown
   return fromProfileId !== activeProfileId;
 }
 
-// Runtime-auth recovery can deterministically establish exactly these two proof
-// classes of the shared contract. (The shared union is wider — quota_probe_fresh /
-// native_resume / provider_activity / terminal_* are produced by other owners.)
-export type RuntimeAuthRecoveryProofKind = Extract<
-  ProviderOutcomeProofKind,
-  'account_adoption_verified' | 'fresh_candidate_selected'
->;
+// Runtime-auth recovery can derive account-adoption and fresh-candidate evidence
+// from switch results. Provider/runtime owners may also pass through an explicit
+// `proofKind` from the shared provider-outcome contract when they own stronger
+// evidence such as native resume, quota probe, provider activity, or terminal proof.
+export type RuntimeAuthRecoveryProofKind = ProviderOutcomeProofKind;
 
 /**
- * Resolve whether a runtime-auth recovery result carries deterministic
- * provider-outcome proof, mapped onto the shared `ProviderOutcomeProofKind`
- * contract. Returns the proof kind when proven, otherwise `null`.
+ * Resolve whether a runtime-auth recovery result carries provider-outcome proof,
+ * mapped onto the shared `ProviderOutcomeProofKind` contract. Returns the proof
+ * kind when proven, otherwise `null`.
  */
 export function resolveRuntimeAuthRecoveryProof(result: unknown): RuntimeAuthRecoveryProofKind | null {
   const switchResult = readRuntimeAuthRecoverySwitchResult(result);
   if (!switchResult) return null;
+  if (isProviderOutcomeProofKind(switchResult.proofKind)) return switchResult.proofKind;
   if (hasVerifiedAccountAdoption(switchResult)) return 'account_adoption_verified';
   if (hasFreshCandidateSelected(switchResult)) return 'fresh_candidate_selected';
   return null;

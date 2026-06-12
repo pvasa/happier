@@ -7,10 +7,10 @@ import {
 
 import type {
   ConnectedServiceProviderRuntimeAuthAdapter,
-  ConnectedServiceRuntimeAuthFailureKind,
   ConnectedServiceRuntimeFailureClassification,
   ConnectedServiceRuntimeAuthTargetInput,
 } from '@/daemon/connectedServices/runtimeAuth/types';
+import { mapProviderLimitCategoryToRuntimeAuthFailureKind } from '@/daemon/connectedServices/runtimeAuth/mapProviderLimitCategoryToRuntimeAuthFailureKind';
 import {
   classifyProviderLimitEvidence,
   parseProviderResetAt,
@@ -176,9 +176,8 @@ function classifyGeminiRuntimeQuotaFailure(
   input: Parameters<ConnectedServiceProviderRuntimeAuthAdapter['classifyRuntimeAuthFailure']>[0],
 ): ConnectedServiceRuntimeFailureClassification | null {
   const category = classifyProviderLimitEvidence(input.error);
-  if (category !== 'quota' && category !== 'rate_limit' && category !== 'capacity' && category !== 'auth' && category !== 'plan' && category !== 'validation' && category !== 'account_disabled') {
-    return null;
-  }
+  const runtimeKind = mapProviderLimitCategoryToRuntimeAuthFailureKind(category);
+  if (!runtimeKind) return null;
   const selection = readRecord(input.selection);
   const textParts: string[] = [];
   collectText(input.error, textParts);
@@ -189,16 +188,6 @@ function classifyGeminiRuntimeQuotaFailure(
       message: textParts.join(' '),
     },
   });
-  const runtimeKind: ConnectedServiceRuntimeAuthFailureKind =
-    category === 'quota'
-      ? 'usage_limit'
-      : category === 'rate_limit'
-      ? 'rate_limit'
-      : category === 'capacity'
-      ? 'capacity'
-      : category === 'auth'
-      ? 'auth_expired'
-      : category;
 
   return {
     kind: runtimeKind,
@@ -216,7 +205,9 @@ function classifyGeminiRuntimeQuotaFailure(
       resetAtMs: timing.resetAtMs,
       quotaScope: 'account',
     },
-    source: 'structured_provider_error' as const,
+    // Honest provenance: Gemini classifications are derived from text evidence heuristics over
+    // stderr/ACP error payloads, not a structured provider error contract.
+    source: 'stable_provider_message' as const,
   };
 }
 
@@ -240,11 +231,14 @@ export function createGeminiConnectedServiceRuntimeAuthAdapter(
       return { applied: false, reason: 'hot_apply_unsupported' };
     },
     async recoverAfterRuntimeAuthSwitch() {
-      return { recovered: false, recovery: 'restart_rematerialize' };
+      // Nothing to hot-recover: restart/rematerialize IS the recovery for Gemini (no-op success).
+      return { recovered: true, recovery: 'restart_rematerialize' };
     },
     async verifyActiveAccount() {
+      // No live provider probe exists: adoption is structurally implied by spawning into the
+      // rematerialized home, so the claim is honest-but-weak (never a strong 'verified').
       return {
-        status: 'verified',
+        status: 'weakly_verified',
         reason: 'provider_restart_rematerialization_authoritative',
       };
     },

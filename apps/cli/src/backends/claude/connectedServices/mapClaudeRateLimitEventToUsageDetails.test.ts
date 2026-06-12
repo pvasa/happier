@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { mapClaudeRateLimitEventToUsageDetails } from './mapClaudeRateLimitEventToUsageDetails';
+import {
+  mapClaudeRateLimitEventToUsageDetails,
+  mapClaudeStopFailureHookToUsageDetails,
+} from './mapClaudeRateLimitEventToUsageDetails';
 
 describe('mapClaudeRateLimitEventToUsageDetails', () => {
   afterEach(() => {
@@ -27,6 +30,7 @@ describe('mapClaudeRateLimitEventToUsageDetails', () => {
       v: 1,
       resetAtMs: 1_768_100_000_000,
       retryAfterMs: null,
+      limitCategory: 'usage_limit',
       quotaScope: 'account',
       recoverability: 'wait',
       providerLimitId: 'five_hour',
@@ -39,6 +43,62 @@ describe('mapClaudeRateLimitEventToUsageDetails', () => {
       },
       action: null,
       connectedService: null,
+    });
+  });
+
+  it('marks rejected rate-limit events as explicit usage limits even when the surfaced meter is below 100', () => {
+    // RD-CLD-5: a rejection can land on a window other than the one whose utilization is surfaced
+    // (weekly cap hit while the 5h meter reads 9x%). The rejection is authoritative — sub-100
+    // utilization must not demote the event to a cooldown-only rate_limit classification.
+    expect(mapClaudeRateLimitEventToUsageDetails({
+      type: 'rate_limit_event',
+      uuid: 'event-weekly-cap',
+      session_id: 'session-weekly-cap',
+      rate_limit_info: {
+        status: 'rejected',
+        rateLimitType: 'weekly',
+        utilization: 95,
+      },
+    })).toMatchObject({
+      limitCategory: 'usage_limit',
+      utilization: 95,
+    });
+  });
+
+  it('parses reset timing from rejected rate-limit event evidence when resets_at is absent', () => {
+    // INC-4: the live incident's Claude 429 classified with resetsAtMs:null because the event
+    // carried no resets_at field; timing evidence elsewhere in the payload was never parsed.
+    const details = mapClaudeRateLimitEventToUsageDetails({
+      type: 'rate_limit_event',
+      uuid: 'event-no-resets-at',
+      session_id: 'session-no-resets-at',
+      rate_limit_info: {
+        status: 'rejected',
+        rateLimitType: 'five_hour',
+        utilization: 100,
+        message: 'Usage limit exceeded. Try again in 2 hours',
+      },
+    });
+
+    expect(details).toMatchObject({
+      resetAtMs: expect.any(Number),
+      retryAfterMs: 7_200_000,
+    });
+  });
+
+  it('parses Claude pipe-epoch usage-limit reset timestamps from assistant error text', () => {
+    // INC-4: the Claude CLI surfaces subscription limits as "Claude AI usage limit reached|<epoch>".
+    const resetEpochSeconds = 4_102_444_800;
+    expect(mapClaudeRateLimitEventToUsageDetails({
+      type: 'assistant',
+      uuid: 'api-error-pipe-epoch',
+      isApiErrorMessage: true,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: `Claude AI usage limit reached|${resetEpochSeconds}` }],
+      },
+    })).toMatchObject({
+      resetAtMs: resetEpochSeconds * 1000,
     });
   });
 
@@ -112,6 +172,43 @@ describe('mapClaudeRateLimitEventToUsageDetails', () => {
       providerLimitId: 'rate_limit',
       utilization: null,
     });
+  });
+
+  it('marks sidechain-sourced api-error rows so consumers can keep them out of turn failure and recovery (FIX-3)', () => {
+    // Subagent transcript rows are imported into the parent stream with isSidechain:true. A
+    // sidechain limit is still real account-level evidence (quota snapshots may consume it),
+    // but it must be distinguishable so it never fails the PARENT turn nor drives recovery.
+    expect(mapClaudeRateLimitEventToUsageDetails({
+      type: 'assistant',
+      uuid: 'api-error-sidechain-1',
+      isSidechain: true,
+      isApiErrorMessage: true,
+      apiErrorStatus: 429,
+      error: {
+        type: 'rate_limit_error',
+        message: 'Claude AI usage limit reached|1781221200',
+      },
+    })).toMatchObject({
+      v: 1,
+      resetAtMs: 1_781_221_200_000,
+      sourcedFromSidechain: true,
+    });
+  });
+
+  it('does not mark parent-chain api-error rows as sidechain-sourced', () => {
+    const details = mapClaudeRateLimitEventToUsageDetails({
+      type: 'assistant',
+      uuid: 'api-error-parent-1',
+      isSidechain: false,
+      isApiErrorMessage: true,
+      apiErrorStatus: 429,
+      error: {
+        type: 'rate_limit_error',
+        message: 'Claude API rate limit exceeded',
+      },
+    });
+    expect(details).not.toBeNull();
+    expect(details?.sourcedFromSidechain).toBeUndefined();
   });
 
   it('maps synthetic Claude result API-error status records', () => {
@@ -222,6 +319,43 @@ describe('mapClaudeRateLimitEventToUsageDetails', () => {
     })).toMatchObject({
       retryAfterMs: 150_000,
       resetAtMs: Date.parse('2026-05-17T12:02:30.000Z'),
+    });
+  });
+
+  it('prefers reset timing from Claude StopFailure assistant text over the null-timing rate_limit fallback', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-10T19:40:00.000Z'));
+
+    expect(mapClaudeStopFailureHookToUsageDetails({
+      hook_event_name: 'StopFailure',
+      error: 'rate_limit',
+      last_assistant_message: "You've hit your session limit · resets 11pm (Europe/Zurich)",
+    })).toMatchObject({
+      v: 1,
+      resetAtMs: Date.parse('2026-06-10T21:00:00.000Z'),
+      retryAfterMs: 4_800_000,
+      quotaScope: 'account',
+      recoverability: 'wait',
+      providerLimitId: 'rate_limit',
+    });
+  });
+
+  it('falls back to the direct Claude StopFailure rate_limit classification when no assistant timing exists', () => {
+    expect(mapClaudeStopFailureHookToUsageDetails({
+      hook_event_name: 'StopFailure',
+      error: 'rate_limit',
+    })).toEqual({
+      v: 1,
+      resetAtMs: null,
+      retryAfterMs: null,
+      quotaScope: 'account',
+      recoverability: 'wait',
+      providerLimitId: 'rate_limit',
+      planType: null,
+      utilization: null,
+      overage: null,
+      action: null,
+      connectedService: null,
     });
   });
 });

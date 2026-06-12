@@ -181,4 +181,46 @@ describe('createOpenAiCodexQuotaFetcher', () => {
         retryAfterMs: 120_000,
       });
   });
+
+  it('converts relative resets_in_seconds windows to absolute resets and drops implausible 1970-era epochs (RD-QUO-1)', async () => {
+    const now = Date.parse('2026-06-11T10:00:00.000Z');
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        plan_type: 'pro',
+        rate_limit: {
+          // Legacy relative shape: no absolute reset, only seconds-until-reset.
+          primary_window: { used_percent: 100, window_minutes: 300, resets_in_seconds: 1_800 },
+          // A relative value misparsed as an epoch would land in 1970 — must be dropped.
+          secondary_window: { used_percent: 25, reset_at: 86_400 },
+        },
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createOpenAiCodexQuotaFetcher();
+    const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
+    const parsed = ConnectedServiceQuotaSnapshotV1Schema.parse(snapshot);
+    expect(parsed.meters).toMatchObject([
+      { meterId: 'session', resetsAt: now + 1_800_000 },
+      { meterId: 'weekly', resetsAt: null },
+    ]);
+  });
 });

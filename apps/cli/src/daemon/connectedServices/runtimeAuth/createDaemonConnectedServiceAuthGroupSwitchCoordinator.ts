@@ -13,6 +13,7 @@ import {
   type ConnectedServiceAuthGroupSwitchState,
   type ConnectedServiceAuthGroupSwitchEvent,
 } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
+import { evaluatePredictiveSoftSwitchSessionApplyPolicy } from '../accountGroups/switching/predictiveSoftSwitchPolicy';
 import { buildConnectedServiceAuthGroupSwitchState } from '../accountGroups/switching/buildConnectedServiceAuthGroupSwitchState';
 import { createConnectedServiceAuthGenerationApplyFailureError } from './connectedServiceAuthGenerationApplyFailure';
 import type { ConnectedServiceSessionAuthSwitchReason } from './connectedServiceSessionAuthSwitchCore';
@@ -51,7 +52,7 @@ function readNonNegativeNumber(value: unknown): number | null {
   return Math.trunc(value);
 }
 
-function resolveUsageLimitRetryAtMs(input: Readonly<{
+function resolveLimiterRetryAtMs(input: Readonly<{
   loaded: ConnectedServiceAuthGroupSwitchState;
   retryAtMs: number | null;
   observedAtMs: number;
@@ -69,6 +70,26 @@ function resolveAuthFailureRetryAtMs(input: Readonly<{
   if (input.retryAtMs !== null) return input.retryAtMs;
   const cooldownMs = readNonNegativeNumber(input.loaded.policy.cooldownMs);
   return cooldownMs === null ? null : input.observedAtMs + cooldownMs;
+}
+
+function assertPredictiveSoftSwitchSessionApplyAllowed(input: Readonly<{
+  reason: string;
+  sessionId?: string;
+  applyMode?: 'hot_apply' | 'restart_resume' | 'spawn_next_turn' | null;
+}>): void {
+  const decision = evaluatePredictiveSoftSwitchSessionApplyPolicy({
+    reason: input.reason as Parameters<typeof evaluatePredictiveSoftSwitchSessionApplyPolicy>[0]['reason'],
+    sessionId: input.sessionId,
+    applyMode: input.applyMode ?? undefined,
+  });
+  if (decision.status === 'allow') return;
+  throw createConnectedServiceAuthGenerationApplyFailureError({
+    errorCode: 'hot_apply_restart_required',
+    diagnostics: {
+      policyReason: decision.reason,
+      ...(input.applyMode ? { attemptedMode: input.applyMode } : {}),
+    },
+  });
 }
 
 function buildObservedFailureMemberState(input: Readonly<{
@@ -95,11 +116,11 @@ function buildObservedFailureMemberState(input: Readonly<{
   };
   switch (input.reason) {
     case 'usage_limit':
-      return { ...state, quotaExhaustedUntilMs: resolveUsageLimitRetryAtMs(input) };
+      return { ...state, quotaExhaustedUntilMs: resolveLimiterRetryAtMs(input) };
     case 'rate_limit':
-      return { ...state, rateLimitedUntilMs: input.retryAtMs };
+      return { ...state, rateLimitedUntilMs: resolveLimiterRetryAtMs(input) };
     case 'capacity':
-      return { ...state, capacityLimitedUntilMs: input.retryAtMs };
+      return { ...state, capacityLimitedUntilMs: resolveLimiterRetryAtMs(input) };
     case 'auth_expired':
     case 'refresh_failed':
     case 'account_disabled':
@@ -353,20 +374,43 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
           fromProfileId: input.fromProfileId ?? null,
         });
         if (applied.ok) {
-          switch (applied.action) {
-            case 'hot_applied':
-              return { mode: 'hot_apply' as const };
-            case 'metadata_updated':
-              return { mode: 'spawn_next_turn' as const };
-            default:
-              return { mode: 'restart_resume' as const };
-          }
+          // Map only REAL transitions to an apply mode. An `unchanged` apply performed no restart
+          // and no provider application — reporting it as `restart_resume`/`applied` fabricates a
+          // transition that never happened (RD-SW-5), so it yields no mode at all.
+          const mode = (() => {
+            switch (applied.action) {
+              case 'hot_applied':
+                return 'hot_apply' as const;
+              case 'metadata_updated':
+                return 'spawn_next_turn' as const;
+              case 'restart_requested':
+                return 'restart_resume' as const;
+              default:
+                return null;
+            }
+          })();
+          assertPredictiveSoftSwitchSessionApplyAllowed({
+            reason: input.reason ?? 'unknown',
+            sessionId: input.sessionId,
+            applyMode: mode,
+          });
+          // INC-6: forward the FSM-proven continuity diagnostics so the coordinator result (and
+          // the reactive switch-attempt telemetry that reads it) is not all-null.
+          return {
+            ...(mode === null ? {} : { mode }),
+            ...(applied.diagnostics === undefined ? {} : { diagnostics: applied.diagnostics }),
+          };
         }
         throw createConnectedServiceAuthGenerationApplyFailureError({
           errorCode: applied.errorCode ?? 'unknown',
           ...(applied.diagnostics === undefined ? {} : { diagnostics: applied.diagnostics }),
         });
       }
+      assertPredictiveSoftSwitchSessionApplyAllowed({
+        reason: input.reason ?? 'unknown',
+        sessionId: input.sessionId,
+        applyMode: 'restart_resume',
+      });
       await params.restartSession({
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         serviceId: input.serviceId as ConnectedServiceId,

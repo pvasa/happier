@@ -61,7 +61,7 @@ describe('hydrateInactiveUsageLimitRecoveryFromSessionMetadata', () => {
     expect(result).toEqual({ scanned: 1, scheduled: 1 });
     expect(schedule).toHaveBeenCalledWith({
       sessionId: 'session-1',
-      recovery,
+      recovery: { ...recovery, resumePromptMode: 'standard' },
       runCheckNow: expect.any(Function),
     });
 
@@ -79,6 +79,68 @@ describe('hydrateInactiveUsageLimitRecoveryFromSessionMetadata', () => {
       }),
       request: { sessionId: 'session-1' },
     }));
+  });
+
+  it('skips persisted pending intents whose latest turn is no longer failed', async () => {
+    const recovery = {
+      v: 1 as const,
+      status: 'waiting' as const,
+      issueFingerprint: 'limit',
+      armedAtMs: 100,
+      resetAtMs: 2_000,
+      nextCheckAtMs: 2_000,
+      attemptCount: 0,
+      maxAttempts: 3,
+      lastProbeError: null,
+      selectedAuth: { kind: 'native' as const },
+    };
+    const schedule = vi.fn();
+    const fetchSessionsPage = vi.fn(async () => {
+      const response = createSessionListResponseFixture([
+        createSessionRecordFixture({
+          id: 'completed-session',
+          active: false,
+          metadata: 'completed',
+          encryptionMode: 'plain',
+          latestTurnStatus: 'completed',
+        }),
+        createSessionRecordFixture({
+          id: 'failed-session',
+          active: false,
+          metadata: 'failed',
+          encryptionMode: 'plain',
+          latestTurnStatus: 'failed',
+        }),
+        createSessionRecordFixture({
+          id: 'unknown-turn-session',
+          active: false,
+          metadata: 'unknown',
+          encryptionMode: 'plain',
+        }),
+      ]);
+      return {
+        sessions: response.sessions,
+        nextCursor: response.nextCursor ?? null,
+        hasNext: response.hasNext ?? false,
+      };
+    });
+
+    const result = await hydrateInactiveUsageLimitRecoveryFromSessionMetadata({
+      credentials,
+      currentMachineId: 'machine-1',
+      currentMachineHost: 'host.local',
+      currentMachineHomeDir: '/Users/example',
+      fetchSessionsPage,
+      decryptMetadata: () => ({
+        [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: recovery,
+      }),
+      schedule,
+      routeCheckNow: vi.fn(),
+    });
+
+    expect(result).toEqual({ scanned: 3, scheduled: 2 });
+    const scheduledSessionIds = schedule.mock.calls.map((call) => call[0]?.sessionId);
+    expect(scheduledSessionIds).toEqual(['failed-session', 'unknown-turn-session']);
   });
 
   it('skips active sessions and terminal recovery intents', async () => {

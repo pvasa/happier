@@ -1,8 +1,10 @@
+import type { ConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol';
+
 import { parseProviderResetAt } from '@/daemon/connectedServices/quotas/normalization';
 
 export type OpenCodeUsageLimitClassification = Readonly<{
   kind: 'usage_limit' | 'rate_limit';
-  limitCategory: 'quota' | 'rate_limit';
+  limitCategory: Extract<ConnectedServiceLimitCategoryV1, 'usage_limit' | 'rate_limit'>;
   retryAfterMs: number | null;
   resetAtMs: number | null;
   quotaScope: 'account' | 'workspace' | 'unknown';
@@ -42,7 +44,7 @@ export function classifyOpenCodeUsageLimitError(params: Readonly<{
   if (name === 'FreeUsageLimitError') {
     return {
       kind: 'usage_limit',
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
       retryAfterMs: retry.retryAfterMs,
       resetAtMs: retry.resetAtMs,
       quotaScope: 'account',

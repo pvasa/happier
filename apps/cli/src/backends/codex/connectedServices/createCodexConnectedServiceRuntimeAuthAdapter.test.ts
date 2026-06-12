@@ -25,7 +25,7 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
             scope: null,
             tokenType: null,
             providerAccountId: 'acct',
-            providerEmail: null,
+            providerEmail: 'codex-user@example.test',
           },
         }),
       },
@@ -55,7 +55,7 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
             scope: null,
             tokenType: null,
             providerAccountId: 'acct',
-            providerEmail: null,
+            providerEmail: 'codex-user@example.test',
           },
         }),
       },
@@ -99,7 +99,7 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
             scope: null,
             tokenType: null,
             providerAccountId: 'acct',
-            providerEmail: null,
+            providerEmail: 'codex-user@example.test',
           },
         }),
       },
@@ -110,7 +110,11 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
       serviceId: 'openai-codex',
       groupId: 'main',
       profileId: 'work',
-    })?.meters[0]?.utilizationPct).toBe(97);
+    })).toMatchObject({
+      activeAccountId: 'acct',
+      accountLabel: 'codex-user@example.test',
+      meters: [expect.objectContaining({ utilizationPct: 97 })],
+    });
   });
 
   it('returns unsupported for non-app-server Codex probes without calling app-server rate-limit APIs', async () => {

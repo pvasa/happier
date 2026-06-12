@@ -204,13 +204,39 @@ describe('createGeminiConnectedServiceRuntimeAuthAdapter', () => {
       },
     })).toMatchObject({
       kind: 'usage_limit',
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
       serviceId: 'gemini',
       profileId: 'gemini-work',
       groupId: 'group-gemini',
       retryAfterMs: 150_000,
       quotaScope: 'account',
-      source: 'structured_provider_error',
+      // Honest provenance: this classification is derived from text evidence heuristics over
+      // provider error payloads, not a structured provider error contract (RD-OPI-6 analogue).
+      source: 'stable_provider_message',
+    });
+  });
+
+  it('reports restart-rematerialize adoption as weakly_verified — no live provider probe runs (RD-OPI-8)', async () => {
+    const adapter = createGeminiConnectedServiceRuntimeAuthAdapter();
+
+    await expect(adapter.verifyActiveAccount?.({
+      target: { agentId: 'gemini' },
+      selection: {},
+    })).resolves.toEqual({
+      status: 'weakly_verified',
+      reason: 'provider_restart_rematerialization_authoritative',
+    });
+  });
+
+  it('treats post-switch recovery as a successful no-op — restart/rematerialize owns recovery (RD-OPI-8)', async () => {
+    const adapter = createGeminiConnectedServiceRuntimeAuthAdapter();
+
+    await expect(adapter.recoverAfterRuntimeAuthSwitch({
+      target: { agentId: 'gemini' },
+      selection: {},
+    })).resolves.toEqual({
+      recovered: true,
+      recovery: 'restart_rematerialize',
     });
   });
 });

@@ -80,7 +80,7 @@ describe('routeSessionUsageLimitRecoverySwitchAccountNow', () => {
     const result = await routeSessionUsageLimitRecoverySwitchAccountNow({
       sessionId: 'session-1',
       rawSession: createRawSession(createUsageLimitIssue()),
-      request: { sessionId: 'session-1', provider: 'codex' },
+      request: { sessionId: 'session-1', provider: 'codex', resumePromptMode: 'off' },
       notifyRuntimeAuthFailure,
       ...createLocalSwitchAccountParams(),
     });
@@ -95,11 +95,13 @@ describe('routeSessionUsageLimitRecoverySwitchAccountNow', () => {
       switchesThisTurn: 0,
       classification: expect.objectContaining({
         kind: 'usage_limit',
+        limitCategory: 'usage_limit',
         serviceId: 'openai-codex',
         profileId: 'primary',
         groupId: 'happier',
         resetsAtMs: 10_000,
       }),
+      resumePromptMode: 'off',
     });
   });
 

@@ -5,6 +5,9 @@ import type {
 
 import type { ConnectedServiceRuntimeAuthSelectionMaterializer } from '@/daemon/connectedServices/sessionAuthSwitch/runtimeAuthSelectionMaterializerTypes';
 import type { ConnectedServiceResolvedSelection } from '@/daemon/connectedServices/materialize/materializeConnectedServicesForSpawn';
+import { resolveExistingSessionAttachContext } from '@/daemon/sessionEncryption/resolveExistingSessionAttachContext';
+import { resolveTrackedConnectedServiceSwitchContinuityContext } from '@/daemon/connectedServices/sessionAuthSwitch/resolveTrackedConnectedServiceSwitchContinuityContext';
+import type { Credentials } from '@/persistence';
 
 import { materializeClaudeConnectedServiceSelection } from './materializeClaudeConnectedServiceSelection';
 
@@ -18,6 +21,22 @@ function readBinding(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+async function resolvePersistedClaudeSessionMetadata(params: Readonly<{
+  credentials: Credentials;
+  sessionId: string;
+  agentId: 'claude';
+}>): Promise<Record<string, unknown> | null> {
+  const token = typeof params.credentials.token === 'string' ? params.credentials.token.trim() : '';
+  if (!token) return null;
+  const attachContext = await resolveExistingSessionAttachContext({
+    token,
+    sessionId: params.sessionId,
+    agent: params.agentId,
+    credentials: params.credentials,
+  }).catch(() => null);
+  return attachContext?.ok === true ? attachContext.metadata : null;
 }
 
 function buildSelection(params: Readonly<{
@@ -79,6 +98,27 @@ export const materializeClaudeConnectedServiceRuntimeAuthSelection: ConnectedSer
 
   const record = readCredentialRecord(params.baseSelection.record);
   if (!record) return params.baseSelection;
+  const trackedContinuityContext = resolveTrackedConnectedServiceSwitchContinuityContext({
+    agentId: params.input.agentId,
+    baseDir: activeServerDir,
+    tracked: params.input.tracked,
+  });
+  // RD-CLD-1/RD-MAT-4: tracked state alone (hook-reported webhook metadata / spawn resume) can be
+  // empty on early-turn failures or thin re-attach markers. Fall back to the server-persisted
+  // session metadata — the same source the FSM continuity gate consults — so the switch-time
+  // rematerialization can still carry the vendor session file instead of silently skipping it.
+  const continuityContext = trackedContinuityContext.candidatePersistedSessionFile
+    ? trackedContinuityContext
+    : resolveTrackedConnectedServiceSwitchContinuityContext({
+        agentId: params.input.agentId,
+        baseDir: activeServerDir,
+        tracked: params.input.tracked,
+        persistedSessionMetadata: await resolvePersistedClaudeSessionMetadata({
+          credentials: params.credentials,
+          sessionId: params.input.sessionId,
+          agentId: params.input.agentId,
+        }),
+      });
   const selection = buildSelection({
     serviceId: params.input.serviceId,
     record,
@@ -98,6 +138,8 @@ export const materializeClaudeConnectedServiceRuntimeAuthSelection: ConnectedSer
     processEnv: params.processEnv ?? process.env,
     accountSettings: params.accountSettings ?? null,
     sessionDirectory: params.input.tracked.spawnOptions?.directory ?? null,
+    vendorResumeId: continuityContext.vendorResumeId,
+    candidatePersistedSessionFile: continuityContext.candidatePersistedSessionFile,
   });
   if (!materialized) return params.baseSelection;
 

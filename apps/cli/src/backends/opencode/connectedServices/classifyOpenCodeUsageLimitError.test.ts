@@ -13,6 +13,7 @@ describe('classifyOpenCodeUsageLimitError', () => {
       },
     })).toMatchObject({
       kind: 'usage_limit',
+      limitCategory: 'usage_limit',
       retryAfterMs: 2500,
       quotaScope: 'account',
       providerLimitId: 'free_tier_limit',

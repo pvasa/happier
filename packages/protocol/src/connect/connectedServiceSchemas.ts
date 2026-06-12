@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
 import {
+    ConnectedServiceLimitCategoryV1Schema,
+} from './connectedServiceLimitCategory.js';
+import {
     ConnectedServiceAuthGroupIdSchema,
     ConnectedServiceBindingSelectionV1Schema,
     ConnectedServiceBindingsV1Schema,
@@ -179,19 +182,6 @@ export const ConnectedServiceQuotaLimitScopeV1Schema = z.enum([
 
 export type ConnectedServiceQuotaLimitScopeV1 = z.infer<typeof ConnectedServiceQuotaLimitScopeV1Schema>;
 
-export const ConnectedServiceLimitCategoryV1Schema = z.enum([
-    'quota',
-    'rate_limit',
-    'capacity',
-    'auth',
-    'plan',
-    'validation',
-    'account_disabled',
-    'unknown',
-]);
-
-export type ConnectedServiceLimitCategoryV1 = z.infer<typeof ConnectedServiceLimitCategoryV1Schema>;
-
 const ConnectedServiceQuotaEvidenceV1Schema = z
     .object({
         kind: z.string().trim().min(1).optional(),
@@ -343,7 +333,7 @@ export const ConnectedServiceAuthGroupPolicyV1Schema = z
             .enum(['off', 'wait_until_reset', 'switch_then_resume', 'switch_or_wait'])
             .default('switch_or_wait'),
         recoveryPromptMode: z.literal('standard').default('standard'),
-        resumePromptMode: z.enum(['standard', 'off']).default('standard'),
+        resumePromptMode: z.enum(['standard', 'off', 'custom']).default('standard'),
         effectiveMeterStrategy: z
             .enum(['most_constrained', 'primary', 'secondary', 'daily', 'weekly', 'session'])
             .default('most_constrained'),
@@ -378,7 +368,7 @@ export const ConnectedServiceAuthGroupPolicyPatchV1Schema = z
         preTurnProbeOrder: z.enum(['current_first_then_candidates', 'candidates_first_then_current']).optional(),
         recoveryMode: z.enum(['off', 'wait_until_reset', 'switch_then_resume', 'switch_or_wait']).optional(),
         recoveryPromptMode: z.literal('standard').optional(),
-        resumePromptMode: z.enum(['standard', 'off']).optional(),
+        resumePromptMode: z.enum(['standard', 'off', 'custom']).optional(),
         effectiveMeterStrategy: z
             .enum(['most_constrained', 'primary', 'secondary', 'daily', 'weekly', 'session'])
             .optional(),
@@ -396,10 +386,14 @@ export const ConnectedServiceAuthGroupMemberStateV1Schema = z
         rateLimitedUntilMs: z.number().int().nonnegative().nullable().optional(),
         capacityLimitedUntilMs: z.number().int().nonnegative().nullable().optional(),
         authInvalidUntilMs: z.number().int().nonnegative().nullable().optional(),
+        planUnavailableUntilMs: z.number().int().nonnegative().nullable().optional(),
+        validationBlockedUntilMs: z.number().int().nonnegative().nullable().optional(),
         lastFailureKind: z.string().trim().min(1).nullable().optional(),
         lastFailureCode: z.string().trim().min(1).nullable().optional(),
         lastObservedPlanType: z.string().trim().min(1).nullable().optional(),
         lastObservedAtMs: z.number().int().nonnegative().nullable().optional(),
+        providerResetsAtMs: z.number().int().nonnegative().nullable().optional(),
+        credentialHealthStatus: ConnectedServiceCredentialHealthStatusV1Schema.nullable().optional(),
     })
     .passthrough()
     .default({});
@@ -502,6 +496,7 @@ export const ConnectedServiceAuthGroupPatchRequestV1Schema = z
         policy: ConnectedServiceAuthGroupPolicyPatchV1Schema.optional(),
         activeProfileId: ConnectedServiceProfileIdSchema.nullable().optional(),
         expectedGeneration: z.number().int().nonnegative().optional(),
+        overrideRuntimeCooldown: z.boolean().optional(),
     })
     .strict()
     .superRefine((request, ctx) => {
@@ -548,6 +543,7 @@ export const ConnectedServiceAuthGroupActiveProfileRequestV1Schema = z
     .object({
         profileId: ConnectedServiceProfileIdSchema,
         expectedGeneration: z.number().int().nonnegative(),
+        overrideRuntimeCooldown: z.boolean().optional(),
     })
     .strict();
 
@@ -566,17 +562,7 @@ export const ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema = z
         state: ConnectedServiceAuthGroupStatePatchV1Schema.optional(),
         memberStates: z.array(ConnectedServiceAuthGroupMemberRuntimeStatePatchV1Schema).default([]),
     })
-    .strict()
-    .superRefine((request, ctx) => {
-        const mutatesRuntimeState = request.state !== undefined || request.memberStates.length > 0;
-        if (mutatesRuntimeState && request.expectedGeneration === undefined) {
-            ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: ['expectedGeneration'],
-                message: 'expectedGeneration is required for runtime-state mutations',
-            });
-        }
-    });
+    .strict();
 
 export type ConnectedServiceAuthGroupRuntimeStatePatchRequestV1 =
     z.infer<typeof ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema>;
@@ -610,6 +596,7 @@ export const ConnectedServiceAuthGroupErrorCodeV1Schema = z.enum([
     'connect_group_generation_conflict',
     'connect_group_generation_required',
     'connect_group_fallback_disabled',
+    'connect_group_runtime_fallback_unsupported',
     'connect_credential_referenced_by_group',
 ]);
 

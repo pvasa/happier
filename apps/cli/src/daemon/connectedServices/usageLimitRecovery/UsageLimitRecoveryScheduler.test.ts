@@ -58,6 +58,7 @@ describe('UsageLimitRecoveryScheduler', () => {
         attemptCount: 3,
         maxAttempts: 3,
         lastProbeError: 'max_attempts_exhausted',
+        resumePromptMode: 'standard',
         selectedAuth: { kind: 'native' },
       },
     });
@@ -91,6 +92,7 @@ describe('UsageLimitRecoveryScheduler', () => {
         attemptCount: 3,
         maxAttempts: 3,
         lastProbeError: 'max_attempts_exhausted',
+        resumePromptMode: 'standard',
         selectedAuth: { kind: 'native' },
       },
     });
@@ -179,7 +181,7 @@ describe('UsageLimitRecoveryScheduler', () => {
     expect(scheduler.read('session-1')?.status).toBe('cancelled');
   });
 
-  it('does not cancel usage-limit recovery from provider activity for another group member', async () => {
+  it('cancels group-scoped usage-limit recovery from provider activity for another member of the same group', async () => {
     const scheduler = new UsageLimitRecoveryScheduler({ nowMs: () => 1_000 });
     await scheduler.enable({
       sessionId: 'session-1',
@@ -200,17 +202,17 @@ describe('UsageLimitRecoveryScheduler', () => {
       groupId: 'main',
       profileId: 'fresh-member',
     })).resolves.toMatchObject({
-      status: 'waiting',
+      status: 'cancelled',
       selectedAuth: {
         kind: 'group',
         profileId: 'old-member',
       },
     });
-    expect(scheduler.read('session-1')?.status).toBe('waiting');
+    expect(scheduler.read('session-1')?.status).toBe('cancelled');
   });
 
   it('re-runs group recovery on wake instead of retrying the old profile directly', async () => {
-    const selectedProfiles: string[] = [];
+    const selectedProfiles: Array<string | null> = [];
     const scheduler = new UsageLimitRecoveryScheduler({
       nowMs: () => 2_000,
       recover: async (intent) => {
@@ -488,6 +490,7 @@ describe('UsageLimitRecoveryScheduler', () => {
         attemptCount: 0,
         maxAttempts: 3,
         lastProbeError: null,
+        resumePromptMode: 'standard',
         selectedAuth: { kind: 'native' },
       },
     });
@@ -596,6 +599,32 @@ describe('UsageLimitRecoveryScheduler', () => {
     expect(resume).toHaveBeenCalledTimes(1);
   });
 
+  it('cancels a superseded intent without resuming when the probe reports turn completion', async () => {
+    const recover = vi.fn(async () => ({ status: 'superseded' as const, lastProbeError: 'session_usage_limit_recovery_control_superseded_by_turn_completion' }));
+    const resume = vi.fn(async () => {});
+    const scheduler = new UsageLimitRecoveryScheduler({
+      nowMs: () => 2_500,
+      recover,
+      resume,
+    });
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'limit',
+      resetAtMs: 2_000,
+      selectedAuth: { kind: 'native' },
+    });
+
+    await scheduler.wake({ sessionId: 'session-1', reason: 'check_now' });
+
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(resume).not.toHaveBeenCalled();
+    expect(scheduler.read('session-1')?.status).toBe('cancelled');
+
+    // The intent is terminally cancelled: later wakes must not probe again.
+    await scheduler.wake({ sessionId: 'session-1', reason: 'timer' });
+    expect(recover).toHaveBeenCalledTimes(1);
+  });
+
   it('does not probe before reset time on timer wakes', async () => {
     const recover = vi.fn(async () => ({ status: 'ready' as const }));
     const scheduler = new UsageLimitRecoveryScheduler({
@@ -618,6 +647,38 @@ describe('UsageLimitRecoveryScheduler', () => {
       status: 'waiting',
       attemptCount: 0,
       nextCheckAtMs: 2_000,
+    });
+  });
+
+  it('delays runner-unavailable wakes before burning a recovery attempt', async () => {
+    const recover = vi.fn(async () => ({ status: 'ready' as const }));
+    const deps = {
+      nowMs: () => 2_000,
+      recover,
+      gate: () => ({
+        status: 'delayed' as const,
+        retryAtMs: 62_000,
+        reason: 'usage_limit_recovery_check_runner_unavailable',
+      }),
+    };
+    const scheduler = new UsageLimitRecoveryScheduler(deps);
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'limit',
+      resetAtMs: 1_000,
+      selectedAuth: { kind: 'native' },
+    });
+
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'timer' })).resolves.toEqual({
+      status: 'waiting',
+    });
+
+    expect(recover).not.toHaveBeenCalled();
+    expect(scheduler.read('session-1')).toMatchObject({
+      status: 'waiting',
+      attemptCount: 0,
+      nextCheckAtMs: 62_000,
+      lastProbeError: 'usage_limit_recovery_check_runner_unavailable',
     });
   });
 

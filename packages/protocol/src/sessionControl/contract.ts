@@ -23,6 +23,10 @@ import {
   SESSION_CONTINUATION_RECOVERY_METADATA_KEY,
   SessionContinuationRecoveryV1Schema,
 } from '../sessionMetadata/sessionContinuationRecoveryV1.js';
+import {
+  CONNECTED_SERVICE_QUOTA_REFS_METADATA_KEY,
+  ConnectedServiceQuotaRefsV1Schema,
+} from '../sessionMetadata/connectedServiceQuotaRefsV1.js';
 export {
   SessionTurnIdentifierV1Schema,
   SessionTurnLifecycleStatusV1Schema,
@@ -97,8 +101,11 @@ export {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   SESSION_USAGE_LIMIT_RECOVERY_STATE_FIELD_ID,
   SessionUsageLimitRecoveryAuthSelectionV1Schema,
+  SessionUsageLimitRecoveryResumePromptModeV1Schema,
   SessionUsageLimitRecoveryV1Schema,
+  resolveSessionUsageLimitRecoveryResumePromptModeV1,
   type SessionUsageLimitRecoveryAuthSelectionV1,
+  type SessionUsageLimitRecoveryResumePromptModeV1,
   type SessionUsageLimitRecoveryV1,
 } from '../sessionMetadata/sessionUsageLimitRecoveryV1.js';
 export {
@@ -230,6 +237,7 @@ export function createSessionMetadataSchema(zod: typeof z) {
       // This metadata key is the compatible storage binding for runtime.usageLimitRecovery.
       [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: SessionUsageLimitRecoveryV1Schema.optional(),
       [SESSION_CONTINUATION_RECOVERY_METADATA_KEY]: SessionContinuationRecoveryV1Schema.optional(),
+      [CONNECTED_SERVICE_QUOTA_REFS_METADATA_KEY]: ConnectedServiceQuotaRefsV1Schema.optional(),
     })
     .passthrough();
 }

@@ -5,6 +5,11 @@ import type { ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
 
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
 
+import {
+  buildClaudeCodeCredentialPayload,
+  computeClaudeCodeCredentialFingerprint,
+} from './nativeAuth/claudeCodeCredentialFile';
+
 export const CLAUDE_CONNECTED_SERVICE_HOME_PROVENANCE_FILE_NAME =
   '.happier-claude-connected-service-home.json';
 
@@ -30,6 +35,7 @@ export type ClaudeConnectedServiceHomeProvenanceV1 = Readonly<{
   serviceId: 'claude-subscription';
   credentialProfileId: string;
   credentialCreatedAt: number;
+  credentialFingerprint?: string | undefined;
   selection: ClaudeConnectedServiceHomeSelectionProvenance;
 }>;
 
@@ -47,6 +53,18 @@ function readFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function readCredentialFingerprint(value: unknown): string | undefined {
+  const text = readNonBlankString(value);
+  return text?.match(/^sha256:[a-f0-9]{64}$/) ? text : undefined;
+}
+
+function buildCredentialFingerprint(record: ConnectedServiceCredentialRecordV1): string | undefined {
+  const built = buildClaudeCodeCredentialPayload(record);
+  return built.status === 'ok'
+    ? computeClaudeCodeCredentialFingerprint(built.payload)
+    : undefined;
+}
+
 export function resolveClaudeConnectedServiceHomeProvenancePath(claudeConfigDir: string): string {
   return join(claudeConfigDir, CLAUDE_CONNECTED_SERVICE_HOME_PROVENANCE_FILE_NAME);
 }
@@ -55,12 +73,14 @@ export function buildClaudeConnectedServiceHomeProvenance(params: Readonly<{
   record: ConnectedServiceCredentialRecordV1;
   selectionDescriptor: ClaudeConnectedServiceHomeSelectionDescriptor;
 }>): ClaudeConnectedServiceHomeProvenanceV1 {
+  const credentialFingerprint = buildCredentialFingerprint(params.record);
   if (params.selectionDescriptor.kind === 'group') {
     return {
       v: 1,
       serviceId: 'claude-subscription',
       credentialProfileId: params.record.profileId,
       credentialCreatedAt: params.record.createdAt,
+      ...(credentialFingerprint ? { credentialFingerprint } : {}),
       selection: {
         kind: 'group',
         groupId: params.selectionDescriptor.groupId,
@@ -74,6 +94,7 @@ export function buildClaudeConnectedServiceHomeProvenance(params: Readonly<{
     serviceId: 'claude-subscription',
     credentialProfileId: params.record.profileId,
     credentialCreatedAt: params.record.createdAt,
+    ...(credentialFingerprint ? { credentialFingerprint } : {}),
     selection: {
       kind: 'profile',
       profileId: params.selectionDescriptor.profileId,
@@ -88,6 +109,7 @@ export function parseClaudeConnectedServiceHomeProvenance(
   if (!root || root.v !== 1 || root.serviceId !== 'claude-subscription') return null;
   const credentialProfileId = readNonBlankString(root.credentialProfileId);
   const credentialCreatedAt = readFiniteNumber(root.credentialCreatedAt);
+  const credentialFingerprint = readCredentialFingerprint(root.credentialFingerprint);
   const selection = readObject(root.selection);
   if (!credentialProfileId || credentialCreatedAt === null || !selection) return null;
   if (selection.kind === 'profile') {
@@ -98,6 +120,7 @@ export function parseClaudeConnectedServiceHomeProvenance(
       serviceId: 'claude-subscription',
       credentialProfileId,
       credentialCreatedAt,
+      ...(credentialFingerprint ? { credentialFingerprint } : {}),
       selection: {
         kind: 'profile',
         profileId,
@@ -114,6 +137,7 @@ export function parseClaudeConnectedServiceHomeProvenance(
       serviceId: 'claude-subscription',
       credentialProfileId,
       credentialCreatedAt,
+      ...(credentialFingerprint ? { credentialFingerprint } : {}),
       selection: {
         kind: 'group',
         groupId,
@@ -147,6 +171,10 @@ export function matchesClaudeConnectedServiceHomeProvenance(
     || actual.serviceId !== expected.serviceId
     || actual.credentialProfileId !== expected.credentialProfileId
     || actual.credentialCreatedAt !== expected.credentialCreatedAt
+    || (
+      expected.credentialFingerprint !== undefined
+      && actual.credentialFingerprint !== expected.credentialFingerprint
+    )
     || actual.selection.kind !== expected.selection.kind
   ) {
     return false;

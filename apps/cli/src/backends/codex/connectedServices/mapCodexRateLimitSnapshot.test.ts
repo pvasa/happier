@@ -80,6 +80,61 @@ describe('mapCodexRateLimitSnapshotToQuotaSnapshot', () => {
     }
   });
 
+  it('converts relative resets_in_seconds to absolute reset timestamps at mapping time (RD-QUO-1)', () => {
+    const fetchedAt = 1_768_000_000_000;
+    const snapshot = mapCodexRateLimitSnapshotToQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      fetchedAt,
+      rawSnapshot: {
+        plan_type: 'pro',
+        primary: {
+          used_percent: 100,
+          window_minutes: 300,
+          resets_in_seconds: 1_800,
+        },
+        secondary: {
+          used_percent: 40,
+          resetsInSeconds: 86_400,
+        },
+      },
+    });
+
+    expect(snapshot.meters).toMatchObject([
+      {
+        meterId: 'primary',
+        utilizationPct: 100,
+        resetAtMs: fetchedAt + 1_800_000,
+        resetsAt: fetchedAt + 1_800_000,
+      },
+      {
+        meterId: 'secondary',
+        utilizationPct: 40,
+        resetAtMs: fetchedAt + 86_400_000,
+        resetsAt: fetchedAt + 86_400_000,
+      },
+    ]);
+  });
+
+  it('prefers absolute reset fields over relative resets_in_seconds when both are present', () => {
+    const snapshot = mapCodexRateLimitSnapshotToQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      fetchedAt: 1_768_000_000_000,
+      rawSnapshot: {
+        primary: {
+          used_percent: 50,
+          resets_at: '2026-05-17T16:00:00.000Z',
+          resets_in_seconds: 60,
+        },
+      },
+    });
+
+    expect(snapshot.meters[0]).toMatchObject({
+      resetsAt: Date.parse('2026-05-17T16:00:00.000Z'),
+    });
+  });
+
   it('maps app-server primary and secondary window snapshots as separate meters', () => {
     const snapshot = mapCodexRateLimitSnapshotToQuotaSnapshot({
       serviceId: 'openai-codex',

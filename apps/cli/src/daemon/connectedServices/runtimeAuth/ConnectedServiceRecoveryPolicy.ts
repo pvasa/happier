@@ -113,7 +113,7 @@ type DecideConnectedServiceRecoveryInput = Readonly<{
   sessionRuntimeSnapshot?: unknown;
   groupPolicy?: unknown;
   quotaSnapshots?: ReadonlyArray<unknown> | null;
-  userSettings?: Readonly<{ resumePromptMode?: 'standard' | 'off' | null }> | null;
+  userSettings?: Readonly<{ resumePromptMode?: 'standard' | 'off' | 'custom' | null }> | null;
   credentialHealth?: ConnectedServiceCredentialHealthPolicyInput | null;
   groupSwitch?: Readonly<{ status: 'idle' | 'in_progress' }> | null;
   groupCandidate?: ConnectedServiceRecoveryGroupCandidatePolicyInput | null;
@@ -151,7 +151,6 @@ function isCredentialFailure(kind: ConnectedServiceRecoveryPolicyIssue['kind']):
 function isSwitchableGroupIssue(kind: ConnectedServiceRecoveryPolicyIssue['kind']): boolean {
   return kind === 'usage_limit'
     || kind === 'rate_limit'
-    || kind === 'capacity'
     || kind === 'auth_expired'
     || kind === 'account_changed'
     || kind === 'refresh_failed'
@@ -182,7 +181,10 @@ export function decideConnectedServiceRecovery(
   const profileId = issueProfileId(issue, input.selection);
   const groupId = issueGroupId(issue, input.selection);
 
-  if (issue.kind === 'temporary_throttle') {
+  // Provider capacity ("Overloaded"/529) is server-side and account-independent: switching
+  // accounts or restarting the session never helps. Retry the SAME session with backoff,
+  // exactly like temporary throttles (incident 2026-06-12, lane TRANSIENT).
+  if (issue.kind === 'temporary_throttle' || issue.kind === 'capacity') {
     return {
       action: 'temporary_retry',
       serviceId: issue.serviceId,

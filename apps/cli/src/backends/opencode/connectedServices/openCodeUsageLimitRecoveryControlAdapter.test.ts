@@ -151,6 +151,7 @@ describe('openCodeUsageLimitRecoveryControlAdapter', () => {
       attemptCount: 0,
       maxAttempts: 3,
       lastProbeError: null,
+      resumePromptMode: 'standard',
       selectedAuth: { kind: 'native' },
     };
     const adapter = createOpenCodeUsageLimitRecoveryControlAdapter({
@@ -212,6 +213,7 @@ describe('openCodeUsageLimitRecoveryControlAdapter', () => {
       attemptCount: 1,
       maxAttempts: 1,
       lastProbeError: null,
+      resumePromptMode: 'standard',
       selectedAuth: { kind: 'native' },
     };
     const adapter = createOpenCodeUsageLimitRecoveryControlAdapter({

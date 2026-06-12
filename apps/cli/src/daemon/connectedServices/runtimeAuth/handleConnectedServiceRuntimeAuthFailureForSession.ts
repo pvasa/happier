@@ -13,6 +13,7 @@ import type { ConnectedServiceRuntimeAuthSwitchAttemptTracker } from './Connecte
 import type { ConnectedServiceRuntimeFailureClassification } from './types';
 import {
   createConnectedServiceSessionAuthSwitchCore,
+  type ConnectedServiceSessionAuthSwitchReason,
   type ConnectedServiceSessionAuthSwitchCore,
 } from './connectedServiceSessionAuthSwitchCore';
 import { buildConnectedServiceSwitchContinuationAttemptId } from '../sessionAuthSwitch/buildConnectedServiceSwitchContinuationAttemptId';
@@ -41,6 +42,18 @@ type SwitchAttemptTrackerLike = Pick<
   | 'recordCredentialRefreshSuccess'
 >>;
 
+type RuntimeAuthRecoveryReaderLike = Readonly<{
+  readForSession(sessionId: string): ReadonlyArray<Readonly<{
+    serviceId: string;
+    groupId: string | null;
+    profileId: string | null;
+    status: 'waiting' | 'checking' | 'resumed_awaiting_proof' | 'cancelled' | 'exhausted';
+    classification: Readonly<{ profileId: string | null }>;
+    pendingTargetProfileId?: string | null;
+    pendingTargetGeneration?: number | null;
+  }>>;
+}>;
+
 type RuntimeCredentialRefreshService = Readonly<{
   refreshConnectedServiceCredentialForRuntimeAuthFailure(input: Readonly<{
     serviceId: string;
@@ -55,6 +68,7 @@ type RuntimeAuthSwitchContinuation = (input: Readonly<{
   normalizedBindings: ConnectedServiceBindingsV1;
   serviceIds: ReadonlySet<ConnectedServiceId>;
   action: 'hot_applied' | 'restart_requested';
+  switchReason?: ConnectedServiceSessionAuthSwitchReason;
 }>) => Promise<void> | void;
 
 type RuntimeAuthRecoverySuccessObserver = (input: Readonly<{
@@ -92,6 +106,19 @@ type RuntimeAuthRecoveryActionRequired = Readonly<{
 }>;
 
 type RuntimeAuthRecoveryInvocationSource = 'daemon_report' | 'scheduler_retry';
+
+// A scheduler replay of a persisted recovery intent whose failing profile the live
+// session no longer runs. The group already moved off the failing profile, so there
+// is nothing left to recover for this intent: the scheduler removes it so the same
+// recovery key can re-arm on a genuine future failure.
+export type RuntimeAuthRecoverySuperseded = Readonly<{
+  status: 'recovery_superseded';
+  reason: 'failing_profile_inactive';
+  serviceId: string;
+  groupId: string;
+  failingProfileId: string | null;
+  activeProfileId: string | null;
+}>;
 
 type RuntimeAuthCredentialRefreshProviderOutcomeWaiting = Readonly<{
   status: 'credential_refreshed';
@@ -222,7 +249,13 @@ function buildReconnectProfileAfterRepeatedCredentialRefresh(input: Readonly<{
 function shouldSwitchAwayAfterRepeatedCredentialRefreshFailure(
   selection: RuntimeRecoverySelection,
 ): boolean {
-  return selection.kind === 'group';
+  if (selection.kind !== 'group') return false;
+  const activeProfileId = normalizeNullableProfileId(selection.activeProfileId);
+  const fallbackProfileId = normalizeNullableProfileId(selection.fallbackProfileId);
+  if (activeProfileId && fallbackProfileId && activeProfileId === fallbackProfileId) {
+    return false;
+  }
+  return true;
 }
 
 function emitRuntimeGroupSwitchSessionEvent(input: Readonly<{
@@ -393,7 +426,48 @@ async function maybeContinueAfterHotAppliedRuntimeGeneration(input: Readonly<{
     normalizedBindings,
     serviceIds,
     action: 'hot_applied',
+    switchReason: 'automatic_runtime_failure',
   });
+}
+
+// A recovery driven by a failure attributed to a profile the live session is NOT
+// running (e.g. a persisted stale rate-limit intent replayed by the scheduler) must
+// never restart or steer the live session: the session is healthy on another group
+// member, and the committed switch applies on the next natural spawn. Incident
+// 2026-06-12 (cmq8y3nlx): a stale intent for an inactive profile restarted a healthy
+// mid-work session on every scheduler retry, churning accounts for ~30 minutes.
+function isRuntimeFailureForInactiveProfile(input: Readonly<{
+  selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
+  classification: ConnectedServiceRuntimeFailureClassification;
+}>): boolean {
+  const failingProfileId = normalizeNullableProfileId(input.classification.profileId);
+  const liveActiveProfileId = normalizeNullableProfileId(input.selection.activeProfileId);
+  return Boolean(failingProfileId && liveActiveProfileId && failingProfileId !== liveActiveProfileId);
+}
+
+function shouldCoalescePendingProofTargetReplay(input: Readonly<{
+  runtimeAuthRecovery?: RuntimeAuthRecoveryReaderLike | null;
+  sessionId: string;
+  selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
+  result: ConnectedServiceAuthGroupSwitchResult;
+}>): boolean {
+  if (!input.runtimeAuthRecovery) return false;
+  if (input.result.status !== 'switched' && input.result.status !== 'observed_generation') return false;
+  const targetProfileId = normalizeSessionId(input.result.activeProfileId);
+  if (!targetProfileId) return false;
+  // The pending proof target is the PROFILE, deliberately NOT the group generation:
+  // sibling sessions thrash the shared group generation between replays (incident
+  // 2026-06-12, gen 81→87), so an exact-generation match never holds and every replay
+  // re-kills the live runner. A fresher generation for the same target profile is the
+  // same logical switch.
+  return input.runtimeAuthRecovery.readForSession(input.sessionId).some((intent) => (
+    intent.serviceId === input.selection.serviceId
+    && intent.groupId === input.selection.groupId
+    && (intent.profileId === null || intent.profileId === targetProfileId)
+    && intent.status === 'resumed_awaiting_proof'
+    && intent.pendingTargetProfileId === targetProfileId
+    && Boolean(intent.classification.profileId && intent.classification.profileId !== targetProfileId)
+  ));
 }
 
 async function maybeContinueAfterCredentialRefresh(input: Readonly<{
@@ -435,6 +509,7 @@ async function maybeContinueAfterCredentialRefresh(input: Readonly<{
     normalizedBindings,
     serviceIds,
     action: 'restart_requested',
+    switchReason: 'automatic_runtime_failure',
   });
 }
 
@@ -562,6 +637,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
   switchCoordinator: SwitchCoordinatorLike | null;
   switchAttemptTracker?: SwitchAttemptTrackerLike | null;
   switchCore?: ConnectedServiceSessionAuthSwitchCore | null;
+  runtimeAuthRecovery?: RuntimeAuthRecoveryReaderLike | null;
   temporaryThrottleRecovery?: TemporaryThrottleRecoveryLike | null;
   credentialRefreshService?: RuntimeCredentialRefreshService | null;
   restartSession?: ((tracked: TrackedSession) => Promise<void> | void) | null;
@@ -581,6 +657,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
       restartRequested: boolean;
     }>
   | RuntimeAuthCredentialRefreshProviderOutcomeWaiting
+  | RuntimeAuthRecoverySuperseded
   | Readonly<{ status: 'session_not_found' }>
   | Readonly<{
       status: 'switch_coordinator_unavailable';
@@ -667,6 +744,27 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
     });
   }
 
+  // Incident 2026-06-12 (cmq8y3nlx): a scheduler replay of a persisted intent whose failing
+  // profile the live session no longer runs must be SUPERSEDED before any recovery work runs
+  // (no credential refresh, no switch pipeline). Replaying the pipeline burned the per-session
+  // switch budget and thrashed the shared group generation on every retry even after the live
+  // restart was suppressed. In-band reports (daemon_report) are fresh evidence and unaffected;
+  // a session still running the failing profile (spawned active == failing) is unaffected.
+  if (
+    input.recoveryInvocationSource === 'scheduler_retry'
+    && isGroupRuntimeRecoverySelection(selection)
+    && isRuntimeFailureForInactiveProfile({ selection, classification })
+  ) {
+    return {
+      status: 'recovery_superseded',
+      reason: 'failing_profile_inactive',
+      serviceId: selection.serviceId,
+      groupId: selection.groupId,
+      failingProfileId: normalizeNullableProfileId(classification.profileId),
+      activeProfileId: normalizeNullableProfileId(selection.activeProfileId),
+    };
+  }
+
   const switchCore = input.switchCore ?? defaultSwitchCore;
   const result = await switchCore.run({
     sessionId: input.sessionId,
@@ -743,20 +841,30 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
       selection,
       result,
     });
-    maybeRestartAfterRuntimeGroupSwitch({
-      sessionId: input.sessionId,
-      tracked,
-      result: result.result,
-      restartSession: input.restartSession ?? null,
-      onRestartFailure: input.onRuntimeAuthRestartFailure ?? null,
-    });
-    await maybeContinueAfterHotAppliedRuntimeGeneration({
-      tracked,
-      sessionId: input.sessionId,
-      selection,
-      result: result.result,
-      continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch ?? null,
-    });
+    if (
+      !isRuntimeFailureForInactiveProfile({ selection, classification })
+      && !shouldCoalescePendingProofTargetReplay({
+        runtimeAuthRecovery: input.runtimeAuthRecovery ?? null,
+        sessionId: input.sessionId,
+        selection,
+        result: result.result,
+      })
+    ) {
+      maybeRestartAfterRuntimeGroupSwitch({
+        sessionId: input.sessionId,
+        tracked,
+        result: result.result,
+        restartSession: input.restartSession ?? null,
+        onRestartFailure: input.onRuntimeAuthRestartFailure ?? null,
+      });
+      await maybeContinueAfterHotAppliedRuntimeGeneration({
+        tracked,
+        sessionId: input.sessionId,
+        selection,
+        result: result.result,
+        continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch ?? null,
+      });
+    }
   }
   return result;
 }

@@ -41,8 +41,11 @@ export function createClaudeConnectedServiceRuntimeAuthAdapter(): ConnectedServi
       if (authClassification) return authClassification;
 
       const details = mapClaudeRateLimitEventToUsageDetails(input.error);
+      // The raw payload rides along even when details mapped, so the classifier can recover reset
+      // timing the mapper could not place in the details (INC-4).
       return classifyClaudeConnectedServiceRuntimeAuthFailure({
-        ...(details ? { details } : { error: input.error }),
+        ...(details ? { details } : {}),
+        error: input.error,
         selection: input.selection,
       });
     },

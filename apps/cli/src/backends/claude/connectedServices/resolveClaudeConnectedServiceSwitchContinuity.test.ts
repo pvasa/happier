@@ -159,6 +159,46 @@ describe('resolveClaudeConnectedServiceSwitchContinuity', () => {
     });
   });
 
+  it('requires shared state when switching Claude group members within the same auth group', async () => {
+    await expect(resolveClaudeConnectedServiceSwitchContinuity(createParams({
+      previousBinding: {
+        source: 'connected',
+        selection: 'group',
+        serviceId: 'claude-subscription',
+        profileId: 'batiplus',
+        groupId: 'claude',
+      },
+      nextBinding: {
+        source: 'connected',
+        selection: 'group',
+        serviceId: 'claude-subscription',
+        profileId: 'leeroy_batiplus',
+        groupId: 'claude',
+      },
+      fromBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'claude-subscription': { source: 'connected', selection: 'group', groupId: 'claude', profileId: 'batiplus' },
+        },
+      },
+      toBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'claude-subscription': { source: 'connected', selection: 'group', groupId: 'claude', profileId: 'leeroy_batiplus' },
+        },
+      },
+      connectedServiceMaterializationIdentityV1: {
+        v: 1,
+        id: 'materialization-1',
+        createdAtMs: 1,
+      },
+      vendorResumeId: 'vendor-session-1',
+    }))).resolves.toEqual({
+      mode: 'restart_shared_state_required',
+      reason: 'claude_shared_state_required',
+    });
+  });
+
   it('requires shared state when moving between native and connected Claude auth', async () => {
     await expect(resolveClaudeConnectedServiceSwitchContinuity(createParams({
       previousBinding: {

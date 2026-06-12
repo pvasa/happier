@@ -29,7 +29,7 @@ function buildSnapshot(overrides: Partial<ConnectedServiceQuotaSnapshotV1> = {})
         status: 'ok',
         details: {
           providerLimitId: 'window-a',
-          limitCategory: 'quota',
+          limitCategory: 'usage_limit',
         },
       },
     ],

@@ -47,6 +47,9 @@ const OperationResultRetryAfterMsSchema = z
   .finite()
   .nonnegative()
   .transform((value) => Math.trunc(value));
+const OperationResultResumePromptModeSchema = z.enum(['standard', 'off', 'custom']);
+type OperationResultResumePromptMode = z.infer<typeof OperationResultResumePromptModeSchema>;
+const INVALID_RESUME_PROMPT_MODE = Symbol('invalid resume prompt mode');
 
 const OperationResultDiagnosticScalarV1Schema = z.union([
   z.string(),
@@ -60,6 +63,11 @@ const OperationResultDiagnosticsV1Schema = z.record(
   OperationResultDiagnosticScalarV1Schema,
 );
 
+// RD-REC-17: persisted session-metadata snapshots ride on the typed contract as a
+// plain optional field so they survive schema validation, JSON serialization, and
+// structured-clone boundaries (never smuggled via non-enumerable properties).
+const OperationResultMetadataV1Schema = z.record(z.string(), z.unknown());
+
 export const SessionUsageLimitRecoveryOperationResultV1Schema = z.discriminatedUnion('ok', [
   z
     .object({
@@ -68,8 +76,10 @@ export const SessionUsageLimitRecoveryOperationResultV1Schema = z.discriminatedU
       sessionId: OperationResultSessionIdSchema,
       issueFingerprint: OperationResultIssueFingerprintSchema.optional(),
       retryAfterMs: OperationResultRetryAfterMsSchema.optional(),
+      resumePromptMode: OperationResultResumePromptModeSchema.optional(),
       uxDiagnostic: ConnectedServiceUxDiagnosticV1Schema.optional(),
       diagnostics: OperationResultDiagnosticsV1Schema.optional(),
+      metadata: OperationResultMetadataV1Schema.optional(),
     })
     .strict(),
   z
@@ -79,9 +89,11 @@ export const SessionUsageLimitRecoveryOperationResultV1Schema = z.discriminatedU
       sessionId: OperationResultSessionIdSchema.optional(),
       errorCode: OperationResultErrorCodeSchema,
       retryAfterMs: OperationResultRetryAfterMsSchema.optional(),
+      resumePromptMode: OperationResultResumePromptModeSchema.optional(),
       issueFingerprint: OperationResultIssueFingerprintSchema.optional(),
       uxDiagnostic: ConnectedServiceUxDiagnosticV1Schema.optional(),
       diagnostics: OperationResultDiagnosticsV1Schema.optional(),
+      metadata: OperationResultMetadataV1Schema.optional(),
     })
     .strict(),
 ]);
@@ -123,6 +135,14 @@ function readIssueFingerprint(raw: Record<string, unknown> | null): string | und
   return readString(raw?.issueFingerprint) ?? undefined;
 }
 
+function readResumePromptMode(
+  raw: Record<string, unknown> | null,
+): OperationResultResumePromptMode | typeof INVALID_RESUME_PROMPT_MODE | undefined {
+  if (!raw || !Object.prototype.hasOwnProperty.call(raw, 'resumePromptMode')) return undefined;
+  const parsed = OperationResultResumePromptModeSchema.safeParse(raw.resumePromptMode);
+  return parsed.success ? parsed.data : INVALID_RESUME_PROMPT_MODE;
+}
+
 function readUxDiagnostic(
   ...records: Array<Record<string, unknown> | null>
 ): z.infer<typeof ConnectedServiceUxDiagnosticV1Schema> | undefined {
@@ -150,6 +170,15 @@ function buildOkResult(
 
   const issueFingerprint = readIssueFingerprint(raw);
   const retryAfterMs = readRetryAfterMs(raw);
+  const resumePromptMode = readResumePromptMode(raw);
+  if (resumePromptMode === INVALID_RESUME_PROMPT_MODE) {
+    return buildErrorResult(
+      'malformed_response',
+      'malformed_session_usage_limit_recovery_resume_prompt_mode',
+      raw,
+      options,
+    );
+  }
   const uxDiagnostic = readUxDiagnostic(raw, extra?.uxDiagnosticSource ?? null);
 
   return SessionUsageLimitRecoveryOperationResultV1Schema.parse({
@@ -158,6 +187,7 @@ function buildOkResult(
     sessionId,
     ...(issueFingerprint ? { issueFingerprint } : {}),
     ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    ...(resumePromptMode ? { resumePromptMode } : {}),
     ...(uxDiagnostic ? { uxDiagnostic } : {}),
   });
 }
@@ -175,6 +205,7 @@ function buildErrorResult(
   const sessionId = readSessionId(raw, options);
   const issueFingerprint = readIssueFingerprint(raw);
   const retryAfterMs = readRetryAfterMs(raw);
+  const resumePromptMode = readResumePromptMode(raw);
   const uxDiagnostic = readUxDiagnostic(raw, extra?.uxDiagnosticSource ?? null);
 
   return SessionUsageLimitRecoveryOperationResultV1Schema.parse({
@@ -183,6 +214,7 @@ function buildErrorResult(
     ...(sessionId ? { sessionId } : {}),
     errorCode,
     ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    ...(resumePromptMode && resumePromptMode !== INVALID_RESUME_PROMPT_MODE ? { resumePromptMode } : {}),
     ...(issueFingerprint ? { issueFingerprint } : {}),
     ...(uxDiagnostic ? { uxDiagnostic } : {}),
     ...(extra?.diagnostics ? { diagnostics: extra.diagnostics } : {}),
@@ -197,6 +229,7 @@ function inheritRawContext(
   const sessionId = result.sessionId ?? readSessionId(raw, options);
   const issueFingerprint = result.issueFingerprint ?? readIssueFingerprint(raw);
   const retryAfterMs = result.retryAfterMs ?? readRetryAfterMs(raw);
+  const resumePromptMode = result.resumePromptMode ?? readResumePromptMode(raw);
   const uxDiagnostic = result.uxDiagnostic ?? readUxDiagnostic(raw);
 
   return SessionUsageLimitRecoveryOperationResultV1Schema.parse({
@@ -204,14 +237,27 @@ function inheritRawContext(
     ...(sessionId ? { sessionId } : {}),
     ...(issueFingerprint ? { issueFingerprint } : {}),
     ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    ...(resumePromptMode && resumePromptMode !== INVALID_RESUME_PROMPT_MODE ? { resumePromptMode } : {}),
     ...(uxDiagnostic ? { uxDiagnostic } : {}),
   });
 }
 
 function statusFromErrorCode(errorCode: string): SessionUsageLimitRecoveryOperationResultErrorStatusV1 {
   const normalized = errorCode.trim().toLowerCase();
+  if (normalized.includes('invalid_parameters') || normalized.includes('malformed')) return 'malformed_response';
   if (normalized.includes('rate_limited') || normalized.includes('rate-limit')) return 'rate_limited';
   if (normalized.includes('inactive')) return 'inactive';
+  // Missing RPC methods mean the session runtime is unreachable/mismatched, not
+  // that the recovery target was "not found" — classify before the not_found
+  // catch-all (DEV-UIS-3 parity with the dev normalizer).
+  if (
+    normalized.includes('rpc_method_not_found')
+    || normalized.includes('rpc_method_not_available')
+    || normalized.includes('method_not_found')
+    || normalized.includes('method_not_available')
+  ) {
+    return 'session_unreachable';
+  }
   if (normalized.includes('not_found') || normalized.includes('not-found')) return 'not_found';
   if (normalized.includes('no_eligible') || normalized.includes('exhausted')) return 'exhausted';
   if (normalized.includes('cancel')) return 'cancelled';
@@ -225,8 +271,10 @@ function statusFromErrorCode(errorCode: string): SessionUsageLimitRecoveryOperat
     || normalized.includes('machine_unavailable')
     || normalized.includes('remote_unavailable')
     || normalized.includes('resume_failed')
+    || normalized.includes('stale_machine')
     || normalized.includes('session_unreachable')
     || normalized.includes('session_rpc_failed')
+    || normalized.includes('server_unreachable')
   ) {
     return 'session_unreachable';
   }

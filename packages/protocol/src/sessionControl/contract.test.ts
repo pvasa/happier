@@ -378,6 +378,15 @@ describe('sessionControl contract exports', () => {
     };
 
     expect((protocol as any).SessionUsageLimitRecoveryV1Schema.safeParse(intent).success).toBe(true);
+    expect((protocol as any).SessionUsageLimitRecoveryV1Schema.safeParse({
+      ...intent,
+      selectedAuth: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'codex-main',
+        profileId: null,
+      },
+    }).success).toBe(true);
     expect((protocol as any).SessionMetadataSchema.safeParse({
       sessionUsageLimitRecoveryV1: intent,
     }).success).toBe(true);

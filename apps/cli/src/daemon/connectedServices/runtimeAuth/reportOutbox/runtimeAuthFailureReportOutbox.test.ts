@@ -14,7 +14,7 @@ import {
 
 const classifiedFailure = {
   kind: 'usage_limit',
-  limitCategory: 'quota',
+  limitCategory: 'usage_limit',
   serviceId: 'openai-codex',
   profileId: 'primary',
   groupId: 'codex-group',
@@ -44,6 +44,7 @@ describe('runtimeAuthFailureReportOutbox', () => {
         report: {
           sessionId: 'sess_1',
           switchesThisTurn: 1,
+          resumePromptMode: 'custom',
           classification: classifiedFailure,
         },
         nowMs: () => 1_700_000_000_000,
@@ -55,9 +56,10 @@ describe('runtimeAuthFailureReportOutbox', () => {
       expect(items[0]).toMatchObject({
         sessionId: 'sess_1',
         switchesThisTurn: 1,
+        resumePromptMode: 'custom',
         classification: {
           kind: 'usage_limit',
-          limitCategory: 'quota',
+          limitCategory: 'usage_limit',
           serviceId: 'openai-codex',
           profileId: 'primary',
           groupId: 'codex-group',
@@ -96,6 +98,7 @@ describe('runtimeAuthFailureReportOutbox', () => {
         report: {
           sessionId: 'sess_1',
           switchesThisTurn: 1,
+          resumePromptMode: 'standard',
           classification: classifiedFailure,
         },
         nowMs: () => 1_700_000_000_000,
@@ -105,6 +108,7 @@ describe('runtimeAuthFailureReportOutbox', () => {
         report: {
           sessionId: 'sess_1',
           switchesThisTurn: 3,
+          resumePromptMode: 'custom',
           classification: classifiedFailure,
         },
         nowMs: () => 1_700_000_000_500,
@@ -116,6 +120,7 @@ describe('runtimeAuthFailureReportOutbox', () => {
       expect(items).toHaveLength(1);
       expect(items[0]).toMatchObject({
         switchesThisTurn: 3,
+        resumePromptMode: 'custom',
         attemptCount: 2,
         createdAtMs: 1_700_000_000_000,
         updatedAtMs: 1_700_000_000_500,
@@ -196,6 +201,7 @@ describe('runtimeAuthFailureReportOutbox', () => {
 
       const result = await drainRuntimeAuthFailureReportOutboxItems({
         outboxDir,
+        nowMs: () => 1_700_000_000_200,
         deliver: async (item) => item.sessionId === 'sess_delivered'
           ? { status: 'delivered' as const }
           : { status: 'retry' as const },
@@ -205,6 +211,89 @@ describe('runtimeAuthFailureReportOutbox', () => {
       const remaining = await readRuntimeAuthFailureReportOutboxItems({ outboxDir });
       expect(remaining).toHaveLength(1);
       expect(remaining[0].sessionId).toBe('sess_retry');
+    } finally {
+      await removeTempDir(outboxDir);
+    }
+  });
+
+  it('drops reports past the TTL at drain time instead of redelivering them forever (RD-REC-6)', async () => {
+    const outboxDir = await createTempDir('happier-runtime-auth-report-outbox-ttl-');
+    try {
+      const enqueueAtMs = 1_700_000_000_000;
+      await enqueueRuntimeAuthFailureReportOutboxItem({
+        outboxDir,
+        report: {
+          sessionId: 'sess_expired',
+          switchesThisTurn: 1,
+          classification: classifiedFailure,
+        },
+        nowMs: () => enqueueAtMs,
+      });
+      await enqueueRuntimeAuthFailureReportOutboxItem({
+        outboxDir,
+        report: {
+          sessionId: 'sess_fresh',
+          switchesThisTurn: 1,
+          classification: {
+            ...classifiedFailure,
+            profileId: 'secondary',
+          },
+        },
+        nowMs: () => enqueueAtMs + 60_000,
+      });
+
+      const deliveredSessionIds: string[] = [];
+      const result = await drainRuntimeAuthFailureReportOutboxItems({
+        outboxDir,
+        nowMs: () => enqueueAtMs + 60_000 + 1,
+        maxItemAgeMs: 60_000,
+        deliver: async (item) => {
+          deliveredSessionIds.push(item.sessionId);
+          return { status: 'delivered' as const };
+        },
+      });
+
+      // The expired item is dropped WITHOUT a delivery attempt; the fresh one delivers.
+      expect(deliveredSessionIds).toEqual(['sess_fresh']);
+      expect(result).toEqual({ delivered: 1, dropped: 1, retried: 0 });
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toEqual([]);
+    } finally {
+      await removeTempDir(outboxDir);
+    }
+  });
+
+  it('redelivers a re-observed report whose original enqueue is past the TTL (updatedAtMs is the freshness anchor)', async () => {
+    const outboxDir = await createTempDir('happier-runtime-auth-report-outbox-ttl-reobserved-');
+    try {
+      const enqueueAtMs = 1_700_000_000_000;
+      await enqueueRuntimeAuthFailureReportOutboxItem({
+        outboxDir,
+        report: {
+          sessionId: 'sess_reobserved',
+          switchesThisTurn: 1,
+          classification: classifiedFailure,
+        },
+        nowMs: () => enqueueAtMs,
+      });
+      // Same report key observed again much later: the failure is still current.
+      await enqueueRuntimeAuthFailureReportOutboxItem({
+        outboxDir,
+        report: {
+          sessionId: 'sess_reobserved',
+          switchesThisTurn: 1,
+          classification: classifiedFailure,
+        },
+        nowMs: () => enqueueAtMs + 10 * 60_000,
+      });
+
+      const result = await drainRuntimeAuthFailureReportOutboxItems({
+        outboxDir,
+        nowMs: () => enqueueAtMs + 10 * 60_000 + 1_000,
+        maxItemAgeMs: 60_000,
+        deliver: async () => ({ status: 'delivered' as const }),
+      });
+
+      expect(result).toEqual({ delivered: 1, dropped: 0, retried: 0 });
     } finally {
       await removeTempDir(outboxDir);
     }
@@ -225,6 +314,7 @@ describe('runtimeAuthFailureReportOutbox', () => {
 
       const result = await drainRuntimeAuthFailureReportOutboxItems({
         outboxDir,
+        nowMs: () => 1_700_000_000_100,
         deliver: async () => ({ status: 'drop' as const }),
       });
 

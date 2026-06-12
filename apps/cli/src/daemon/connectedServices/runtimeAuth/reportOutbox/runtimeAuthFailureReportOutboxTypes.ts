@@ -4,6 +4,7 @@ import type {
   ConnectedServiceRuntimeLimitCategory,
   ConnectedServiceRuntimeQuotaScope,
 } from '../types';
+import type { SessionUsageLimitRecoveryResumePromptModeV1 } from '@happier-dev/protocol';
 
 export type RuntimeAuthFailureReportOutboxAction = Readonly<{
   kind: 'open_url';
@@ -34,6 +35,7 @@ export type RuntimeAuthFailureReportOutboxClassification = Readonly<{
 export type RuntimeAuthFailureReportOutboxReport = Readonly<{
   sessionId: string;
   switchesThisTurn?: number;
+  resumePromptMode?: unknown;
   classification: unknown;
 }>;
 
@@ -43,6 +45,7 @@ export type RuntimeAuthFailureReportOutboxItem = Readonly<{
   reportKey: string;
   sessionId: string;
   switchesThisTurn: number;
+  resumePromptMode?: SessionUsageLimitRecoveryResumePromptModeV1;
   classification: RuntimeAuthFailureReportOutboxClassification;
   attemptCount: number;
   createdAtMs: number;

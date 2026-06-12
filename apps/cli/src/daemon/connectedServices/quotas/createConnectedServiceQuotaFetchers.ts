@@ -57,7 +57,7 @@ export function createConnectedServiceQuotaFetchers(env: NodeJS.ProcessEnv): Arr
     createClaudeSubscriptionQuotaFetcher({
       usageUrl: parseNonEmptyStringEnv(env.HAPPIER_CONNECTED_SERVICES_CLAUDE_SUBSCRIPTION_USAGE_URL ?? env.HAPPIER_CONNECTED_SERVICES_ANTHROPIC_USAGE_URL),
       staleAfterMs,
-      userAgent: parseNonEmptyStringEnv(env.HAPPIER_CONNECTED_SERVICES_QUOTAS_USER_AGENT),
+      userAgent: parseNonEmptyStringEnv(env.HAPPIER_CONNECTED_SERVICES_CLAUDE_SUBSCRIPTION_USER_AGENT),
     }),
     createGeminiQuotaFetcher(),
   ];

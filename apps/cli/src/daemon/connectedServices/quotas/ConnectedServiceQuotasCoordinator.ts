@@ -1,5 +1,7 @@
 import {
   ConnectedServiceIdSchema,
+  type ConnectedServiceAuthGroupRuntimeStatePatchRequestV1,
+  type ConnectedServiceAuthGroupV1,
   openConnectedServiceCredentialCiphertext,
   openConnectedServiceQuotaSnapshotCiphertext,
   sealConnectedServiceQuotaSnapshotCiphertext,
@@ -32,6 +34,15 @@ import {
   type ConnectedServiceChildSelection,
 } from '../connectedServiceChildEnvironment';
 import type { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
+import {
+  buildConnectedServiceAuthGroupSwitchState,
+  normalizeConnectedServiceAuthGroupPolicy,
+} from '../accountGroups/switching/buildConnectedServiceAuthGroupSwitchState';
+import {
+  reconcileMemberRuntimeStateWithFreshQuotaEvidence,
+  selectConnectedServiceAuthGroupCandidate,
+  type ConnectedServiceAuthGroupMemberRuntimeState,
+} from '../accountGroups/selection/selectConnectedServiceAuthGroupCandidate';
 import type { ConnectedServiceQuotaFetcher } from './types';
 import {
   buildQuotaPersistenceKey,
@@ -133,6 +144,16 @@ type QuotaApi = Readonly<{
     profileId: string;
     health: ConnectedServiceCredentialHealthV1;
   }>) => Promise<void>;
+  getConnectedServiceAuthGroup?: (args: Readonly<{
+    serviceId: ConnectedServiceId;
+    groupId: string;
+  }>) => Promise<ConnectedServiceAuthGroupV1 | null>;
+  updateConnectedServiceAuthGroupRuntimeState?: (args: Readonly<{
+    serviceId: ConnectedServiceId;
+    groupId: string;
+    expectedGeneration: number;
+    memberStates: ReadonlyArray<Readonly<ConnectedServiceAuthGroupRuntimeStatePatchRequestV1['memberStates'][number]>>;
+  }>) => Promise<ConnectedServiceAuthGroupV1>;
 }>;
 
 type ExistingQuotaSnapshotResponse =
@@ -219,6 +240,41 @@ export type ConnectedServiceQuotaSoftSwitchRecoveryGuard = (
     reason: 'soft_threshold';
   }>,
 ) => SoftSwitchRecoveryGuardResult | Promise<SoftSwitchRecoveryGuardResult>;
+
+/**
+ * RD-QUO-13: edge-triggered quota lifecycle transition emitted by the coordinator.
+ *
+ * `blocked` fires once when fresh evidence shows a group has NO immediately eligible
+ * member (every member limited/disabled) while group-bound sessions exist; `recovered`
+ * fires once when a later eligibility pass frees a member (F7 fresh-quota clearing).
+ * Producers built on this hook stay host-side and provider-agnostic.
+ */
+export type ConnectedServiceQuotaLifecycleTransition = Readonly<{
+  phase: 'blocked' | 'recovered';
+  serviceId: ConnectedServiceId;
+  groupId: string;
+  activeProfileId: string | null;
+  sessionIds: ReadonlyArray<string>;
+  issueFingerprint: string;
+  resetAtMs: number | null;
+  reason: string;
+}>;
+export type ConnectedServiceQuotaLifecycleListener = (
+  transition: ConnectedServiceQuotaLifecycleTransition,
+) => void | Promise<void>;
+
+type SoftSwitchPolicyGuardResult =
+  | Readonly<{ status: 'allow' }>
+  | Readonly<{ status: 'suppress'; reason: string }>;
+export type ConnectedServiceQuotaSoftSwitchPolicyGuard = (
+  input: Readonly<{
+    sessionId: string;
+    serviceId: ConnectedServiceId;
+    groupId: string;
+    activeProfileId: string;
+    reason: 'soft_threshold';
+  }>,
+) => SoftSwitchPolicyGuardResult | Promise<SoftSwitchPolicyGuardResult>;
 
 function buildResolvedSelectionProfilesByServiceId(
   env: Pick<NodeJS.ProcessEnv, string> | undefined,
@@ -435,15 +491,19 @@ export class ConnectedServiceQuotasCoordinator {
   private readonly quotaFingerprintKeyMaterial: Uint8Array;
   private quotaFingerprintHmacKey: Uint8Array;
   private readonly authGroupSwitchCoordinator: AuthGroupSwitchCoordinator | null;
+  private readonly softSwitchPolicyGuard: ConnectedServiceQuotaSoftSwitchPolicyGuard | null;
   private readonly softSwitchRecoveryGuard: ConnectedServiceQuotaSoftSwitchRecoveryGuard | null;
   private readonly groupSwitchCheckMinIntervalMs: number;
   private readonly groupSwitchCheckJitterMs: number;
   private readonly quotaWorkGate: DaemonServerWorkGate | null;
   private readonly recordDiagnostic: ((event: ConnectedServiceQuotaCoordinatorDiagnostic) => void) | null;
+  private readonly onQuotaLifecycleTransition: ConnectedServiceQuotaLifecycleListener | null;
+  private readonly quotaLifecycleFreshnessMs: number;
   private readonly spawnTargetsByPid = new Map<number, SpawnTarget>();
   private readonly failureStateByBindingKey = new Map<string, FailureState>();
   private readonly groupSwitchCheckAtByKey = new Map<string, number>();
   private readonly persistedInBandQuotaStateByKey = new Map<string, PersistedInBandQuotaState>();
+  private readonly notifiedQuotaBlockedGroupKeys = new Set<string>();
   private lastDiscoveryAt = 0;
 
   public constructor(params: Readonly<{
@@ -481,11 +541,14 @@ export class ConnectedServiceQuotasCoordinator {
     quotaPersistenceMinFreshnessRefreshMs?: number;
     quotaPersistenceMaxConsecutiveFailures?: number;
     authGroupSwitchCoordinator?: AuthGroupSwitchCoordinator | null;
+    softSwitchPolicyGuard?: ConnectedServiceQuotaSoftSwitchPolicyGuard | null;
     softSwitchRecoveryGuard?: ConnectedServiceQuotaSoftSwitchRecoveryGuard | null;
     groupSwitchCheckMinIntervalMs?: number;
     groupSwitchCheckJitterMs?: number;
     quotaWorkGate?: DaemonServerWorkGate | null;
     recordDiagnostic?: (event: ConnectedServiceQuotaCoordinatorDiagnostic) => void;
+    onQuotaLifecycleTransition?: ConnectedServiceQuotaLifecycleListener | null;
+    quotaLifecycleFreshnessMs?: number;
   }>) {
     this.api = params.api;
     this.credentials = params.credentials;
@@ -531,6 +594,7 @@ export class ConnectedServiceQuotasCoordinator {
         : 5_000;
     this.sleepMs = params.sleepMs ?? defaultSleepMs;
     this.authGroupSwitchCoordinator = params.authGroupSwitchCoordinator ?? null;
+    this.softSwitchPolicyGuard = params.softSwitchPolicyGuard ?? null;
     this.softSwitchRecoveryGuard = params.softSwitchRecoveryGuard ?? null;
     this.groupSwitchCheckMinIntervalMs =
       typeof params.groupSwitchCheckMinIntervalMs === 'number' && Number.isFinite(params.groupSwitchCheckMinIntervalMs)
@@ -542,6 +606,11 @@ export class ConnectedServiceQuotasCoordinator {
         : 0;
     this.quotaWorkGate = params.quotaWorkGate ?? null;
     this.recordDiagnostic = params.recordDiagnostic ?? null;
+    this.onQuotaLifecycleTransition = params.onQuotaLifecycleTransition ?? null;
+    this.quotaLifecycleFreshnessMs =
+      typeof params.quotaLifecycleFreshnessMs === 'number' && Number.isFinite(params.quotaLifecycleFreshnessMs)
+        ? Math.max(0, Math.trunc(params.quotaLifecycleFreshnessMs))
+        : 5 * 60_000;
     this.quotaPersistenceServerWorkScheduler = params.quotaPersistenceServerWorkScheduler ?? null;
     this.quotaPersistenceServerScope = params.quotaPersistenceServerScope?.trim() || 'current-server';
     this.quotaPersistenceAccountScopeCanRefresh = params.quotaPersistenceAccountScope === undefined;
@@ -712,6 +781,10 @@ export class ConnectedServiceQuotasCoordinator {
     profileId: string;
     snapshot: ConnectedServiceQuotaSnapshotV1;
   }>): Promise<ConnectedServiceInBandQuotaSnapshotRecordResult> {
+    if (input.snapshot.serviceId !== input.serviceId) {
+      return { status: 'suppressed', reason: 'service_id_mismatch' };
+    }
+
     const key = this.buildQuotaPersistenceKey(input).key;
     const status = deriveQuotaSnapshotStatus(input.snapshot);
     const materialFingerprint = this.computeQuotaMaterialFingerprint(input.snapshot);
@@ -933,6 +1006,164 @@ export class ConnectedServiceQuotasCoordinator {
     this.runtimeQuotaSnapshots?.recordProfileSnapshot(input);
   }
 
+  private async maybeClearStaleMemberLimitersForGroupQuotaSnapshot(input: Readonly<{
+    serviceId: ConnectedServiceId;
+    groupId: string;
+    profileId: string;
+    now: number;
+  }>): Promise<void> {
+    if (!this.runtimeQuotaSnapshots) return;
+    if (typeof this.api.getConnectedServiceAuthGroup !== 'function') return;
+
+    const group = await this.api.getConnectedServiceAuthGroup({
+      serviceId: input.serviceId,
+      groupId: input.groupId,
+    }).catch(() => null);
+    if (!group) return;
+
+    const reconciledGroup = await this.clearStaleMemberLimitersWithFreshEvidence({ group, ...input });
+    await this.evaluateGroupQuotaLifecycle({
+      group: reconciledGroup ?? group,
+      now: input.now,
+    });
+  }
+
+  private async clearStaleMemberLimitersWithFreshEvidence(input: Readonly<{
+    group: ConnectedServiceAuthGroupV1;
+    serviceId: ConnectedServiceId;
+    groupId: string;
+    profileId: string;
+    now: number;
+  }>): Promise<ConnectedServiceAuthGroupV1 | null> {
+    if (!this.runtimeQuotaSnapshots) return null;
+    if (typeof this.api.updateConnectedServiceAuthGroupRuntimeState !== 'function') return null;
+
+    const member = input.group.members.find((candidate) => candidate.profileId === input.profileId) ?? null;
+    if (!member) return null;
+    const runtimeState = this.runtimeQuotaSnapshots.buildMemberStates({
+      serviceId: input.serviceId,
+      groupId: input.groupId,
+      capturedAtMs: input.now,
+    }).get(input.profileId) ?? null;
+    const quotaSnapshot = runtimeState?.quotaSnapshot ?? null;
+    if (!quotaSnapshot) return null;
+
+    const reconciledState = reconcileMemberRuntimeStateWithFreshQuotaEvidence({
+      state: member.state as ConnectedServiceAuthGroupMemberRuntimeState,
+      quotaSnapshot,
+      policy: normalizeConnectedServiceAuthGroupPolicy(input.group.policy),
+      nowMs: input.now,
+    });
+    if (!reconciledState || reconciledState === member.state) return null;
+
+    return await this.api.updateConnectedServiceAuthGroupRuntimeState({
+      serviceId: input.serviceId,
+      groupId: input.groupId,
+      expectedGeneration: input.group.generation,
+      memberStates: [{
+        profileId: input.profileId,
+        state: reconciledState,
+      }],
+    }).catch(() => null);
+  }
+
+  private resolveActiveSessionIdsForGroup(serviceId: ConnectedServiceId, groupId: string): string[] {
+    const sessionIds: string[] = [];
+    for (const target of this.spawnTargetsByPid.values()) {
+      const sessionId = typeof target.sessionId === 'string' ? target.sessionId.trim() : '';
+      if (!sessionId || sessionIds.includes(sessionId)) continue;
+      for (const entry of extractActiveBindings(target.bindings, target.connectedServiceSelectionsEnv)) {
+        if (entry.serviceId !== serviceId) continue;
+        if ((entry.groupId ?? '') !== groupId) continue;
+        sessionIds.push(sessionId);
+        break;
+      }
+    }
+    return sessionIds;
+  }
+
+  /**
+   * RD-QUO-13: edge-triggered group quota lifecycle (blocked/recovered) producer hook.
+   *
+   * Runs the same eligibility pass the switch coordinator uses (`allowCurrentProfileRetry`
+   * so the active member counts when eligible). `no_eligible_members` with live group-bound
+   * sessions emits `blocked` once; a later pass that frees any member emits `recovered`
+   * once. Manual-strategy groups are user-driven and never emit.
+   */
+  private async evaluateGroupQuotaLifecycle(input: Readonly<{
+    group: ConnectedServiceAuthGroupV1;
+    now: number;
+  }>): Promise<void> {
+    const listener = this.onQuotaLifecycleTransition;
+    if (!listener || !this.runtimeQuotaSnapshots) return;
+    const switchState = buildConnectedServiceAuthGroupSwitchState({
+      group: input.group,
+      runtimeQuotaSnapshots: this.runtimeQuotaSnapshots,
+      nowMs: input.now,
+    });
+    const selection = selectConnectedServiceAuthGroupCandidate({
+      nowMs: input.now,
+      quotaFreshnessMs: this.quotaLifecycleFreshnessMs,
+      activeProfileId: switchState.activeProfileId,
+      policy: switchState.policy,
+      members: switchState.members,
+      memberStatesByProfileId: switchState.memberStatesByProfileId,
+      allowCurrentProfileRetry: true,
+    });
+    if (selection.reason === 'manual_strategy') return;
+
+    const serviceId = input.group.serviceId;
+    const groupId = input.group.groupId;
+    const groupKey = `${serviceId}\u0000${groupId}`;
+    const blocked = selection.reason === 'no_eligible_members';
+    const previouslyNotified = this.notifiedQuotaBlockedGroupKeys.has(groupKey);
+    if (blocked === previouslyNotified) return;
+
+    const sessionIds = this.resolveActiveSessionIdsForGroup(serviceId, groupId);
+    const issueFingerprint = `quota-blocked:${serviceId}:${groupId}`;
+    if (blocked) {
+      // No group-bound sessions: nothing to notify yet. Stay unmarked so a session
+      // observing the still-blocked group later still gets the blocked edge.
+      if (sessionIds.length === 0) return;
+      const resetAtMs = selection.excluded
+        .map((exclusion) => exclusion.retryAtMs)
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > input.now)
+        .sort((left, right) => left - right)[0] ?? null;
+      this.notifiedQuotaBlockedGroupKeys.add(groupKey);
+      try {
+        await listener({
+          phase: 'blocked',
+          serviceId,
+          groupId,
+          activeProfileId: switchState.activeProfileId,
+          sessionIds,
+          issueFingerprint,
+          resetAtMs,
+          reason: 'connected_service_group_quota_exhausted',
+        });
+      } catch {
+        // Notifications are best-effort; never fail the quota path.
+      }
+      return;
+    }
+
+    this.notifiedQuotaBlockedGroupKeys.delete(groupKey);
+    try {
+      await listener({
+        phase: 'recovered',
+        serviceId,
+        groupId,
+        activeProfileId: switchState.activeProfileId,
+        sessionIds,
+        issueFingerprint,
+        resetAtMs: null,
+        reason: 'fresh_quota_evidence',
+      });
+    } catch {
+      // Notifications are best-effort; never fail the quota path.
+    }
+  }
+
   private makeGroupSwitchCheckKey(input: ActiveGroupQuotaSwitchTarget): string {
     return `${input.serviceId}\u0000${input.groupId}\u0000${input.activeProfileId}`;
   }
@@ -966,6 +1197,35 @@ export class ConnectedServiceQuotasCoordinator {
   }
 
   private async shouldRunSoftSwitchForTarget(target: ActiveGroupQuotaSwitchTarget): Promise<boolean> {
+    const policyGuard = this.softSwitchPolicyGuard;
+    if (policyGuard) {
+      let policyResult: SoftSwitchPolicyGuardResult;
+      try {
+        policyResult = await policyGuard({
+          sessionId: target.sessionId,
+          serviceId: target.serviceId,
+          groupId: target.groupId,
+          activeProfileId: target.activeProfileId,
+          reason: 'soft_threshold',
+        });
+      } catch {
+        this.recordDiagnostic?.({
+          event: 'quota_work_suppressed',
+          phase: 'soft_switch',
+          reason: 'quota_soft_switch_policy_guard_failed',
+        });
+        return false;
+      }
+      if (policyResult.status !== 'allow') {
+        this.recordDiagnostic?.({
+          event: 'quota_work_suppressed',
+          phase: 'soft_switch',
+          reason: policyResult.reason.trim() || 'quota_soft_switch_suppressed_policy_guard',
+        });
+        return false;
+      }
+    }
+
     const guard = this.softSwitchRecoveryGuard;
     if (!guard) return true;
     let result: SoftSwitchRecoveryGuardResult;
@@ -1064,6 +1324,7 @@ export class ConnectedServiceQuotasCoordinator {
   }>): Promise<void> {
     if (this.checkQuotaWorkGate('hydrate_group').status !== 'open') return;
     if (!this.runtimeQuotaSnapshots) return;
+    const now = Math.max(0, Math.trunc(this.now()));
     const accountMode = await resolveConnectedServiceAccountMode(this.api);
     const encryption = this.credentials.encryption;
     const material =
@@ -1091,6 +1352,12 @@ export class ConnectedServiceQuotasCoordinator {
         groupId: input.groupId,
         profileId,
         snapshot,
+      });
+      await this.maybeClearStaleMemberLimitersForGroupQuotaSnapshot({
+        serviceId: input.serviceId,
+        groupId: input.groupId,
+        profileId,
+        now,
       });
     }
   }
@@ -1140,6 +1407,12 @@ export class ConnectedServiceQuotasCoordinator {
               profileId,
               snapshot: observedSnapshot,
             });
+            await this.maybeClearStaleMemberLimitersForGroupQuotaSnapshot({
+              serviceId,
+              groupId,
+              profileId,
+              now,
+            });
           }
           continue;
         }
@@ -1167,8 +1440,17 @@ export class ConnectedServiceQuotasCoordinator {
           profileId,
           snapshot,
         });
-        await this.persistQuotaSnapshot({
-          accountMode: credential.storageMode,
+        await this.maybeClearStaleMemberLimitersForGroupQuotaSnapshot({
+          serviceId,
+          groupId,
+          profileId,
+          now,
+        });
+        // RD-QUO-3: probe-driven snapshots persist through the same materiality →
+        // coalescing → serverWork → HMAC-fingerprint idempotency path as event-driven
+        // snapshots. A direct no-fingerprint write would hit the server's legacy
+        // unconditional upsert and bypass the daemon storm budget/backoff accounting.
+        await this.recordInBandQuotaSnapshot({
           serviceId,
           profileId,
           snapshot,

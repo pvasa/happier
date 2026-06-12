@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol';
 import type { ConnectedServiceAccountTransitionVerificationResult } from '../accountTransitions/connectedServiceAccountTransition';
 
 export const ConnectedServiceRuntimeAuthFailureKindSchema = z.enum([
@@ -20,15 +21,7 @@ export const ConnectedServiceRuntimeAuthFailureKindSchema = z.enum([
 export type ConnectedServiceRuntimeAuthFailureKind =
   z.infer<typeof ConnectedServiceRuntimeAuthFailureKindSchema>;
 
-export type ConnectedServiceRuntimeLimitCategory =
-  | 'quota'
-  | 'rate_limit'
-  | 'capacity'
-  | 'auth'
-  | 'plan'
-  | 'validation'
-  | 'account_disabled'
-  | 'unknown';
+export type ConnectedServiceRuntimeLimitCategory = ConnectedServiceLimitCategoryV1;
 
 export type ConnectedServiceRuntimeQuotaScope =
   | 'account'

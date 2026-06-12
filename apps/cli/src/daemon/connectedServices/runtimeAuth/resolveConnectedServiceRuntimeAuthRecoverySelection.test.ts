@@ -6,7 +6,7 @@ import type { ConnectedServiceRuntimeFailureClassification } from './types';
 
 const baseClassification: ConnectedServiceRuntimeFailureClassification = {
   kind: 'usage_limit',
-  limitCategory: 'quota',
+  limitCategory: 'usage_limit',
   serviceId: 'openai-codex',
   profileId: null,
   groupId: null,

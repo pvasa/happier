@@ -31,7 +31,7 @@ describe('createPiConnectedServiceRuntimeAuthAdapter', () => {
 
     expect(classification).toMatchObject({
       kind: 'usage_limit',
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
       serviceId: 'claude-subscription',
       profileId: 'claude-primary',
       groupId: 'claude-main',
@@ -77,7 +77,7 @@ describe('createPiConnectedServiceRuntimeAuthAdapter', () => {
 
     expect(classification).toMatchObject({
       kind: 'usage_limit',
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
       serviceId: 'openai-codex',
       profileId: 'leeroy',
       groupId: 'happier',
@@ -101,7 +101,7 @@ describe('createPiConnectedServiceRuntimeAuthAdapter', () => {
 
     expect(classification).toMatchObject({
       kind: 'auth_expired',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       serviceId: 'openai',
       profileId: 'openai-work',
       groupId: null,
@@ -143,5 +143,29 @@ describe('createPiConnectedServiceRuntimeAuthAdapter', () => {
       source: 'stable_provider_message',
     });
     expect(classification?.limitCategory).toBeUndefined();
+  });
+
+  it('reports restart-rematerialize adoption as weakly_verified — no live provider probe runs (RD-OPI-8)', async () => {
+    const adapter = createPiConnectedServiceRuntimeAuthAdapter();
+
+    await expect(adapter.verifyActiveAccount?.({
+      target: { agentId: 'pi' },
+      selection: {},
+    })).resolves.toEqual({
+      status: 'weakly_verified',
+      reason: 'provider_restart_rematerialization_authoritative',
+    });
+  });
+
+  it('treats post-switch recovery as a successful no-op — restart/rematerialize owns recovery (RD-OPI-8)', async () => {
+    const adapter = createPiConnectedServiceRuntimeAuthAdapter();
+
+    await expect(adapter.recoverAfterRuntimeAuthSwitch({
+      target: { agentId: 'pi' },
+      selection: {},
+    })).resolves.toEqual({
+      recovered: true,
+      recovery: 'restart_rematerialize',
+    });
   });
 });

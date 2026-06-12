@@ -1,18 +1,30 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildConnectedServiceCredentialRecord, type ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
+import {
+  accountSettingsParse,
+  buildConnectedServiceCredentialRecord,
+  type ConnectedServiceBindingsV1,
+} from '@happier-dev/protocol';
 
 import type { ApiClient } from '@/api/api';
+import { verifyResumeReachableClaude } from '@/backends/claude/connectedServices/verifyResumeReachableClaude';
 import type { TrackedSession } from '@/daemon/types';
 import type { Credentials } from '@/persistence';
 
 import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from './nativeAuth/claudeCodeCredentialScopes';
 import { materializeClaudeConnectedServiceRuntimeAuthSelection } from './materializeClaudeConnectedServiceRuntimeAuthSelection';
 import { resolveClaudeConnectedServiceStableConfigDir } from './resolveClaudeConnectedServiceStableAuthDir';
+
+// Server HTTP boundary mock: the persisted-metadata continuity fallback fetches the session
+// snapshot from the server; unit tests must never hit the network.
+const mockFetchSessionByIdCompat = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
+vi.mock('@/session/transport/http/sessionsHttp', () => ({
+  fetchSessionByIdCompat: mockFetchSessionByIdCompat,
+}));
 
 describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -226,6 +238,297 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
       },
     });
     await expect(readFile(join(materializedEnv!.CLAUDE_CONFIG_DIR, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"ambient"}\n');
+  });
+
+  it('forwards tracked Claude continuity hints into runtime-auth rematerialization', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-server-'));
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-home-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-source-'));
+    const previousClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-previous-'));
+    const vendorResumeId = '4b9434a8-b115-4363-851a-f39fff76a94b';
+    const previousSessionPath = join(
+      previousClaudeConfigDir,
+      'projects',
+      '-Users-leeroy-Documents-Development-happier-remote-dev',
+      `${vendorResumeId}.jsonl`,
+    );
+    await mkdir(join(previousClaudeConfigDir, 'projects', '-Users-leeroy-Documents-Development-happier-remote-dev'), { recursive: true });
+    await writeFile(previousSessionPath, '{"type":"assistant","message":"previous profile session"}\n');
+
+    const record = buildConnectedServiceCredentialRecord({
+      now: 1_000,
+      serviceId: 'claude-subscription',
+      profileId: 'backup',
+      kind: 'oauth',
+      expiresAt: 2_000,
+      oauth: {
+        accessToken: 'selected-access-placeholder',
+        refreshToken: 'selected-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'provider-account',
+        providerEmail: null,
+      },
+    });
+    const previousBindings: ConnectedServiceBindingsV1 = {
+      v: 1,
+      bindingsByServiceId: {
+        'claude-subscription': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'work',
+          profileId: 'primary',
+        },
+      },
+    };
+    const normalizedBindings: ConnectedServiceBindingsV1 = {
+      v: 1,
+      bindingsByServiceId: {
+        'claude-subscription': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'work',
+          profileId: 'backup',
+        },
+      },
+    };
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      happySessionId: 'sess_2',
+      pid: 456,
+      vendorResumeId,
+      spawnOptions: {
+        directory: '/Users/leeroy/Documents/Development/happier/remote-dev',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        connectedServices: previousBindings,
+        resume: previousSessionPath,
+        environmentVariables: {
+          CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+        },
+      },
+    };
+
+    const result = await materializeClaudeConnectedServiceRuntimeAuthSelection({
+      credentials: {
+        token: 'token',
+        encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+      } satisfies Credentials,
+      api: {} as ApiClient,
+      activeServerDir,
+      input: {
+        tracked,
+        sessionId: 'sess_2',
+        agentId: 'claude',
+        serviceId: 'claude-subscription',
+        previous: {
+          source: 'connected',
+          selection: 'group',
+          serviceId: 'claude-subscription',
+          profileId: 'primary',
+          groupId: 'work',
+        },
+        next: {
+          source: 'connected',
+          selection: 'group',
+          serviceId: 'claude-subscription',
+          profileId: 'backup',
+          groupId: 'work',
+        },
+        previousBindings,
+        normalizedBindings,
+        groupMetadata: {
+          groupId: 'work',
+          activeProfileId: 'backup',
+          fallbackProfileId: 'fallback',
+          generation: 3,
+        },
+      },
+      baseSelection: {
+        serviceId: 'claude-subscription',
+        binding: normalizedBindings.bindingsByServiceId['claude-subscription'],
+        profileId: 'backup',
+        groupId: 'work',
+        activeProfileId: 'backup',
+        fallbackProfileId: 'fallback',
+        generation: 3,
+        record,
+      },
+      accountSettings: accountSettingsParse({
+        connectedServicesProviderStateSharingSettingsV1: {
+          v: 1,
+          defaults: { configMode: 'linked', stateMode: 'shared' },
+          byAgentId: {
+            claude: { configMode: 'copied', stateMode: 'shared' },
+          },
+          acknowledgedRisksByAgentId: {
+            claude: { sharedStatePrivacy: true, symlinkUnavailable: true },
+          },
+        },
+      }),
+      processEnv: { HOME: homeDir, CLAUDE_CONFIG_DIR: sourceClaudeConfigDir },
+    });
+
+    const materializedEnv = (result as { targetMaterializedEnv?: Record<string, string> }).targetMaterializedEnv;
+    expect(materializedEnv?.CLAUDE_CONFIG_DIR).toBeTruthy();
+    await expect(verifyResumeReachableClaude({
+      vendorResumeId,
+      processEnv: { HOME: homeDir, CLAUDE_CONFIG_DIR: materializedEnv!.CLAUDE_CONFIG_DIR },
+    })).resolves.toEqual({
+      ok: true,
+      resolvedPath: join(
+        materializedEnv!.CLAUDE_CONFIG_DIR,
+        'projects',
+        '-Users-leeroy-Documents-Development-happier-remote-dev',
+        `${vendorResumeId}.jsonl`,
+      ),
+    });
+  });
+
+  it('falls back to persisted session metadata for continuity hints when hooks have not reported', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-server-'));
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-home-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-source-'));
+    const previousClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-previous-'));
+    const vendorResumeId = '9d8b34a8-b115-4363-851a-f39fff76a94c';
+    const previousSessionPath = join(
+      previousClaudeConfigDir,
+      'projects',
+      '-Users-leeroy-Documents-Development-happier-remote-dev',
+      `${vendorResumeId}.jsonl`,
+    );
+    await mkdir(dirname(previousSessionPath), { recursive: true });
+    await writeFile(previousSessionPath, '{"type":"assistant","message":"persisted metadata session"}\n');
+    mockFetchSessionByIdCompat.mockResolvedValueOnce({
+      id: 'sess_persisted',
+      encryptionMode: 'plain',
+      seq: 1,
+      metadata: JSON.stringify({
+        claudeSessionId: vendorResumeId,
+        claudeTranscriptPath: previousSessionPath,
+      }),
+    });
+
+    const record = buildConnectedServiceCredentialRecord({
+      now: 1_000,
+      serviceId: 'claude-subscription',
+      profileId: 'backup',
+      kind: 'oauth',
+      expiresAt: 2_000,
+      oauth: {
+        accessToken: 'selected-access-placeholder',
+        refreshToken: 'selected-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'provider-account',
+        providerEmail: null,
+      },
+    });
+    const previousBindings: ConnectedServiceBindingsV1 = {
+      v: 1,
+      bindingsByServiceId: {
+        'claude-subscription': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'work',
+          profileId: 'primary',
+        },
+      },
+    };
+    const normalizedBindings: ConnectedServiceBindingsV1 = {
+      v: 1,
+      bindingsByServiceId: {
+        'claude-subscription': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'work',
+          profileId: 'backup',
+        },
+      },
+    };
+    // The tracked session carries NO hook-reported continuity hints (early-turn failure /
+    // daemon re-attach shape): no vendorResumeId, no resume spawn option, no webhook metadata.
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      happySessionId: 'sess_persisted',
+      pid: 789,
+      spawnOptions: {
+        directory: '/Users/leeroy/Documents/Development/happier/remote-dev',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        connectedServices: previousBindings,
+        environmentVariables: {
+          CLAUDE_CONFIG_DIR: sourceClaudeConfigDir,
+        },
+      },
+    };
+
+    const result = await materializeClaudeConnectedServiceRuntimeAuthSelection({
+      credentials: {
+        token: 'token',
+        encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+      } satisfies Credentials,
+      api: {} as ApiClient,
+      activeServerDir,
+      input: {
+        tracked,
+        sessionId: 'sess_persisted',
+        agentId: 'claude',
+        serviceId: 'claude-subscription',
+        previous: {
+          source: 'connected',
+          selection: 'group',
+          serviceId: 'claude-subscription',
+          profileId: 'primary',
+          groupId: 'work',
+        },
+        next: {
+          source: 'connected',
+          selection: 'group',
+          serviceId: 'claude-subscription',
+          profileId: 'backup',
+          groupId: 'work',
+        },
+        previousBindings,
+        normalizedBindings,
+        groupMetadata: {
+          groupId: 'work',
+          activeProfileId: 'backup',
+          fallbackProfileId: 'fallback',
+          generation: 3,
+        },
+      },
+      baseSelection: {
+        serviceId: 'claude-subscription',
+        binding: normalizedBindings.bindingsByServiceId['claude-subscription'],
+        profileId: 'backup',
+        groupId: 'work',
+        activeProfileId: 'backup',
+        fallbackProfileId: 'fallback',
+        generation: 3,
+        record,
+      },
+      accountSettings: accountSettingsParse({
+        connectedServicesProviderStateSharingSettingsV1: {
+          v: 1,
+          defaults: { configMode: 'linked', stateMode: 'shared' },
+          byAgentId: {
+            claude: { configMode: 'copied', stateMode: 'shared' },
+          },
+          acknowledgedRisksByAgentId: {
+            claude: { sharedStatePrivacy: true, symlinkUnavailable: true },
+          },
+        },
+      }),
+      processEnv: { HOME: homeDir, CLAUDE_CONFIG_DIR: sourceClaudeConfigDir },
+    });
+
+    const materializedEnv = (result as { targetMaterializedEnv?: Record<string, string> }).targetMaterializedEnv;
+    expect(materializedEnv?.CLAUDE_CONFIG_DIR).toBeTruthy();
+    await expect(verifyResumeReachableClaude({
+      vendorResumeId,
+      processEnv: { HOME: homeDir, CLAUDE_CONFIG_DIR: materializedEnv!.CLAUDE_CONFIG_DIR },
+    })).resolves.toMatchObject({ ok: true });
   });
 
   it('isolates runtime rematerialization from stale target temp-file collisions by staging before replacement', async () => {

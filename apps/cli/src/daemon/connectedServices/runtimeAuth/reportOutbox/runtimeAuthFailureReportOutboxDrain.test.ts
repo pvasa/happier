@@ -24,18 +24,24 @@ describe('runtimeAuthFailureReportOutboxDrain', () => {
         report: {
           sessionId: 'sess_group_401',
           switchesThisTurn: 2,
+          resumePromptMode: 'custom',
           classification: classifiedFailure,
         },
         nowMs: () => 1_700_000_000_000,
       });
       const notify = vi.fn(async () => ({ ok: true, result: { status: 'credential_refreshed' } }));
 
-      const result = await drainRuntimeAuthFailureReportOutboxToDaemon({ outboxDir, notify });
+      const result = await drainRuntimeAuthFailureReportOutboxToDaemon({
+        outboxDir,
+        notify,
+        nowMs: () => 1_700_000_000_500,
+      });
 
       expect(result).toEqual({ delivered: 1, dropped: 0, retried: 0 });
       expect(notify).toHaveBeenCalledWith({
         sessionId: 'sess_group_401',
         switchesThisTurn: 2,
+        resumePromptMode: 'custom',
         classification: expect.objectContaining({
           kind: 'auth_expired',
           serviceId: 'claude-subscription',
@@ -66,7 +72,11 @@ describe('runtimeAuthFailureReportOutboxDrain', () => {
         errorCode: 'connected_service_runtime_auth_recovery_intake_failed',
       }));
 
-      const result = await drainRuntimeAuthFailureReportOutboxToDaemon({ outboxDir, notify });
+      const result = await drainRuntimeAuthFailureReportOutboxToDaemon({
+        outboxDir,
+        notify,
+        nowMs: () => 1_700_000_000_500,
+      });
 
       expect(result).toEqual({ delivered: 0, dropped: 0, retried: 1 });
       expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toHaveLength(1);

@@ -43,6 +43,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
       headers: expect.objectContaining({
         Authorization: 'Bearer at',
         'anthropic-beta': 'oauth-2025-04-20',
+        'User-Agent': expect.stringMatching(/^claude-code\/[0-9][a-zA-Z0-9._+-]*$/u),
       }),
     }));
   });
@@ -240,6 +241,129 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
     });
 
     await expect(fetcher.fetch({ record, now: clock, signal: new AbortController().signal })).resolves.toBeNull();
+    clock += 60_000;
+    await expect(fetcher.fetch({ record, now: clock, signal: new AbortController().signal })).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reuse a Retry-After cooldown after a profile reconnects with different credentials', async () => {
+    const now = 5_250_000;
+    let usageCalls = 0;
+    const fetchMock = vi.fn(async (input: unknown, init?: unknown) => {
+      const url = String(input ?? '');
+      if (!url.includes('/anthropic/oauth/usage')) {
+        throw new Error(`Unexpected URL in test: ${url}`);
+      }
+      usageCalls += 1;
+      const auth = (() => {
+        const headers: unknown =
+          init && typeof init === 'object' && 'headers' in init ? (init as { headers?: unknown }).headers : undefined;
+        if (headers && typeof headers === 'object' && 'get' in headers && typeof headers.get === 'function') {
+          return String(headers.get('Authorization'));
+        }
+        return String((headers as Record<string, unknown> | undefined)?.Authorization ?? '');
+      })();
+      if (auth === 'Bearer stale-access-token') {
+        return {
+          ok: false,
+          status: 429,
+          statusText: 'Too Many Requests',
+          headers: { get: (name: string) => (name.toLowerCase() === 'retry-after' ? '120' : null) },
+          text: async () => 'rate limited',
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          five_hour: { utilization: 11, resets_at: '2026-02-16T00:00:00Z' },
+        }),
+      };
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const staleRecord = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'stale-access-token',
+        refreshToken: 'stale-refresh-token',
+        idToken: null,
+        scope: claudeCodeScope,
+        tokenType: null,
+        providerAccountId: null,
+        providerEmail: 'user@example.com',
+      },
+    });
+    const reconnectedRecord = buildConnectedServiceCredentialRecord({
+      now: now + 60_000,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 120_000,
+      oauth: {
+        accessToken: 'fresh-access-token',
+        refreshToken: 'fresh-refresh-token',
+        idToken: null,
+        scope: claudeCodeScope,
+        tokenType: null,
+        providerAccountId: null,
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    let clock = now;
+    const fetcher = createClaudeSubscriptionQuotaFetcher({
+      usageUrl: 'https://quota.happier.dev/anthropic/oauth/usage',
+      staleAfterMs: 300_000,
+      nowMs: () => clock,
+    });
+
+    await expect(fetcher.fetch({ record: staleRecord, now: clock, signal: new AbortController().signal })).resolves.toBeNull();
+    clock += 60_000;
+    await expect(fetcher.fetch({ record: reconnectedRecord, now: clock, signal: new AbortController().signal }))
+      .resolves
+      .toMatchObject({ profileId: 'work' });
+    expect(usageCalls).toBe(2);
+  });
+
+  it('records cooldown before fetching so repeated provider failures do not immediately refetch', async () => {
+    const now = 5_500_000;
+    const fetchMock = vi.fn(async () => {
+      throw new Error('network unavailable');
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: claudeCodeScope,
+        tokenType: null,
+        providerAccountId: null,
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    let clock = now;
+    const fetcher = createClaudeSubscriptionQuotaFetcher({
+      usageUrl: 'https://quota.happier.dev/anthropic/oauth/usage',
+      staleAfterMs: 300_000,
+      nowMs: () => clock,
+    });
+
+    await expect(fetcher.fetch({ record, now: clock, signal: new AbortController().signal }))
+      .rejects
+      .toThrow(/network unavailable/);
     clock += 60_000;
     await expect(fetcher.fetch({ record, now: clock, signal: new AbortController().signal })).resolves.toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);

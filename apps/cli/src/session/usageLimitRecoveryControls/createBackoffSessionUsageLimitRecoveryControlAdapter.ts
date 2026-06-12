@@ -1,6 +1,5 @@
 import {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
-  ConnectedServiceIdSchema,
   SessionRuntimeIssueV1Schema,
   SessionUsageLimitRecoveryV1Schema,
   type ConnectedServiceId,
@@ -13,15 +12,19 @@ import type {
   SessionUsageLimitRecoveryControlAdapterParams,
 } from './sessionUsageLimitRecoveryControlTypes';
 import { deriveUsageLimitRecoveryTiming } from './deriveUsageLimitRecoveryTiming';
+import { resolveUsageLimitRecoverySelectedAuthFromIssue } from './usageLimitRecoverySelectedAuth';
 
 type MetadataRecord = Record<string, unknown>;
 
 type BackoffUsageLimitRecoveryControlResult =
   | Readonly<{ ok: true; status: 'ready' | 'waiting'; metadata: MetadataRecord }>
-  | Readonly<{ ok: false; errorCode: string; error: string }>;
+  | Readonly<{ ok: false; errorCode: string; error: string; metadata?: MetadataRecord }>;
 
 const USAGE_LIMIT_RECOVERY_MAX_ATTEMPTS_EXHAUSTED_ERROR =
   'usage_limit_recovery_max_attempts_exhausted' as const;
+
+export const USAGE_LIMIT_RECOVERY_SUPERSEDED_BY_TURN_COMPLETION_ERROR =
+  'session_usage_limit_recovery_control_superseded_by_turn_completion' as const;
 
 function stableError(errorCode: string): Readonly<{ ok: false; errorCode: string; error: string }> {
   return { ok: false, errorCode, error: errorCode };
@@ -40,6 +43,25 @@ function readNonNegativeIntegerFromEnv(
 function readRecoveryIntent(metadata: MetadataRecord): SessionUsageLimitRecoveryV1 | null {
   const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]);
   return parsed.success ? parsed.data : null;
+}
+
+function isPendingRecoveryIntentStatus(status: SessionUsageLimitRecoveryV1['status']): boolean {
+  return status === 'waiting' || status === 'armed' || status === 'checking';
+}
+
+/**
+ * A persisted intent may only arm a resume when the session's latest turn is
+ * still interrupted. A turn that later completed (or was cancelled) normally
+ * supersedes the intent — re-arming it would spawn an involuntary resume into
+ * a session that already moved on. Unknown turn status keeps the intent
+ * (no evidence either way), matching readLatestUsageLimitIssue's convention.
+ */
+function isPersistedIntentSupersededByTurnCompletion(input: Readonly<{
+  intent: SessionUsageLimitRecoveryV1 | null;
+  latestTurnStatus: SessionUsageLimitRecoveryControlAdapterParams['rawSession']['latestTurnStatus'];
+}>): boolean {
+  if (!input.intent || !isPendingRecoveryIntentStatus(input.intent.status)) return false;
+  return input.latestTurnStatus != null && input.latestTurnStatus !== 'failed';
 }
 
 function readLatestUsageLimitIssue(input: Readonly<{
@@ -74,35 +96,6 @@ function buildUsageLimitIssueFingerprint(input: Readonly<{
       ? 'no-reset'
       : String(input.issue.usageLimit.resetAtMs),
   ].join(':');
-}
-
-function parseConnectedServiceId(value: unknown): ConnectedServiceId | null {
-  const parsed = ConnectedServiceIdSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
-}
-
-function buildSelectedAuth(input: Readonly<{
-  issue: SessionRuntimeIssueV1;
-  defaultNativeServiceId?: ConnectedServiceId | null;
-}>): SessionUsageLimitRecoveryV1['selectedAuth'] {
-  const connectedService = input.issue.usageLimit?.connectedService;
-  if (connectedService?.groupId && connectedService.profileId) {
-    return {
-      kind: 'group',
-      serviceId: connectedService.serviceId,
-      groupId: connectedService.groupId,
-      profileId: connectedService.profileId,
-    };
-  }
-  if (connectedService?.profileId) {
-    return {
-      kind: 'profile',
-      serviceId: connectedService.serviceId,
-      profileId: connectedService.profileId,
-    };
-  }
-  const serviceId = parseConnectedServiceId(connectedService?.serviceId) ?? input.defaultNativeServiceId ?? null;
-  return serviceId ? { kind: 'native', serviceId } : { kind: 'native' };
 }
 
 function resolveFallbackNextCheckAtMs(params: Readonly<{
@@ -147,6 +140,7 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(params: Readonly<{
   fallbackBackoffMs: number;
   maxAttempts: number;
   nowMs: number;
+  resumePromptMode?: 'standard' | 'off' | 'custom';
 }>): SessionUsageLimitRecoveryV1 {
   const usageLimit = params.issue.usageLimit;
   const timing = usageLimit
@@ -169,10 +163,11 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(params: Readonly<{
     attemptCount: 0,
     maxAttempts: params.maxAttempts,
     lastProbeError: null,
-    selectedAuth: buildSelectedAuth({
+    resumePromptMode: params.resumePromptMode ?? 'standard',
+    selectedAuth: resolveUsageLimitRecoverySelectedAuthFromIssue({
       issue: params.issue,
       defaultNativeServiceId: params.defaultNativeServiceId,
-    }),
+    }) ?? { kind: 'native' },
   };
 
   return {
@@ -245,6 +240,7 @@ export function createBackoffSessionUsageLimitRecoveryControlAdapter(options: Re
   defaultMaxAttempts: number;
   defaultNativeServiceId?: ConnectedServiceId | null;
   issueProviderFilter?: string | null;
+  resolveResumePromptConfig?: SessionUsageLimitRecoveryControlAdapter['resolveResumePromptConfig'];
   nowMs?: () => number;
   processEnv?: NodeJS.ProcessEnv;
 }>): SessionUsageLimitRecoveryControlAdapter {
@@ -252,6 +248,9 @@ export function createBackoffSessionUsageLimitRecoveryControlAdapter(options: Re
   const processEnv = options.processEnv ?? process.env;
 
   return {
+    ...(options.resolveResumePromptConfig
+      ? { resolveResumePromptConfig: options.resolveResumePromptConfig }
+      : {}),
     checkNow: async (params): Promise<BackoffUsageLimitRecoveryControlResult> => {
       const now = nowMs();
       const latestIssue = readLatestUsageLimitIssue({
@@ -260,6 +259,23 @@ export function createBackoffSessionUsageLimitRecoveryControlAdapter(options: Re
         issueProviderFilter: options.issueProviderFilter ?? null,
       });
       const persistedIntent = readRecoveryIntent(params.metadata);
+      if (isPersistedIntentSupersededByTurnCompletion({
+        intent: persistedIntent,
+        latestTurnStatus: params.rawSession.latestTurnStatus,
+      }) && persistedIntent) {
+        return {
+          ok: false,
+          errorCode: USAGE_LIMIT_RECOVERY_SUPERSEDED_BY_TURN_COMPLETION_ERROR,
+          error: USAGE_LIMIT_RECOVERY_SUPERSEDED_BY_TURN_COMPLETION_ERROR,
+          metadata: {
+            ...params.metadata,
+            [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: {
+              ...persistedIntent,
+              status: 'cancelled',
+            } satisfies SessionUsageLimitRecoveryV1,
+          },
+        };
+      }
       const fallbackBackoffMs = readNonNegativeIntegerFromEnv(
         processEnv,
         options.fallbackBackoffEnvKey,
@@ -279,6 +295,7 @@ export function createBackoffSessionUsageLimitRecoveryControlAdapter(options: Re
               options.defaultMaxAttempts,
             ),
             nowMs: now,
+            resumePromptMode: params.resumePromptMode,
           })
           : null;
       if (!intent) {

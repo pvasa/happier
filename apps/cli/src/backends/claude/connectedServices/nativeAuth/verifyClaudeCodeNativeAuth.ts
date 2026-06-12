@@ -1,11 +1,13 @@
 import { readFile } from 'node:fs/promises';
 
 import {
+  computeClaudeCodeCredentialFingerprint,
   parseClaudeCodeCredentialFile,
   resolveClaudeCodeCredentialsFilePath,
 } from './claudeCodeCredentialFile';
 import { readClaudeCodeMacOsKeychainCredential } from './claudeCodeMacOsKeychain';
 import { findMissingClaudeCodeCredentialScopes } from './claudeCodeCredentialScopes';
+import { readClaudeConnectedServiceHomeProvenance } from '../claudeConnectedServiceHomeProvenance';
 
 export type ClaudeCodeNativeAuthVerificationResult = Readonly<{
   status:
@@ -15,7 +17,8 @@ export type ClaudeCodeNativeAuthVerificationResult = Readonly<{
     | 'missing_access_token'
     | 'missing_refresh_token'
     | 'missing_required_scope'
-    | 'expired';
+    | 'expired'
+    | 'credential_fingerprint_mismatch';
   missingScopes: readonly string[];
   credentialPath: string;
 }>;
@@ -59,6 +62,17 @@ export async function verifyClaudeCodeNativeAuth(params: Readonly<{
   if (typeof parsed.expiresAt === 'number' && Number.isFinite(parsed.expiresAt) && parsed.expiresAt <= now) {
     return { status: 'expired', missingScopes: [], credentialPath };
   }
+  const fileFingerprint = computeClaudeCodeCredentialFingerprint(raw);
+  const provenance = await readClaudeConnectedServiceHomeProvenance(params.claudeConfigDir);
+  if (
+    provenance
+    && (
+      provenance.credentialFingerprint === undefined
+      || provenance.credentialFingerprint !== fileFingerprint
+    )
+  ) {
+    return { status: 'credential_fingerprint_mismatch', missingScopes: [], credentialPath };
+  }
   if (process.platform === 'darwin') {
     const keychainPayload = await readClaudeCodeMacOsKeychainCredential({
       claudeConfigDir: params.claudeConfigDir,
@@ -80,6 +94,9 @@ export async function verifyClaudeCodeNativeAuth(params: Readonly<{
         missingScopes: missingKeychainScopes,
         credentialPath,
       };
+    }
+    if (computeClaudeCodeCredentialFingerprint(keychainPayload) !== fileFingerprint) {
+      return { status: 'credential_fingerprint_mismatch', missingScopes: [], credentialPath };
     }
     if (
       typeof keychainParsed.expiresAt === 'number'

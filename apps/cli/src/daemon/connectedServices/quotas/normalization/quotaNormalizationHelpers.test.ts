@@ -106,7 +106,7 @@ describe('quota normalization helpers', () => {
       utilizationPct: null,
       used: null,
       limit: null,
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
     });
 
     expect(nullMeter).toMatchObject({
@@ -120,7 +120,7 @@ describe('quota normalization helpers', () => {
   it('classifies provider limit evidence without collapsing capacity or eligibility into quota', async () => {
     const helpers = await loadNormalizationHelpers();
 
-    expect(helpers.classifyProviderLimitEvidence({ code: 'usage_limit_reached' })).toBe('quota');
+    expect(helpers.classifyProviderLimitEvidence({ code: 'usage_limit_reached' })).toBe('usage_limit');
     expect(helpers.classifyProviderLimitEvidence({ status: 429, message: 'rate limit exceeded' })).toBe('rate_limit');
     expect(helpers.classifyProviderLimitEvidence({ error: { status: 429 } })).toBe('rate_limit');
     expect(helpers.classifyProviderLimitEvidence({ error: { code: -32603, data: { status: 429 } } })).toBe('rate_limit');
@@ -129,11 +129,11 @@ describe('quota normalization helpers', () => {
     expect(helpers.classifyProviderLimitEvidence({ message: 'model capacity exhausted' })).toBe('capacity');
     expect(helpers.classifyProviderLimitEvidence({ code: 'server_is_overloaded' })).toBe('capacity');
     expect(helpers.classifyProviderLimitEvidence({ message: 'server_is_overloaded' })).toBe('capacity');
-    expect(helpers.classifyProviderLimitEvidence({ status: 401, message: 'invalid api key' })).toBe('auth');
-    expect(helpers.classifyProviderLimitEvidence({ status: 402, message: 'upgrade your plan' })).toBe('plan');
-    expect(helpers.classifyProviderLimitEvidence({ message: 'plan unavailable for this account' })).toBe('plan');
-    expect(helpers.classifyProviderLimitEvidence({ status: 400, message: 'validation failed' })).toBe('validation');
-    expect(helpers.classifyProviderLimitEvidence({ message: 'account disabled' })).toBe('account_disabled');
+    expect(helpers.classifyProviderLimitEvidence({ status: 401, message: 'invalid api key' })).toBe('auth_invalid');
+    expect(helpers.classifyProviderLimitEvidence({ status: 402, message: 'upgrade your plan' })).toBe('plan_invalid');
+    expect(helpers.classifyProviderLimitEvidence({ message: 'plan unavailable for this account' })).toBe('plan_invalid');
+    expect(helpers.classifyProviderLimitEvidence({ status: 400, message: 'validation failed' })).toBe('validation_failed');
+    expect(helpers.classifyProviderLimitEvidence({ message: 'account disabled' })).toBe('disabled');
     expect(helpers.classifyProviderLimitEvidence({ message: 'quota limit: 100000 remaining: 95000' })).toBe('unknown');
   });
 
@@ -153,7 +153,7 @@ describe('quota normalization helpers', () => {
         meterId: 'daily',
         label: 'Daily',
         utilizationPct: 70,
-        limitCategory: 'quota',
+        limitCategory: 'usage_limit',
         reliable: true,
         applicable: true,
       }),
@@ -161,7 +161,7 @@ describe('quota normalization helpers', () => {
         meterId: 'weekly',
         label: 'Weekly',
         utilizationPct: 90,
-        limitCategory: 'quota',
+        limitCategory: 'usage_limit',
         reliable: true,
         applicable: true,
       }),

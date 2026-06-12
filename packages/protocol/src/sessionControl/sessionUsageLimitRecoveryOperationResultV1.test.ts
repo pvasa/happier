@@ -98,6 +98,7 @@ describe('SessionUsageLimitRecoveryOperationResultV1', () => {
       sessionId: 'sess_123',
       retryAfterMs: 123.9,
       issueFingerprint: 'usage-limit:sess_123:codex',
+      resumePromptMode: 'off',
       uxDiagnostic: baseDiagnostic,
     })).toEqual({
       ok: true,
@@ -105,6 +106,7 @@ describe('SessionUsageLimitRecoveryOperationResultV1', () => {
       sessionId: 'sess_123',
       retryAfterMs: 123,
       issueFingerprint: 'usage-limit:sess_123:codex',
+      resumePromptMode: 'off',
       uxDiagnostic: baseDiagnostic,
     });
   });
@@ -223,6 +225,18 @@ describe('SessionUsageLimitRecoveryOperationResultV1', () => {
       status: 'malformed_response',
       errorCode: 'missing_session_id',
     });
+
+    expect(normalizeSessionUsageLimitRecoveryOperationResultV1({
+      ok: true,
+      status: 'waiting',
+      sessionId: 'sess_123',
+      resumePromptMode: 'sometimes',
+    })).toEqual({
+      ok: false,
+      status: 'malformed_response',
+      sessionId: 'sess_123',
+      errorCode: 'malformed_session_usage_limit_recovery_resume_prompt_mode',
+    });
   });
 
   it('preserves typed diagnostics on normalized errors and classifies rate limits', () => {
@@ -260,5 +274,70 @@ describe('SessionUsageLimitRecoveryOperationResultV1', () => {
         errorCode,
       });
     }
+  });
+
+  it('classifies transport/parameter error codes like the dev normalizer (DEV-UIS-3 parity)', () => {
+    // Missing RPC methods and unreachable transports are session reachability
+    // failures, not "method unsupported" or "session not found".
+    for (const errorCode of [
+      'rpc_method_not_found',
+      'rpc_method_not_available',
+      'method_not_found',
+      'method_not_available',
+      'stale_machine',
+      'server_unreachable',
+    ]) {
+      expect(normalizeSessionUsageLimitRecoveryOperationResultV1({
+        ok: false,
+        errorCode,
+      }, { sessionId: 'sess_123' })).toEqual({
+        ok: false,
+        status: 'session_unreachable',
+        sessionId: 'sess_123',
+        errorCode,
+      });
+    }
+    // Caller-side parameter validation failures are malformed requests/responses.
+    for (const errorCode of ['invalid_parameters', 'malformed_request']) {
+      expect(normalizeSessionUsageLimitRecoveryOperationResultV1({
+        ok: false,
+        errorCode,
+      }, { sessionId: 'sess_123' })).toEqual({
+        ok: false,
+        status: 'malformed_response',
+        sessionId: 'sess_123',
+        errorCode,
+      });
+    }
+  });
+
+  it('carries session metadata as a typed, serializable field on both branches (RD-REC-17)', () => {
+    // Metadata must be part of the typed contract — never smuggled through
+    // non-enumerable properties invisible to validation and JSON boundaries.
+    const okResult = SessionUsageLimitRecoveryOperationResultV1Schema.parse({
+      ok: true,
+      status: 'ready',
+      sessionId: 'sess_123',
+      metadata: { usageLimitRecoveryV1: { status: 'waiting' } },
+    });
+    expect(okResult).toMatchObject({
+      ok: true,
+      metadata: { usageLimitRecoveryV1: { status: 'waiting' } },
+    });
+    expect(JSON.parse(JSON.stringify(okResult)).metadata).toEqual({
+      usageLimitRecoveryV1: { status: 'waiting' },
+    });
+
+    const errorResult = SessionUsageLimitRecoveryOperationResultV1Schema.parse({
+      ok: false,
+      status: 'exhausted',
+      sessionId: 'sess_123',
+      errorCode: 'recovery_exhausted',
+      metadata: { usageLimitRecoveryV1: null },
+    });
+    expect(errorResult).toMatchObject({
+      ok: false,
+      metadata: { usageLimitRecoveryV1: null },
+    });
   });
 });

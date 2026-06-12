@@ -26,6 +26,17 @@ function readSessionId(rawSession: RawSessionRecord): string {
   return typeof raw === 'string' ? raw.trim() : '';
 }
 
+/**
+ * Persisted recovery intents may only be re-armed while the session's latest
+ * turn is still interrupted. A completed/cancelled latest turn supersedes the
+ * intent: rehydrating it would schedule an involuntary time-based resume into
+ * a session that already moved on. Unknown turn status keeps the intent.
+ */
+function hasInterruptedTurnEvidence(rawSession: RawSessionRecord): boolean {
+  const status = (rawSession as Readonly<{ latestTurnStatus?: unknown }>).latestTurnStatus;
+  return status == null || status === 'failed';
+}
+
 function readActiveRecoveryIntent(metadata: Record<string, unknown> | null): SessionUsageLimitRecoveryV1 | null {
   const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(
     metadata?.[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY],
@@ -86,6 +97,7 @@ export async function hydrateInactiveUsageLimitRecoveryFromSessionMetadata(param
       if (rawSession.active === true) continue;
       const sessionId = readSessionId(rawSession);
       if (!sessionId) continue;
+      if (!hasInterruptedTurnEvidence(rawSession)) continue;
       const metadata = decryptMetadata({
         credentials: params.credentials,
         rawSession,

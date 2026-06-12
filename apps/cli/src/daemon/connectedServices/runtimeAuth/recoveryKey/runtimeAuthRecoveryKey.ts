@@ -7,12 +7,22 @@ export type RuntimeAuthRecoveryKeyParts = Readonly<{
 
 const RUNTIME_AUTH_RECOVERY_KEY_PREFIX = 'runtime-auth:v1:';
 
+function canonicalizeRuntimeAuthRecoveryKeyParts(parts: RuntimeAuthRecoveryKeyParts): RuntimeAuthRecoveryKeyParts {
+  return parts.groupId
+    ? {
+      ...parts,
+      profileId: null,
+    }
+    : parts;
+}
+
 function encodeKeyPayload(parts: RuntimeAuthRecoveryKeyParts): string {
+  const canonical = canonicalizeRuntimeAuthRecoveryKeyParts(parts);
   return Buffer.from(JSON.stringify([
-    parts.sessionId,
-    parts.serviceId,
-    parts.profileId,
-    parts.groupId,
+    canonical.sessionId,
+    canonical.serviceId,
+    canonical.profileId,
+    canonical.groupId,
   ]), 'utf8').toString('base64url');
 }
 
@@ -44,10 +54,10 @@ export function parseRuntimeAuthRecoveryKey(key: string): RuntimeAuthRecoveryKey
   if (!sessionId || !serviceId) return null;
   if (decoded[2] !== null && !profileId) return null;
   if (decoded[3] !== null && !groupId) return null;
-  return {
+  return canonicalizeRuntimeAuthRecoveryKeyParts({
     sessionId,
     serviceId,
     profileId,
     groupId,
-  };
+  });
 }

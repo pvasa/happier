@@ -2,12 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isCodexShareableSqliteStateEntry,
-  isCodexSharedStateSqliteFileName,
   resolveConfiguredCodexSqliteHome,
 } from './codexStateFileNames';
 
 describe('codexStateFileNames', () => {
-  it('classifies only state and goals SQLite files as shareable Codex SQLite state', () => {
+  it('classifies state, goals, and logs SQLite files (with wal/shm sidecars) as shareable Codex SQLite state', () => {
     expect(isCodexShareableSqliteStateEntry('state_5.sqlite')).toBe(true);
     expect(isCodexShareableSqliteStateEntry('state_5.sqlite-wal')).toBe(true);
     expect(isCodexShareableSqliteStateEntry('state_5.sqlite-shm')).toBe(true);
@@ -16,8 +15,7 @@ describe('codexStateFileNames', () => {
     expect(isCodexShareableSqliteStateEntry('logs_2.sqlite')).toBe(true);
     expect(isCodexShareableSqliteStateEntry('logs_2.sqlite-shm')).toBe(true);
     expect(isCodexShareableSqliteStateEntry('logs_2.sqlite-wal')).toBe(true);
-    expect(isCodexSharedStateSqliteFileName('logs_2.sqlite')).toBe(true);
-    expect(isCodexSharedStateSqliteFileName('state_5.sqlite-journal')).toBe(false);
+    expect(isCodexShareableSqliteStateEntry('state_5.sqlite-journal')).toBe(false);
   });
 
   it('resolves CODEX_SQLITE_HOME before falling back to CODEX_HOME', () => {

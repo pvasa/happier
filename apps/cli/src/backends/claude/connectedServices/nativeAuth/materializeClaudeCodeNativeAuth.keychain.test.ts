@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +8,8 @@ import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 
 import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from './claudeCodeCredentialScopes';
 import { resolveClaudeCodeMacOsKeychainServiceName } from './claudeCodeMacOsKeychain';
+import { resolveClaudeCodeCredentialsFilePath } from './claudeCodeCredentialFile';
+import { resolveClaudeConnectedServiceHomeProvenancePath } from '../claudeConnectedServiceHomeProvenance';
 
 const REALISTIC_ISSUED_AT_MS = Date.parse('2026-06-05T12:00:00.000Z');
 const REALISTIC_EXPIRES_AT_MS = REALISTIC_ISSUED_AT_MS + 60 * 60 * 1000;
@@ -106,7 +108,7 @@ describe('materializeClaudeSubscriptionNativeAuthHome macOS keychain integration
     );
   });
 
-  it('fails closed with a blocking diagnostic when the macOS keychain write fails after materialization', async () => {
+  it('fails closed with a blocking diagnostic and leaves the target home unchanged when the macOS keychain write fails', async () => {
     spawnSyncSpy.mockReturnValue({
       status: 1,
       stdout: '',
@@ -122,7 +124,13 @@ describe('materializeClaudeSubscriptionNativeAuthHome macOS keychain integration
     const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-keychain-home-'));
     const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-keychain-source-'));
     const targetClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-keychain-target-'));
+    const previousSettings = '{"theme":"previous"}\n';
+    const previousCredentials = '{"previous":true}\n';
+    const previousProvenance = '{"previousProvenance":true}\n';
     await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"source"}\n');
+    await writeFile(join(targetClaudeConfigDir, 'settings.json'), previousSettings);
+    await writeFile(resolveClaudeCodeCredentialsFilePath(targetClaudeConfigDir), previousCredentials);
+    await writeFile(resolveClaudeConnectedServiceHomeProvenancePath(targetClaudeConfigDir), previousProvenance);
 
     const result = await materializeClaudeSubscriptionNativeAuthHome({
       record: buildClaudeOauthRecord(),
@@ -147,5 +155,43 @@ describe('materializeClaudeSubscriptionNativeAuthHome macOS keychain integration
         reason: 'keychain_write_failed',
       }),
     ]);
+    await expect(readFile(join(targetClaudeConfigDir, 'settings.json'), 'utf8')).resolves.toBe(previousSettings);
+    await expect(readFile(resolveClaudeCodeCredentialsFilePath(targetClaudeConfigDir), 'utf8')).resolves.toBe(previousCredentials);
+    await expect(readFile(resolveClaudeConnectedServiceHomeProvenancePath(targetClaudeConfigDir), 'utf8')).resolves.toBe(previousProvenance);
+  });
+
+  it('rolls back self-source promoted credentials and provenance when the macOS keychain write fails', async () => {
+    spawnSyncSpy.mockReturnValue({
+      status: 1,
+      stdout: '',
+      stderr: 'keychain write failed',
+      error: undefined,
+      pid: 1,
+      output: ['', '', ''],
+      signal: null,
+    });
+    Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM_DESCRIPTOR, value: 'darwin' });
+
+    const { materializeClaudeSubscriptionNativeAuthHome } = await import('./materializeClaudeCodeNativeAuth');
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-keychain-home-'));
+    const targetClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-keychain-self-source-'));
+    await writeFile(join(targetClaudeConfigDir, 'settings.json'), '{"theme":"source"}\n');
+
+    const result = await materializeClaudeSubscriptionNativeAuthHome({
+      record: buildClaudeOauthRecord(),
+      targetClaudeConfigDir,
+      sourceEnv: { HOME: homeDir, CLAUDE_CONFIG_DIR: targetClaudeConfigDir },
+      accountSettings: null,
+      sessionDirectory: null,
+      selectionDescriptor: {
+        kind: 'profile',
+        serviceId: 'claude-subscription',
+        profileId: 'oauth-profile',
+      },
+    });
+
+    expect(result.status).toBe('diagnostic');
+    await expect(lstat(resolveClaudeCodeCredentialsFilePath(targetClaudeConfigDir))).rejects.toThrow();
+    await expect(lstat(resolveClaudeConnectedServiceHomeProvenancePath(targetClaudeConfigDir))).rejects.toThrow();
   });
 });

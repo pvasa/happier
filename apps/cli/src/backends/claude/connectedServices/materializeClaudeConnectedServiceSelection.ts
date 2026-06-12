@@ -126,6 +126,8 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
   processEnv: NodeJS.ProcessEnv;
   accountSettings?: AccountSettings | Readonly<Record<string, unknown>> | null;
   sessionDirectory?: string | null;
+  vendorResumeId?: string | null;
+  candidatePersistedSessionFile?: string | null;
 }>): Promise<ClaudeConnectedServiceSelectionMaterialization | null> {
   const claudeConfigDir = resolveClaudeConnectedServiceStableConfigDir({
     activeServerDir: params.activeServerDir,
@@ -170,6 +172,8 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
           }),
           accountSettings: params.accountSettings ?? null,
           sessionDirectory: params.sessionDirectory ?? null,
+          vendorResumeId: params.vendorResumeId ?? null,
+          candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
           selectionDescriptor: canonicalProfileSelectionDescriptor,
         });
         if (canonicalProfileMaterialized.status === 'diagnostic') {
@@ -200,6 +204,8 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
       }),
       accountSettings: params.accountSettings ?? null,
       sessionDirectory: params.sessionDirectory ?? null,
+      vendorResumeId: params.vendorResumeId ?? null,
+      candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
       selectionDescriptor,
     });
     return {

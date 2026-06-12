@@ -9,6 +9,14 @@ import {
   readCodexAuthStoreProviderAccountIdFromJson,
 } from './readCodexAuthStoreProviderAccountId';
 
+function buildJwt(payload: Record<string, unknown>): string {
+  return [
+    Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url'),
+    Buffer.from(JSON.stringify(payload)).toString('base64url'),
+    'sig',
+  ].join('.');
+}
+
 describe('readCodexAuthStoreProviderAccountId', () => {
   it('reads the connected-service flat Codex auth account id', () => {
     expect(readCodexAuthStoreProviderAccountIdFromJson({
@@ -49,6 +57,30 @@ describe('readCodexAuthStoreProviderAccountId', () => {
       await expect(readCodexAuthStoreProviderAccountId(codexHome)).resolves.toEqual({
         status: 'resolved',
         accountId: 'acct_tokens',
+      });
+    });
+  });
+
+  it('reads the upstream Codex token account id and email from an id_token JWT', async () => {
+    await withTempDir('happier-codex-auth-store-', async (root) => {
+      const codexHome = join(root, 'codex-home');
+      await mkdir(codexHome, { recursive: true });
+      await writeFile(join(codexHome, 'auth.json'), JSON.stringify({
+        auth_mode: 'chatgptAuthTokens',
+        tokens: {
+          access_token: 'redacted',
+          refresh_token: 'redacted',
+          id_token: buildJwt({
+            chatgpt_account_id: 'acct_from_jwt',
+            email: 'codex-user@example.test',
+          }),
+        },
+      }));
+
+      await expect(readCodexAuthStoreProviderAccountId(codexHome)).resolves.toEqual({
+        status: 'resolved',
+        accountId: 'acct_from_jwt',
+        accountEmail: 'codex-user@example.test',
       });
     });
   });

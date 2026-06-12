@@ -1,22 +1,33 @@
+import { randomUUID } from 'node:crypto';
 import type {
   AccountSettings,
   ConnectedServiceCredentialRecordV1,
 } from '@happier-dev/protocol';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { resolveConfiguredClaudeConfigDir } from '@/backends/claude/utils/resolveConfiguredClaudeConfigDir';
 import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
+import { withConnectedServiceStateSharingDestinationLock } from '@/daemon/connectedServices/stateSharing/connectedServiceStateSharingLock';
 import { replaceDirectoryAtomically } from '@/utils/fs/replaceDirectoryAtomically';
 
-import { syncClaudeConnectedServiceHome } from '../syncClaudeConnectedServiceHome';
+import {
+  backfillPreviousClaudeHomeSessionFiles,
+  resolveClaudeHomeSharingSettings,
+  syncClaudeConnectedServiceHome,
+} from '../syncClaudeConnectedServiceHome';
 import {
   buildClaudeConnectedServiceHomeProvenance,
+  resolveClaudeConnectedServiceHomeProvenancePath,
   writeClaudeConnectedServiceHomeProvenance,
 } from '../claudeConnectedServiceHomeProvenance';
 import { sanitizeClaudeRootConfigFile } from '../claudeRootConfig';
 import { materializeClaudeWorkspaceTrust } from '../materializeClaudeWorkspaceTrust';
-import { buildClaudeCodeCredentialPayload, writeClaudeCodeCredentialsFile } from './claudeCodeCredentialFile';
+import {
+  buildClaudeCodeCredentialPayload,
+  resolveClaudeCodeCredentialsFilePath,
+  writeClaudeCodeCredentialsFile,
+} from './claudeCodeCredentialFile';
 import { writeClaudeCodeMacOsKeychainCredential } from './claudeCodeMacOsKeychain';
 import {
   classifyClaudeCodeCredentialHealth,
@@ -160,6 +171,71 @@ function hasNonBlankString(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+type FileRollbackSnapshot = Readonly<{
+  path: string;
+  existed: boolean;
+  contents?: Buffer | undefined;
+  mode?: number | undefined;
+}>;
+
+async function snapshotFileForRollback(path: string): Promise<FileRollbackSnapshot> {
+  try {
+    const [contents, stats] = await Promise.all([readFile(path), lstat(path)]);
+    return { path, existed: true, contents, mode: stats.mode & 0o777 };
+  } catch {
+    return { path, existed: false };
+  }
+}
+
+async function restoreFileSnapshot(snapshot: FileRollbackSnapshot): Promise<void> {
+  if (!snapshot.existed) {
+    await rm(snapshot.path, { force: true }).catch(() => {});
+    return;
+  }
+  await mkdir(dirname(snapshot.path), { recursive: true });
+  await writeFile(snapshot.path, snapshot.contents ?? Buffer.alloc(0), { mode: snapshot.mode ?? 0o600 });
+  if (process.platform !== 'win32') {
+    await chmod(snapshot.path, snapshot.mode ?? 0o600).catch(() => {});
+  }
+}
+
+async function restoreFileSnapshots(snapshots: readonly FileRollbackSnapshot[]): Promise<void> {
+  await Promise.all(snapshots.map((snapshot) => restoreFileSnapshot(snapshot)));
+}
+
+async function replaceDirectoryAtomicallyWithPostPromoteRollback(params: Readonly<{
+  stagedDir: string;
+  targetDir: string;
+  afterPromote: () => Promise<void>;
+}>): Promise<void> {
+  await mkdir(dirname(params.targetDir), { recursive: true });
+  const backupDir = `${params.targetDir}.previous-${randomUUID()}`;
+  let hasBackup = false;
+  let promoted = false;
+  try {
+    await rename(params.targetDir, backupDir);
+    hasBackup = true;
+  } catch {
+    hasBackup = false;
+  }
+  try {
+    await rename(params.stagedDir, params.targetDir);
+    promoted = true;
+    await params.afterPromote();
+    if (hasBackup) {
+      await rm(backupDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    if (promoted) {
+      await rm(params.targetDir, { recursive: true, force: true }).catch(() => {});
+    }
+    if (hasBackup) {
+      await rename(backupDir, params.targetDir).catch(() => {});
+    }
+    throw error;
+  }
+}
+
 function buildClaudeSubscriptionNativeAuthIdentityDiagnostic(params: Readonly<{
   record: ConnectedServiceCredentialRecordV1;
   selectionDescriptor: ClaudeSubscriptionNativeAuthSelectionDescriptor;
@@ -195,6 +271,10 @@ export async function materializeClaudeSubscriptionNativeAuthHome(params: Readon
   sourceEnv: NodeJS.ProcessEnv;
   accountSettings?: AccountSettings | Readonly<Record<string, unknown>> | null;
   sessionDirectory?: string | null;
+  vendorResumeId?: string | null;
+  candidatePersistedSessionFile?: string | null;
+  /** Ambient native store root for self-source sharing-policy reconciliation (RD-MAT-2). */
+  ambientStateSourceDir?: string | null;
   selectionDescriptor: ClaudeSubscriptionNativeAuthSelectionDescriptor;
 }>): Promise<ClaudeSubscriptionNativeAuthHomeMaterializationResult> {
   const health = classifyClaudeCodeCredentialHealth(params.record);
@@ -223,8 +303,29 @@ export async function materializeClaudeSubscriptionNativeAuthHome(params: Readon
     };
   }
 
+  const sharingPolicy = resolveClaudeHomeSharingSettings(params.accountSettings ?? null);
   const sourceClaudeConfigDir = resolveConfiguredClaudeConfigDir({ env: params.sourceEnv });
   if (resolve(sourceClaudeConfigDir) === resolve(params.targetClaudeConfigDir)) {
+    const credentialSnapshot = await snapshotFileForRollback(
+      resolveClaudeCodeCredentialsFilePath(params.targetClaudeConfigDir),
+    );
+    const provenanceSnapshot = await snapshotFileForRollback(
+      resolveClaudeConnectedServiceHomeProvenancePath(params.targetClaudeConfigDir),
+    );
+    const syncResult = await syncClaudeConnectedServiceHome({
+      sourceEnv: params.sourceEnv,
+      targetDir: params.targetClaudeConfigDir,
+      accountSettings: params.accountSettings ?? null,
+      sessionDirectory: params.sessionDirectory ?? null,
+      preserveNativeCredentialFile: true,
+      sharingPolicyOverride: {
+        configMode: 'copied',
+        stateMode: sharingPolicy.stateMode,
+      },
+      vendorResumeId: params.vendorResumeId ?? null,
+      candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
+      ambientStateSourceDir: params.ambientStateSourceDir ?? null,
+    });
     await mkdir(params.targetClaudeConfigDir, { recursive: true });
     await materializeClaudeWorkspaceTrust({
       sourceEnv: params.sourceEnv,
@@ -240,6 +341,7 @@ export async function materializeClaudeSubscriptionNativeAuthHome(params: Readon
     if (materialized.status !== 'materialized') {
       return {
         ...materialized,
+        diagnostics: [...syncResult.diagnostics, ...materialized.diagnostics],
         identityDiagnostic,
       };
     }
@@ -259,6 +361,7 @@ export async function materializeClaudeSubscriptionNativeAuthHome(params: Readon
           payload: builtCredentialPayload.payload,
         });
       } catch {
+        await restoreFileSnapshots([credentialSnapshot, provenanceSnapshot]);
         return {
           status: 'diagnostic',
           env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
@@ -271,74 +374,104 @@ export async function materializeClaudeSubscriptionNativeAuthHome(params: Readon
       ...materialized,
       env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
       credentialPath: join(params.targetClaudeConfigDir, '.credentials.json'),
+      diagnostics: [...syncResult.diagnostics, ...materialized.diagnostics],
       identityDiagnostic,
     };
   }
 
   await mkdir(dirname(params.targetClaudeConfigDir), { recursive: true });
-  const stagedClaudeConfigDir = await mkdtemp(join(dirname(params.targetClaudeConfigDir), '.happier-claude-config-'));
-  try {
-    const syncResult = await syncClaudeConnectedServiceHome({
-      sourceEnv: params.sourceEnv,
-      targetDir: stagedClaudeConfigDir,
-      accountSettings: params.accountSettings ?? null,
-      sessionDirectory: params.sessionDirectory ?? null,
-      preserveNativeCredentialFile: true,
-      sharingPolicyOverride: {
-        configMode: 'copied',
-        stateMode: 'isolated',
-      },
-      importSessionFilesFromSourceProjects: true,
-    });
-    await sanitizeClaudeRootConfigFile(join(stagedClaudeConfigDir, '.claude.json'));
-    const materialized = await materializeClaudeCodeNativeAuth({
-      record: params.record,
-      claudeConfigDir: stagedClaudeConfigDir,
-    });
-    if (materialized.status !== 'materialized') {
-      return {
-        ...materialized,
-        env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
-        diagnostics: [...syncResult.diagnostics, ...materialized.diagnostics],
-        identityDiagnostic,
-      };
-    }
-    await writeClaudeConnectedServiceHomeProvenance({
-      claudeConfigDir: stagedClaudeConfigDir,
-      provenance: buildClaudeConnectedServiceHomeProvenance({
+  // RD-MAT-8: hold the destination lock on the REAL target home across stage-build + swap so a
+  // concurrent self-source materialization of the same profile home cannot interleave in-place
+  // writes with the staged replacement. The inner sync locks only the staged dir (distinct key).
+  return await withConnectedServiceStateSharingDestinationLock(params.targetClaudeConfigDir, async () => {
+    const stagedClaudeConfigDir = await mkdtemp(join(dirname(params.targetClaudeConfigDir), '.happier-claude-config-'));
+    try {
+      const syncResult = await syncClaudeConnectedServiceHome({
+        sourceEnv: params.sourceEnv,
+        targetDir: stagedClaudeConfigDir,
+        accountSettings: params.accountSettings ?? null,
+        sessionDirectory: params.sessionDirectory ?? null,
+        preserveNativeCredentialFile: true,
+        sharingPolicyOverride: {
+          configMode: 'copied',
+          stateMode: sharingPolicy.stateMode,
+        },
+        vendorResumeId: params.vendorResumeId ?? null,
+        candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
+      });
+      await sanitizeClaudeRootConfigFile(join(stagedClaudeConfigDir, '.claude.json'));
+      const materialized = await materializeClaudeCodeNativeAuth({
         record: params.record,
-        selectionDescriptor: params.selectionDescriptor,
-      }),
-    });
-    await replaceDirectoryAtomically({
-      stagedDir: stagedClaudeConfigDir,
-      targetDir: params.targetClaudeConfigDir,
-    });
-    if (process.platform === 'darwin') {
-      try {
-        await writeClaudeCodeMacOsKeychainCredential({
-          claudeConfigDir: params.targetClaudeConfigDir,
-          homeDir: params.sourceEnv.HOME,
-          username: params.sourceEnv.USER,
-          payload: builtCredentialPayload.payload,
-        });
-      } catch {
+        claudeConfigDir: stagedClaudeConfigDir,
+      });
+      if (materialized.status !== 'materialized') {
         return {
-          status: 'diagnostic',
+          ...materialized,
           env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
-          diagnostics: [...syncResult.diagnostics, diagnosticForKeychainWriteFailure()],
+          diagnostics: [...syncResult.diagnostics, ...materialized.diagnostics],
           identityDiagnostic,
         };
       }
+      await writeClaudeConnectedServiceHomeProvenance({
+        claudeConfigDir: stagedClaudeConfigDir,
+        provenance: buildClaudeConnectedServiceHomeProvenance({
+          record: params.record,
+          selectionDescriptor: params.selectionDescriptor,
+        }),
+      });
+      // RD-CLD-2: preserve the previous home's physical session files before the staged swap
+      // destroys them — sibling sessions resting in that home are NOT covered by the candidate
+      // session-file import of the session being resumed.
+      await backfillPreviousClaudeHomeSessionFiles({
+        previousClaudeConfigDir: params.targetClaudeConfigDir,
+        stagedClaudeConfigDir,
+        effectiveStateMode: syncResult.effectiveStateMode,
+        sharedSourceProjectsRoot: join(sourceClaudeConfigDir, 'projects'),
+      });
+      if (process.platform === 'darwin') {
+        let keychainWriteFailed = false;
+        try {
+          await replaceDirectoryAtomicallyWithPostPromoteRollback({
+            stagedDir: stagedClaudeConfigDir,
+            targetDir: params.targetClaudeConfigDir,
+            afterPromote: async () => {
+              try {
+                await writeClaudeCodeMacOsKeychainCredential({
+                  claudeConfigDir: params.targetClaudeConfigDir,
+                  homeDir: params.sourceEnv.HOME,
+                  username: params.sourceEnv.USER,
+                  payload: builtCredentialPayload.payload,
+                });
+              } catch (error) {
+                keychainWriteFailed = true;
+                throw error;
+              }
+            },
+          });
+        } catch (error) {
+          if (!keychainWriteFailed) throw error;
+          return {
+            status: 'diagnostic',
+            env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
+            diagnostics: [...syncResult.diagnostics, diagnosticForKeychainWriteFailure()],
+            identityDiagnostic,
+          };
+        }
+      } else {
+        await replaceDirectoryAtomically({
+          stagedDir: stagedClaudeConfigDir,
+          targetDir: params.targetClaudeConfigDir,
+        });
+      }
+      return {
+        ...materialized,
+        env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
+        credentialPath: join(params.targetClaudeConfigDir, '.credentials.json'),
+        diagnostics: [...syncResult.diagnostics, ...materialized.diagnostics],
+        identityDiagnostic,
+      };
+    } finally {
+      await rm(stagedClaudeConfigDir, { recursive: true, force: true }).catch(() => {});
     }
-    return {
-      ...materialized,
-      env: { CLAUDE_CONFIG_DIR: params.targetClaudeConfigDir },
-      credentialPath: join(params.targetClaudeConfigDir, '.credentials.json'),
-      diagnostics: [...syncResult.diagnostics, ...materialized.diagnostics],
-      identityDiagnostic,
-    };
-  } finally {
-    await rm(stagedClaudeConfigDir, { recursive: true, force: true }).catch(() => {});
-  }
+  }, { providerId: 'claude' });
 }

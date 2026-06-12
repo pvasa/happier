@@ -16,12 +16,14 @@ type SwitchAccountNowRequest = Readonly<{
    * "codex"; this is not the connected-service id such as "openai-codex".
    */
   provider?: string;
+  resumePromptMode?: 'standard' | 'off' | 'custom';
 }>;
 
 export type NotifyRuntimeAuthFailure = (body: Readonly<{
   sessionId: string;
   switchesThisTurn?: number;
   classification: unknown;
+  resumePromptMode?: 'standard' | 'off' | 'custom';
 }>) => Promise<unknown>;
 
 type RouteSessionUsageLimitRecoverySwitchAccountNowParams = Readonly<{
@@ -34,6 +36,30 @@ type RouteSessionUsageLimitRecoverySwitchAccountNowParams = Readonly<{
   request?: SwitchAccountNowRequest;
   notifyRuntimeAuthFailure?: NotifyRuntimeAuthFailure;
 }>;
+
+function normalizeUsageLimitCategoryForRuntimeRecovery(
+  value: NonNullable<SessionRuntimeIssueV1['usageLimit']>['limitCategory'],
+): ConnectedServiceRuntimeFailureClassification['limitCategory'] {
+  switch (value) {
+    case 'usage_limit':
+      return 'usage_limit';
+    case 'auth_invalid':
+      return 'auth_invalid';
+    case 'plan_invalid':
+      return 'plan_invalid';
+    case 'validation_failed':
+      return 'validation_failed';
+    case 'disabled':
+      return 'disabled';
+    case 'rate_limit':
+    case 'capacity':
+    case 'temporary_throttle':
+    case 'unknown':
+      return value;
+    default:
+      return 'usage_limit';
+  }
+}
 
 function stableError(
   errorCode: string,
@@ -120,7 +146,7 @@ function buildRuntimeAuthClassificationFromUsageLimitIssue(
     providerLimitId: usageLimit.providerLimitId ?? null,
     action,
     planType: usageLimit.planType ?? null,
-    limitCategory: usageLimit.limitCategory ?? 'quota',
+    limitCategory: normalizeUsageLimitCategoryForRuntimeRecovery(usageLimit.limitCategory),
     rateLimits: null,
     source: 'provider_runtime_marker',
   };
@@ -189,6 +215,7 @@ export async function routeSessionUsageLimitRecoverySwitchAccountNow(
       sessionId: params.sessionId,
       switchesThisTurn: 0,
       classification,
+      ...(params.request?.resumePromptMode ? { resumePromptMode: params.request.resumePromptMode } : {}),
     }));
   } catch {
     return operationResult(params, stableError('session_usage_limit_recovery_control_switch_failed'));

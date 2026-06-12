@@ -1,5 +1,8 @@
 import type { ConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/types';
-import type { NormalizedProviderUsageLimitDetailsV1 } from './mapClaudeRateLimitEventToUsageDetails';
+import {
+    resolveClaudeUsageLimitResetTiming,
+    type NormalizedProviderUsageLimitDetailsV1,
+} from './mapClaudeRateLimitEventToUsageDetails';
 
 function readRecord(value: unknown): Record<string, unknown> | null {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -9,6 +12,10 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 
 function readString(value: unknown): string | null {
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readClaudeConnectedServiceId(value: unknown): 'anthropic' | 'claude-subscription' {
+    return readString(value) === 'anthropic' ? 'anthropic' : 'claude-subscription';
 }
 
 function readStatus(value: unknown): number | null {
@@ -71,8 +78,8 @@ function classifyClaudeAuthFailure(params: Readonly<{
     const selection = readRecord(params.selection);
     return {
         kind: 'auth_expired',
-        limitCategory: 'auth',
-        serviceId: readString(selection?.serviceId) ?? 'claude-subscription',
+        limitCategory: 'auth_invalid',
+        serviceId: readClaudeConnectedServiceId(selection?.serviceId),
         profileId: readString(selection?.activeProfileId ?? selection?.profileId),
         groupId: readString(selection?.groupId),
         resetsAtMs: null,
@@ -95,26 +102,34 @@ export function classifyClaudeConnectedServiceRuntimeAuthFailure(params: Readonl
         return classifyClaudeAuthFailure({ error: params.error, selection: params.selection });
     }
     const selection = readRecord(params.selection);
-    const kind =
-        params.details.limitCategory === 'capacity'
-            ? 'capacity'
-            : params.details.limitCategory === 'rate_limit' || (params.details.utilization !== null && params.details.utilization < 100)
+    // RD-CLD-5: an explicit mapper category is authoritative; the sub-100 utilization heuristic
+    // (cooldown-shaped rate limit) applies only when the mapper could not determine a category.
+    const limitCategory =
+        params.details.limitCategory !== undefined && params.details.limitCategory !== 'unknown'
+            ? params.details.limitCategory
+            : params.details.utilization !== null && params.details.utilization < 100
                 ? 'rate_limit'
                 : 'usage_limit';
-    const limitCategory =
-        params.details.limitCategory === 'capacity'
+    const kind =
+        limitCategory === 'capacity'
             ? 'capacity'
-            : params.details.limitCategory === 'rate_limit' || (params.details.utilization !== null && params.details.utilization < 100)
+            : limitCategory === 'rate_limit'
                 ? 'rate_limit'
-                : 'quota';
+                : 'usage_limit';
+    // INC-4: when the mapped details carry no timing, fall back to parsing the raw provider
+    // payload so durable waits can use the true provider reset instead of rolling cooldowns.
+    const fallbackTiming =
+        params.details.resetAtMs === null && params.details.retryAfterMs === null && params.error !== undefined
+            ? resolveClaudeUsageLimitResetTiming(params.error, Date.now())
+            : null;
     return {
         kind,
         limitCategory,
-        serviceId: readString(selection?.serviceId) ?? 'claude-subscription',
+        serviceId: readClaudeConnectedServiceId(selection?.serviceId),
         profileId: readString(selection?.activeProfileId ?? selection?.profileId),
         groupId: readString(selection?.groupId),
-        resetsAtMs: params.details.resetAtMs,
-        retryAfterMs: params.details.retryAfterMs,
+        resetsAtMs: params.details.resetAtMs ?? fallbackTiming?.resetAtMs ?? null,
+        retryAfterMs: params.details.retryAfterMs ?? fallbackTiming?.retryAfterMs ?? null,
         quotaScope: params.details.quotaScope,
         providerLimitId: params.details.providerLimitId ?? null,
         action: params.details.action,

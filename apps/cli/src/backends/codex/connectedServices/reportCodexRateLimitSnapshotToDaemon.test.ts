@@ -1,7 +1,19 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { reportCodexRateLimitSnapshotToDaemon } from './reportCodexRateLimitSnapshotToDaemon';
+
+function buildJwt(payload: Record<string, unknown>): string {
+  return [
+    Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url'),
+    Buffer.from(JSON.stringify(payload)).toString('base64url'),
+    'sig',
+  ].join('.');
+}
 
 describe('reportCodexRateLimitSnapshotToDaemon', () => {
   it('reports app-server rate-limit snapshots for the active connected-service group member', async () => {
@@ -39,17 +51,145 @@ describe('reportCodexRateLimitSnapshotToDaemon', () => {
     });
   });
 
-  it('does not report snapshots when the session did not select OpenAI Codex connected auth', async () => {
+  it('attributes post-hot-apply snapshots to the current session metadata member, not the stale child env selection', async () => {
     const notify = vi.fn(async () => ({ ok: true }));
 
     await reportCodexRateLimitSnapshotToDaemon({
-      env: {},
+      env: {
+        // The child env keeps naming the PRE-switch member after a hot-apply
+        // group switch; it must not own snapshot attribution.
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'main',
+          activeProfileId: 'exhausted-member',
+          fallbackProfileId: 'fresh-member',
+          generation: 2,
+        }]),
+      },
+      session: {
+        getMetadataSnapshot: () => ({
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                groupId: 'main',
+                profileId: 'fresh-member',
+              },
+            },
+          },
+        }),
+      },
+      sessionId: 'sess_1',
+      rawSnapshot: { primary: { used_percent: 5 } },
+      nowMs: 1_000,
+      notify,
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot: expect.objectContaining({
+        serviceId: 'openai-codex',
+        profileId: 'fresh-member',
+      }),
+    });
+  });
+
+  it('falls back to the child env selection when session metadata has no usable connected binding', async () => {
+    const notify = vi.fn(async () => ({ ok: true }));
+
+    await reportCodexRateLimitSnapshotToDaemon({
+      env: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'main',
+          activeProfileId: 'backup',
+          fallbackProfileId: 'primary',
+          generation: 2,
+        }]),
+      },
+      session: {
+        getMetadataSnapshot: () => ({ connectedServices: null }),
+      },
       sessionId: 'sess_1',
       rawSnapshot: { primary: { used_percent: 88 } },
       nowMs: 1_000,
       notify,
     });
 
-    expect(notify).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot: expect.objectContaining({ profileId: 'backup' }),
+    });
+  });
+
+  it('reports native app-server snapshots with stable Codex account identity when no connected auth is selected', async () => {
+    const root = join(tmpdir(), `happier-codex-native-quota-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const codexHome = join(root, 'codex-home');
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(join(codexHome, 'auth.json'), JSON.stringify({
+      tokens: {
+        id_token: {
+          chatgpt_account_id: 'acct_native_codex',
+        },
+      },
+    }));
+    const notify = vi.fn(async () => ({ ok: true }));
+
+    await reportCodexRateLimitSnapshotToDaemon({
+      env: { CODEX_HOME: codexHome },
+      sessionId: 'sess_1',
+      rawSnapshot: { primary: { used_percent: 88 } },
+      nowMs: 1_000,
+      notify,
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot: expect.objectContaining({
+        serviceId: 'openai-codex',
+        profileId: expect.stringMatching(/^acct:[a-f0-9]{48}$/u),
+        activeAccountId: 'acct_native_codex',
+        providerId: 'codex',
+      }),
+    });
+  });
+
+  it('uses the native Codex auth-store email as the quota account label when the rate-limit payload is email-less', async () => {
+    const root = join(tmpdir(), `happier-codex-native-quota-email-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const codexHome = join(root, 'codex-home');
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(join(codexHome, 'auth.json'), JSON.stringify({
+      tokens: {
+        id_token: buildJwt({
+          chatgpt_account_id: 'acct_native_codex',
+          email: 'codex-user@example.test',
+        }),
+      },
+    }));
+    const notify = vi.fn(async () => ({ ok: true }));
+
+    await reportCodexRateLimitSnapshotToDaemon({
+      env: { CODEX_HOME: codexHome },
+      sessionId: 'sess_1',
+      rawSnapshot: { primary: { used_percent: 44 } },
+      nowMs: 1_000,
+      notify,
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot: expect.objectContaining({
+        activeAccountId: 'acct_native_codex',
+        accountLabel: 'codex-user@example.test',
+      }),
+    });
   });
 });

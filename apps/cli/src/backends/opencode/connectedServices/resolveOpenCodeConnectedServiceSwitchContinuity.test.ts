@@ -83,7 +83,11 @@ describe('resolveOpenCodeConnectedServiceSwitchContinuity', () => {
     });
   });
 
-  it('fails closed for exact connected-selection continuity when resume reachability is not proven', async () => {
+  // OpenCode session state lives in the GLOBAL shared managed-server storage (not home-scoped),
+  // so an identical re-selection is at least as resumable as a changed selection. It must route
+  // through the same restart/rematerialize action instead of failing closed on a home-scoped
+  // reachability proof that can never succeed (RD-OPI-4).
+  it('uses restart/rematerialize continuity for exact connected-selection re-selection', async () => {
     await expect(resolveOpenCodeConnectedServiceSwitchContinuity(createParams({
       previousBinding: {
         source: 'connected',
@@ -118,8 +122,8 @@ describe('resolveOpenCodeConnectedServiceSwitchContinuity', () => {
       },
       vendorResumeId: 'vendor-session-1',
     }))).resolves.toEqual({
-      mode: 'unsupported',
-      reason: 'provider_session_state_unavailable_for_resume',
+      mode: 'restart_same_home',
+      reason: 'opencode_restart_rematerialize_required',
     });
   });
 

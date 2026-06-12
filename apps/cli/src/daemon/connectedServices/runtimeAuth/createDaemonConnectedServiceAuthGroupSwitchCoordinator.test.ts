@@ -123,6 +123,93 @@ describe('createDaemonConnectedServiceAuthGroupSwitchCoordinator', () => {
     expect(restartSession).not.toHaveBeenCalled();
   });
 
+  it('surfaces the FSM-proven continuity context on the switched result for switch telemetry (INC-6)', async () => {
+    const api = {
+      getConnectedServiceAuthGroup: vi.fn(async () => group('primary', 1)),
+      updateConnectedServiceAuthGroupActiveProfile: vi.fn(async () => group('backup', 2)),
+      updateConnectedServiceAuthGroupRuntimeState: vi.fn(async () => group('primary', 1)),
+    };
+    const continuity = {
+      materializationIdentityId: 'csm_abc',
+      targetMaterializedRoot: '/home/user/.happier/csm/csm_abc',
+      vendorResumeId: 'resume-123',
+      candidatePersistedSessionFile: '/home/user/.codex/sessions/rollout.jsonl',
+      requestedStateMode: 'shared',
+      effectiveStateMode: 'shared',
+    };
+    const applyConnectedServiceAuthGeneration = vi.fn(async () => ({
+      ok: true as const,
+      action: 'metadata_updated' as const,
+      diagnostics: { continuity },
+    }));
+    const coordinator = createDaemonConnectedServiceAuthGroupSwitchCoordinator({
+      api,
+      runtimeQuotaSnapshots: new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore(),
+      quotaFreshnessMs: 60_000,
+      nowMs: () => 1_000,
+      restartSession: vi.fn(async () => {}),
+      applyConnectedServiceAuthGeneration,
+    });
+
+    // The proven continuity context from the session FSM must reach the coordinator result —
+    // reactive switch-attempt telemetry reads `result.diagnostics.continuity`, and dropping it
+    // here is what left vendorResumeId/targetMaterializedRoot/effectiveStateMode all-null in
+    // the Jun-10 incident telemetry (INC-6).
+    await expect(coordinator.switchAfterClassifiedFailure({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+      switchesThisTurn: 0,
+    })).resolves.toMatchObject({
+      status: 'switched',
+      activeProfileId: 'backup',
+      generation: 2,
+      mode: 'spawn_next_turn',
+      diagnostics: { continuity },
+    });
+  });
+
+  it('does not claim a restart or provider application when the FSM reports the binding unchanged (RD-SW-5)', async () => {
+    const api = {
+      getConnectedServiceAuthGroup: vi.fn(async () => group('primary', 1)),
+      updateConnectedServiceAuthGroupActiveProfile: vi.fn(async () => group('backup', 2)),
+      updateConnectedServiceAuthGroupRuntimeState: vi.fn(async () => group('primary', 1)),
+    };
+    const restartSession = vi.fn(async () => {});
+    const applyConnectedServiceAuthGeneration = vi.fn(async () => ({
+      ok: true as const,
+      action: 'unchanged' as const,
+    }));
+    const coordinator = createDaemonConnectedServiceAuthGroupSwitchCoordinator({
+      api,
+      runtimeQuotaSnapshots: new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore(),
+      quotaFreshnessMs: 60_000,
+      nowMs: () => 1_000,
+      restartSession,
+      applyConnectedServiceAuthGeneration,
+    });
+
+    const result = await coordinator.switchAfterClassifiedFailure({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+      switchesThisTurn: 0,
+    });
+
+    expect(result).toMatchObject({
+      status: 'switched',
+      activeProfileId: 'backup',
+      generation: 2,
+    });
+    // An `unchanged` apply performed no restart and no provider application — the diagnostic
+    // mode/providerApplication must not fabricate a `restart_resume`/`applied` transition.
+    expect(result).not.toHaveProperty('mode');
+    expect(result).not.toHaveProperty('providerApplication');
+    expect(restartSession).not.toHaveBeenCalled();
+  });
+
   it('retries a transient auth-group load failure with backoff before switching', async () => {
     const getConnectedServiceAuthGroup = vi.fn<() => Promise<ConnectedServiceAuthGroupV1 | null>>()
       .mockRejectedValueOnce(new Error('Failed to get connected service auth group: timeout of 5000ms exceeded'))
@@ -669,6 +756,65 @@ describe('createDaemonConnectedServiceAuthGroupSwitchCoordinator', () => {
         state: expect.objectContaining({
           quotaExhaustedUntilMs: 46_000,
           lastFailureKind: 'usage_limit',
+          lastObservedAtMs: 1_000,
+        }),
+      }],
+    }));
+  });
+
+  it('uses the group cooldown as a rate-limit and capacity fallback when provider timing is missing', async () => {
+    const loadedGroup = {
+      ...group('primary', 1),
+      policy: {
+        ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+        autoSwitch: true,
+        cooldownMs: 45_000,
+      },
+    };
+    const api = {
+      getConnectedServiceAuthGroup: vi.fn(async () => loadedGroup),
+      updateConnectedServiceAuthGroupRuntimeState: vi.fn(async () => loadedGroup),
+      updateConnectedServiceAuthGroupActiveProfile: vi.fn(async () => group('backup', 2)),
+    };
+    const coordinator = createDaemonConnectedServiceAuthGroupSwitchCoordinator({
+      api,
+      runtimeQuotaSnapshots: new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore(),
+      quotaFreshnessMs: 60_000,
+      nowMs: () => 1_000,
+      restartSession: async () => {},
+    });
+
+    await coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'rate_limit',
+      observedProfileId: 'primary',
+      planType: null,
+    });
+    await coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'capacity',
+      observedProfileId: 'primary',
+      planType: null,
+    });
+
+    expect(api.updateConnectedServiceAuthGroupRuntimeState).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      memberStates: [{
+        profileId: 'primary',
+        state: expect.objectContaining({
+          rateLimitedUntilMs: 46_000,
+          lastFailureKind: 'rate_limit',
+          lastObservedAtMs: 1_000,
+        }),
+      }],
+    }));
+    expect(api.updateConnectedServiceAuthGroupRuntimeState).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      memberStates: [{
+        profileId: 'primary',
+        state: expect.objectContaining({
+          capacityLimitedUntilMs: 46_000,
+          lastFailureKind: 'capacity',
           lastObservedAtMs: 1_000,
         }),
       }],

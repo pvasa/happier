@@ -1,10 +1,9 @@
-import type { ConnectedServiceId, ConnectedServiceProfileId } from '@happier-dev/protocol';
+import type { ConnectedServiceId, ConnectedServiceLimitCategoryV1, ConnectedServiceProfileId } from '@happier-dev/protocol';
 
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 
 export type CodexConnectedServiceRuntimeFailureKind =
   | 'usage_limit'
-  | 'rate_limit'
   | 'auth_expired'
   | 'account_changed'
   | 'refresh_failed'
@@ -13,7 +12,7 @@ export type CodexConnectedServiceRuntimeFailureKind =
 
 export type CodexConnectedServiceRuntimeFailureClassification = Readonly<{
   kind: CodexConnectedServiceRuntimeFailureKind;
-  limitCategory?: 'quota' | 'rate_limit' | 'capacity' | 'auth' | 'plan' | 'validation' | 'account_disabled' | 'unknown';
+  limitCategory?: ConnectedServiceLimitCategoryV1;
   serviceId: ConnectedServiceId;
   profileId: ConnectedServiceProfileId | null;
   groupId: string | null;
@@ -35,7 +34,6 @@ export type ClassifyCodexConnectedServiceAuthFailureInput = Readonly<{
   serviceId: ConnectedServiceId;
   profileId: ConnectedServiceProfileId | null;
   groupId: string | null;
-  nowMs?: number | null;
 }>;
 
 const CODEX_ACCOUNT_CHANGED_MESSAGE =
@@ -120,88 +118,9 @@ function readRetryAfterMs(value: unknown): number | null {
   return Math.trunc(numeric);
 }
 
-const monthIndexByName = new Map([
-  ['january', 0],
-  ['jan', 0],
-  ['february', 1],
-  ['feb', 1],
-  ['march', 2],
-  ['mar', 2],
-  ['april', 3],
-  ['apr', 3],
-  ['may', 4],
-  ['june', 5],
-  ['jun', 5],
-  ['july', 6],
-  ['jul', 6],
-  ['august', 7],
-  ['aug', 7],
-  ['september', 8],
-  ['sep', 8],
-  ['sept', 8],
-  ['october', 9],
-  ['oct', 9],
-  ['november', 10],
-  ['nov', 10],
-  ['december', 11],
-  ['dec', 11],
-]);
-
-function parsePeriodHour(rawHour: number, period: string | undefined): number | null {
-  if (!Number.isInteger(rawHour) || rawHour < 1 || rawHour > 12) return null;
-  let hour = rawHour % 12;
-  if (period?.toUpperCase() === 'PM') hour += 12;
-  return hour;
-}
-
-function readStableFullDateRetryTimeResetAtMs(text: string): number | null {
-  const match = /\btry\s+again\s+at\s+([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b/iu.exec(text);
-  if (!match) return null;
-  const monthIndex = monthIndexByName.get(match[1]?.toLowerCase() ?? '');
-  const day = Number(match[2]);
-  const year = Number(match[3]);
-  const rawHour = Number(match[4]);
-  const minute = Number(match[5] ?? '00');
-  const hour = parsePeriodHour(rawHour, match[6]);
-  if (monthIndex === undefined || hour === null) return null;
-  if (!Number.isInteger(year) || year < 1970 || !Number.isInteger(day) || day < 1 || day > 31) return null;
-  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
-  const candidate = new Date(year, monthIndex, day, hour, minute, 0, 0);
-  if (
-    candidate.getFullYear() !== year
-    || candidate.getMonth() !== monthIndex
-    || candidate.getDate() !== day
-  ) {
-    return null;
-  }
-  const parsed = candidate.getTime();
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-}
-
-function readStableRetryTimeResetAtMs(text: string, nowMs: number): number | null {
-  const fullDateResetAtMs = readStableFullDateRetryTimeResetAtMs(text);
-  if (fullDateResetAtMs !== null) return fullDateResetAtMs;
-
-  const match = /\btry\s+again\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b/iu.exec(text);
-  if (!match) return null;
-  const hourText = match[1];
-  const minuteText = match[2] ?? '00';
-  const period = match[3]?.toUpperCase();
-  const rawHour = Number(hourText);
-  const minute = Number(minuteText);
-  const hour = parsePeriodHour(rawHour, period);
-  if (hour === null || !Number.isInteger(minute)) return null;
-  if (minute < 0 || minute > 59) return null;
-  const now = new Date(nowMs);
-  const candidate = new Date(now.getTime());
-  candidate.setHours(hour, minute, 0, 0);
-  if (candidate.getTime() <= nowMs) {
-    candidate.setDate(candidate.getDate() + 1);
-  }
-  const parsed = candidate.getTime();
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-}
-
+// F11: human-readable "try again at <time/date>" retry wording carries no timezone/offset
+// and must stay advisory-only — it is never parsed into a durable daemon-local
+// `resetsAtMs`. Only structured provider reset metadata may drive reset timing.
 function buildClassification(
   input: ClassifyCodexConnectedServiceAuthFailureInput,
   params: Readonly<{
@@ -243,13 +162,10 @@ export function classifyCodexConnectedServiceAuthFailure(
   const codexErrorInfo = readString(record?.codexErrorInfo ?? record?.codex_error_info);
   const structuredCode = readString(record?.code ?? record?.type ?? record?.reason);
   if (isStructuredUsageLimitCode(codexErrorInfo) || isStructuredUsageLimitCode(structuredCode)) {
-    const text = readErrorText(input.error);
     return buildClassification(input, {
       kind: 'usage_limit',
-      limitCategory: 'quota',
-      resetsAtMs:
-        readResetAtMs(record?.resetsAt ?? record?.resets_at)
-        ?? readStableRetryTimeResetAtMs(text, input.nowMs ?? Date.now()),
+      limitCategory: 'usage_limit',
+      resetsAtMs: readResetAtMs(record?.resetsAt ?? record?.resets_at),
       retryAfterMs: readRetryAfterMs(record?.retryAfterMs ?? record?.retry_after_ms),
       planType: readString(record?.planType ?? record?.plan_type),
       rateLimits: record?.rateLimits ?? record?.rate_limits ?? null,
@@ -262,7 +178,7 @@ export function classifyCodexConnectedServiceAuthFailure(
   if (text.includes(CODEX_ACCOUNT_CHANGED_MESSAGE)) {
     return buildClassification(input, {
       kind: 'account_changed',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       source: record ? 'structured_provider_error' : 'stable_provider_message',
     });
   }
@@ -273,7 +189,7 @@ export function classifyCodexConnectedServiceAuthFailure(
   if ((providerCode && refreshFailedProviderCodes.has(providerCode)) || containsRefreshTokenFailureMessage(text)) {
     return buildClassification(input, {
       kind: 'refresh_failed',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       source: record ? 'structured_provider_error' : 'stable_provider_message',
     });
   }
@@ -285,7 +201,7 @@ export function classifyCodexConnectedServiceAuthFailure(
   ) {
     return buildClassification(input, {
       kind: 'auth_expired',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       source: record ? 'structured_provider_error' : 'stable_provider_message',
     });
   }
@@ -298,8 +214,7 @@ export function classifyCodexConnectedServiceAuthFailure(
   if (generic.source === 'usage_limit') {
     return buildClassification(input, {
       kind: 'usage_limit',
-      limitCategory: 'quota',
-      resetsAtMs: readStableRetryTimeResetAtMs(text, input.nowMs ?? Date.now()),
+      limitCategory: 'usage_limit',
       source: 'stable_provider_message',
       recoveryAction: codexUsageLimitRecoveryAction,
     });
@@ -307,14 +222,14 @@ export function classifyCodexConnectedServiceAuthFailure(
   if (generic.source === 'auth_error') {
     return buildClassification(input, {
       kind: 'auth_expired',
-      limitCategory: 'auth',
+      limitCategory: 'auth_invalid',
       source: 'stable_provider_message',
     });
   }
   if (generic.source === 'permission_blocked') {
     return buildClassification(input, {
       kind: 'permission_denied',
-      limitCategory: 'plan',
+      limitCategory: 'plan_invalid',
       source: 'stable_provider_message',
     });
   }

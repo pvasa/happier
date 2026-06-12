@@ -26,6 +26,10 @@ import type {
 } from './sessionUsageLimitRecoveryControlTypes';
 import { deriveUsageLimitRecoveryTiming } from './deriveUsageLimitRecoveryTiming';
 import {
+  resolveRoutedUsageLimitRecoveryResumePromptMode,
+  type RoutedUsageLimitRecoveryResumePromptTierSources,
+} from './resolveRoutedUsageLimitRecoveryResumePromptMode';
+import {
   attachCliSessionUsageLimitRecoveryOperationMetadata,
   normalizeCliSessionUsageLimitRecoveryOperationResult,
 } from './sessionUsageLimitRecoveryOperationResult';
@@ -33,6 +37,7 @@ import {
   UsageLimitCheckNowRateLimiter,
   USAGE_LIMIT_CHECK_NOW_RATE_LIMITED_CODE,
 } from './usageLimitCheckNowRateLimiter';
+import { resolveUsageLimitRecoverySelectedAuthFromIssue } from './usageLimitRecoverySelectedAuth';
 
 type RouteSessionUsageLimitRecoveryControlParams = Readonly<{
   token: string;
@@ -55,6 +60,12 @@ type RouteSessionUsageLimitRecoveryControlParams = Readonly<{
     metadata: Record<string, unknown>;
   }>) => Promise<boolean> | boolean;
   resolveAdapter?: ResolveSessionUsageLimitRecoveryControlAdapter;
+  /**
+   * Lower precedence tiers (account setting, group policy, provider config)
+   * for resume-prompt-mode resolution. Explicit request values and the stored
+   * intent always win over these tiers.
+   */
+  resumePromptTierSources?: RoutedUsageLimitRecoveryResumePromptTierSources;
 }>;
 
 type RouteSessionUsageLimitRecoveryWaitResumeEnableParams =
@@ -64,6 +75,7 @@ type RouteSessionUsageLimitRecoveryWaitResumeEnableParams =
       issueFingerprint?: string;
       remember?: boolean;
       rememberPreference?: boolean;
+      resumePromptMode?: 'standard' | 'off' | 'custom';
     }>;
   }>;
 
@@ -80,6 +92,7 @@ type RouteSessionUsageLimitRecoveryCheckNowParams =
     request?: Readonly<{
       sessionId: string;
       provider?: string;
+      resumePromptMode?: 'standard' | 'off' | 'custom';
     }>;
   }>;
 
@@ -156,11 +169,14 @@ function shouldFallbackFromLiveSessionUsageLimitRpc(result: unknown): boolean {
     || error === 'session_rpc_failed';
 }
 
-function buildAdapterParams(
+async function buildAdapterParams(
   params: RouteSessionUsageLimitRecoveryControlParams,
   metadata: Record<string, unknown>,
   sessionMachineId: string,
-): SessionUsageLimitRecoveryControlAdapterParams {
+): Promise<SessionUsageLimitRecoveryControlAdapterParams> {
+  const request = 'request' in params && params.request && typeof params.request === 'object'
+    ? params.request as Readonly<{ resumePromptMode?: unknown }>
+    : null;
   return {
     token: params.token,
     ...(params.credentials ? { credentials: params.credentials } : {}),
@@ -172,6 +188,11 @@ function buildAdapterParams(
     cwd: resolveRawSessionString(params.rawSession, 'path') ?? readString(metadata.path),
     ctx: params.ctx,
     mode: params.mode,
+    resumePromptMode: await resolveRoutedUsageLimitRecoveryResumePromptMode({
+      explicit: request?.resumePromptMode,
+      existingIntent: metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY],
+      ...params.resumePromptTierSources,
+    }),
   };
 }
 
@@ -244,6 +265,7 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(
   params: Readonly<{
     rawSession: RawSessionRecord;
     issueFingerprint?: string;
+    resumePromptMode: 'standard' | 'off' | 'custom';
   }>,
 ): SessionUsageLimitRecoveryV1 | null {
   if (params.rawSession.latestTurnStatus != null && params.rawSession.latestTurnStatus !== 'failed') {
@@ -255,22 +277,9 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(
     return null;
   }
 
-  const connectedService = issueParsed.data.usageLimit.connectedService;
-  const selectedAuth: SessionUsageLimitRecoveryV1['selectedAuth'] =
-    connectedService?.groupId && connectedService.profileId
-      ? {
-        kind: 'group',
-        serviceId: connectedService.serviceId,
-        groupId: connectedService.groupId,
-        profileId: connectedService.profileId,
-      }
-      : connectedService?.profileId
-        ? {
-          kind: 'profile',
-          serviceId: connectedService.serviceId,
-          profileId: connectedService.profileId,
-        }
-        : { kind: 'native' };
+  const selectedAuth = resolveUsageLimitRecoverySelectedAuthFromIssue({
+    issue: issueParsed.data,
+  }) ?? { kind: 'native' };
 
   const timing = deriveUsageLimitRecoveryTiming({
     occurredAtMs: issueParsed.data.occurredAt,
@@ -288,21 +297,29 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(
     attemptCount: 0,
     maxAttempts: 3,
     lastProbeError: null,
+    resumePromptMode: params.resumePromptMode,
     selectedAuth,
   };
 }
 
-function buildEnabledRecoveryIntent(
+async function buildEnabledRecoveryIntent(
   params: RouteSessionUsageLimitRecoveryWaitResumeEnableParams,
   metadata: Record<string, unknown>,
-): SessionUsageLimitRecoveryV1 | null {
+): Promise<SessionUsageLimitRecoveryV1 | null> {
   const existing = parseRecoveryIntent(metadata);
   const issueFingerprint =
     typeof params.request.issueFingerprint === 'string' && params.request.issueFingerprint.trim().length > 0
       ? params.request.issueFingerprint.trim()
       : undefined;
+  const rawExisting = metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY];
+  const resumePromptMode = await resolveRoutedUsageLimitRecoveryResumePromptMode({
+    explicit: params.request.resumePromptMode,
+    existingIntent: rawExisting,
+    ...params.resumePromptTierSources,
+  });
   const base = existing ?? buildRecoveryIntentFromLatestUsageLimitIssue({
     rawSession: params.rawSession,
+    resumePromptMode,
     ...(issueFingerprint ? { issueFingerprint } : {}),
   });
   if (!base) return null;
@@ -310,6 +327,7 @@ function buildEnabledRecoveryIntent(
     ...base,
     status: 'waiting',
     ...(issueFingerprint ? { issueFingerprint } : {}),
+    resumePromptMode,
     lastProbeError: null,
   };
 }
@@ -379,7 +397,7 @@ export async function routeSessionUsageLimitRecoveryWaitResumeEnable(
   const context = ensureLocalInactiveControlContext(params);
   if (!context.ok) return operationResult(params, context.result);
 
-  const nextIntent = buildEnabledRecoveryIntent(params, context.metadata);
+  const nextIntent = await buildEnabledRecoveryIntent(params, context.metadata);
   if (!nextIntent) {
     return operationResult(params, stableError('session_usage_limit_recovery_control_inactive'));
   }
@@ -469,7 +487,7 @@ export async function routeSessionUsageLimitRecoveryCheckNow(
 
   const result = await persistAdapterMetadataResult(
     params,
-    await adapter.checkNow(buildAdapterParams(params, context.metadata, context.sessionMachineId)),
+    await adapter.checkNow(await buildAdapterParams(params, context.metadata, context.sessionMachineId)),
   );
   const resultMetadata = readMetadataResult(result);
   const normalizedResult = operationResult(params, result);

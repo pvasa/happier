@@ -27,6 +27,7 @@ function findTrackedSession(
 export async function recordConnectedServiceRuntimeQuotaSnapshotForSession(input: Readonly<{
   getChildren: () => ReadonlyArray<TrackedSession>;
   quotaCoordinator: QuotaCoordinatorLike | null;
+  publishQuotaRef?: (ref: Readonly<{ sessionId: string; serviceId: ConnectedServiceId; profileId: string }>) => Promise<void>;
   runtimeQuotaSnapshots: ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore;
   sessionId: string;
   serviceId: ConnectedServiceId;
@@ -34,15 +35,16 @@ export async function recordConnectedServiceRuntimeQuotaSnapshotForSession(input
 }>): Promise<
   | Readonly<{ status: 'recorded'; groupRuntimeStateRecorded: boolean; quotaStateRecorded: boolean }>
   | Readonly<{ status: 'session_not_found' }>
-  | Readonly<{ status: 'not_connected_selection' }>
+  | Readonly<{ status: 'service_id_mismatch' }>
 > {
+  if (input.snapshot.serviceId !== input.serviceId) return { status: 'service_id_mismatch' };
+
   const tracked = findTrackedSession(input.getChildren(), input.sessionId);
   if (!tracked) return { status: 'session_not_found' };
   const selection = parseConnectedServiceBindingSelections(tracked.spawnOptions?.connectedServices)
     .find((candidate) => candidate.serviceId === input.serviceId) ?? null;
-  if (!selection) return { status: 'not_connected_selection' };
 
-  const groupRuntimeStateRecorded = selection.kind === 'group';
+  const groupRuntimeStateRecorded = selection?.kind === 'group';
   if (groupRuntimeStateRecorded) {
     input.runtimeQuotaSnapshots.recordSnapshot({
       serviceId: input.serviceId,
@@ -63,6 +65,18 @@ export async function recordConnectedServiceRuntimeQuotaSnapshotForSession(input
       quotaStateRecorded = persistence.status !== 'deferred_unknown_mode';
     } catch {
       quotaStateRecorded = false;
+    }
+  }
+
+  if (quotaStateRecorded) {
+    try {
+      await input.publishQuotaRef?.({
+        sessionId: input.sessionId,
+        serviceId: input.serviceId,
+        profileId: input.snapshot.profileId,
+      });
+    } catch {
+      // Session metadata refs are a best-effort display projection over the durable quota row.
     }
   }
 

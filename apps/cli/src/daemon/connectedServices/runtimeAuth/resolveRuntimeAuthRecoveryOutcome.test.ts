@@ -34,6 +34,26 @@ describe('resolveRuntimeAuthRecoveryProof', () => {
     expect(resolveRuntimeAuthRecoveryProof(result)).toBe('account_adoption_verified');
   });
 
+  it('accepts explicit recovered proof kinds from provider-owned recovery results', () => {
+    expect(resolveRuntimeAuthRecoveryProof({
+      status: 'native_resume_accepted',
+      proofKind: 'native_resume',
+    })).toBe('native_resume');
+    expect(isProvenRuntimeAuthRecoverySuccess({
+      status: 'quota_probe_succeeded',
+      proofKind: 'quota_probe_fresh',
+    })).toBe(true);
+  });
+
+  it('returns explicit terminal proof kinds without treating them as recovered success', () => {
+    const result = {
+      status: 'recovery_action_required',
+      proofKind: 'terminal_action_required',
+    };
+    expect(resolveRuntimeAuthRecoveryProof(result)).toBe('terminal_action_required');
+    expect(isProvenRuntimeAuthRecoverySuccess(result)).toBe(false);
+  });
+
   it('keeps a genuinely fresh candidate as intermediate evidence, not recovered success', () => {
     const result = {
       status: 'switch_attempted',

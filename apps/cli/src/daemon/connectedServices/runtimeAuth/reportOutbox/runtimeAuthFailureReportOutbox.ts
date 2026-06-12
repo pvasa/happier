@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import {
+  readConnectedServiceLimitCategoryV1,
+  SessionUsageLimitRecoveryResumePromptModeV1Schema,
+  type SessionUsageLimitRecoveryResumePromptModeV1,
+} from '@happier-dev/protocol';
 
 import { configuration } from '@/configuration';
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
@@ -27,17 +32,6 @@ const OUTBOX_DIR_BASENAME = 'connected-service-runtime-auth-report-outbox';
 const QUARANTINE_DIR_BASENAME = 'quarantine';
 const SAFE_STRING_MAX_LENGTH = 512;
 const SAFE_ACTION_URL_MAX_LENGTH = 2_048;
-
-const LIMIT_CATEGORIES = new Set<ConnectedServiceRuntimeLimitCategory>([
-  'quota',
-  'rate_limit',
-  'capacity',
-  'auth',
-  'plan',
-  'validation',
-  'account_disabled',
-  'unknown',
-]);
 
 const QUOTA_SCOPES = new Set<ConnectedServiceRuntimeQuotaScope>([
   'account',
@@ -105,9 +99,7 @@ function readKind(value: unknown): ConnectedServiceRuntimeAuthFailureKind | null
 }
 
 function readLimitCategory(value: unknown): ConnectedServiceRuntimeLimitCategory | undefined {
-  return typeof value === 'string' && LIMIT_CATEGORIES.has(value as ConnectedServiceRuntimeLimitCategory)
-    ? value as ConnectedServiceRuntimeLimitCategory
-    : undefined;
+  return readConnectedServiceLimitCategoryV1(value) ?? undefined;
 }
 
 function readQuotaScope(value: unknown): ConnectedServiceRuntimeQuotaScope | undefined {
@@ -120,6 +112,11 @@ function readSource(value: unknown): RuntimeAuthFailureReportOutboxClassificatio
   return typeof value === 'string' && SOURCES.has(value as RuntimeAuthFailureReportOutboxClassification['source'])
     ? value as RuntimeAuthFailureReportOutboxClassification['source']
     : null;
+}
+
+function readResumePromptMode(value: unknown): SessionUsageLimitRecoveryResumePromptModeV1 | null {
+  const parsed = SessionUsageLimitRecoveryResumePromptModeV1Schema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function readSafeAction(value: unknown): RuntimeAuthFailureReportOutboxAction | null {
@@ -221,12 +218,14 @@ function sanitizeReport(report: RuntimeAuthFailureReportOutboxReport): RuntimeAu
   const classification = sanitizeClassification(report.classification);
   if (!sessionId || !classification) return null;
   const reportKey = buildReportKey({ sessionId, classification });
+  const resumePromptMode = readResumePromptMode(report.resumePromptMode);
   return {
     schemaVersion: OUTBOX_SCHEMA_VERSION,
     fileId: buildFileId(reportKey),
     reportKey,
     sessionId,
     switchesThisTurn: readNonNegativeInt(report.switchesThisTurn, 0),
+    ...(resumePromptMode ? { resumePromptMode } : {}),
     classification,
     attemptCount: 1,
     createdAtMs: 0,
@@ -255,12 +254,14 @@ function normalizePersistedItem(value: unknown): RuntimeAuthFailureReportOutboxI
   const sessionId = readBoundedString(value.sessionId);
   const classification = sanitizeClassification(value.classification);
   if (!fileId || !fileId.startsWith('report-') || !reportKey || !sessionId || !classification) return null;
+  const resumePromptMode = readResumePromptMode(value.resumePromptMode);
   return {
     schemaVersion: OUTBOX_SCHEMA_VERSION,
     fileId,
     reportKey,
     sessionId,
     switchesThisTurn: readNonNegativeInt(value.switchesThisTurn, 0),
+    ...(resumePromptMode ? { resumePromptMode } : {}),
     classification,
     attemptCount: Math.max(1, readNonNegativeInt(value.attemptCount, 1)),
     createdAtMs: readNonNegativeInt(value.createdAtMs, 0),
@@ -388,10 +389,17 @@ export function resolveRuntimeAuthFailureReportOutboxKey(report: RuntimeAuthFail
   return sanitized?.reportKey ?? null;
 }
 
+// RD-REC-6 / P3: reports not (re-)observed within this window are dead-lettered at
+// drain time instead of redelivering at every daemon start forever. `updatedAtMs`
+// is the freshness anchor: re-enqueueing the same report key refreshes it.
+export const DEFAULT_RUNTIME_AUTH_FAILURE_REPORT_OUTBOX_TTL_MS = 24 * 60 * 60_000;
+
 export async function drainRuntimeAuthFailureReportOutboxItems(input: Readonly<{
   outboxDir?: string;
   deliver: (item: RuntimeAuthFailureReportOutboxItem) => Promise<DrainRuntimeAuthFailureReportOutboxItemResult>;
   limit?: number;
+  nowMs?: () => number;
+  maxItemAgeMs?: number;
 }>): Promise<DrainRuntimeAuthFailureReportOutboxItemsResult> {
   const items = await readRuntimeAuthFailureReportOutboxItems({
     ...(input.outboxDir ? { outboxDir: input.outboxDir } : {}),
@@ -399,17 +407,25 @@ export async function drainRuntimeAuthFailureReportOutboxItems(input: Readonly<{
   const limit = typeof input.limit === 'number' && Number.isFinite(input.limit)
     ? Math.max(0, Math.trunc(input.limit))
     : items.length;
+  const nowMs = input.nowMs ?? (() => Date.now());
+  const maxItemAgeMs = typeof input.maxItemAgeMs === 'number' && Number.isFinite(input.maxItemAgeMs) && input.maxItemAgeMs > 0
+    ? Math.trunc(input.maxItemAgeMs)
+    : DEFAULT_RUNTIME_AUTH_FAILURE_REPORT_OUTBOX_TTL_MS;
   let delivered = 0;
   let dropped = 0;
   let retried = 0;
 
   for (const item of items.slice(0, limit)) {
     let result: DrainRuntimeAuthFailureReportOutboxItemResult;
-    try {
-      result = await input.deliver(item);
-    } catch {
-      retried += 1;
-      continue;
+    if (nowMs() - item.updatedAtMs > maxItemAgeMs) {
+      result = { status: 'drop' };
+    } else {
+      try {
+        result = await input.deliver(item);
+      } catch {
+        retried += 1;
+        continue;
+      }
     }
 
     if (result.status === 'delivered' || result.status === 'drop') {

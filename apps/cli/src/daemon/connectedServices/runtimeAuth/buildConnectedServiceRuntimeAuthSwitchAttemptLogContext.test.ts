@@ -10,7 +10,7 @@ const classification: ConnectedServiceRuntimeFailureClassification = {
   groupId: 'happier',
   resetsAtMs: null,
   retryAfterMs: 60_000,
-  limitCategory: 'quota',
+  limitCategory: 'usage_limit',
   quotaScope: 'account',
   providerLimitId: 'weekly',
   planType: 'plus',
@@ -46,7 +46,7 @@ describe('buildConnectedServiceRuntimeAuthSwitchAttemptLogContext', () => {
       generation: 57,
       routedThroughFsm: true,
       latencyMs: 75,
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
       quotaScope: 'account',
       providerLimitId: 'weekly',
     });

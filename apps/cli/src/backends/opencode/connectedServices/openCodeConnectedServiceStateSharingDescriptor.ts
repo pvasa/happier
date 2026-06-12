@@ -18,6 +18,8 @@ export const openCodeConnectedServiceStateSharingDescriptor = {
   },
   authIsolation: {
     mode: 'process_env',
-    secretEntries: ['OPENCODE_AUTH_CONTENT', 'auth.json'],
+    // OpenCode auth is delivered ONLY via the process env (`materializeOpenCodeConnectedServiceAuth`);
+    // no auth.json file is ever materialized for connected selections.
+    secretEntries: ['OPENCODE_AUTH_CONTENT'],
   },
 } satisfies ConnectedServiceStateSharingDescriptor;

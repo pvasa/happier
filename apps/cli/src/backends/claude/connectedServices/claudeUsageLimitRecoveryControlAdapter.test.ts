@@ -137,6 +137,7 @@ describe('claudeUsageLimitRecoveryControlAdapter', () => {
       attemptCount: 1,
       maxAttempts: 1,
       lastProbeError: null,
+      resumePromptMode: 'standard',
       selectedAuth: { kind: 'native', serviceId: 'claude-subscription' },
     };
     const adapter = createClaudeUsageLimitRecoveryControlAdapter({

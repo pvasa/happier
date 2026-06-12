@@ -8,7 +8,6 @@ import {
   hasExactConnectedServiceRestartContinuityContext,
   isConnectedToConnectedServiceSwitch,
   isExactSameConnectedServiceSelection,
-  isSameConnectedServiceAuthGroup,
   providerSessionStateUnavailableForResume,
 } from '@/backends/connectedServices/switchContinuityContext';
 import { canResumeFromMaterializedState } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedState';
@@ -53,7 +52,7 @@ export async function resolveClaudeConnectedServiceSwitchContinuity(
     return { mode: 'restart_same_home' };
   }
 
-  if (isSameConnectedServiceAuthGroup(params) || isExactSameConnectedServiceSelection(params)) {
+  if (isExactSameConnectedServiceSelection(params)) {
     if (!hasExactConnectedServiceRestartContinuityContext(params)) {
       return providerSessionStateUnavailableForResume();
     }

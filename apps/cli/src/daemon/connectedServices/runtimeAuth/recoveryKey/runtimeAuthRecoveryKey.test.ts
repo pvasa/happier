@@ -20,4 +20,27 @@ describe('runtimeAuthRecoveryKey', () => {
     expect(key).not.toContain('session:with/slashes');
     expect(parseRuntimeAuthRecoveryKey(key)).toEqual(parts);
   });
+
+  it('canonicalizes group-backed keys so profile changes in the same group share one durable key', () => {
+    const a = buildRuntimeAuthRecoveryKey({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'codex-main',
+      profileId: 'member-a',
+    });
+    const b = buildRuntimeAuthRecoveryKey({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'codex-main',
+      profileId: 'member-b',
+    });
+
+    expect(a).toBe(b);
+    expect(parseRuntimeAuthRecoveryKey(a)).toEqual({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'codex-main',
+      profileId: null,
+    });
+  });
 });

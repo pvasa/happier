@@ -1,10 +1,12 @@
+import type { ConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol';
+
 import { parseProviderResetAt, parseProviderTimestampMs } from '@/daemon/connectedServices/quotas/normalization';
 
 export type NormalizedProviderUsageLimitDetailsV1 = Readonly<{
   v: 1;
   resetAtMs: number | null;
   retryAfterMs: number | null;
-  limitCategory?: 'quota' | 'rate_limit' | 'capacity' | 'unknown';
+  limitCategory?: Extract<ConnectedServiceLimitCategoryV1, 'usage_limit' | 'rate_limit' | 'capacity' | 'unknown'>;
   quotaScope: 'account' | 'workspace' | 'organization' | 'model' | 'provider' | 'unknown';
   recoverability: 'wait' | 'switch_account' | 'manual' | 'unknown';
   providerLimitId?: string;
@@ -17,6 +19,12 @@ export type NormalizedProviderUsageLimitDetailsV1 = Readonly<{
   }> | null;
   action: null;
   connectedService: null;
+  /**
+   * Set when the evidence row was imported from a subagent transcript (`isSidechain: true`).
+   * Sidechain limits are real account-level evidence (quota snapshots may consume them) but
+   * must never fail the PARENT turn nor trigger runtime-auth recovery (incident Jun-11 H-B).
+   */
+  sourcedFromSidechain?: true;
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -114,6 +122,82 @@ function containsRateLimitEvidence(value: unknown): boolean {
     value.details,
     value.description,
   ].some(containsRateLimitEvidence);
+}
+
+function containsClaudeUsageLimitEvidence(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return /usage\s+limit|limit\s+reached/iu.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsClaudeUsageLimitEvidence);
+  }
+  if (!isRecord(value)) return false;
+  return [
+    value.error,
+    value.code,
+    value.type,
+    value.kind,
+    value.message,
+    value.detail,
+    value.details,
+    value.description,
+    value.text,
+    value.content,
+  ].some(containsClaudeUsageLimitEvidence);
+}
+
+const CLAUDE_PIPE_EPOCH_RESET_PATTERN = /limit\s+reached\s*\|\s*(\d{10,13})\b/iu;
+
+function collectClaudeEvidenceText(value: unknown, output: string[]): void {
+  if (typeof value === 'string') {
+    output.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectClaudeEvidenceText(item, output);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const key of [
+    'error',
+    'errors',
+    'message',
+    'detail',
+    'details',
+    'description',
+    'text',
+    'content',
+    'result',
+    'rate_limit_info',
+  ]) {
+    collectClaudeEvidenceText(value[key], output);
+  }
+}
+
+/**
+ * Best-effort reset/retry timing extraction from a raw Claude provider payload (INC-4): the
+ * canonical pipe-epoch CLI shape ("Claude AI usage limit reached|<epoch>") wins, then structured
+ * fields/headers, then textual evidence ("try again in 2 hours", TUI reset text) anywhere in the
+ * assistant/result content the shared parser does not walk.
+ */
+export function resolveClaudeUsageLimitResetTiming(
+  value: unknown,
+  nowMs: number,
+): Readonly<{ resetAtMs: number | null; retryAfterMs: number | null }> {
+  const candidates: string[] = [];
+  collectClaudeEvidenceText(value, candidates);
+  for (const candidate of candidates) {
+    const match = CLAUDE_PIPE_EPOCH_RESET_PATTERN.exec(candidate);
+    const resetAtMs = match ? readTimestampMs(Number(match[1])) : null;
+    if (resetAtMs !== null) return { resetAtMs, retryAfterMs: null };
+  }
+  const direct = parseProviderResetAt({ body: value, nowMs });
+  if (direct.resetAtMs !== null || direct.retryAfterMs !== null) return direct;
+  for (const candidate of candidates) {
+    const parsed = parseProviderResetAt({ body: { message: candidate }, nowMs });
+    if (parsed.resetAtMs !== null || parsed.retryAfterMs !== null) return parsed;
+  }
+  return { resetAtMs: null, retryAfterMs: null };
 }
 
 function containsTransientThrottleEvidence(value: unknown): boolean {
@@ -215,17 +299,18 @@ function mapSyntheticClaudeApiErrorToUsageDetails(record: Record<string, unknown
   const records = collectSyntheticApiErrorRecords(record);
   const status = readHttpStatus(readFirstField(records, ['apiErrorStatus', 'api_error_status', 'status', 'statusCode', 'status_code']));
   const hasRateLimitEvidence = containsRateLimitEvidence(record);
+  const hasUsageLimitEvidence = containsClaudeUsageLimitEvidence(record);
   const hasProviderCapacityEvidence = status === 529 || containsProviderCapacityEvidence(record);
   const hasCompatibleStatus = status === null || status === 429 || status === 529;
   const isAssistantApiError =
     record.type === 'assistant' &&
     record.isApiErrorMessage === true &&
-    (hasRateLimitEvidence || hasProviderCapacityEvidence || status === 429) &&
+    (hasRateLimitEvidence || hasUsageLimitEvidence || hasProviderCapacityEvidence || status === 429) &&
     hasCompatibleStatus;
   const isResultApiError =
     record.type === 'result' &&
     hasCompatibleStatus &&
-    (status === 429 || hasRateLimitEvidence || hasProviderCapacityEvidence) &&
+    (status === 429 || hasRateLimitEvidence || hasUsageLimitEvidence || hasProviderCapacityEvidence) &&
     (
       status === 429 ||
       status === 529 ||
@@ -234,7 +319,7 @@ function mapSyntheticClaudeApiErrorToUsageDetails(record: Record<string, unknown
     );
   if (!isAssistantApiError && !isResultApiError) return null;
 
-  const timing = parseProviderResetAt({ body: record, nowMs: Date.now() });
+  const timing = resolveClaudeUsageLimitResetTiming(record, Date.now());
   const resetAtMs = readSyntheticResetAtMs(records) ?? timing.resetAtMs;
   const retryAfterMs = readSyntheticRetryAfterMs(records) ?? timing.retryAfterMs;
   const providerLimitId = readSyntheticProviderLimitId(records);
@@ -305,10 +390,16 @@ export function mapClaudeStopFailureHookToUsageDetails(hook: unknown): Normalize
   const hookEventName = readString(record.hook_event_name ?? record.hookEventName);
   if (hookEventName !== 'StopFailure') return null;
   const direct = mapClaudeStopFailureErrorToUsageDetails(readString(record.error) ?? readString(record.error_type));
-  if (direct) return direct;
   const lastAssistantMessage = readString(record.last_assistant_message ?? record.lastAssistantMessage);
-  if (!lastAssistantMessage) return null;
-  return mapSyntheticClaudeApiErrorToUsageDetails({
+  const assistantTiming = lastAssistantMessage
+    ? parseProviderResetAt({
+        body: { message: lastAssistantMessage },
+        nowMs: Date.now(),
+      })
+    : { resetAtMs: null, retryAfterMs: null };
+  const fromAssistant = !lastAssistantMessage
+    ? null
+    : mapSyntheticClaudeApiErrorToUsageDetails({
     type: 'assistant',
     isApiErrorMessage: true,
     text: lastAssistantMessage,
@@ -317,14 +408,40 @@ export function mapClaudeStopFailureHookToUsageDetails(hook: unknown): Normalize
     error_type: record.error_type,
     apiErrorStatus: record.apiErrorStatus ?? record.api_error_status ?? record.status,
   });
+  if (direct && (assistantTiming.resetAtMs !== null || assistantTiming.retryAfterMs !== null)) {
+    return {
+      ...direct,
+      resetAtMs: assistantTiming.resetAtMs,
+      retryAfterMs: assistantTiming.retryAfterMs,
+    };
+  }
+  if (!fromAssistant) return direct;
+  return direct
+    ? {
+        ...direct,
+        ...fromAssistant,
+        providerLimitId: fromAssistant.providerLimitId ?? direct.providerLimitId,
+      }
+    : fromAssistant;
+}
+
+function markSidechainSourcedUsageDetails(
+  record: Record<string, unknown> | null,
+  details: NormalizedProviderUsageLimitDetailsV1 | null,
+): NormalizedProviderUsageLimitDetailsV1 | null {
+  if (!details || record?.isSidechain !== true) return details;
+  return { ...details, sourcedFromSidechain: true };
 }
 
 export function mapClaudeRateLimitEventToUsageDetails(event: unknown): NormalizedProviderUsageLimitDetailsV1 | null {
   const record = isRecord(event) ? event : null;
   if (record?.type !== 'rate_limit_event') {
-    return record
-      ? mapSyntheticClaudeApiErrorToUsageDetails(record) ?? mapClaudeHeadersToUsageDetails(event)
-      : mapClaudeHeadersToUsageDetails(event);
+    return markSidechainSourcedUsageDetails(
+      record,
+      record
+        ? mapSyntheticClaudeApiErrorToUsageDetails(record) ?? mapClaudeHeadersToUsageDetails(event)
+        : mapClaudeHeadersToUsageDetails(event),
+    );
   }
   const info = isRecord(record.rate_limit_info) ? record.rate_limit_info : null;
   if (!info) return null;
@@ -335,11 +452,20 @@ export function mapClaudeRateLimitEventToUsageDetails(event: unknown): Normalize
   const overageStatus = normalizeOverageStatus(overageStatusRaw);
   const overageResetAtMs = readTimestampMs(info.overageResetsAt ?? info.overage_resets_at);
   const overageDisabledReason = readString(info.overageDisabledReason ?? info.overage_disabled_reason);
+  const declaredResetAtMs = readTimestampMs(info.resetsAt ?? info.resets_at);
+  // INC-4: a rejected event without resets_at must not surface a timing-less limit when the
+  // payload carries parseable reset/retry evidence elsewhere.
+  const fallbackTiming = declaredResetAtMs === null
+    ? resolveClaudeUsageLimitResetTiming(record, Date.now())
+    : null;
 
-  return {
+  return markSidechainSourcedUsageDetails(record, {
     v: 1,
-    resetAtMs: readTimestampMs(info.resetsAt ?? info.resets_at),
-    retryAfterMs: null,
+    resetAtMs: declaredResetAtMs ?? fallbackTiming?.resetAtMs ?? null,
+    retryAfterMs: fallbackTiming?.retryAfterMs ?? null,
+    // RD-CLD-5: the rejection is authoritative usage-limit evidence — the surfaced meter's
+    // utilization (possibly a different window than the one that rejected) must not demote it.
+    limitCategory: 'usage_limit',
     quotaScope: 'account',
     recoverability: 'wait',
     ...(rateLimitType ? { providerLimitId: rateLimitType } : {}),
@@ -354,5 +480,5 @@ export function mapClaudeRateLimitEventToUsageDetails(event: unknown): Normalize
         },
     action: null,
     connectedService: null,
-  };
+  });
 }

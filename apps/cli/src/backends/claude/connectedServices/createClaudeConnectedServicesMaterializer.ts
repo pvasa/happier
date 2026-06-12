@@ -17,6 +17,8 @@ export function createClaudeConnectedServicesMaterializer(): ConnectedServicesPr
         processEnv: params.processEnv ?? process.env,
         accountSettings: params.accountSettings ?? null,
         sessionDirectory: params.sessionDirectory ?? null,
+        vendorResumeId: params.vendorResumeId ?? null,
+        candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
       });
       if (!materialized) return null;
       return {
@@ -39,6 +41,8 @@ export function createClaudeConnectedServicesMaterializer(): ConnectedServicesPr
       processEnv: params.processEnv ?? process.env,
       accountSettings: params.accountSettings ?? null,
       sessionDirectory: params.sessionDirectory ?? null,
+      vendorResumeId: params.vendorResumeId ?? null,
+      candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
     });
     if (!materialized) return null;
     return {

@@ -1,3 +1,7 @@
+import {
+  SessionUsageLimitRecoveryResumePromptModeV1Schema,
+  type SessionUsageLimitRecoveryResumePromptModeV1,
+} from '@happier-dev/protocol';
 import { notifyDaemonConnectedServiceRuntimeAuthFailure } from '@/daemon/controlClient';
 import { logger as defaultLogger } from '@/ui/logger';
 import { resolveConnectedServiceRuntimeAuthFailureStatusMessage } from './resolveConnectedServiceRuntimeAuthFailureStatusMessage';
@@ -14,6 +18,7 @@ import {
 type RuntimeAuthFailureNotifyBody = Readonly<{
   sessionId: string;
   switchesThisTurn?: number;
+  resumePromptMode?: SessionUsageLimitRecoveryResumePromptModeV1;
   classification: unknown;
 }>;
 
@@ -35,16 +40,86 @@ export type ConnectedServiceRuntimeAuthFailureDaemonReport = Readonly<{
   report: unknown | null;
   statusCode: string | null;
   statusMessage: string | null;
+  resumePromptMode?: SessionUsageLimitRecoveryResumePromptModeV1;
   uxDiagnostic?: ConnectedServiceRuntimeAuthRecoveryProjection['uxDiagnostic'];
   projection?: ConnectedServiceRuntimeAuthRecoveryProjection;
 }>;
 
 export const CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS = 120_000;
 
+// Incident Jun-11 H-C / FIX-2: one failed turn is observed by multiple independent triggers
+// (e.g. Claude's StopFailure hook, the SDK inbound loop, and the bridge transcript observer),
+// each of which calls this shared report path. Dedupe lives HERE — the single owner in front
+// of the daemon — keyed on STABLE identity only (no Date.now-derived retryAfterMs), with a
+// short TTL window. Concurrent duplicates coalesce onto the in-flight daemon call.
+const RUNTIME_AUTH_FAILURE_REPORT_DEDUPE_WINDOW_MS = 15_000;
+
+type RuntimeAuthFailureReportDedupeEntry = Readonly<{
+  reportedAtMs: number;
+  result: Promise<ConnectedServiceRuntimeAuthFailureDaemonReport>;
+}>;
+
+const recentRuntimeAuthFailureReportsByStableKey = new Map<string, RuntimeAuthFailureReportDedupeEntry>();
+
+export function resetConnectedServiceRuntimeAuthFailureReportDedupeForTests(): void {
+  recentRuntimeAuthFailureReportsByStableKey.clear();
+}
+
 function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Readonly<Record<string, unknown>>
     : null;
+}
+
+function readRecoveryActionKind(value: unknown): string | null {
+  const action = readRecord(value);
+  const kind = action?.kind;
+  return kind === 'provider_state_sharing_required' || kind === 'quota_recovery_required' ? kind : null;
+}
+
+function readResumePromptMode(value: unknown): SessionUsageLimitRecoveryResumePromptModeV1 | null {
+  const parsed = SessionUsageLimitRecoveryResumePromptModeV1Schema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+// Stable failure fingerprint: identity + failure kind + provider-declared reset horizon
+// (bucketed to absorb parse jitter). Volatile per-trigger fields (`retryAfterMs`,
+// `statusMessage`, rate-limit telemetry) are deliberately excluded — they are recomputed
+// from Date.now() per trigger and made every key unique in the live incident. The
+// explicit resume-prompt mode is included because it changes recovery continuation
+// and usage-limit metadata semantics.
+function buildStableRuntimeAuthFailureReportDedupeKey(input: Readonly<{
+  sessionId: string;
+  switchesThisTurn: number;
+  resumePromptMode: SessionUsageLimitRecoveryResumePromptModeV1 | null;
+  classification: unknown;
+}>): string | null {
+  const classification = readRecord(input.classification);
+  if (!classification) return null;
+  const resetsAtMs = typeof classification.resetsAtMs === 'number' && Number.isFinite(classification.resetsAtMs)
+    ? Math.floor(classification.resetsAtMs / 60_000)
+    : null;
+  return JSON.stringify({
+    sessionId: input.sessionId,
+    switchesThisTurn: input.switchesThisTurn,
+    kind: classification.kind ?? null,
+    serviceId: classification.serviceId ?? null,
+    profileId: classification.profileId ?? null,
+    groupId: classification.groupId ?? null,
+    limitCategory: classification.limitCategory ?? null,
+    providerLimitId: classification.providerLimitId ?? null,
+    recoveryActionKind: readRecoveryActionKind(classification.recoveryAction),
+    resetsAtMsBucket: resetsAtMs,
+    resumePromptMode: input.resumePromptMode,
+  });
+}
+
+function pruneStaleRuntimeAuthFailureReportDedupeEntries(nowMs: number): void {
+  for (const [key, entry] of recentRuntimeAuthFailureReportsByStableKey.entries()) {
+    if (nowMs - entry.reportedAtMs > RUNTIME_AUTH_FAILURE_REPORT_DEDUPE_WINDOW_MS) {
+      recentRuntimeAuthFailureReportsByStableKey.delete(key);
+    }
+  }
 }
 
 function isUnhandledLocalControlErrorReport(report: unknown): boolean {
@@ -56,11 +131,12 @@ function isUnhandledLocalControlErrorReport(report: unknown): boolean {
 }
 
 export async function reportConnectedServiceRuntimeAuthFailureToDaemon(input: Readonly<{
-  sessionId: string;
-  switchesThisTurn?: number;
-  classification: unknown;
-  notify?: RuntimeAuthFailureNotify;
-  logger?: RuntimeAuthFailureLogger;
+	  sessionId: string;
+	  switchesThisTurn?: number;
+	  resumePromptMode?: unknown;
+	  classification: unknown;
+	  notify?: RuntimeAuthFailureNotify;
+	  logger?: RuntimeAuthFailureLogger;
   logPrefix?: string;
   reportOutboxDir?: string;
   nowMs?: () => number;
@@ -68,9 +144,11 @@ export async function reportConnectedServiceRuntimeAuthFailureToDaemon(input: Re
   const notify = input.notify ?? notifyDaemonConnectedServiceRuntimeAuthFailure;
   const logger = input.logger ?? defaultLogger;
   const logPrefix = input.logPrefix ?? '[connected-services]';
+  const resumePromptMode = readResumePromptMode(input.resumePromptMode);
   const reportBody = {
     sessionId: input.sessionId,
     switchesThisTurn: input.switchesThisTurn ?? 0,
+    ...(resumePromptMode ? { resumePromptMode } : {}),
     classification: input.classification,
   };
 
@@ -99,36 +177,73 @@ export async function reportConnectedServiceRuntimeAuthFailureToDaemon(input: Re
     }
   }
 
-  try {
-    const report = await notify(reportBody, {
-      timeoutMs: CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS,
-    });
-    const statusNote = resolveConnectedServiceRuntimeAuthFailureStatusMessage(report);
-    const projection = normalizeConnectedServiceRuntimeAuthRecoveryProjection({
-      report,
-      statusNote,
-    });
-    if (projection.handled) {
-      await removeOutboxBestEffort();
-    } else if (isUnhandledLocalControlErrorReport(report)) {
+  async function performReport(): Promise<ConnectedServiceRuntimeAuthFailureDaemonReport> {
+    try {
+      const report = await notify(reportBody, {
+        timeoutMs: CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS,
+      });
+      const statusNote = resolveConnectedServiceRuntimeAuthFailureStatusMessage(report);
+      const projection = normalizeConnectedServiceRuntimeAuthRecoveryProjection({
+        report,
+        statusNote,
+      });
+      if (projection.handled) {
+        await removeOutboxBestEffort();
+      } else if (isUnhandledLocalControlErrorReport(report)) {
+        await enqueueOutboxBestEffort();
+      }
+	      return {
+	        handled: projection.handled,
+	        report,
+	        statusCode: projection.statusCode,
+	        statusMessage: projection.statusMessage,
+	        ...(resumePromptMode ? { resumePromptMode } : {}),
+	        ...(projection.uxDiagnostic ? { uxDiagnostic: projection.uxDiagnostic } : {}),
+	        projection,
+	      };
+    } catch (error) {
       await enqueueOutboxBestEffort();
+      logger.debug(`${logPrefix} Failed to report connected-service runtime auth failure to daemon (non-fatal)`, error);
+	      return {
+	        handled: false,
+	        report: null,
+	        statusCode: null,
+	        statusMessage: null,
+	        ...(resumePromptMode ? { resumePromptMode } : {}),
+	      };
     }
-    return {
-      handled: projection.handled,
-      report,
-      statusCode: projection.statusCode,
-      statusMessage: projection.statusMessage,
-      ...(projection.uxDiagnostic ? { uxDiagnostic: projection.uxDiagnostic } : {}),
-      projection,
-    };
-  } catch (error) {
-    await enqueueOutboxBestEffort();
-    logger.debug(`${logPrefix} Failed to report connected-service runtime auth failure to daemon (non-fatal)`, error);
-    return {
-      handled: false,
-      report: null,
-      statusCode: null,
-      statusMessage: null,
-    };
   }
+
+  const nowMs = (input.nowMs ?? Date.now)();
+	  const dedupeKey = buildStableRuntimeAuthFailureReportDedupeKey({
+	    sessionId: input.sessionId,
+	    switchesThisTurn: input.switchesThisTurn ?? 0,
+	    resumePromptMode,
+	    classification: input.classification,
+	  });
+  if (!dedupeKey) {
+    return await performReport();
+  }
+  pruneStaleRuntimeAuthFailureReportDedupeEntries(nowMs);
+  const recent = recentRuntimeAuthFailureReportsByStableKey.get(dedupeKey);
+  if (recent && nowMs - recent.reportedAtMs <= RUNTIME_AUTH_FAILURE_REPORT_DEDUPE_WINDOW_MS) {
+    logger.debug(`${logPrefix} Suppressed duplicate connected-service runtime auth failure report (stable-key dedupe)`);
+    return await recent.result;
+  }
+  const result = performReport();
+  recentRuntimeAuthFailureReportsByStableKey.set(dedupeKey, {
+    reportedAtMs: nowMs,
+    result,
+  });
+  // A FAILED delivery (notify threw → report:null) must not hold the window: concurrent
+  // duplicates coalesce onto the in-flight call, but once it settles unreported the next
+  // trigger is a legitimate retry (the outbox replay/clear flow depends on it).
+  void result.then((report) => {
+    if (report.report !== null) return;
+    const current = recentRuntimeAuthFailureReportsByStableKey.get(dedupeKey);
+    if (current?.result === result) {
+      recentRuntimeAuthFailureReportsByStableKey.delete(dedupeKey);
+    }
+  });
+  return await result;
 }

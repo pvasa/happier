@@ -1,5 +1,8 @@
 import { ConnectedServiceQuotaFetchError, type ConnectedServiceQuotaFetcher } from '../types';
 import type { ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
+import { createHash } from 'node:crypto';
+
+import { resolveClaudeCodeUserAgent } from '@/backends/claude/utils/claudeCodeUserAgent';
 
 import { resolveMissingClaudeSubscriptionClaudeCodeScopes } from '../../descriptors/connectedAccountDescriptors';
 import { isRecord, normalizePct, resolveConnectedServiceQuotaAccountLabel } from '../quotaNormalization';
@@ -18,6 +21,22 @@ function parseIsoDateMs(value: unknown): number | null {
 
 function resolveAccountLabel(record: ConnectedServiceCredentialRecordV1): string | null {
   return resolveConnectedServiceQuotaAccountLabel(record);
+}
+
+function buildCredentialBackoffKey(record: ConnectedServiceCredentialRecordV1): string | null {
+  if (record.kind !== 'oauth') return null;
+  const profileId = String(record.profileId ?? '').trim();
+  if (!profileId) return null;
+  const digest = createHash('sha256')
+    .update(record.serviceId)
+    .update('\0')
+    .update(profileId)
+    .update('\0')
+    .update(record.oauth.accessToken)
+    .update('\0')
+    .update(record.oauth.refreshToken ?? '')
+    .digest('hex');
+  return `${profileId}:${digest}`;
 }
 
 function createMissingClaudeCodeScopeQuotaError(): ConnectedServiceQuotaFetchError {
@@ -55,9 +74,9 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
     typeof params?.staleAfterMs === 'number' && Number.isFinite(params.staleAfterMs)
       ? Math.max(1, Math.trunc(params.staleAfterMs))
       : 300_000;
-  const userAgent = params?.userAgent ?? 'happier';
+  const userAgent = resolveClaudeCodeUserAgent(params?.userAgent);
   const nowMs = params?.nowMs ?? (() => Date.now());
-  const retryAfterBackoffByProfileId = new Map<string, number>();
+  const retryAfterBackoffByCredentialKey = new Map<string, number>();
 
   async function fetchUsage(params: Readonly<{
     usageUrl: string;
@@ -108,10 +127,13 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
       if (resolveMissingClaudeSubscriptionClaudeCodeScopes(record.oauth.scope).length > 0) {
         throw createMissingClaudeCodeScopeQuotaError();
       }
-      const profileId = String(record.profileId ?? '').trim();
-      const backoffUntil = profileId ? (retryAfterBackoffByProfileId.get(profileId) ?? 0) : 0;
+      const backoffKey = buildCredentialBackoffKey(record);
+      const backoffUntil = backoffKey ? (retryAfterBackoffByCredentialKey.get(backoffKey) ?? 0) : 0;
       if (backoffUntil > now) {
         return null;
+      }
+      if (backoffKey) {
+        retryAfterBackoffByCredentialKey.set(backoffKey, now + 15 * 60_000);
       }
 
       let response = await fetchUsage({
@@ -125,8 +147,8 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
       if (!response.ok && response.status === 429) {
         const retryAfter = parseRetryAfterHeader(response.headers?.get?.('retry-after'), { nowMs: nowMs() });
         const retryAfterMs = retryAfter.retryAfterMs ?? 5 * 60_000;
-        if (profileId) {
-          retryAfterBackoffByProfileId.set(profileId, now + Math.max(15 * 60_000, retryAfterMs));
+        if (backoffKey) {
+          retryAfterBackoffByCredentialKey.set(backoffKey, now + Math.max(15 * 60_000, retryAfterMs));
         }
         return null;
       }
@@ -187,6 +209,9 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
           status: utilizationPct === null ? 'unavailable' : 'ok',
           details: {},
         });
+      }
+      if (backoffKey) {
+        retryAfterBackoffByCredentialKey.delete(backoffKey);
       }
 
       return {

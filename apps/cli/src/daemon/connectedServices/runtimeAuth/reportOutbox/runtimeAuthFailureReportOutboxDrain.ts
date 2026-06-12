@@ -11,6 +11,7 @@ import type {
 type RuntimeAuthFailureReportOutboxDaemonNotify = (body: Readonly<{
   sessionId: string;
   switchesThisTurn: number;
+  resumePromptMode?: RuntimeAuthFailureReportOutboxItem['resumePromptMode'];
   classification: RuntimeAuthFailureReportOutboxItem['classification'];
 }>) => Promise<unknown>;
 
@@ -28,15 +29,20 @@ export async function drainRuntimeAuthFailureReportOutboxToDaemon(input: Readonl
   outboxDir?: string;
   notify?: RuntimeAuthFailureReportOutboxDaemonNotify;
   limit?: number;
+  nowMs?: () => number;
+  maxItemAgeMs?: number;
 }> = {}): Promise<DrainRuntimeAuthFailureReportOutboxItemsResult> {
   const notify = input.notify ?? notifyDaemonConnectedServiceRuntimeAuthFailure;
   return await drainRuntimeAuthFailureReportOutboxItems({
     ...(input.outboxDir ? { outboxDir: input.outboxDir } : {}),
     ...(input.limit === undefined ? {} : { limit: input.limit }),
+    ...(input.nowMs === undefined ? {} : { nowMs: input.nowMs }),
+    ...(input.maxItemAgeMs === undefined ? {} : { maxItemAgeMs: input.maxItemAgeMs }),
     deliver: async (item) => {
       const response = await notify({
         sessionId: item.sessionId,
         switchesThisTurn: item.switchesThisTurn,
+        ...(item.resumePromptMode ? { resumePromptMode: item.resumePromptMode } : {}),
         classification: item.classification,
       });
       return isRetryableDaemonResponse(response)

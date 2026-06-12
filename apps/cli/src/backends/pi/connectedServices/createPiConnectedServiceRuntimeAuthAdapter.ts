@@ -1,9 +1,9 @@
 import { classifyProviderLimitEvidence, parseProviderResetAt } from '@/daemon/connectedServices/quotas/normalization';
+import { mapProviderLimitCategoryToRuntimeAuthFailureKind } from '@/daemon/connectedServices/runtimeAuth/mapProviderLimitCategoryToRuntimeAuthFailureKind';
 import type {
   ConnectedServiceProviderRuntimeAuthAdapter,
   ConnectedServiceRuntimeFailureInput,
   ConnectedServiceRuntimeFailureClassification,
-  ConnectedServiceRuntimeAuthFailureKind,
   ConnectedServiceRuntimeLimitCategory,
   ConnectedServiceRuntimeAuthTargetInput,
   ConnectedServiceRuntimeQuotaScope,
@@ -130,21 +130,8 @@ function chooseSelection(params: Readonly<{
   return selections[0] ?? null;
 }
 
-function mapLimitCategoryToKind(
-  category: ConnectedServiceRuntimeLimitCategory,
-): ConnectedServiceRuntimeAuthFailureKind | null {
-  if (category === 'quota') return 'usage_limit';
-  if (category === 'rate_limit') return 'rate_limit';
-  if (category === 'capacity') return 'capacity';
-  if (category === 'auth') return 'auth_expired';
-  if (category === 'plan') return 'plan';
-  if (category === 'validation') return 'validation';
-  if (category === 'account_disabled') return 'account_disabled';
-  return null;
-}
-
 function quotaScopeForCategory(category: ConnectedServiceRuntimeLimitCategory): ConnectedServiceRuntimeQuotaScope | undefined {
-  return category === 'quota' || category === 'rate_limit' ? 'account' : undefined;
+  return category === 'usage_limit' || category === 'rate_limit' ? 'account' : undefined;
 }
 
 function isDependencyFailureText(text: string): boolean {
@@ -174,8 +161,8 @@ function classifyPiRuntimeAuthFailure(
   const text = textParts.join(' ').toLowerCase();
   const providerCategory = classifyProviderLimitEvidence(evidence) as ConnectedServiceRuntimeLimitCategory;
   const dependencyFailure = isDependencyFailureText(text);
-  const category = providerCategory === 'unknown' && /\b(no|missing)\s+api\s+key\b/u.test(text) ? 'auth' : providerCategory;
-  const kind = dependencyFailure ? 'dependency_failure' : mapLimitCategoryToKind(category);
+  const category = providerCategory === 'unknown' && /\b(no|missing)\s+api\s+key\b/u.test(text) ? 'auth_invalid' : providerCategory;
+  const kind = dependencyFailure ? 'dependency_failure' : mapProviderLimitCategoryToRuntimeAuthFailureKind(category);
   if (!kind) return null;
 
   const provider = readProviderFromError(evidence);
@@ -219,11 +206,14 @@ export function createPiConnectedServiceRuntimeAuthAdapter(): ConnectedServicePr
       return { applied: false, reason: 'hot_apply_unsupported' };
     },
     async recoverAfterRuntimeAuthSwitch() {
-      return { recovered: false, recovery: 'restart_rematerialize' };
+      // Nothing to hot-recover: restart/rematerialize IS the recovery for Pi (no-op success).
+      return { recovered: true, recovery: 'restart_rematerialize' };
     },
     async verifyActiveAccount() {
+      // No live provider probe exists: adoption is structurally implied by spawning into the
+      // rematerialized home, so the claim is honest-but-weak (never a strong 'verified').
       return {
-        status: 'verified',
+        status: 'weakly_verified',
         reason: 'provider_restart_rematerialization_authoritative',
       };
     },
