@@ -184,6 +184,99 @@ describe('createClaudeLocalLifecycleTracker', () => {
     lifecycle.dispose();
   });
 
+  it('ignores sidechain-attributed hooks for the primary turn lifecycle', () => {
+    const lifecycle = createLocalTurnLifecycleController({ completionQuiescenceMs: 0 });
+    const tracker = createClaudeLocalLifecycleTracker({ lifecycle });
+
+    // A subagent prompt does not start a primary turn.
+    tracker.observeHook({
+      session_id: 'sid',
+      hook_event_name: 'UserPromptSubmit',
+      agent_id: 'agent_sidechain_1',
+      agent_type: 'general-purpose',
+    });
+    expect(lifecycle.snapshot()).toMatchObject({ active: false, terminal: false });
+
+    tracker.observeHook({ session_id: 'sid', hook_event_name: 'UserPromptSubmit' });
+    expect(lifecycle.snapshot()).toMatchObject({ active: true, terminal: false });
+
+    // Live incident 2026-06-12 (session cmq8171…): subagent auth StopFailures must not
+    // fail the primary turn while the main agent keeps working.
+    tracker.observeHook({
+      session_id: 'sid',
+      hook_event_name: 'StopFailure',
+      agent_id: 'agent_sidechain_1',
+      agent_type: 'general-purpose',
+      error: 'authentication_failed',
+    } as any);
+    expect(lifecycle.snapshot()).toMatchObject({ active: true, terminal: false });
+
+    // A subagent Stop does not complete the primary turn.
+    tracker.observeHook({
+      session_id: 'sid',
+      hook_event_name: 'Stop',
+      agent_id: 'agent_sidechain_1',
+      background_tasks: [],
+    });
+    expect(lifecycle.snapshot()).toMatchObject({ active: true, terminal: false });
+
+    // A subagent SessionEnd does not end the primary turn.
+    tracker.observeHook({
+      session_id: 'sid',
+      hook_event_name: 'SessionEnd',
+      agent_id: 'agent_sidechain_1',
+      reason: 'other',
+    });
+    expect(lifecycle.snapshot()).toMatchObject({ active: true, terminal: false });
+
+    // Main-agent terminal evidence still terminalizes (control).
+    tracker.observeHook({ session_id: 'sid', hook_event_name: 'StopFailure' });
+    expect(lifecycle.snapshot()).toMatchObject({ terminal: true, lastTerminalReason: 'failed' });
+    lifecycle.dispose();
+  });
+
+  it('does not let a sidechain Stop clear async provider-task tracking', () => {
+    const lifecycle = createLocalTurnLifecycleController({ completionQuiescenceMs: 0 });
+    const tracker = createClaudeLocalLifecycleTracker({ lifecycle });
+
+    tracker.observeHook({ session_id: 'sid', hook_event_name: 'UserPromptSubmit' });
+    tracker.observeTranscript({
+      type: 'user',
+      uuid: 'launch-1',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Async agent launched successfully.' }],
+      },
+      toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'agent_1' },
+    } as any);
+
+    tracker.observeHook({
+      session_id: 'sid',
+      hook_event_name: 'Stop',
+      agent_id: 'agent_sidechain_1',
+      background_tasks: [],
+    });
+
+    // The async-agent ledger must still suppress completion while agent_1 runs.
+    tracker.observeTranscript({
+      type: 'assistant',
+      uuid: 'yielded-while-agents-run',
+      message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Agent is running.' }] },
+    } as any);
+    expect(lifecycle.snapshot()).toMatchObject({ active: true, terminal: false });
+
+    tracker.observeHook({
+      session_id: 'sid',
+      hook_event_name: 'Stop',
+      background_tasks: [],
+    });
+    expect(lifecycle.snapshot()).toMatchObject({
+      active: false,
+      terminal: true,
+      lastTerminalReason: 'completed',
+    });
+    lifecycle.dispose();
+  });
+
   it('treats Stop with no background tasks as completion after async Agent launches', async () => {
     const lifecycle = createLocalTurnLifecycleController({
       completionQuiescenceMs: 0,

@@ -71,6 +71,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     dir: string;
     requestLogPath: string;
     rateLimitReadResult?: unknown;
+    rejectRateLimitRead?: boolean;
     rollbackError?: Readonly<{
         code: number;
         message: string;
@@ -87,8 +88,13 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     rejectStructuredSteerInput?: boolean;
     emitResumeContinuationUserInputRequest?: boolean;
     emitResumeTurnStartedBeforeResponse?: boolean;
+    resumeResponseDelayMs?: number;
+    threadReadResponseDelayMs?: number;
     emitIdleMcpRequestAfterThreadStart?: boolean;
     rejectPermissionsProfileAsStringShape?: boolean;
+    rejectThreadRead?: boolean;
+    requireResumeBeforeThreadRead?: boolean;
+    oversizedResumePayloadChars?: number;
 }>): Promise<string> {
     const scriptPath = join(params.dir, 'fake-codex-app-server.mjs');
     const script = [
@@ -98,6 +104,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         `const requestLogPath = ${JSON.stringify(params.requestLogPath)};`,
         'const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });',
         'let staleTerminalTurnId = null;',
+        'const resumedThreadIds = new Set();',
         'for await (const line of rl) {',
         '    if (!line.trim()) continue;',
         '    const msg = JSON.parse(line);',
@@ -128,6 +135,23 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        }',
         '        continue;',
         '    }',
+        '    if (msg.method === "thread/read") {',
+        `        if (${JSON.stringify(params.rejectThreadRead === true)}) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "Method not found: thread/read" } }) + "\\n");',
+        '            continue;',
+        '        }',
+        `        if (${JSON.stringify(params.requireResumeBeforeThreadRead === true)} && !resumedThreadIds.has(msg.params?.threadId ?? "")) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32000, message: "thread not found: " + (msg.params?.threadId ?? "") } }) + "\\n");',
+        '            continue;',
+        '        }',
+        '        const threadReadResponse = JSON.stringify({ id: msg.id, result: { thread: { id: msg.params?.threadId ?? null, turns: msg.params?.includeTurns === true ? [{ id: "turn-history", items: [{ id: "item-history", type: "agentMessage", text: "history" }] }] : [] } } }) + "\\n";',
+        `        if (${JSON.stringify(params.threadReadResponseDelayMs ?? 0)} > 0) {`,
+        `            setTimeout(() => { process.stdout.write(threadReadResponse); }, ${JSON.stringify(params.threadReadResponseDelayMs ?? 0)});`,
+        '        } else {',
+        '            process.stdout.write(threadReadResponse);',
+        '        }',
+        '        continue;',
+        '    }',
         '    if (msg.method === "thread/resume") {',
         `        if (${JSON.stringify(params.rejectPermissionsProfile === true)} && msg.params?.permissions) {`,
         '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32602, message: "invalid params: permissions unsupported" } }) + "\\n");',
@@ -143,6 +167,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        }',
         '        const adoptsOverrideThread = Object.prototype.hasOwnProperty.call(msg.params ?? {}, "model") || Object.prototype.hasOwnProperty.call(msg.params ?? {}, "serviceTier");',
         '        const resumedThreadId = adoptsOverrideThread ? "thread-overrides" : (msg.params?.threadId ?? null);',
+        '        if (resumedThreadId) resumedThreadIds.add(resumedThreadId);',
         `        if (${JSON.stringify(params.emitResumeTurnStartedBeforeResponse === true)}) {`,
         '            const resumeTurnId = "turn-resume-start-before-response";',
         '            process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: resumedThreadId, turn: { id: resumeTurnId } } }) + "\\n");',
@@ -152,7 +177,13 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            }, 20);',
         '            continue;',
         '        }',
-        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { threadId: resumedThreadId, model: msg.params?.model ?? (adoptsOverrideThread ? "gpt-5.4-mini" : "gpt-5.4"), serviceTier: Object.prototype.hasOwnProperty.call(msg.params ?? {}, "serviceTier") ? msg.params.serviceTier : null, activePermissionProfile: msg.params?.permissions ?? null } }) + "\\n");',
+        `        const oversizedPayload = ${JSON.stringify(params.oversizedResumePayloadChars ?? 0)} > 0 ? "x".repeat(${JSON.stringify(params.oversizedResumePayloadChars ?? 0)}) : undefined;`,
+        '        const resumeResponse = JSON.stringify({ id: msg.id, result: { threadId: resumedThreadId, model: msg.params?.model ?? (adoptsOverrideThread ? "gpt-5.4-mini" : "gpt-5.4"), serviceTier: Object.prototype.hasOwnProperty.call(msg.params ?? {}, "serviceTier") ? msg.params.serviceTier : null, activePermissionProfile: msg.params?.permissions ?? null, ...(oversizedPayload ? { oversizedPayload } : {}) } }) + "\\n";',
+        `        if (${JSON.stringify(params.resumeResponseDelayMs ?? 0)} > 0) {`,
+        `            setTimeout(() => { process.stdout.write(resumeResponse); }, ${JSON.stringify(params.resumeResponseDelayMs ?? 0)});`,
+        '        } else {',
+        '            process.stdout.write(resumeResponse);',
+        '        }',
         `        if (${JSON.stringify(params.emitResumeContinuationUserInputRequest === true)}) {`,
         '            const resumeTurnId = "turn-resume-request";',
         '            setTimeout(() => {',
@@ -165,6 +196,10 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        continue;',
         '    }',
         '    if (msg.method === "account/rateLimits/read") {',
+        `        if (${JSON.stringify(params.rejectRateLimitRead === true)}) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32000, message: "connection reset while reading rate limits" } }) + "\\n");',
+        '            continue;',
+        '        }',
         `        process.stdout.write(JSON.stringify({ id: msg.id, result: ${JSON.stringify(params.rateLimitReadResult ?? { plan_type: 'pro', primary: { used_percent: 12, resets_at: '2026-05-17T12:00:00.000Z' } })} }) + "\\n");`,
         '        continue;',
         '    }',
@@ -839,6 +874,31 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            }, 14);',
         '            continue;',
         '        }',
+        '        if (text === "model-capacity-once" && matchingTurnStartCount === 1) {',
+        '            const capacityError = { message: "Selected model is at capacity. Please try a different model.", codexErrorInfo: "other", additionalDetails: null };',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId, status: "failed", error: capacityError } } }) + "\\n");',
+        '            }, 8);',
+        '            continue;',
+        '        }',
+        '        if (text === "model-capacity-twice" && matchingTurnStartCount <= 2) {',
+        '            const capacityMessage = matchingTurnStartCount === 1 ? "ORIGINAL_CAPACITY_FAILURE: Selected model is at capacity. Please try a different model." : "RETRY_CAPACITY_FAILURE: Selected model is at capacity. Please try a different model.";',
+        '            const capacityError = { message: capacityMessage, codexErrorInfo: "other", additionalDetails: null };',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId, status: "failed", error: capacityError } } }) + "\\n");',
+        '            }, 8);',
+        '            continue;',
+        '        }',
+        '        if (text === "model-capacity-after-activity-once" && matchingTurnStartCount === 1) {',
+        '            const capacityError = { message: "Selected model is at capacity. Please try a different model.", codexErrorInfo: "other", additionalDetails: null };',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/agentMessage/delta", params: { threadId: msg.params?.threadId ?? null, turnId, itemId: "capacity_mid_turn_msg", delta: "I changed " } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId, status: "failed", error: capacityError } } }) + "\\n");',
+        '            }, 12);',
+        '            continue;',
+        '        }',
         '        if (text === "top-level-failed-turn") {',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, id: turnId, status: "failed", error: { message: "top-level failed turn", codexErrorInfo: "other", additionalDetails: null } } }) + "\\n");',
@@ -1169,9 +1229,19 @@ describe('createCodexAppServerRuntime', () => {
             rejectStructuredSteerInput?: boolean;
             emitResumeContinuationUserInputRequest?: boolean;
             emitResumeTurnStartedBeforeResponse?: boolean;
+            resumeResponseDelayMs?: number;
+            threadReadResponseDelayMs?: number;
             emitIdleMcpRequestAfterThreadStart?: boolean;
             rejectPermissionsProfileAsStringShape?: boolean;
             rateLimitReadResult?: unknown;
+            rejectRateLimitRead?: boolean;
+            rejectThreadRead?: boolean;
+            requireResumeBeforeThreadRead?: boolean;
+            oversizedResumePayloadChars?: number;
+            maxJsonLineChars?: number;
+            rpcTimeoutMs?: number;
+            startupRpcTimeoutMs?: number;
+            resumeRecoveryTimeoutMs?: number;
         }> = {},
     ): Promise<{
         root: string;
@@ -1197,13 +1267,22 @@ describe('createCodexAppServerRuntime', () => {
             rejectStructuredSteerInput: options.rejectStructuredSteerInput,
             emitResumeContinuationUserInputRequest: options.emitResumeContinuationUserInputRequest,
             emitResumeTurnStartedBeforeResponse: options.emitResumeTurnStartedBeforeResponse,
+            resumeResponseDelayMs: options.resumeResponseDelayMs,
+            threadReadResponseDelayMs: options.threadReadResponseDelayMs,
             emitIdleMcpRequestAfterThreadStart: options.emitIdleMcpRequestAfterThreadStart,
             rejectPermissionsProfileAsStringShape: options.rejectPermissionsProfileAsStringShape,
             rateLimitReadResult: options.rateLimitReadResult,
+            rejectRateLimitRead: options.rejectRateLimitRead,
+            rejectThreadRead: options.rejectThreadRead,
+            requireResumeBeforeThreadRead: options.requireResumeBeforeThreadRead,
+            oversizedResumePayloadChars: options.oversizedResumePayloadChars,
         });
         envScope.patch({
             HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
-            HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '10000',
+            HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: String(options.rpcTimeoutMs ?? 10000),
+            ...(options.startupRpcTimeoutMs ? { HAPPIER_CODEX_APP_SERVER_STARTUP_RPC_TIMEOUT_MS: String(options.startupRpcTimeoutMs) } : {}),
+            ...(options.resumeRecoveryTimeoutMs ? { HAPPIER_CODEX_APP_SERVER_RESUME_RECOVERY_TIMEOUT_MS: String(options.resumeRecoveryTimeoutMs) } : {}),
+            ...(options.maxJsonLineChars ? { HAPPIER_CODEX_APP_SERVER_MAX_JSON_LINE_CHARS: String(options.maxJsonLineChars) } : {}),
             CODEX_HOME: join(root, 'codex-home'),
             OPENAI_API_KEY: 'test-openai-key',
             CODEX_API_KEY: undefined,
@@ -1452,8 +1531,10 @@ describe('createCodexAppServerRuntime', () => {
         });
     });
 
-    it('resumes an existing app-server thread for resume ids and existing session ids', async () => {
-        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-resume-');
+    it('loads an existing app-server thread with resume even when history import is disabled', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-resume-', {
+            requireResumeBeforeThreadRead: true,
+        });
 
         const runtime = createCodexAppServerRuntime({
             directory: root,
@@ -1463,13 +1544,145 @@ describe('createCodexAppServerRuntime', () => {
         });
 
         await runtime.startOrLoad({ resumeId: 'resume-123', importHistory: false });
-        await runtime.startOrLoad({ existingSessionId: 'existing-456' });
+        await runtime.startOrLoad({ existingSessionId: 'existing-456', importHistory: false });
 
         const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-        const resumeRequests = requestLog.filter((entry: { method: string }) => entry.method === 'thread/resume');
-        expect(resumeRequests).toEqual(
+        expect(requestLog.filter((entry: { method: string }) => entry.method === 'thread/read')).toEqual([]);
+        expect(requestLog.filter((entry: { method: string }) => entry.method === 'thread/resume')).toEqual(
             expect.arrayContaining([
-                expect.objectContaining({ params: expect.objectContaining({ threadId: 'resume-123', persistExtendedHistory: true }) }),
+                expect.objectContaining({
+                    params: expect.objectContaining({
+                        threadId: 'resume-123',
+                        persistExtendedHistory: true,
+                    }),
+                }),
+                expect.objectContaining({
+                    params: expect.objectContaining({
+                        threadId: 'existing-456',
+                        persistExtendedHistory: true,
+                    }),
+                }),
+            ]),
+        );
+    });
+
+    it('defaults resumed sessions to lean metadata recovery after app-server loads the thread', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-resume-oversized-', {
+            requireResumeBeforeThreadRead: true,
+            oversizedResumePayloadChars: 4 * 1024,
+            maxJsonLineChars: 1024,
+        });
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'read-only',
+        });
+
+        await runtime.startOrLoad({ resumeId: 'resume-123' });
+
+        expect(runtime.getSessionId()).toBe('resume-123');
+        const requestLog = await readRequestLog(requestLogPath);
+        const resumeIndex = requestLog.findIndex((entry) => entry.method === 'thread/resume');
+        const readIndex = requestLog.findIndex((entry) => entry.method === 'thread/read');
+        expect(resumeIndex).toBeGreaterThanOrEqual(0);
+        expect(readIndex).toBeGreaterThan(resumeIndex);
+        expect(requestLog[readIndex]).toMatchObject({
+            method: 'thread/read',
+            params: {
+                threadId: 'resume-123',
+                includeTurns: false,
+            },
+        });
+    });
+
+    it('waits beyond the normal startup timeout for recoverable oversized no-history resumes', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-resume-delayed-oversized-', {
+            requireResumeBeforeThreadRead: true,
+            resumeResponseDelayMs: 500,
+            oversizedResumePayloadChars: 4 * 1024,
+            maxJsonLineChars: 1024,
+            rpcTimeoutMs: 250,
+            startupRpcTimeoutMs: 250,
+            resumeRecoveryTimeoutMs: 1200,
+        });
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'read-only',
+        });
+
+        await runtime.startOrLoad({ resumeId: 'resume-slow' });
+
+        expect(runtime.getSessionId()).toBe('resume-slow');
+        const requestLog = await readRequestLog(requestLogPath);
+        const resumeIndex = requestLog.findIndex((entry) => entry.method === 'thread/resume');
+        const readIndex = requestLog.findIndex((entry) => entry.method === 'thread/read');
+        expect(resumeIndex).toBeGreaterThanOrEqual(0);
+        expect(readIndex).toBeGreaterThan(resumeIndex);
+        expect(requestLog[readIndex]).toMatchObject({
+            method: 'thread/read',
+            params: {
+                threadId: 'resume-slow',
+                includeTurns: false,
+            },
+        });
+    });
+
+    it('uses the resume recovery timeout for lean thread metadata reads after oversized resumes', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-resume-oversized-delayed-read-', {
+            requireResumeBeforeThreadRead: true,
+            threadReadResponseDelayMs: 500,
+            oversizedResumePayloadChars: 4 * 1024,
+            maxJsonLineChars: 1024,
+            rpcTimeoutMs: 250,
+            startupRpcTimeoutMs: 250,
+            resumeRecoveryTimeoutMs: 1200,
+        });
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'read-only',
+        });
+
+        await runtime.startOrLoad({ resumeId: 'resume-slow-read' });
+
+        expect(runtime.getSessionId()).toBe('resume-slow-read');
+        const requestLog = await readRequestLog(requestLogPath);
+        const resumeIndex = requestLog.findIndex((entry) => entry.method === 'thread/resume');
+        const readIndex = requestLog.findIndex((entry) => entry.method === 'thread/read');
+        expect(resumeIndex).toBeGreaterThanOrEqual(0);
+        expect(readIndex).toBeGreaterThan(resumeIndex);
+        expect(requestLog[readIndex]).toMatchObject({
+            method: 'thread/read',
+            params: {
+                threadId: 'resume-slow-read',
+                includeTurns: false,
+            },
+        });
+    });
+
+    it('resumes an existing app-server thread with full history when history import is requested', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-resume-history-');
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'read-only',
+        });
+
+        await runtime.startOrLoad({ resumeId: 'resume-123', importHistory: true });
+
+        const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+        expect(requestLog.filter((entry: { method: string }) => entry.method === 'thread/read')).toEqual([]);
+        expect(requestLog.filter((entry: { method: string }) => entry.method === 'thread/resume')).toEqual(
+            expect.arrayContaining([
                 expect.objectContaining({
                     params: expect.objectContaining({
                         threadId: 'resume-123',
@@ -1480,18 +1693,63 @@ describe('createCodexAppServerRuntime', () => {
                         persistExtendedHistory: true,
                     }),
                 }),
-                expect.objectContaining({
-                    params: expect.objectContaining({
-                        threadId: 'existing-456',
-                        permissions: {
-                            type: 'profile',
-                            id: ':read-only',
-                        },
-                        persistExtendedHistory: true,
-                    }),
-                }),
             ]),
         );
+    });
+
+    it('publishes the requested resume thread id before delayed app-server history hydration completes', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-resume-delayed-', {
+            resumeResponseDelayMs: 500,
+        });
+        let metadata: Metadata = {
+            path: root,
+            host: 'test-host',
+            homeDir: root,
+            happyHomeDir: join(root, '.happier'),
+            happyLibDir: join(root, '.happier', 'lib'),
+            happyToolsDir: join(root, '.happier', 'tools'),
+        };
+        const updateMetadata = vi.fn(async (updater: (current: Metadata) => Metadata) => {
+            metadata = updater(metadata);
+        });
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata } as any,
+            permissionMode: 'read-only',
+        });
+
+        let settled = false;
+        const startPromise = runtime.startOrLoad({ resumeId: 'resume-slow' })
+            .finally(() => {
+                settled = true;
+            });
+
+        try {
+            await waitForCondition(
+                () => metadata.codexSessionId === 'resume-slow',
+                {
+                    timeoutMs: 200,
+                    intervalMs: 20,
+                    label: 'resume metadata to publish before app-server history hydration completes',
+                    debug: () => JSON.stringify({ metadata, settled }),
+                },
+            );
+            expect(settled).toBe(false);
+            expect(metadata).toMatchObject({
+                codexSessionId: 'resume-slow',
+                codexBackendMode: 'appServer',
+                agentRuntimeDescriptorV1: expect.objectContaining({
+                    providerId: 'codex',
+                    provider: expect.objectContaining({
+                        backendMode: 'appServer',
+                        vendorSessionId: 'resume-slow',
+                    }),
+                }),
+            });
+        } finally {
+            await startPromise;
+        }
     });
 
     it('drains accepted pending queue rows after resuming an app-server thread', async () => {
@@ -1606,6 +1864,55 @@ describe('createCodexAppServerRuntime', () => {
         const turnStart = requestLog.find((entry: { method: string }) => entry.method === 'turn/start') as { params?: Record<string, unknown> } | undefined;
         expect(turnStart?.params).not.toHaveProperty('sandboxPolicy');
         expect(turnStart?.params).not.toHaveProperty('approvalPolicy');
+    });
+
+    it.each([
+        ['turn-ledger', true],
+        ['legacy', false],
+    ] as const)('cancels a pending usage-limit recovery intent on normal turn completion (%s path)', async (_label, useTurnLedger) => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-turn-usage-limit-cancel-');
+
+        let metadata: Metadata = {
+            path: root,
+            host: 'test-host',
+            homeDir: root,
+            // nextCheckAtMs far in the future so the scheduler's own wake timer cannot
+            // probe-and-cancel during the test; only normal turn completion may cancel.
+            [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: {
+                v: 1,
+                status: 'waiting',
+                issueFingerprint: 'usage-limit:codex:turn-old:1:2',
+                armedAtMs: Date.now(),
+                resetAtMs: Date.now() + 3_600_000,
+                nextCheckAtMs: Date.now() + 3_600_000,
+                attemptCount: 0,
+                maxAttempts: 3,
+                lastProbeError: null,
+                resumePromptMode: 'standard',
+                selectedAuth: { kind: 'native', serviceId: 'openai-codex' },
+            },
+        } as unknown as Metadata;
+        const updateMetadata = vi.fn(async (handler: (current: Metadata) => Metadata) => {
+            metadata = handler(metadata);
+        });
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                sessionId: 'session-usage-limit-cancel',
+                updateMetadata,
+                getMetadataSnapshot: () => metadata,
+                ...(useTurnLedger ? { sessionTurnLifecycle: createSessionTurnLifecycleTestDouble() } : {}),
+            } as unknown as Parameters<typeof createCodexAppServerRuntime>[0]['session'],
+            permissionMode: 'read-only',
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('hello-world');
+
+        expect((metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]).toMatchObject({
+            status: 'cancelled',
+        });
     });
 
     it('does not report an active provider turn before native Codex starts one', async () => {
@@ -5335,62 +5642,66 @@ describe('createCodexAppServerRuntime', () => {
             } as unknown as Parameters<typeof createCodexAppServerRuntime>[0]['session'],
         });
 
-        await runtime.startOrLoad({});
+        try {
+            await runtime.startOrLoad({});
 
-        await expect(runtime.sendPrompt('usage-limit-structured')).rejects.toMatchObject({
-            runtimeAuthClassification: {
-                kind: 'usage_limit',
-                serviceId: 'openai-codex',
-                profileId: 'backup',
-                groupId: 'happier',
-            },
-        });
-        expect(sessionTurnLifecycle.failTurn).toHaveBeenCalledWith(expect.objectContaining({
-            provider: 'codex',
-            issue: expect.objectContaining({
-                source: 'usage_limit',
-                usageLimit: expect.objectContaining({
-                    recoverability: 'switch_account',
-                    connectedService: {
-                        serviceId: 'openai-codex',
-                        profileId: 'backup',
-                        groupId: 'happier',
-                    },
+            await expect(runtime.sendPrompt('usage-limit-structured')).rejects.toMatchObject({
+                runtimeAuthClassification: {
+                    kind: 'usage_limit',
+                    serviceId: 'openai-codex',
+                    profileId: 'backup',
+                    groupId: 'happier',
+                },
+            });
+            expect(sessionTurnLifecycle.failTurn).toHaveBeenCalledWith(expect.objectContaining({
+                provider: 'codex',
+                issue: expect.objectContaining({
+                    source: 'usage_limit',
+                    usageLimit: expect.objectContaining({
+                        recoverability: 'switch_account',
+                        connectedService: {
+                            serviceId: 'openai-codex',
+                            profileId: 'backup',
+                            groupId: 'happier',
+                        },
+                    }),
                 }),
-            }),
-        }));
-        const runtimeControls = runtime as typeof runtime & {
-            enableUsageLimitWaitResume?: (request: { sessionId: string }) => Promise<unknown>;
-            checkUsageLimitRecoveryNow?: (request: { sessionId: string }) => Promise<unknown>;
-        };
-        await expect(runtimeControls.enableUsageLimitWaitResume?.({
-            sessionId: 'session-stale-env-group',
-        })).resolves.toMatchObject({
-            ok: true,
-            recovery: {
-                selectedAuth: {
-                    kind: 'group',
+            }));
+            const runtimeControls = runtime as typeof runtime & {
+                enableUsageLimitWaitResume?: (request: { sessionId: string }) => Promise<unknown>;
+                checkUsageLimitRecoveryNow?: (request: { sessionId: string }) => Promise<unknown>;
+            };
+            await expect(runtimeControls.enableUsageLimitWaitResume?.({
+                sessionId: 'session-stale-env-group',
+            })).resolves.toMatchObject({
+                ok: true,
+                recovery: {
+                    selectedAuth: {
+                        kind: 'group',
+                        serviceId: 'openai-codex',
+                        groupId: 'happier',
+                        profileId: 'backup',
+                    },
+                },
+            });
+            await expect(runtimeControls.checkUsageLimitRecoveryNow?.({
+                sessionId: 'session-stale-env-group',
+            })).resolves.toMatchObject({
+                ok: true,
+                status: 'waiting',
+            });
+            expect(onUsageLimitGroupRecovery).toHaveBeenCalledWith({
+                sessionId: 'session-stale-env-group',
+                classification: expect.objectContaining({
+                    kind: 'usage_limit',
                     serviceId: 'openai-codex',
                     groupId: 'happier',
                     profileId: 'backup',
-                },
-            },
-        });
-        await expect(runtimeControls.checkUsageLimitRecoveryNow?.({
-            sessionId: 'session-stale-env-group',
-        })).resolves.toMatchObject({
-            ok: true,
-            status: 'waiting',
-        });
-        expect(onUsageLimitGroupRecovery).toHaveBeenCalledWith({
-            sessionId: 'session-stale-env-group',
-            classification: expect.objectContaining({
-                kind: 'usage_limit',
-                serviceId: 'openai-codex',
-                groupId: 'happier',
-                profileId: 'backup',
-            }),
-        });
+                }),
+            });
+        } finally {
+            await runtime.reset();
+        }
     });
 
     it('persists observed stable Codex usage-limit failures through the real session lifecycle', async () => {
@@ -5478,7 +5789,7 @@ describe('createCodexAppServerRuntime', () => {
         await expect(runtime.sendPrompt('refresh-token-was-already-used')).rejects.toMatchObject({
             runtimeAuthClassification: {
                 kind: 'refresh_failed',
-                limitCategory: 'auth',
+                limitCategory: 'auth_invalid',
                 serviceId: 'openai-codex',
                 profileId: 'bot',
                 groupId: 'happier',
@@ -5489,7 +5800,7 @@ describe('createCodexAppServerRuntime', () => {
             issue: expect.objectContaining({
                 source: 'auth_error',
                 usageLimit: expect.objectContaining({
-                    limitCategory: 'auth',
+                    limitCategory: 'auth_invalid',
                     connectedService: {
                         serviceId: 'openai-codex',
                         profileId: 'bot',
@@ -5617,7 +5928,7 @@ describe('createCodexAppServerRuntime', () => {
                 },
             });
             const runtimeControls = runtime as typeof runtime & {
-                enableUsageLimitWaitResume?: (request: { sessionId: string; rememberPreference?: boolean }) => Promise<unknown>;
+                enableUsageLimitWaitResume?: (request: { sessionId: string; rememberPreference?: boolean; resumePromptMode?: 'standard' | 'off' | 'custom' }) => Promise<unknown>;
                 checkUsageLimitRecoveryNow?: (request: { sessionId: string }) => Promise<unknown>;
             };
 
@@ -5625,16 +5936,19 @@ describe('createCodexAppServerRuntime', () => {
             await expect(runtimeControls.enableUsageLimitWaitResume?.({
                 sessionId: 'session-usage-recovery',
                 rememberPreference: true,
+                resumePromptMode: 'custom',
             })).resolves.toMatchObject({
                 ok: true,
                 recovery: {
                     status: 'waiting',
+                    resumePromptMode: 'custom',
                 },
             });
             expect(rememberUsageLimitRecoveryPreference).toHaveBeenCalledTimes(1);
             expect(metadata).toMatchObject({
                 sessionUsageLimitRecoveryV1: {
                     status: 'waiting',
+                    resumePromptMode: 'custom',
                     resetAtMs: Date.parse('2026-05-17T12:00:00.000Z'),
                     selectedAuth: {
                         kind: 'profile',
@@ -5705,10 +6019,13 @@ describe('createCodexAppServerRuntime', () => {
                 runtimeAuthClassification: { kind: 'usage_limit' },
             });
             const runtimeControls = runtime as typeof runtime & {
-                checkUsageLimitRecoveryNow?: (request: { sessionId: string }) => Promise<unknown>;
+                checkUsageLimitRecoveryNow?: (request: { sessionId: string; resumePromptMode?: 'standard' | 'off' | 'custom' }) => Promise<unknown>;
             };
 
-            await expect(runtimeControls.checkUsageLimitRecoveryNow?.({ sessionId: 'session-usage-check-now' })).resolves.toMatchObject({
+            await expect(runtimeControls.checkUsageLimitRecoveryNow?.({
+                sessionId: 'session-usage-check-now',
+                resumePromptMode: 'off',
+            })).resolves.toMatchObject({
                 ok: true,
                 status: 'resumed',
             });
@@ -5719,6 +6036,7 @@ describe('createCodexAppServerRuntime', () => {
             expect(metadata).toMatchObject({
                 sessionUsageLimitRecoveryV1: {
                     status: 'cancelled',
+                    resumePromptMode: 'off',
                     selectedAuth: { kind: 'native', serviceId: 'openai-codex' },
                 },
             });
@@ -5728,6 +6046,62 @@ describe('createCodexAppServerRuntime', () => {
                 errorCode: 'probe_rate_limited',
                 retryAfterMs: expect.any(Number),
             });
+        } finally {
+            await runtime.reset();
+        }
+    });
+
+    it('routes usage-limit rate-limit probes through the shared param-compat reader (single null-params probe when accepted)', async () => {
+        const { root, fakeAppServer, requestLogPath } = await createRuntimeFixture(
+            'happier-codex-app-server-runtime-rate-limit-params-',
+        );
+        let metadata: Metadata = {
+            path: root,
+            host: 'test-host',
+            homeDir: root,
+            happyHomeDir: join(root, '.happier'),
+            happyLibDir: join(root, '.happier', 'lib'),
+            happyToolsDir: join(root, '.happier', 'tools'),
+        };
+        const updateMetadata = vi.fn(async (handler: (current: Metadata) => Metadata) => {
+            metadata = handler(metadata);
+        });
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const processEnv = createCodexAppServerProcessEnv(fakeAppServer, {
+            CODEX_HOME: join(root, 'codex-home'),
+            OPENAI_API_KEY: 'test-openai-key',
+        });
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            processEnv,
+            onThinkingChange: vi.fn(),
+            session: {
+                sessionId: 'session-usage-check-now',
+                updateMetadata,
+                sessionTurnLifecycle,
+                getMetadataSnapshot: () => metadata,
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as unknown as Parameters<typeof createCodexAppServerRuntime>[0]['session'],
+        });
+
+        try {
+            await runtime.startOrLoad({});
+            await expect(runtime.sendPrompt('usage-limit-structured')).rejects.toMatchObject({
+                runtimeAuthClassification: { kind: 'usage_limit' },
+            });
+            const runtimeControls = runtime as typeof runtime & {
+                checkUsageLimitRecoveryNow?: (request: { sessionId: string }) => Promise<unknown>;
+            };
+
+            await expect(runtimeControls.checkUsageLimitRecoveryNow?.({ sessionId: 'session-usage-check-now' })).resolves.toMatchObject({
+                ok: true,
+                status: 'resumed',
+            });
+
+            const rateLimitReads = (await readRequestLog(requestLogPath))
+                .filter((entry) => entry.method === 'account/rateLimits/read');
+            expect(rateLimitReads.map((entry) => entry.params)).toEqual([null]);
         } finally {
             await runtime.reset();
         }
@@ -5941,6 +6315,77 @@ describe('createCodexAppServerRuntime', () => {
         }
     });
 
+    it('keeps usage-limit recovery waiting when the rate-limit probe fails transiently (never durable exhausted)', async () => {
+        // RD-CDX-8: a transient `account/rateLimits/read` failure (timeout/conn-reset/RPC
+        // unavailable, incl. a probe racing the hot-swap app-server restart) is not an
+        // authoritative provider verdict and must keep the durable intent WAITING.
+        const { root, fakeAppServer } = await createRuntimeFixture('happier-codex-app-server-runtime-usage-probe-failure-', {
+            rejectRateLimitRead: true,
+        });
+        let metadata: Metadata = {
+            path: root,
+            host: 'test-host',
+            homeDir: root,
+            happyHomeDir: join(root, '.happier'),
+            happyLibDir: join(root, '.happier', 'lib'),
+            happyToolsDir: join(root, '.happier', 'tools'),
+        };
+        const updateMetadata = vi.fn(async (handler: (current: Metadata) => Metadata) => {
+            metadata = handler(metadata);
+        });
+        const processEnv = createCodexAppServerProcessEnv(fakeAppServer, {
+            CODEX_HOME: join(root, 'codex-home'),
+            OPENAI_API_KEY: 'test-openai-key',
+        });
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            processEnv,
+            onThinkingChange: vi.fn(),
+            session: {
+                sessionId: 'session-usage-probe-failure',
+                updateMetadata,
+                sessionTurnLifecycle: createSessionTurnLifecycleTestDouble(),
+                getMetadataSnapshot: () => metadata,
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as unknown as Parameters<typeof createCodexAppServerRuntime>[0]['session'],
+        });
+
+        try {
+            await runtime.startOrLoad({});
+            await expect(runtime.sendPrompt('usage-limit-structured')).rejects.toMatchObject({
+                runtimeAuthClassification: { kind: 'usage_limit' },
+            });
+
+            const runtimeControls = runtime as typeof runtime & {
+                enableUsageLimitWaitResume?: (request: { sessionId: string }) => Promise<unknown>;
+                checkUsageLimitRecoveryNow?: (request: { sessionId: string }) => Promise<unknown>;
+            };
+            await runtimeControls.enableUsageLimitWaitResume?.({
+                sessionId: 'session-usage-probe-failure',
+            });
+
+            await expect(runtimeControls.checkUsageLimitRecoveryNow?.({
+                sessionId: 'session-usage-probe-failure',
+            })).resolves.toMatchObject({
+                ok: true,
+                status: 'waiting',
+            });
+            expect(metadata).toMatchObject({
+                sessionUsageLimitRecoveryV1: {
+                    status: 'waiting',
+                    nextCheckAtMs: expect.any(Number),
+                    lastProbeError: 'codex_app_server_rate_limit_probe_unavailable',
+                },
+            });
+            const recovery = (metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY] as { nextCheckAtMs?: number };
+            // Bounded degraded retry: never immediate, never terminal.
+            expect(recovery.nextCheckAtMs).toBeGreaterThan(Date.now());
+        } finally {
+            await runtime.reset();
+        }
+    });
+
     it('auto-arms usage-limit wait/resume when the account setting is auto-wait', async () => {
         const { root, fakeAppServer } = await createRuntimeFixture('happier-codex-app-server-runtime-usage-auto-wait-');
         setActiveAccountSettingsSnapshot({
@@ -6076,7 +6521,6 @@ describe('createCodexAppServerRuntime', () => {
             happyHomeDir: join(root, '.happier'),
             happyLibDir: join(root, '.happier', 'lib'),
             happyToolsDir: join(root, '.happier', 'tools'),
-            ...({
             sessionUsageLimitRecoveryV1: {
                 v: 1,
                 status: 'waiting',
@@ -6087,9 +6531,9 @@ describe('createCodexAppServerRuntime', () => {
                 attemptCount: 0,
                 maxAttempts: 3,
                 lastProbeError: null,
+                resumePromptMode: 'standard',
                 selectedAuth: { kind: 'native' },
             },
-            } satisfies Record<string, unknown>),
         };
         const updateMetadata = vi.fn(async (handler: (current: Metadata) => Metadata) => {
             metadata = handler(metadata);
@@ -6333,6 +6777,142 @@ describe('createCodexAppServerRuntime', () => {
             type: 'message',
             message: expect.stringContaining('context window'),
         }));
+    });
+
+    it('retries the original prompt once after a transient Codex model-capacity failure without turn activity', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-model-capacity-retry-');
+
+        const sendCodexMessage = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage,
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+
+        await expect(runtime.sendPrompt('model-capacity-once')).resolves.toBeUndefined();
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.filter((entry) => entry.method === 'thread/compact/start')).toHaveLength(0);
+        const turnStarts = requestLog.filter((entry) => {
+            const params = entry.params as { input?: Array<{ text?: string }>; threadId?: string } | null;
+            return entry.method === 'turn/start' && params?.input?.[0]?.text === 'model-capacity-once';
+        });
+        expect(turnStarts).toHaveLength(2);
+        expect(sendCodexMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+            type: 'message',
+            message: expect.stringContaining('capacity'),
+        }));
+        expect(sendCodexMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+            type: 'turn_aborted',
+        }));
+    });
+
+    it('continues instead of replaying the original prompt after transient Codex model-capacity failure with turn activity', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-model-capacity-activity-');
+
+        const sendCodexMessage = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage,
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+
+        await expect(runtime.sendPrompt('model-capacity-after-activity-once')).resolves.toBeUndefined();
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.filter((entry) => entry.method === 'thread/compact/start')).toHaveLength(0);
+        const turnStarts = requestLog.filter((entry) => entry.method === 'turn/start') as Array<{
+            params?: { input?: Array<{ text?: string }>; threadId?: string };
+        }>;
+        const prompts = turnStarts.map((entry) => entry.params?.input?.[0]?.text ?? '');
+        expect(prompts.filter((text) => text === 'model-capacity-after-activity-once')).toHaveLength(1);
+        expect(prompts.some((text) => text.includes('continue') && text.includes('repeat completed work'))).toBe(true);
+        expect(sendCodexMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+            type: 'message',
+            message: expect.stringContaining('capacity'),
+        }));
+        expect(sendCodexMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+            type: 'turn_aborted',
+        }));
+    });
+
+    it('uses the configured continuation prompt after transient Codex model-capacity failure with turn activity', async () => {
+        const { root, requestLogPath, fakeAppServer } = await createRuntimeFixture('happier-codex-app-server-runtime-model-capacity-custom-continuation-');
+        const customContinuationPrompt = 'CUSTOM_CAPACITY_CONTINUATION_PROMPT';
+        const processEnv = createCodexAppServerProcessEnv(fakeAppServer, {
+            HAPPIER_CODEX_CONTEXT_WINDOW_CONTINUATION_PROMPT: customContinuationPrompt,
+        });
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            processEnv,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+
+        await expect(runtime.sendPrompt('model-capacity-after-activity-once')).resolves.toBeUndefined();
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.filter((entry) => entry.method === 'thread/compact/start')).toHaveLength(0);
+        const turnStarts = requestLog.filter((entry) => entry.method === 'turn/start') as Array<{
+            params?: { input?: Array<{ text?: string }>; threadId?: string };
+        }>;
+        const prompts = turnStarts.map((entry) => entry.params?.input?.[0]?.text ?? '');
+        expect(prompts.filter((text) => text === 'model-capacity-after-activity-once')).toHaveLength(1);
+        expect(prompts).toContain(customContinuationPrompt);
+    });
+
+    it('surfaces the original transient Codex model-capacity failure when the retry fails again', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-model-capacity-repeat-');
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+
+        let caughtError: unknown;
+        try {
+            await runtime.sendPrompt('model-capacity-twice');
+        } catch (error) {
+            caughtError = error;
+        }
+
+        expect(caughtError).toBeInstanceOf(Error);
+        expect((caughtError as Error).message).toContain('ORIGINAL_CAPACITY_FAILURE');
+        expect((caughtError as Error).message).not.toContain('RETRY_CAPACITY_FAILURE');
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.filter((entry) => entry.method === 'thread/compact/start')).toHaveLength(0);
+        const retriedTurnStarts = requestLog.filter((entry) => {
+            const params = entry.params as { input?: Array<{ text?: string }>; threadId?: string } | null;
+            return entry.method === 'turn/start' && params?.input?.[0]?.text === 'model-capacity-twice';
+        });
+        expect(retriedTurnStarts).toHaveLength(2);
     });
 
     it('surfaces context-window exhaustion without compacting when Codex recovery is disabled', async () => {

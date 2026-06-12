@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { mapToClaudeMode, resolveClaudeSdkPermissionModeFromEnhancedMode } from './permissionMode';
+import {
+    mapToClaudeMode,
+    normalizeClaudeHappyCliSessionControlPermissionMode,
+    resolveClaudeSdkPermissionModeFromEnhancedMode,
+} from './permissionMode';
 import type { PermissionMode } from '@/api/types';
 
 describe('mapToClaudeMode', () => {
@@ -60,5 +64,11 @@ describe('resolveClaudeSdkPermissionModeFromEnhancedMode', () => {
                 agentModeId: 'plan',
             }),
         ).toBe('plan');
+    });
+});
+
+describe('normalizeClaudeHappyCliSessionControlPermissionMode', () => {
+    it('keeps safe-yolo as a Happier CLI intent so Unified can launch Claude in auto mode', () => {
+        expect(normalizeClaudeHappyCliSessionControlPermissionMode('safe-yolo')).toBe('safe-yolo');
     });
 });

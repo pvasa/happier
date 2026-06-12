@@ -37,6 +37,7 @@ export async function applyCodexConnectedServiceAuthGeneration(params: Readonly<
   candidate: ConnectedServiceCredentialRecordV1;
   forcedWorkspaceId: string | null;
   invalidateTransports?: (() => Promise<void> | void) | null;
+  persistAuthStore?: (() => Promise<void> | void) | null;
 }>): Promise<
   | Readonly<{ applied: true; via: 'hot' }>
   | Readonly<{
@@ -45,7 +46,11 @@ export async function applyCodexConnectedServiceAuthGeneration(params: Readonly<
     }>
   | Readonly<{
       applied: false;
-      reason: 'transport_invalidation_unavailable' | 'transport_invalidation_failed';
+      reason:
+        | 'transport_invalidation_unavailable'
+        | 'transport_invalidation_failed'
+        | 'auth_store_persistence_unavailable'
+        | 'auth_store_persistence_failed';
       recovery: 'restart_resume';
     }>
 > {
@@ -58,6 +63,17 @@ export async function applyCodexConnectedServiceAuthGeneration(params: Readonly<
     return {
       applied: false,
       reason: 'transport_invalidation_unavailable',
+      recovery: 'restart_resume',
+    };
+  }
+  if (typeof params.persistAuthStore !== 'function') {
+    // Without a durable auth-store write the session app-server would reload
+    // the PREVIOUS account on transport invalidation (login/start only mutates
+    // the throwaway control app-server), so adoption verification would always
+    // reject the hot apply. Fail closed into the bounded restart fallback.
+    return {
+      applied: false,
+      reason: 'auth_store_persistence_unavailable',
       recovery: 'restart_resume',
     };
   }
@@ -74,6 +90,15 @@ export async function applyCodexConnectedServiceAuthGeneration(params: Readonly<
     accessToken: record.oauth.accessToken,
     chatgptAccountId: record.oauth.providerAccountId,
   });
+  try {
+    await params.persistAuthStore();
+  } catch {
+    return {
+      applied: false,
+      reason: 'auth_store_persistence_failed',
+      recovery: 'restart_resume',
+    };
+  }
   try {
     await params.invalidateTransports();
   } catch {

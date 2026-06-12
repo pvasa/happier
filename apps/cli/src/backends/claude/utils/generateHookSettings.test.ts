@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -8,6 +8,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 
 import {
+  DEFAULT_PERMISSION_HOOK_TIMEOUT_SECONDS,
   cleanupHookPluginDir,
   cleanupHookSettingsFile,
   generateHookPluginDir,
@@ -57,6 +58,7 @@ describe('generateHookSettingsFile', () => {
       'mcp__happier__subagents_delegate_start',
       'mcp__happier__review_start',
     ]));
+    expect(statSync(filePath).mode & 0o777).toBe(0o600);
   });
 
   it('does not read or copy arbitrary keys from Claude settings.json', () => {
@@ -93,6 +95,7 @@ describe('generateHookPluginDir', () => {
     'HAPPIER_MANAGED_NODE_BIN',
     'HAPPIER_HOME_DIR',
     'HAPPIER_CLAUDE_HOOKS_DISABLED',
+    'HAPPIER_CLAUDE_PERMISSION_HOOK_TIMEOUT_SECONDS',
   ] as const;
   let envScope = createEnvKeyScope(envKeys);
 
@@ -143,10 +146,11 @@ describe('generateHookPluginDir', () => {
     expect(parsed.author?.name).toBe('Happier');
   });
 
-  it('adds PermissionRequest hook when local permission bridge is enabled', () => {
+  it('adds PermissionRequest hook using a private secret file instead of command argv', () => {
+    const secret = 'test-secret-123';
     const pluginDir = generateHookPluginDir(43124, {
       enableLocalPermissionBridge: true,
-      permissionHookSecret: 'test-secret-123',
+      permissionHookSecret: secret,
     });
     expect(pluginDir).toBeTruthy();
     createdPluginDirs.push(pluginDir!);
@@ -155,7 +159,118 @@ describe('generateHookPluginDir', () => {
     const parsed = JSON.parse(readFileSync(hooksPath, 'utf8')) as any;
     const permissionCommand = parsed.hooks?.PermissionRequest?.[0]?.hooks?.[0]?.command as string;
     expect(permissionCommand).toContain('permission_hook_forwarder.cjs');
-    expect(permissionCommand).toContain('test-secret-123');
+    expect(permissionCommand).toContain('--secret-file');
+    expect(permissionCommand).not.toContain(secret);
+    const secretPath = permissionCommand.match(/--secret-file\s+"([^"]+)"/)?.[1];
+    expect(secretPath).toBeTruthy();
+    expect(readFileSync(secretPath!, 'utf8')).toBe(secret);
+    expect(statSync(secretPath!).mode & 0o777).toBe(0o600);
+  });
+
+  it('restricts the secret-bearing plugin dirs and files to the owner even with permissive umask', () => {
+    if (process.platform === 'win32') return;
+    const originalUmask = process.umask(0);
+    try {
+      const pluginDir = generateHookPluginDir(43150, {
+        enableLocalPermissionBridge: true,
+        permissionHookSecret: 'perm-secret-perms',
+      });
+      expect(pluginDir).toBeTruthy();
+      createdPluginDirs.push(pluginDir!);
+
+      const manifestDir = join(pluginDir!, '.claude-plugin');
+      const hooksDir = join(pluginDir!, 'hooks');
+      const dirMode = statSync(pluginDir!).mode & 0o777;
+      const manifestDirMode = statSync(manifestDir).mode & 0o777;
+      const hooksDirMode = statSync(hooksDir).mode & 0o777;
+      const manifestFileMode = statSync(join(manifestDir, 'plugin.json')).mode & 0o777;
+      const hooksFileMode = statSync(join(hooksDir, 'hooks.json')).mode & 0o777;
+      expect(dirMode).toBe(0o700);
+      expect(manifestDirMode).toBe(0o700);
+      expect(hooksDirMode).toBe(0o700);
+      expect(manifestFileMode).toBe(0o600);
+      expect(hooksFileMode).toBe(0o600);
+    } finally {
+      process.umask(originalUmask);
+    }
+  });
+
+  it('installs an effectively-unlimited (7-day) default timeout on the permission hooks', () => {
+    const pluginDir = generateHookPluginDir(43140, {
+      enableLocalPermissionBridge: true,
+      permissionHookSecret: 'test-secret-timeout',
+    });
+    expect(pluginDir).toBeTruthy();
+    createdPluginDirs.push(pluginDir!);
+
+    const hooksPath = join(pluginDir!, 'hooks', 'hooks.json');
+    const parsed = JSON.parse(readFileSync(hooksPath, 'utf8')) as any;
+    // 7 days in seconds — large enough that a user can answer a permission request after sleeping,
+    // while still finite so the bridge can honestly expire a genuinely-dead forwarder.
+    expect(parsed.hooks?.PermissionRequest?.[0]?.hooks?.[0]?.timeout).toBe(604800);
+    expect(parsed.hooks?.PreToolUse?.[0]?.hooks?.[0]?.timeout).toBe(604800);
+    expect(parsed.hooks?.PermissionRequest?.[0]?.hooks?.[0]?.timeout).toBe(DEFAULT_PERMISSION_HOOK_TIMEOUT_SECONDS);
+    // Lifecycle hooks keep Claude's default timeout (no explicit override).
+    expect(parsed.hooks?.SessionStart?.[0]?.hooks?.[0]?.timeout).toBeUndefined();
+  });
+
+  it('reads HAPPIER_CLAUDE_PERMISSION_HOOK_TIMEOUT_SECONDS as the default when no explicit option is given', () => {
+    envScope.patch({ HAPPIER_CLAUDE_PERMISSION_HOOK_TIMEOUT_SECONDS: '120' });
+    const pluginDir = generateHookPluginDir(43142, {
+      enableLocalPermissionBridge: true,
+      permissionHookSecret: 'test-secret-env',
+    });
+    expect(pluginDir).toBeTruthy();
+    createdPluginDirs.push(pluginDir!);
+
+    const hooksPath = join(pluginDir!, 'hooks', 'hooks.json');
+    const parsed = JSON.parse(readFileSync(hooksPath, 'utf8')) as any;
+    expect(parsed.hooks?.PermissionRequest?.[0]?.hooks?.[0]?.timeout).toBe(120);
+    expect(parsed.hooks?.PreToolUse?.[0]?.hooks?.[0]?.timeout).toBe(120);
+  });
+
+  it('prefers an explicit permissionHookTimeoutSeconds over the env override', () => {
+    envScope.patch({ HAPPIER_CLAUDE_PERMISSION_HOOK_TIMEOUT_SECONDS: '120' });
+    const pluginDir = generateHookPluginDir(43143, {
+      enableLocalPermissionBridge: true,
+      permissionHookSecret: 'test-secret-env-explicit',
+      permissionHookTimeoutSeconds: 45,
+    });
+    expect(pluginDir).toBeTruthy();
+    createdPluginDirs.push(pluginDir!);
+
+    const hooksPath = join(pluginDir!, 'hooks', 'hooks.json');
+    const parsed = JSON.parse(readFileSync(hooksPath, 'utf8')) as any;
+    expect(parsed.hooks?.PermissionRequest?.[0]?.hooks?.[0]?.timeout).toBe(45);
+  });
+
+  it('ignores a non-positive or non-numeric env override and falls back to the default', () => {
+    envScope.patch({ HAPPIER_CLAUDE_PERMISSION_HOOK_TIMEOUT_SECONDS: 'not-a-number' });
+    const pluginDir = generateHookPluginDir(43144, {
+      enableLocalPermissionBridge: true,
+      permissionHookSecret: 'test-secret-env-bad',
+    });
+    expect(pluginDir).toBeTruthy();
+    createdPluginDirs.push(pluginDir!);
+
+    const hooksPath = join(pluginDir!, 'hooks', 'hooks.json');
+    const parsed = JSON.parse(readFileSync(hooksPath, 'utf8')) as any;
+    expect(parsed.hooks?.PermissionRequest?.[0]?.hooks?.[0]?.timeout).toBe(DEFAULT_PERMISSION_HOOK_TIMEOUT_SECONDS);
+  });
+
+  it('honors a configured permissionHookTimeoutSeconds override on both permission hooks', () => {
+    const pluginDir = generateHookPluginDir(43141, {
+      enableLocalPermissionBridge: true,
+      permissionHookSecret: 'test-secret-timeout-override',
+      permissionHookTimeoutSeconds: 30,
+    });
+    expect(pluginDir).toBeTruthy();
+    createdPluginDirs.push(pluginDir!);
+
+    const hooksPath = join(pluginDir!, 'hooks', 'hooks.json');
+    const parsed = JSON.parse(readFileSync(hooksPath, 'utf8')) as any;
+    expect(parsed.hooks?.PermissionRequest?.[0]?.hooks?.[0]?.timeout).toBe(30);
+    expect(parsed.hooks?.PreToolUse?.[0]?.hooks?.[0]?.timeout).toBe(30);
   });
 
   it('adds an AskUserQuestion PreToolUse hook when local permission bridge is enabled', () => {
@@ -173,7 +288,8 @@ describe('generateHookPluginDir', () => {
     const preToolUseCommand = preToolUseHook?.hooks?.[0]?.command as string;
     expect(preToolUseCommand).toContain('permission_hook_forwarder.cjs');
     expect(preToolUseCommand).toContain('PreToolUse');
-    expect(preToolUseCommand).toContain('test-secret-ask');
+    expect(preToolUseCommand).toContain('--secret-file');
+    expect(preToolUseCommand).not.toContain('test-secret-ask');
   });
 
   it('returns null when HAPPIER_CLAUDE_HOOKS_DISABLED is set (debug escape hatch)', () => {
@@ -234,5 +350,24 @@ describe('generateHookPluginDir', () => {
       vi.doUnmock('@/utils/runtime');
       vi.resetModules();
     }
+  });
+});
+
+
+describe('cleanupHookSettingsFile overlay sibling', () => {
+  it('also removes the 0600 .overlay.json sibling written for merged --settings overlays', async () => {
+    const { mkdtemp, writeFile, access } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'happier-hook-cleanup-'));
+    const settingsPath = join(dir, 'session-hook-123.json');
+    const overlayPath = join(dir, 'session-hook-123.overlay.json');
+    await writeFile(settingsPath, '{}');
+    await writeFile(overlayPath, '{}', { mode: 0o600 });
+
+    cleanupHookSettingsFile(settingsPath);
+
+    await expect(access(settingsPath)).rejects.toThrow();
+    await expect(access(overlayPath)).rejects.toThrow();
   });
 });

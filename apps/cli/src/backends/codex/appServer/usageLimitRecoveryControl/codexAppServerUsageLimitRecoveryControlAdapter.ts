@@ -11,8 +11,10 @@ import type {
 } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryControlTypes';
 import { deriveUsageLimitRecoveryTiming } from '@/session/usageLimitRecoveryControls/deriveUsageLimitRecoveryTiming';
 import { resolveUsageLimitRecoveryMaxAttemptsExhaustion } from '@/session/usageLimitRecoveryControls/resolveUsageLimitRecoveryMaxAttemptsExhaustion';
+import { resolveUsageLimitRecoverySelectedAuthFromIssue } from '@/session/usageLimitRecoveryControls/usageLimitRecoverySelectedAuth';
 import type { CodexAppServerControlClientResult } from '../control/withCodexAppServerControlClient';
 import { withCodexAppServerControlClient } from '../control/withCodexAppServerControlClient';
+import { readCodexRateLimitsSnapshot } from '../readCodexRateLimitsSnapshot';
 import type { CodexAppServerClient } from '../client/createCodexAppServerClient';
 import {
   isCodexRateLimitSnapshotExhausted,
@@ -89,22 +91,10 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(
     return null;
   }
 
-  const connectedService = issueParsed.data.usageLimit.connectedService;
-  const selectedAuth: SessionUsageLimitRecoveryV1['selectedAuth'] =
-    connectedService?.groupId && connectedService.profileId
-      ? {
-        kind: 'group',
-        serviceId: connectedService.serviceId,
-        groupId: connectedService.groupId,
-        profileId: connectedService.profileId,
-      }
-      : connectedService?.profileId
-        ? {
-          kind: 'profile',
-          serviceId: connectedService.serviceId,
-          profileId: connectedService.profileId,
-        }
-        : { kind: 'native', serviceId: CODEX_CONNECTED_SERVICE_ID };
+  const selectedAuth = resolveUsageLimitRecoverySelectedAuthFromIssue({
+    issue: issueParsed.data,
+    defaultNativeServiceId: CODEX_CONNECTED_SERVICE_ID,
+  }) ?? { kind: 'native', serviceId: CODEX_CONNECTED_SERVICE_ID };
 
   const timing = deriveUsageLimitRecoveryTiming({
     occurredAtMs: issueParsed.data.occurredAt,
@@ -122,6 +112,7 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(
     attemptCount: 0,
     maxAttempts: DEFAULT_USAGE_LIMIT_RECOVERY_MAX_ATTEMPTS,
     lastProbeError: null,
+    resumePromptMode: params.resumePromptMode ?? 'standard',
     selectedAuth,
   };
 }
@@ -188,7 +179,9 @@ export function createCodexAppServerUsageLimitRecoveryControlAdapter(deps: Reado
         cwd,
         metadata: params.metadata,
         accountSettings: null,
-        run: async (client) => await client.request('account/rateLimits/read'),
+        run: async (client) => await readCodexRateLimitsSnapshot({
+          request: async (_method, requestParams) => await client.request('account/rateLimits/read', requestParams),
+        }),
       });
       if (!controlResult.ok) return stableError(controlResult.errorCode);
 

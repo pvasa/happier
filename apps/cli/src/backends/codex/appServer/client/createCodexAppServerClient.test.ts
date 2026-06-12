@@ -406,6 +406,44 @@ describe('createCodexAppServerClient', () => {
         });
     });
 
+    it('allows a request-specific timeout override', async () => {
+        await withTempDir('happier-codex-app-server-client-request-timeout-override-', async (root) => {
+            const fakeAppServer = await writeFakeCodexAppServerScript({
+                dir: root,
+                bodyLines: [
+                    'for await (const line of rl) {',
+                    '  if (!line.trim()) continue;',
+                    '  const msg = JSON.parse(line);',
+                    '  if (msg.method === "initialize") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { serverInfo: { name: "fake", version: "0.0.0" } } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  if (msg.method === "initialized") continue;',
+                    '  if (msg.method === "slow/request") {',
+                    '    setTimeout(() => {',
+                    '      process.stdout.write(JSON.stringify({ id: msg.id, result: { ok: true } }) + "\\n");',
+                    '    }, 700);',
+                    '    continue;',
+                    '  }',
+                    '  process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "method not found" } }) + "\\n");',
+                    '}',
+                ],
+            });
+
+            const client = await createCodexAppServerClient({
+                processEnv: createCodexAppServerProcessEnv(fakeAppServer, {
+                    HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '250',
+                }),
+            });
+
+            try {
+                await expect(client.request('slow/request', undefined, { timeoutMs: 1200 })).resolves.toEqual({ ok: true });
+            } finally {
+                await client.dispose();
+            }
+        });
+    });
+
     it('disposes the child process when initialize times out', async () => {
         await withTempDir('happier-codex-app-server-client-init-timeout-', async (root) => {
             const pidFile = join(root, 'pid.txt');

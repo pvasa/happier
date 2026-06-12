@@ -76,11 +76,12 @@ describe('claudePreflightModelsProbeAdapter', () => {
 
     expect(Array.isArray(raw)).toBe(true);
 
-    // Opus 4.8 supports effort, including `xhigh` and `max`, and defaults to `high`.
+    // Fable 5 is the newest highest-capability generally available Claude model and supports
+    // effort, including `xhigh` and `max`, with a `high` default.
     expect(raw).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        id: 'claude-opus-4-8',
-        modelOptions: [expect.objectContaining({
+        id: 'claude-fable-5',
+        modelOptions: expect.arrayContaining([expect.objectContaining({
           id: 'reasoning_effort',
           currentValue: 'high',
           options: expect.arrayContaining([
@@ -90,7 +91,25 @@ describe('claudePreflightModelsProbeAdapter', () => {
             expect.objectContaining({ value: 'xhigh' }),
             expect.objectContaining({ value: 'max' }),
           ]),
-        })],
+        })]),
+      }),
+    ]));
+
+    // Opus 4.8 supports effort, including `xhigh` and `max`, and defaults to `high`.
+    expect(raw).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'claude-opus-4-8',
+        modelOptions: expect.arrayContaining([expect.objectContaining({
+          id: 'reasoning_effort',
+          currentValue: 'high',
+          options: expect.arrayContaining([
+            expect.objectContaining({ value: 'low' }),
+            expect.objectContaining({ value: 'medium' }),
+            expect.objectContaining({ value: 'high' }),
+            expect.objectContaining({ value: 'xhigh' }),
+            expect.objectContaining({ value: 'max' }),
+          ]),
+        })]),
       }),
     ]));
 
@@ -98,7 +117,7 @@ describe('claudePreflightModelsProbeAdapter', () => {
     expect(raw).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'claude-opus-4-7',
-        modelOptions: [expect.objectContaining({
+        modelOptions: expect.arrayContaining([expect.objectContaining({
           id: 'reasoning_effort',
           currentValue: 'xhigh',
           options: expect.arrayContaining([
@@ -108,7 +127,7 @@ describe('claudePreflightModelsProbeAdapter', () => {
             expect.objectContaining({ value: 'xhigh' }),
             expect.objectContaining({ value: 'max' }),
           ]),
-        })],
+        })]),
       }),
     ]));
 
@@ -116,7 +135,7 @@ describe('claudePreflightModelsProbeAdapter', () => {
     expect(raw).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'claude-opus-4-6',
-        modelOptions: [expect.objectContaining({
+        modelOptions: expect.arrayContaining([expect.objectContaining({
           id: 'reasoning_effort',
           currentValue: 'high',
           options: expect.arrayContaining([
@@ -125,7 +144,7 @@ describe('claudePreflightModelsProbeAdapter', () => {
             expect.objectContaining({ value: 'high' }),
             expect.objectContaining({ value: 'max' }),
           ]),
-        })],
+        })]),
       }),
     ]));
 
@@ -133,7 +152,7 @@ describe('claudePreflightModelsProbeAdapter', () => {
     expect(raw).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'claude-sonnet-4-6',
-        modelOptions: [expect.objectContaining({
+        modelOptions: expect.arrayContaining([expect.objectContaining({
           id: 'reasoning_effort',
           currentValue: 'high',
           options: expect.arrayContaining([
@@ -141,7 +160,7 @@ describe('claudePreflightModelsProbeAdapter', () => {
             expect.objectContaining({ value: 'medium' }),
             expect.objectContaining({ value: 'high' }),
           ]),
-        })],
+        })]),
       }),
     ]));
 

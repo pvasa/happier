@@ -59,6 +59,42 @@ describe('hashClaudeEnhancedModeForQueue', () => {
         expect(next).not.toBe(base);
     });
 
+    it('changes when resolved ultracode changes (agent SDK and unified terminal)', () => {
+        for (const unified of [false, true]) {
+            const base = hashClaudeEnhancedModeForQueue(makeMode({
+                claudeRemoteAgentSdkEnabled: true,
+                claudeUnifiedTerminalEnabled: unified,
+                claudeUnifiedTerminalHost: unified ? 'auto' : undefined,
+                model: 'claude-fable-5',
+            } as any));
+
+            const next = hashClaudeEnhancedModeForQueue(makeMode({
+                claudeRemoteAgentSdkEnabled: true,
+                claudeUnifiedTerminalEnabled: unified,
+                claudeUnifiedTerminalHost: unified ? 'auto' : undefined,
+                model: 'claude-fable-5',
+                ultracode: true,
+            } as any));
+
+            expect(next).not.toBe(base);
+        }
+    });
+
+    it('does not change for an ultracode request the model cannot honor', () => {
+        const base = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeRemoteAgentSdkEnabled: true,
+            model: 'claude-sonnet-4-6',
+        } as any));
+
+        const next = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeRemoteAgentSdkEnabled: true,
+            model: 'claude-sonnet-4-6',
+            ultracode: true,
+        } as any));
+
+        expect(next).toBe(base);
+    });
+
     it('ignores Agent SDK fallback enablement when unified terminal is enabled', () => {
         const base = hashClaudeEnhancedModeForQueue(makeMode({
             claudeRemoteAgentSdkEnabled: true,

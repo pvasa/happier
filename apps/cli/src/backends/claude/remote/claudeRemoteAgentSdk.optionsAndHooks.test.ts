@@ -241,6 +241,151 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
         expect(capturedOptions.effort).toBe('max');
     });
 
+    it('passes ultracode through the --settings extraArg for xhigh-capable models', async () => {
+        let capturedOptions: any = null;
+
+        const createQuery = vi.fn((_params: any) => {
+            capturedOptions = _params.options;
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield { type: 'result' } as any;
+                },
+                close: vi.fn(),
+                setPermissionMode: vi.fn(),
+                setModel: vi.fn(),
+                setMaxThinkingTokens: vi.fn(),
+                supportedCommands: vi.fn(async () => []),
+                supportedModels: vi.fn(async () => []),
+            } as any;
+        });
+
+        let didSendFirst = false;
+        const nextMessage = vi.fn(async () => {
+            if (didSendFirst) return null;
+            didSendFirst = true;
+            return {
+                message: 'hello',
+                mode: makeMode({ permissionMode: 'default', model: 'claude-fable-5', ultracode: true } as any),
+            };
+        });
+
+        await claudeRemoteAgentSdk({
+            sessionId: null,
+            transcriptPath: null,
+            path: '/tmp',
+            claudeArgs: [],
+            claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+            isAborted: () => false,
+            nextMessage,
+            onReady: () => {},
+            onSessionFound: () => {},
+            onMessage: () => {},
+            createQuery,
+        } as any);
+
+        expect(capturedOptions).toBeTruthy();
+        expect(capturedOptions.extraArgs).toMatchObject({
+            settings: JSON.stringify({ ultracode: true }),
+        });
+    });
+
+    it('omits the ultracode settings extraArg for models without xhigh support', async () => {
+        let capturedOptions: any = null;
+
+        const createQuery = vi.fn((_params: any) => {
+            capturedOptions = _params.options;
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield { type: 'result' } as any;
+                },
+                close: vi.fn(),
+                setPermissionMode: vi.fn(),
+                setModel: vi.fn(),
+                setMaxThinkingTokens: vi.fn(),
+                supportedCommands: vi.fn(async () => []),
+                supportedModels: vi.fn(async () => []),
+            } as any;
+        });
+
+        let didSendFirst = false;
+        const nextMessage = vi.fn(async () => {
+            if (didSendFirst) return null;
+            didSendFirst = true;
+            return {
+                message: 'hello',
+                mode: makeMode({ permissionMode: 'default', model: 'claude-sonnet-4-6', ultracode: true } as any),
+            };
+        });
+
+        await claudeRemoteAgentSdk({
+            sessionId: null,
+            transcriptPath: null,
+            path: '/tmp',
+            claudeArgs: [],
+            claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+            isAborted: () => false,
+            nextMessage,
+            onReady: () => {},
+            onSessionFound: () => {},
+            onMessage: () => {},
+            createQuery,
+        } as any);
+
+        expect(capturedOptions).toBeTruthy();
+        const settingsArg = capturedOptions.extraArgs?.settings;
+        expect(settingsArg).toBeUndefined();
+    });
+
+    it('passes a [1m]-suffixed model id unmutated while still resolving effort', async () => {
+        let capturedOptions: any = null;
+
+        const createQuery = vi.fn((_params: any) => {
+            capturedOptions = _params.options;
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield { type: 'result' } as any;
+                },
+                close: vi.fn(),
+                setPermissionMode: vi.fn(),
+                setModel: vi.fn(),
+                setMaxThinkingTokens: vi.fn(),
+                supportedCommands: vi.fn(async () => []),
+                supportedModels: vi.fn(async () => []),
+            } as any;
+        });
+
+        let didSendFirst = false;
+        const nextMessage = vi.fn(async () => {
+            if (didSendFirst) return null;
+            didSendFirst = true;
+            return {
+                message: 'hello',
+                mode: makeMode({ permissionMode: 'default', model: 'claude-sonnet-4-6[1m]', reasoningEffort: 'low' } as any),
+            };
+        });
+
+        await claudeRemoteAgentSdk({
+            sessionId: null,
+            transcriptPath: null,
+            path: '/tmp',
+            claudeArgs: [],
+            claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+            isAborted: () => false,
+            nextMessage,
+            onReady: () => {},
+            onSessionFound: () => {},
+            onMessage: () => {},
+            createQuery,
+        } as any);
+
+        expect(capturedOptions).toBeTruthy();
+        expect(capturedOptions.model).toBe('claude-sonnet-4-6[1m]');
+        expect(capturedOptions.effort).toBe('low');
+    });
+
     it('exposes a turn interrupt handler that stops the active task via query.stopTask()', async () => {
         const stopTask = vi.fn(async (_taskId: string) => {});
         let capturedTurnInterrupt: null | (() => Promise<void>) = null;
@@ -1514,7 +1659,11 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
                 },
                 childEnv: {
                     hasAnthropicApiKey: false,
-                    hasClaudeCodeOauthToken: true,
+                    // claude-subscription authenticates through the materialized config dir, NOT the
+                    // OAuth token env var. `isolateClaudeRuntimeAuthEnv` correctly strips
+                    // CLAUDE_CODE_OAUTH_TOKEN from the child env for a config-dir-only subscription
+                    // selection (no materialized auth env keys), so the diagnostic must report it absent.
+                    hasClaudeCodeOauthToken: false,
                     hasClaudeConfigDir: true,
                     hasHappierConnectedServiceSelections: false,
                 },
@@ -1532,6 +1681,70 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
             if (originals.selection === undefined) delete process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
             else process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] = originals.selection;
         }
+    });
+
+    it('applies live setModel, setPermissionMode, and setMaxThinkingTokens before the next queued message', async () => {
+        let response: any = null;
+        const createQuery = vi.fn((_params: any) => {
+            response = {
+                async *[Symbol.asyncIterator]() {
+                    yield { type: 'result' } as any;
+                },
+                close: vi.fn(),
+                setPermissionMode: vi.fn(),
+                setModel: vi.fn(),
+                setMaxThinkingTokens: vi.fn(),
+                supportedCommands: vi.fn(async () => []),
+                supportedModels: vi.fn(async () => []),
+            } as any;
+            return response;
+        });
+
+        let callCount = 0;
+        const nextMessage = vi.fn(async () => {
+            callCount += 1;
+            // First turn settings are baked into the initial query; no setter calls expected for it.
+            if (callCount === 1) {
+                return { message: 'first', mode: makeMode({ permissionMode: 'default', model: 'claude-model-a' } as any) };
+            }
+            // Second turn changes model, permission mode, and max-thinking → live setters before send.
+            if (callCount === 2) {
+                return {
+                    message: 'second',
+                    mode: makeMode({
+                        permissionMode: 'acceptEdits',
+                        model: 'claude-model-b',
+                        claudeRemoteMaxThinkingTokens: 5000,
+                    } as any),
+                };
+            }
+            return null;
+        });
+
+        await claudeRemoteAgentSdk({
+            sessionId: 'session-runtime-settings',
+            transcriptPath: null,
+            path: '/tmp',
+            claudeArgs: [],
+            claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+            isAborted: () => false,
+            nextMessage,
+            onReady: () => {},
+            onSessionFound: () => {},
+            onMessage: () => {},
+            createQuery,
+        } as any);
+
+        // Live runtime setters fired exactly once each, with the second turn's desired values,
+        // before the second user message was delivered to the running SDK session.
+        expect(createQuery).toHaveBeenCalledTimes(1);
+        expect(response?.setModel).toHaveBeenCalledTimes(1);
+        expect(response?.setModel).toHaveBeenCalledWith('claude-model-b');
+        expect(response?.setPermissionMode).toHaveBeenCalledTimes(1);
+        expect(response?.setPermissionMode).toHaveBeenCalledWith('acceptEdits');
+        expect(response?.setMaxThinkingTokens).toHaveBeenCalledTimes(1);
+        expect(response?.setMaxThinkingTokens).toHaveBeenCalledWith(5000);
     });
 
     it('forwards the resolved Claude config dir override to the Claude subprocess env', async () => {

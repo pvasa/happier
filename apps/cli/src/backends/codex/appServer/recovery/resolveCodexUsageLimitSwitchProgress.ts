@@ -15,13 +15,7 @@
  * Seam for wave-3: this helper proves a fresh CANDIDATE was selected. Full provider-outcome
  * proof (the provider actually accepting the new account and producing activity) is left to the
  * shared provider-outcome proof gate (`provider_activity`).
- *
- * Mapping onto the shared, provider-agnostic proof contract is thin and behavior-preserving:
- * see `mapCodexUsageLimitSwitchProgressToProof` below — it classifies an existing decision, it
- * does not change how the decision is made.
  */
-
-import type { ProviderOutcomeProofKind } from '@/daemon/connectedServices/recovery/providerOutcomeProof';
 
 export type CodexUsageLimitSwitchAttemptStatus =
   | 'switched'
@@ -78,6 +72,12 @@ export function resolveCodexUsageLimitSwitchProgress(input: Readonly<{
         reason: `connected_service_generation_apply_failed:${normalizeProfileId(input.errorCode) ?? 'unknown'}`,
       };
     case 'no_eligible_member':
+      if (
+        (typeof input.resetAtMs === 'number' && Number.isFinite(input.resetAtMs))
+        || (typeof input.fallbackNextCheckAtMs === 'number' && Number.isFinite(input.fallbackNextCheckAtMs))
+      ) {
+        return waitUntilReset();
+      }
       return { kind: 'exhausted', reason: 'connected_service_group_no_eligible_member' };
     case 'manual_strategy':
     case 'auto_switch_disabled':
@@ -98,28 +98,5 @@ export function resolveCodexUsageLimitSwitchProgress(input: Readonly<{
     }
     default:
       return waitUntilReset();
-  }
-}
-
-/**
- * Thin mapping of an already-decided Codex usage-limit switch-progress outcome onto the shared,
- * provider-agnostic `ProviderOutcomeProofKind` contract. Behavior-preserving: this only classifies
- * an existing decision.
- *
- * - `retry` (a genuinely different account was selected) => `fresh_candidate_selected` (intermediate evidence, not recovered by itself).
- * - `exhausted` (no eligible member / generation apply failed) => `terminal_exhausted` (visible terminal).
- * - `wait_until_reset` => `null`: NOT proof. Same-account / unavailable-switch is still recovering;
- *   it waits for the provider reset under the scheduler lifecycle (never an immediate-retry storm).
- */
-export function mapCodexUsageLimitSwitchProgressToProof(
-  progress: CodexUsageLimitSwitchProgress,
-): ProviderOutcomeProofKind | null {
-  switch (progress.kind) {
-    case 'retry':
-      return 'fresh_candidate_selected';
-    case 'exhausted':
-      return 'terminal_exhausted';
-    case 'wait_until_reset':
-      return null;
   }
 }

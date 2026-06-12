@@ -848,7 +848,10 @@ describe('runCodex CodexACP resume behavior', () => {
     ]);
     const createdRuntime = createCodexAppServerRuntimeSpy.mock.results[0]?.value as any;
     const startOrLoad = createdRuntime?.startOrLoad as ReturnType<typeof vi.fn> | undefined;
-    expect(startOrLoad?.mock.calls[0]?.[0]).toMatchObject({ existingSessionId: 'vendor-thread-existing-123' });
+    expect(startOrLoad?.mock.calls[0]?.[0]).toMatchObject({
+      existingSessionId: 'vendor-thread-existing-123',
+      importHistory: false,
+    });
     expect(outcome).toMatchObject({ ok: false });
     if (outcome.ok) throw new Error('expected runCodex to fail in test');
     const failedOutcome = outcome;

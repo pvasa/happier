@@ -18,6 +18,16 @@ export function readCodexAppServerStartupRpcTimeoutMs(env?: NodeJS.ProcessEnv, b
     return Math.max(base, configured);
 }
 
+export function readCodexAppServerResumeRecoveryTimeoutMs(env?: NodeJS.ProcessEnv): number {
+    const startupTimeoutMs = readCodexAppServerStartupRpcTimeoutMs(env);
+    const configured = clampRpcTimeoutMs(
+        env?.HAPPIER_CODEX_APP_SERVER_RESUME_RECOVERY_TIMEOUT_MS,
+        120_000,
+        10 * 60_000,
+    );
+    return Math.max(startupTimeoutMs, configured);
+}
+
 export function readCodexAppServerRequestTimeoutMs(method: string, env?: NodeJS.ProcessEnv): number {
     const baseTimeoutMs = readCodexAppServerRpcTimeoutMs(env);
     if (STARTUP_RPC_METHODS.has(method)) {

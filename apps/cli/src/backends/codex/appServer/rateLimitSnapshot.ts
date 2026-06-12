@@ -41,12 +41,26 @@ export function isCodexRateLimitSnapshotExhausted(rawSnapshot: unknown): boolean
   return false;
 }
 
-export function readEarliestCodexRateLimitResetAtMs(rawSnapshot: unknown): number | null {
+function readRelativeResetSeconds(meter: Record<string, unknown> | null): number | null {
+  const seconds = readFiniteNumber(meter?.resetsInSeconds ?? meter?.resets_in_seconds);
+  return seconds !== null && seconds >= 0 ? seconds : null;
+}
+
+/**
+ * Resolve a meter's reset timing. Absolute fields win; legacy relative
+ * `resets_in_seconds` shapes are converted to an absolute timestamp against
+ * `nowMs` at read time (RD-QUO-1) so durable-wait arming gets true reset timing.
+ */
+function readCodexRateLimitMeterResetAtMs(meter: Record<string, unknown> | null, nowMs: number): number | null {
+  const absolute = parseProviderTimestampMs(meter?.resetsAt ?? meter?.resets_at ?? meter?.resetAt ?? meter?.reset_at);
+  if (absolute !== null) return absolute;
+  const relativeSeconds = readRelativeResetSeconds(meter);
+  return relativeSeconds !== null ? Math.trunc(nowMs + relativeSeconds * 1000) : null;
+}
+
+export function readEarliestCodexRateLimitResetAtMs(rawSnapshot: unknown, nowMs: number = Date.now()): number | null {
   const resets = (['primary', 'secondary'] as const)
-    .map((key) => {
-      const meter = readCodexRateLimitMeter(rawSnapshot, key);
-      return parseProviderTimestampMs(meter?.resetsAt ?? meter?.resets_at ?? meter?.resetAt ?? meter?.reset_at);
-    })
+    .map((key) => readCodexRateLimitMeterResetAtMs(readCodexRateLimitMeter(rawSnapshot, key), nowMs))
     .filter((value): value is number => value !== null);
   return resets.length > 0 ? Math.min(...resets) : null;
 }

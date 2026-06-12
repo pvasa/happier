@@ -2,12 +2,14 @@ import { readSessionMetadataRuntimeDescriptor } from '@happier-dev/agents';
 import { SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
+import { logger } from '@/ui/logger'; // QAG-TEMP instrumentation (remove)
 import type { ConnectedServiceRuntimeAuthSelectionMaterializer } from '@/daemon/connectedServices/sessionAuthSwitch/runtimeAuthSelectionMaterializerTypes';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 
 import { withCodexAppServerControlClient } from '../appServer/control/withCodexAppServerControlClient';
 import { readCodexAuthStoreProviderAccountId } from './readCodexAuthStoreProviderAccountId';
+import { writeCodexAuthStoreFile } from './writeCodexAuthStoreFile';
 
 export const materializeCodexConnectedServiceRuntimeAuthSelection: ConnectedServiceRuntimeAuthSelectionMaterializer = async (params) => {
   if (params.input.serviceId !== 'openai-codex') return params.baseSelection;
@@ -15,13 +17,19 @@ export const materializeCodexConnectedServiceRuntimeAuthSelection: ConnectedServ
   const cwd = typeof params.input.tracked.spawnOptions?.directory === 'string'
     ? params.input.tracked.spawnOptions.directory.trim()
     : '';
-  if (!cwd) return params.baseSelection;
+  if (!cwd) {
+    logger.debug('[QAG-TEMP codex materializer] bail: empty cwd', { sessionId: params.input.sessionId }); // QAG-TEMP
+    return params.baseSelection;
+  }
 
   const transport = await resolveSessionTransportContext({
     credentials: params.credentials,
     idOrPrefix: params.input.sessionId,
   });
-  if (!transport.ok) return params.baseSelection;
+  if (!transport.ok) {
+    logger.debug('[QAG-TEMP codex materializer] bail: transport not ok', { sessionId: params.input.sessionId, code: transport.code }); // QAG-TEMP
+    return params.baseSelection;
+  }
 
   const metadata = params.input.tracked.happySessionMetadataFromLocalWebhook ?? null;
   const runtimeDescriptor = readSessionMetadataRuntimeDescriptor(metadata, 'codex');
@@ -35,6 +43,15 @@ export const materializeCodexConnectedServiceRuntimeAuthSelection: ConnectedServ
     processEnv: params.processEnv,
     run: async () => undefined,
   });
+  // QAG-TEMP begin
+  logger.debug('[QAG-TEMP codex materializer] probe', {
+    sessionId: params.input.sessionId,
+    hasWebhookMetadata: metadata !== null,
+    codexHome,
+    probeOk: controlClientSupported.ok,
+    probeError: controlClientSupported.ok ? null : controlClientSupported.errorCode,
+  });
+  // QAG-TEMP end
   if (!controlClientSupported.ok) return params.baseSelection;
 
   return {
@@ -57,6 +74,17 @@ export const materializeCodexConnectedServiceRuntimeAuthSelection: ConnectedServ
     ...(codexHome
       ? {
           readAuthStoreProviderAccountId: async () => await readCodexAuthStoreProviderAccountId(codexHome),
+          // Durable adoption for hot-apply: the session app-server reloads
+          // `<codexHome>/auth.json` when its transports are invalidated, so the
+          // switched credential must be persisted there or the runtime would
+          // resume on the previous account (post-switch verification then
+          // rejects the hot apply and forces a restart).
+          persistAuthStore: async () => {
+            await writeCodexAuthStoreFile({
+              codexHome,
+              record: params.baseSelection.record as Parameters<typeof writeCodexAuthStoreFile>[0]['record'],
+            });
+          },
         }
       : {}),
     invalidateTransports: async () => {

@@ -15,9 +15,8 @@ const openCodeConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCre
   providerId: 'opencode',
   serviceIds: AGENTS_CORE.opencode.connectedServices.supportedServiceIds,
   spawnPreflightOauthRefresh: { mode: 'expiry_window' },
-  refreshTokenRuntimeHandling: 'daemon_only',
   refreshedCredentialApplication: { mode: 'restart_required' },
-  runtimeAuthFailureClassifier: { available: true },
+  predictiveSoftSwitch: { mode: 'unsupported' },
 };
 
 export const agent = {

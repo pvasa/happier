@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { resetConnectedServiceRuntimeAuthFailureReportDedupeForTests } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 
 import { PiRpcBackend } from './PiRpcBackend';
 
@@ -73,6 +74,9 @@ describe('PiRpcBackend stderr runtime-auth detection', () => {
   afterEach(() => {
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockReset();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValue({});
+    // The shared daemon-report path dedupes on stable identity; tests reuse session ids and
+    // classifications across cases, so the window must not leak between tests.
+    resetConnectedServiceRuntimeAuthFailureReportDedupeForTests();
   });
 
   it('reports a usage limit that surfaces only on stderr during an active turn', () => {

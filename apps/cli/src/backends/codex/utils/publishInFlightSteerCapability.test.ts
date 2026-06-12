@@ -57,3 +57,55 @@ describe('publishInFlightSteerCapability', () => {
     expect(state.capabilities?.inFlightSteerSupported).toBe(false);
   });
 });
+
+describe('publishInFlightSteerCapability — unavailable-reason seam (lane P, O-design Seam A)', () => {
+  function capture() {
+    let state: AgentState = {};
+    const session = {
+      updateAgentState: (updater: (current: AgentState) => AgentState) => {
+        state = updater(state);
+      },
+    };
+    return { session, get state() { return state; } };
+  }
+
+  it('publishes backend_unsupported with a state timestamp when steering is unsupported', async () => {
+    const { publishInFlightSteerCapability } = await import('./publishInFlightSteerCapability');
+    const captured = capture();
+
+    publishInFlightSteerCapability({
+      session: captured.session as any,
+      runtime: { supportsInFlightSteer: () => false } as any,
+    });
+
+    expect(captured.state.capabilities?.inFlightSteerUnavailableReason).toBe('backend_unsupported');
+    expect(typeof captured.state.capabilities?.inFlightSteerStateAt).toBe('number');
+  });
+
+  it('publishes unsafe_window when supported but the current window cannot steer', async () => {
+    const { publishInFlightSteerCapability } = await import('./publishInFlightSteerCapability');
+    const captured = capture();
+
+    publishInFlightSteerCapability({
+      session: captured.session as any,
+      runtime: { supportsInFlightSteer: () => true, canSteerPrompt: () => false } as any,
+    });
+
+    expect(captured.state.capabilities?.inFlightSteerUnavailableReason).toBe('unsafe_window');
+    expect(captured.state.capabilities?.inFlightSteerAvailable).toBe(false);
+  });
+
+  it('clears the reason when steering is available', async () => {
+    const { publishInFlightSteerCapability } = await import('./publishInFlightSteerCapability');
+    const captured = capture();
+
+    publishInFlightSteerCapability({
+      session: captured.session as any,
+      runtime: { supportsInFlightSteer: () => true, canSteerPrompt: () => true } as any,
+    });
+
+    expect(captured.state.capabilities?.inFlightSteerUnavailableReason ?? null).toBeNull();
+    expect(captured.state.capabilities?.inFlightSteerAvailable).toBe(true);
+    expect(typeof captured.state.capabilities?.inFlightSteerStateAt).toBe('number');
+  });
+});

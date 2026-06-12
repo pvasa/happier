@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { geminiTransport } from './transport';
+import { GEMINI_PROVIDER_RUNTIME_ERROR_EVENT, geminiTransport } from './transport';
 import type { StderrContext } from '@/agent/transport/TransportHandler';
 
 const DEFAULT_CONTEXT = {
@@ -114,6 +114,40 @@ describe('GeminiTransport determineToolName', () => {
 });
 
 describe('GeminiTransport handleStderr', () => {
+  it('surfaces RESOURCE_EXHAUSTED stderr as a structured provider runtime error event with the 429 status', () => {
+    const res = geminiTransport.handleStderr?.(
+      '{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}',
+      DEFAULT_STDERR_CONTEXT,
+    );
+    expect(res?.message).toMatchObject({
+      type: 'event',
+      name: GEMINI_PROVIDER_RUNTIME_ERROR_EVENT,
+      payload: {
+        source: 'gemini_stderr',
+        status: 429,
+      },
+    });
+    expect(res?.suppress).toBe(false);
+    if (res?.message?.type !== 'event') throw new Error('Expected a structured event message');
+    const payload = res.message.payload as Record<string, unknown>;
+    expect(String(payload.message)).toContain('RESOURCE_EXHAUSTED');
+  });
+
+  it('surfaces rate-limit stderr without an explicit 429 marker as a structured event without a status code', () => {
+    const res = geminiTransport.handleStderr?.(
+      'ApiError: rateLimitExceeded for quota metric',
+      DEFAULT_STDERR_CONTEXT,
+    );
+    expect(res?.message).toMatchObject({
+      type: 'event',
+      name: GEMINI_PROVIDER_RUNTIME_ERROR_EVENT,
+      payload: { source: 'gemini_stderr' },
+    });
+    if (res?.message?.type !== 'event') throw new Error('Expected a structured event message');
+    const payload = res.message.payload as Record<string, unknown>;
+    expect(payload.status).toBeUndefined();
+  });
+
   it('formats 404 model-not-found errors with catalog suggestions', () => {
     const res = geminiTransport.handleStderr?.('request failed with status 404', DEFAULT_STDERR_CONTEXT);
     expect(res?.message?.type).toBe('status');

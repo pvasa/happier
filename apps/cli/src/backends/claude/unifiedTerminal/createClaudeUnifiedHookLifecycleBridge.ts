@@ -15,6 +15,7 @@ import {
 } from '../connectedServices/mapClaudeRateLimitEventToUsageDetails';
 import type { RawJSONLines } from '../types';
 import type { SessionHookData } from '../utils/startHookServer';
+import { isSidechainSessionHook } from '../utils/sessionHookAttribution';
 import type { ClaudeUnifiedInputArbiter, ClaudeUnifiedStartableDisposable } from './_types';
 import { logger } from '@/ui/logger';
 
@@ -282,28 +283,36 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
       tracker = createClaudeLocalLifecycleTracker({ lifecycle });
       unsubscribe = opts.subscribeClaudeSessionHooks((data) => {
         const hookEventName = readHookEventName(data);
+        // Sidechain (subagent) hooks carry an agent_id attribution. They must not
+        // drive main-conversation lifecycle behavior: prompt acceptance, compaction
+        // gating, turn-terminal projection, release-all permission unblocking, or
+        // session end. Per-request permission accounting and account-level
+        // StopFailure usage evidence remain valid from sidechains.
+        const sidechain = isSidechainSessionHook(data);
         if (hookEventName === 'SessionStart') {
-          opts.onProviderSessionStarted?.();
+          if (!sidechain) opts.onProviderSessionStarted?.();
         } else if (hookEventName === 'PreCompact') {
-          observeCompactionStarted();
+          if (!sidechain) observeCompactionStarted();
         } else if (hookEventName === 'PostCompact') {
-          observeCompactionCompleted();
+          if (!sidechain) observeCompactionCompleted();
         } else if (hookEventName === 'UserPromptSubmit') {
-          opts.onTrustedProviderProgress?.();
-          observeProviderPromptStarted();
-          if (opts.onProviderPromptSubmitMetadata) {
-            const permissionMode = readHookString(data, 'permission_mode') || readHookString(data, 'permissionMode');
-            const model = readHookString(data, 'model');
-            const reasoningEffort = readHookString(data, 'reasoning_effort') || readHookString(data, 'effort');
-            if (permissionMode || model || reasoningEffort) {
-              opts.onProviderPromptSubmitMetadata({
-                ...(permissionMode ? { permissionMode } : {}),
-                ...(model ? { model } : {}),
-                ...(reasoningEffort ? { reasoningEffort } : {}),
-              });
+          if (!sidechain) {
+            opts.onTrustedProviderProgress?.();
+            observeProviderPromptStarted();
+            if (opts.onProviderPromptSubmitMetadata) {
+              const permissionMode = readHookString(data, 'permission_mode') || readHookString(data, 'permissionMode');
+              const model = readHookString(data, 'model');
+              const reasoningEffort = readHookString(data, 'reasoning_effort') || readHookString(data, 'effort');
+              if (permissionMode || model || reasoningEffort) {
+                opts.onProviderPromptSubmitMetadata({
+                  ...(permissionMode ? { permissionMode } : {}),
+                  ...(model ? { model } : {}),
+                  ...(reasoningEffort ? { reasoningEffort } : {}),
+                });
+              }
             }
+            void opts.arbiter.confirmPromptAcceptedByProvider().catch(() => undefined);
           }
-          void opts.arbiter.confirmPromptAcceptedByProvider().catch(() => undefined);
         } else if (hookEventName === 'PermissionRequest') {
           observePermissionBlocked(data);
         } else if (
@@ -312,13 +321,16 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
         ) {
           observePermissionReleased(data);
         } else if (
-          hookEventName === 'Stop'
-          || hookEventName === 'StopFailure'
-          || hookEventName === 'SessionEnd'
+          !sidechain
+          && (
+            hookEventName === 'Stop'
+            || hookEventName === 'StopFailure'
+            || hookEventName === 'SessionEnd'
+          )
         ) {
           observePermissionReleased(data, { redrain: false, releaseAll: true });
         }
-        if (hookEventName === 'SessionEnd') {
+        if (hookEventName === 'SessionEnd' && !sidechain) {
           observeSessionEnd(data);
         }
         if (hookEventName === 'StopFailure') {

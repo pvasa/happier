@@ -4,6 +4,7 @@ import type {
 } from '@/agent/localControl/turnLifecycle';
 import type { RawJSONLines } from '@/backends/claude/types';
 import type { SessionHookData } from '../utils/startHookServer';
+import { isSidechainSessionHook } from '../utils/sessionHookAttribution';
 import { createClaudeProviderActivityLedger } from '../providerActivity/createClaudeProviderActivityLedger';
 import { readClaudeTranscriptProviderActivity } from './readClaudeTranscriptProviderActivity';
 import { readClaudeTranscriptTurnSignal } from './readClaudeTranscriptTurnSignal';
@@ -87,6 +88,11 @@ export function createClaudeLocalLifecycleTracker(opts: Readonly<{
 
   return {
     observeHook(data: SessionHookData): void {
+      // Sidechain (subagent) hooks never drive the primary turn lifecycle: a
+      // subagent StopFailure/Stop/SessionEnd is not primary-turn evidence.
+      // Subagent activity is tracked through the transcript provider-activity
+      // ledger instead (async launches / task notifications).
+      if (isSidechainSessionHook(data)) return;
       if (readHookEventName(data) === 'Stop' && hookReportsNoActiveBackgroundTasks(data)) {
         providerActivityLedger.clearProviderTasks();
       }

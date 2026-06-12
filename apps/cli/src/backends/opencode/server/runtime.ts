@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { McpServerConfig } from '@/agent';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/ProviderEnforcedPermissionHandler';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
+import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import type { Metadata, PermissionMode } from '@/api/types';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
 import { configuration } from '@/configuration';
@@ -243,6 +244,7 @@ export function createOpenCodeServerRuntime(params: {
       }).then((recoveryReport) => {
         projectConnectedServiceRuntimeAuthRecoveryReport({
           report: recoveryReport,
+          classification: runtimeAuthClassification,
           sendGenericStatusMessage: (message) => {
             params.session.sendSessionEvent({ type: 'message', message });
             return true;
@@ -250,6 +252,15 @@ export function createOpenCodeServerRuntime(params: {
           commitTypedProjection: (projection) => {
             if (!projection.transcriptEvent) return false;
             params.session.sendSessionEvent(projection.transcriptEvent);
+            return true;
+          },
+          commitUsageLimitRecoveryMetadata: (updater) => {
+            updateMetadataBestEffort(
+              params.session,
+              updater,
+              '[opencode]',
+              'runtime_auth_usage_limit_recovery',
+            );
             return true;
           },
         });

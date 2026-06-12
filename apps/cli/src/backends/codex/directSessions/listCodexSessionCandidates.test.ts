@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile, utimes } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, symlink, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -579,6 +579,131 @@ describe('listCodexSessionCandidates', () => {
         }),
       }),
     ]);
+  });
+
+  it('uses an exact connected-service materialized homePath for isolated Codex auth homes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-list-materialized-home-'));
+    const activeServerDir = join(root, 'servers', 'cloud');
+    const exactHome = join(activeServerDir, 'daemon', 'connected-services', 'materialized', 'csm_session_1', 'codex', 'codex-home');
+    await mkdir(join(exactHome, 'sessions'), { recursive: true });
+
+    const exactSessionId = '33333333-3333-3333-3333-333333333333';
+    const rollout = join(exactHome, 'sessions', `rollout-2026-01-10T00-00-00-${exactSessionId}.jsonl`);
+    await writeFile(
+      rollout,
+      sessionMetaLine({ id: exactSessionId, timestamp: '2026-01-10T00:00:00.000Z', cwd: '/repo/materialized-home' })
+        + responseItemLine({ type: 'message', role: 'user', content: [{ type: 'text', text: 'Materialized home title' }] }),
+      'utf8',
+    );
+
+    const result = await listCodexSessionCandidates({
+      source: {
+        kind: 'codexHome',
+        home: 'connectedService',
+        connectedServiceId: 'svc_1',
+        connectedServiceProfileId: 'profile-b',
+        homePath: exactHome,
+      },
+      env: {} as NodeJS.ProcessEnv,
+      activeServerDir,
+      limit: 10,
+    });
+
+    expect(result.candidates).toEqual([
+      expect.objectContaining({
+        remoteSessionId: exactSessionId,
+        details: expect.objectContaining({
+          cwd: '/repo/materialized-home',
+          source: expect.objectContaining({
+            kind: 'codexHome',
+            home: 'connectedService',
+            connectedServiceId: 'svc_1',
+            connectedServiceProfileId: 'profile-b',
+            homePath: exactHome,
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it('uses an exact connected-service materialized homePath from the daemon materialization root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-list-daemon-materialized-home-'));
+    const activeServerDir = join(root, 'servers', 'cloud');
+    const exactHome = join(root, 'daemon', 'connected-services', 'materialized', 'csm_session_1', 'codex', 'codex-home');
+    await mkdir(join(exactHome, 'sessions'), { recursive: true });
+
+    const exactSessionId = '66666666-6666-6666-6666-666666666666';
+    const rollout = join(exactHome, 'sessions', `rollout-2026-01-10T00-00-00-${exactSessionId}.jsonl`);
+    await writeFile(
+      rollout,
+      sessionMetaLine({ id: exactSessionId, timestamp: '2026-01-10T00:00:00.000Z', cwd: '/repo/daemon-materialized-home' })
+        + responseItemLine({ type: 'message', role: 'user', content: [{ type: 'text', text: 'Daemon materialized home title' }] }),
+      'utf8',
+    );
+
+    const result = await listCodexSessionCandidates({
+      source: {
+        kind: 'codexHome',
+        home: 'connectedService',
+        connectedServiceId: 'svc_1',
+        connectedServiceProfileId: 'profile-b',
+        homePath: exactHome,
+      },
+      env: {} as NodeJS.ProcessEnv,
+      activeServerDir,
+      limit: 10,
+    });
+
+    expect(result.candidates).toEqual([
+      expect.objectContaining({
+        remoteSessionId: exactSessionId,
+        details: expect.objectContaining({
+          cwd: '/repo/daemon-materialized-home',
+          source: expect.objectContaining({
+            kind: 'codexHome',
+            home: 'connectedService',
+            connectedServiceId: 'svc_1',
+            connectedServiceProfileId: 'profile-b',
+            homePath: exactHome,
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it('rejects materialized connected-service homePath symlinks that escape the materialized root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-list-materialized-symlink-'));
+    const activeServerDir = join(root, 'servers', 'cloud');
+    const outsideHome = join(root, 'outside-codex-home');
+    await mkdir(join(outsideHome, 'sessions'), { recursive: true });
+
+    const exactHome = join(activeServerDir, 'daemon', 'connected-services', 'materialized', 'csm_session_1', 'codex', 'codex-home');
+    await mkdir(join(exactHome, '..'), { recursive: true });
+    await symlink(outsideHome, exactHome);
+
+    const exactSessionId = '77777777-7777-7777-7777-777777777777';
+    const rollout = join(outsideHome, 'sessions', `rollout-2026-01-10T00-00-00-${exactSessionId}.jsonl`);
+    await writeFile(
+      rollout,
+      sessionMetaLine({ id: exactSessionId, timestamp: '2026-01-10T00:00:00.000Z', cwd: '/repo/escaped-home' })
+        + responseItemLine({ type: 'message', role: 'user', content: [{ type: 'text', text: 'Escaped home title' }] }),
+      'utf8',
+    );
+
+    const result = await listCodexSessionCandidates({
+      source: {
+        kind: 'codexHome',
+        home: 'connectedService',
+        connectedServiceId: 'svc_1',
+        connectedServiceProfileId: 'profile-b',
+        homePath: exactHome,
+      },
+      env: {} as NodeJS.ProcessEnv,
+      activeServerDir,
+      limit: 10,
+    });
+
+    expect(result.candidates).toEqual([]);
   });
 
   it('uses an exact connected-service group homePath', async () => {

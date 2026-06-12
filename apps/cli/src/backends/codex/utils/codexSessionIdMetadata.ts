@@ -3,18 +3,54 @@ import { resolve } from 'node:path';
 import type { Metadata } from '@/api/types';
 import { buildCodexAgentRuntimeDescriptor, type CodexBackendMode } from '@happier-dev/agents';
 import { normalizeCodexBackendMode, type DirectSessionsSource } from '@happier-dev/protocol';
+import { findConnectedServiceChildSelection } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { inferCodexDirectSessionsSourceFromHome } from '../directSessions/resolveCodexHomeEntriesForDirectSessionsSource';
 import { resolveConfiguredCodexHome } from './resolveConfiguredCodexHome';
+
+function resolveCodexHome(params: Readonly<{
+  codexHome?: string | null;
+  processEnv?: NodeJS.ProcessEnv;
+}>): string {
+  return typeof params.codexHome === 'string' && params.codexHome.trim().length > 0
+    ? resolve(params.codexHome.trim())
+    : resolveConfiguredCodexHome(params.processEnv ?? process.env);
+}
+
+function resolveCodexDirectSourceFromSelectionEnv(params: Readonly<{
+  codexHome: string;
+  processEnv?: NodeJS.ProcessEnv;
+}>): DirectSessionsSource | null {
+  const selection = findConnectedServiceChildSelection(params.processEnv ?? {}, 'openai-codex');
+  if (!selection) return null;
+  if (selection.kind === 'group') {
+    return {
+      kind: 'codexHome',
+      home: 'connectedService',
+      connectedServiceId: selection.serviceId,
+      connectedServiceGroupId: selection.groupId,
+      homePath: params.codexHome,
+    };
+  }
+  return {
+    kind: 'codexHome',
+    home: 'connectedService',
+    connectedServiceId: selection.serviceId,
+    connectedServiceProfileId: selection.profileId,
+    homePath: params.codexHome,
+  };
+}
 
 function resolveCodexDirectSource(params: Readonly<{
   codexHome?: string | null;
   activeServerDir?: string | null;
   processEnv?: NodeJS.ProcessEnv;
 }>): DirectSessionsSource {
-  return inferCodexDirectSessionsSourceFromHome({
-    codexHome: typeof params.codexHome === 'string' && params.codexHome.trim().length > 0
-      ? resolve(params.codexHome.trim())
-      : resolveConfiguredCodexHome(params.processEnv ?? process.env),
+  const codexHome = resolveCodexHome(params);
+  return resolveCodexDirectSourceFromSelectionEnv({
+    codexHome,
+    processEnv: params.processEnv,
+  }) ?? inferCodexDirectSessionsSourceFromHome({
+    codexHome,
     activeServerDir: params.activeServerDir,
   });
 }

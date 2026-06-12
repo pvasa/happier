@@ -76,6 +76,31 @@ describe('resolveClaudeTerminalCliOptions', () => {
         expect(resolved.appendSystemPrompt).toContain('Do not create TODO');
     });
 
+    it('resolves ultracode only for xhigh-capable models', () => {
+        expect(resolveClaudeTerminalCliOptions({
+            mode: makeMode({ model: 'claude-fable-5', ultracode: true }),
+        }).ultracodeEnabled).toBe(true);
+
+        expect(resolveClaudeTerminalCliOptions({
+            mode: makeMode({ model: 'claude-sonnet-4-6', ultracode: true }),
+        }).ultracodeEnabled).toBe(false);
+
+        expect(resolveClaudeTerminalCliOptions({
+            mode: makeMode({ model: 'claude-fable-5' }),
+        }).ultracodeEnabled).toBe(false);
+    });
+
+    it('keeps a [1m]-suffixed model id unmutated while still resolving effort', () => {
+        const resolved = resolveClaudeTerminalCliOptions({
+            mode: makeMode({ model: 'claude-sonnet-4-6[1m]', reasoningEffort: 'low' }),
+        });
+
+        expect(resolved.extraArgs).toContain('--model');
+        expect(resolved.extraArgs[resolved.extraArgs.indexOf('--model') + 1]).toBe('claude-sonnet-4-6[1m]');
+        expect(resolved.extraArgs).toContain('--effort');
+        expect(resolved.extraArgs[resolved.extraArgs.indexOf('--effort') + 1]).toBe('low');
+    });
+
     it('maps terminal-compatible advanced option JSON to CLI args', () => {
         const resolved = resolveClaudeTerminalCliOptions({
             mode: makeMode({

@@ -13,12 +13,11 @@ export type ClaudeSdkPermissionMode = NonNullable<QueryOptions['permissionMode']
  *
  * In practice:
  * - yolo → bypassPermissions
- * - safe-yolo → acceptEdits
+ * - safe-yolo must remain safe-yolo here so Unified can map it to Claude auto at launch
  * - read-only must remain read-only here (do not rewrite to dontAsk at this boundary)
  */
 export function normalizeClaudeHappyCliSessionControlPermissionMode(mode: string): string {
     if (mode === 'yolo') return 'bypassPermissions';
-    if (mode === 'safe-yolo') return 'acceptEdits';
     return mode;
 }
 

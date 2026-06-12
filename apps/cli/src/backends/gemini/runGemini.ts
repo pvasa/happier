@@ -80,6 +80,7 @@ import {
 } from '@/backends/gemini/utils/optionsParser';
 import { ConversationHistory } from '@/backends/gemini/utils/conversationHistory';
 import { createGeminiBackendMessageHandler } from '@/backends/gemini/runtime/createGeminiBackendMessageHandler';
+import { reportGeminiConnectedServiceRuntimeAuthFailureBestEffort } from '@/backends/gemini/connectedServices/surfaceGeminiConnectedServiceRuntimeAuthFailure';
 import {
   createGeminiTurnMessageState,
   resolveGeminiTurnCompletionSignal,
@@ -1032,12 +1033,26 @@ export async function runGemini(opts: {
             cause: 'cancelled',
           });
         } else {
+          const turnFailureError = promptTurnError ?? buildGeminiTurnOutcomeError(promptTurnOutcome);
+          // Connected-services producer: report the structured classification to the daemon so
+          // reactive usage-limit/throttle/auth recovery can engage (raw provider errors stay
+          // suppressed; only structured projections surface).
+          const runtimeAuthClassification = reportGeminiConnectedServiceRuntimeAuthFailureBestEffort({
+            session,
+            error: turnFailureError,
+            logPrefix: '[gemini]',
+          });
           await surfacePrimarySessionRuntimeIssue({
             provider: 'gemini',
             session,
             sessionSeq: session.getLastObservedMessageSeq(),
             cause: 'status_error',
-            error: promptTurnError ?? buildGeminiTurnOutcomeError(promptTurnOutcome),
+            error: runtimeAuthClassification
+              ? Object.assign(
+                  turnFailureError instanceof Error ? turnFailureError : new Error(String(turnFailureError)),
+                  { runtimeAuthClassification },
+                )
+              : turnFailureError,
           });
         }
         

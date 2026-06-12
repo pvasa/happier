@@ -33,8 +33,12 @@ type JsonRpcMessage = Readonly<{
 type JsonRpcRequestHandler = (params: unknown, message: JsonRpcMessage) => Promise<unknown> | unknown;
 type JsonRpcNotificationHandler = (params: unknown) => Promise<void> | void;
 
+export type CodexAppServerRequestOptions = Readonly<{
+    timeoutMs?: number;
+}>;
+
 export type CodexAppServerClient = Readonly<{
-    request: (method: string, params?: unknown) => Promise<unknown>;
+    request: (method: string, params?: unknown, options?: CodexAppServerRequestOptions) => Promise<unknown>;
     notify: (method: string, params?: unknown) => Promise<void>;
     registerRequestHandler: (method: string, handler: JsonRpcRequestHandler) => () => void;
     registerNotificationHandler: (method: string, handler: JsonRpcNotificationHandler) => () => void;
@@ -54,6 +58,20 @@ type PendingRequest = Readonly<{
     reject: (error: Error) => void;
 }>;
 
+export class CodexAppServerJsonLineTooLargeError extends Error {
+    readonly maxChars: number;
+
+    constructor(maxChars: number) {
+        super(`Codex app-server JSON output exceeded ${maxChars} characters before newline; refusing to buffer it`);
+        this.name = 'CodexAppServerJsonLineTooLargeError';
+        this.maxChars = maxChars;
+    }
+}
+
+export function isCodexAppServerJsonLineTooLargeError(error: unknown): error is CodexAppServerJsonLineTooLargeError {
+    return error instanceof CodexAppServerJsonLineTooLargeError;
+}
+
 type RpcLogEntry = Readonly<{
     direction: 'incoming' | 'outgoing';
     id?: number | string | null;
@@ -65,6 +83,7 @@ type RpcLogEntry = Readonly<{
 
 const DEFAULT_RPC_LOG_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_RPC_LOG_ROTATE_COUNT = 2;
+const DEFAULT_MAX_JSON_LINE_CHARS = 128 * 1024 * 1024;
 
 function resolveRpcLogPath(env: NodeJS.ProcessEnv): string | null {
     const raw = expandHomeDirPath(
@@ -91,6 +110,14 @@ function readRpcLogRotateCount(env: NodeJS.ProcessEnv): number {
     return Math.min(
         readPositiveIntegerEnv(env, 'HAPPIER_CODEX_APP_SERVER_RPC_LOG_ROTATE_COUNT', DEFAULT_RPC_LOG_ROTATE_COUNT),
         10,
+    );
+}
+
+function readMaxJsonLineChars(env: NodeJS.ProcessEnv): number {
+    return readPositiveIntegerEnv(
+        env,
+        'HAPPIER_CODEX_APP_SERVER_MAX_JSON_LINE_CHARS',
+        DEFAULT_MAX_JSON_LINE_CHARS,
     );
 }
 
@@ -178,8 +205,33 @@ function toMessageKey(id: number | string | null | undefined): string | null {
     return `${typeof id}:${String(id)}`;
 }
 
+function readJsonRpcIdFromLineStartSample(sample: string): number | string | null {
+    const match = /"id"\s*:\s*(-?\d+|"((?:\\.|[^"\\])*)")/.exec(sample);
+    if (!match) return null;
+    const raw = match[1];
+    if (!raw) return null;
+    if (raw.startsWith('"')) {
+        try {
+            const parsed = JSON.parse(raw) as unknown;
+            return typeof parsed === 'string' ? parsed : null;
+        } catch {
+            return null;
+        }
+    }
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
 function createDisposedError(): Error {
     return new Error('Codex app-server client has been disposed');
+}
+
+function resolveRequestTimeoutMs(defaultTimeoutMs: number, options?: CodexAppServerRequestOptions): number {
+    if (options?.timeoutMs === undefined) {
+        return defaultTimeoutMs;
+    }
+    const override = Math.trunc(options.timeoutMs);
+    return Number.isFinite(override) && override > 0 ? Math.max(250, override) : defaultTimeoutMs;
 }
 
 function sanitizeCodexAppServerEnv(processEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -427,19 +479,43 @@ export async function createCodexAppServerClient(params: Readonly<{
         pending.resolve(message.result);
     };
 
-    const jsonLineReader = createCodexAppServerJsonLineReader((rawLine) => {
-        if (state.fatalError) return;
-        try {
-            handleIncomingMessage(JSON.parse(rawLine) as JsonRpcMessage);
-        } catch (error) {
-            failWith(new Error(`Invalid Codex app-server JSON output: ${error instanceof Error ? error.message : String(error)}`));
+    const handleOversizedJsonLine = (sample: string, maxBufferedChars: number): void => {
+        const error = new CodexAppServerJsonLineTooLargeError(maxBufferedChars);
+        const requestKey = toMessageKey(readJsonRpcIdFromLineStartSample(sample));
+        if (requestKey) {
+            const pending = pendingRequests.get(requestKey);
+            if (pending) {
+                pendingRequests.delete(requestKey);
+                pending.reject(error);
+                return;
+            }
         }
-    });
+        failWith(error);
+    };
+
+    const jsonLineReader = createCodexAppServerJsonLineReader(
+        (rawLine) => {
+            if (state.fatalError) return;
+            try {
+                handleIncomingMessage(JSON.parse(rawLine) as JsonRpcMessage);
+            } catch (error) {
+                failWith(new Error(`Invalid Codex app-server JSON output: ${error instanceof Error ? error.message : String(error)}`));
+            }
+        },
+        {
+            maxBufferedChars: readMaxJsonLineChars(sourceProcessEnv),
+            onOversizedLine: handleOversizedJsonLine,
+        },
+    );
 
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
         if (state.fatalError) return;
-        jsonLineReader.push(chunk);
+        try {
+            jsonLineReader.push(chunk);
+        } catch (error) {
+            failWith(new Error(`Invalid Codex app-server JSON output: ${error instanceof Error ? error.message : String(error)}`));
+        }
     });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {
@@ -460,8 +536,15 @@ export async function createCodexAppServerClient(params: Readonly<{
         failWith(new Error(`Codex app-server exited before completing the request (code=${code ?? 'null'} signal=${signal ?? 'null'})${suffix}`));
     });
 
-    const request = async (method: string, requestParams?: unknown): Promise<unknown> => {
-        const timeoutMs = readCodexAppServerRequestTimeoutMs(method, processEnv);
+    const request = async (
+        method: string,
+        requestParams?: unknown,
+        requestOptions?: CodexAppServerRequestOptions,
+    ): Promise<unknown> => {
+        const timeoutMs = resolveRequestTimeoutMs(
+            readCodexAppServerRequestTimeoutMs(method, processEnv),
+            requestOptions,
+        );
         const id = ++nextId;
         const requestKey = toMessageKey(id);
         if (!requestKey) {

@@ -57,7 +57,7 @@ function readSkillMentions(metadata: MetadataRecord | null): MetadataRecord[] {
 
 function readAttachmentInputs(metadata: MetadataRecord | null): CodexAppServerTurnInputItem[] {
     const envelope = readStructuredEnvelope(metadata);
-    const attachments = asRecordArray(envelope?.attachments);
+    const attachments = asRecordArray(envelope?.imageInputs).concat(asRecordArray(envelope?.attachments));
     const items: CodexAppServerTurnInputItem[] = [];
     for (const attachment of attachments) {
         const mimeType = readString(attachment.mimeType);

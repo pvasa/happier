@@ -57,12 +57,14 @@ describe('Codex connected-service runtime auth application', () => {
     });
     const client = { request: vi.fn(async () => ({ ok: true })) };
     const invalidateTransports = vi.fn(async () => {});
+    const persistAuthStore = vi.fn(async () => {});
 
     await expect(applyCodexConnectedServiceAuthGeneration({
       client,
       candidate,
       forcedWorkspaceId: 'workspace-work',
       invalidateTransports,
+      persistAuthStore,
     })).resolves.toEqual({ applied: true, via: 'hot' });
 
     expect(client.request).toHaveBeenCalledWith('account/login/start', {
@@ -70,7 +72,86 @@ describe('Codex connected-service runtime auth application', () => {
       accessToken: 'access',
       chatgptAccountId: 'workspace-work',
     });
+    expect(persistAuthStore).toHaveBeenCalledOnce();
     expect(invalidateTransports).toHaveBeenCalledOnce();
+    // Durable adoption must land in the auth store BEFORE transports are
+    // recycled: the session app-server re-reads auth.json on invalidation.
+    expect(persistAuthStore.mock.invocationCallOrder[0]!)
+      .toBeLessThan(invalidateTransports.mock.invocationCallOrder[0]!);
+  });
+
+  it('requires a durable auth-store persistence hook before reporting hot auth apply as safe', async () => {
+    const candidate = buildConnectedServiceCredentialRecord({
+      now: 1000,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: 2000,
+      oauth: {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        idToken: 'id',
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'workspace-work',
+        providerEmail: null,
+      },
+    });
+    const client = { request: vi.fn(async () => ({ ok: true })) };
+    const invalidateTransports = vi.fn(async () => {});
+
+    await expect(applyCodexConnectedServiceAuthGeneration({
+      client,
+      candidate,
+      forcedWorkspaceId: 'workspace-work',
+      invalidateTransports,
+    })).resolves.toEqual({
+      applied: false,
+      reason: 'auth_store_persistence_unavailable',
+      recovery: 'restart_resume',
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(invalidateTransports).not.toHaveBeenCalled();
+  });
+
+  it('falls back to restart/resume when the auth-store write fails after login/start', async () => {
+    const candidate = buildConnectedServiceCredentialRecord({
+      now: 1000,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: 2000,
+      oauth: {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        idToken: 'id',
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'workspace-work',
+        providerEmail: null,
+      },
+    });
+    const client = { request: vi.fn(async () => ({ ok: true })) };
+    const invalidateTransports = vi.fn(async () => {});
+    const persistAuthStore = vi.fn(async () => {
+      throw new Error('disk full');
+    });
+
+    await expect(applyCodexConnectedServiceAuthGeneration({
+      client,
+      candidate,
+      forcedWorkspaceId: 'workspace-work',
+      invalidateTransports,
+      persistAuthStore,
+    })).resolves.toEqual({
+      applied: false,
+      reason: 'auth_store_persistence_failed',
+      recovery: 'restart_resume',
+    });
+
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(invalidateTransports).not.toHaveBeenCalled();
   });
 
   it('requires an explicit transport invalidation hook before reporting hot auth apply as safe', async () => {
@@ -132,6 +213,7 @@ describe('Codex connected-service runtime auth application', () => {
       candidate,
       forcedWorkspaceId: 'workspace-work',
       invalidateTransports,
+      persistAuthStore: async () => {},
     })).resolves.toEqual({
       applied: false,
       reason: 'transport_invalidation_failed',

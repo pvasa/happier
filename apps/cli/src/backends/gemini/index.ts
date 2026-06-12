@@ -14,9 +14,8 @@ const geminiConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCrede
   providerId: 'gemini',
   serviceIds: AGENTS_CORE.gemini.connectedServices.supportedServiceIds,
   spawnPreflightOauthRefresh: { mode: 'expiry_window' },
-  refreshTokenRuntimeHandling: 'daemon_only',
   refreshedCredentialApplication: { mode: 'restart_required' },
-  runtimeAuthFailureClassifier: { available: true },
+  predictiveSoftSwitch: { mode: 'unsupported' },
 };
 
 export const agent = {

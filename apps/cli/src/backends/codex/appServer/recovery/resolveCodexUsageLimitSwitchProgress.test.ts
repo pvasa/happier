@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  mapCodexUsageLimitSwitchProgressToProof,
-  resolveCodexUsageLimitSwitchProgress,
-} from './resolveCodexUsageLimitSwitchProgress';
+import { resolveCodexUsageLimitSwitchProgress } from './resolveCodexUsageLimitSwitchProgress';
 
 describe('resolveCodexUsageLimitSwitchProgress', () => {
   it('treats a switch to a genuinely different account as progress (retry)', () => {
@@ -44,12 +41,24 @@ describe('resolveCodexUsageLimitSwitchProgress', () => {
     expect(result).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 9_000 });
   });
 
-  it('reports terminal when the group has no eligible member to switch to', () => {
+  it('waits until reset when the group has no eligible member but reset timing is known', () => {
     const result = resolveCodexUsageLimitSwitchProgress({
       switchAttemptStatus: 'no_eligible_member',
       exhaustedProfileId: 'work',
       selectedProfileId: null,
       resetAtMs: 5_000,
+      nowMs: 1_000,
+    });
+
+    expect(result).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 5_000 });
+  });
+
+  it('reports terminal when the group has no eligible member and no reset timing is known', () => {
+    const result = resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'no_eligible_member',
+      exhaustedProfileId: 'work',
+      selectedProfileId: null,
+      resetAtMs: null,
       nowMs: 1_000,
     });
 
@@ -98,22 +107,5 @@ describe('resolveCodexUsageLimitSwitchProgress', () => {
       resetAtMs: 5_000,
       nowMs: 1_000,
     })).toEqual({ kind: 'retry' });
-  });
-
-  describe('mapCodexUsageLimitSwitchProgressToProof (shared proof contract mapping)', () => {
-    it('maps a fresh-candidate retry to fresh_candidate_selected', () => {
-      expect(mapCodexUsageLimitSwitchProgressToProof({ kind: 'retry' })).toBe('fresh_candidate_selected');
-    });
-
-    it('maps an exhausted outcome to terminal_exhausted', () => {
-      expect(mapCodexUsageLimitSwitchProgressToProof({ kind: 'exhausted', reason: 'x' })).toBe('terminal_exhausted');
-    });
-
-    it('maps a wait_until_reset (same-account / unavailable switch) to no proof', () => {
-      expect(mapCodexUsageLimitSwitchProgressToProof({
-        kind: 'wait_until_reset',
-        nextCheckAtMs: 5_000,
-      })).toBeNull();
-    });
   });
 });

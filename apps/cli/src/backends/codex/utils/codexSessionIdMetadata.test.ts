@@ -5,6 +5,7 @@ import type { Metadata } from '@/api/types';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { maybeUpdateCodexSessionIdMetadata, publishCodexSessionIdMetadata } from './codexSessionIdMetadata';
 import { resolveConfiguredCodexHome } from './resolveConfiguredCodexHome';
+import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 
 const TEST_HOME_PATH = resolve(join('/tmp', 'happier-codex-home'));
 const TEST_CODEX_HOME_ENV: NodeJS.ProcessEnv = {
@@ -92,7 +93,7 @@ describe('maybeUpdateCodexSessionIdMetadata', () => {
         updates.push(updater(createTestMetadata({ path: '/tmp' })));
       },
       lastPublished,
-    } as any);
+    });
 
     expect(updates).toEqual([
       {
@@ -451,6 +452,50 @@ describe('maybeUpdateCodexSessionIdMetadata', () => {
         },
       } as Metadata,
     ]);
+  });
+
+  it('publishes connected-service Codex source affinity from child selection env for isolated materialized homes', () => {
+    const lastPublished = { value: null as string | null };
+    const updates: Metadata[] = [];
+    const codexHome = '/Users/test/.happier/servers/cloud/daemon/connected-services/materialized/csm_session_1/codex/codex-home';
+
+    maybeUpdateCodexSessionIdMetadata({
+      getCodexThreadId: () => 'thread-materialized-connected',
+      backendMode: 'appServer',
+      codexHome,
+      activeServerDir: '/Users/test/.happier/servers/cloud',
+      processEnv: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'profile',
+          serviceId: 'openai-codex',
+          profileId: 'profile-1',
+        }]),
+      },
+      updateHappySessionMetadata: (updater: (metadata: Metadata) => Metadata) => {
+        updates.push(updater(createTestMetadata({ path: '/repo' })));
+      },
+      lastPublished,
+    } as any);
+
+    expect(updates[0]?.agentRuntimeDescriptorV1).toMatchObject({
+      providerId: 'codex',
+      provider: {
+        backendMode: 'appServer',
+        vendorSessionId: 'thread-materialized-connected',
+        home: 'connectedService',
+        connectedServiceId: 'openai-codex',
+        connectedServiceProfileId: 'profile-1',
+        homePath: codexHome,
+        providerExtra: {
+          runtimeAffinity: {
+            home: 'connectedService',
+            connectedServiceId: 'openai-codex',
+            connectedServiceProfileId: 'profile-1',
+            homePath: codexHome,
+          },
+        },
+      },
+    });
   });
 
   it('publishes connected-service Codex group affinity through the generic runtime descriptor', () => {

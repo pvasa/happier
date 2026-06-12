@@ -4,6 +4,19 @@ import { RawJSONLinesSchema, type RawJSONLines } from '../types';
 
 export const CLAUDE_JSONL_LOCAL_ID_PREFIX = 'claude-jsonl:';
 
+/**
+ * Committed Claude JSONL dedupe baseline (Lane N4). `keys` are the claude-jsonl message keys
+ * already committed to the Happier transcript within the fetched window. `complete` is true when
+ * the window covered the session's entire transcript history; otherwise `oldestCoveredAtMs` is
+ * the server commit time of the oldest covered row — rows older than that cannot be proven
+ * uncommitted and must not replay-as-new.
+ */
+export type CommittedClaudeJsonlMessageBaseline = Readonly<{
+  keys: ReadonlySet<string>;
+  complete: boolean;
+  oldestCoveredAtMs: number | null;
+}>;
+
 function readTrimmedString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }

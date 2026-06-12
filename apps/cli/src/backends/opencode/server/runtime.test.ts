@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { buildChangeTitleInstruction } from '@/agent/runtime/changeTitleInstruction';
 import { logger } from '@/ui/logger';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { resetConnectedServiceRuntimeAuthFailureReportDedupeForTests } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 
 import { createOpenCodeServerRuntime } from './runtime';
 import { isTerminalOpenCodeToolPartStatus } from './runtime/createOpenCodeProviderActivityTracker';
@@ -384,6 +385,12 @@ async function beginOpenCodePromptForTest(opts?: {
 
 describe('createOpenCodeServerRuntime', () => {
   const OPENCODE_CHANGE_TITLE_INSTRUCTION = buildChangeTitleInstruction({ preferredToolName: 'happier_change_title' });
+
+  afterEach(() => {
+    // The shared daemon-report path dedupes on stable identity; tests reuse session ids and
+    // classifications across cases, so the window must not leak between tests.
+    resetConnectedServiceRuntimeAuthFailureReportDedupeForTests();
+  });
 
   it('recognizes provider terminal tool statuses', () => {
     expect([

@@ -10,6 +10,7 @@ import { initialMachineMetadata } from '@/daemon/startDaemon';
 import { refreshDaemonOpenAiCodexChatGptAuthTokensForBridge } from '@/daemon/controlClient';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 import { projectConnectedServiceRuntimeAuthRecoveryReport } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
+import type { ConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/types';
 import { reportCodexRateLimitSnapshotToDaemon } from './connectedServices/reportCodexRateLimitSnapshotToDaemon';
 import {
     createOpenAiCodexBridgeRefreshFailureClassification,
@@ -143,10 +144,30 @@ import {
 	import { resolveCodexRequestedDirectory } from './utils/resolveCodexRequestedDirectory';
 import { readDaemonInitialGoalFromEnv } from '@/agent/runtime/sessionInitialGoal';
 
-function readRuntimeAuthClassification(error: unknown): unknown | null {
+function isRuntimeAuthFailureClassification(value: unknown): value is ConnectedServiceRuntimeFailureClassification {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    if (typeof record.kind !== 'string') return false;
+    if (typeof record.serviceId !== 'string') return false;
+    if (typeof record.profileId !== 'string' && record.profileId !== null) return false;
+    if (typeof record.groupId !== 'string' && record.groupId !== null) return false;
+    if (typeof record.resetsAtMs !== 'number' && record.resetsAtMs !== null) return false;
+    if (typeof record.planType !== 'string' && record.planType !== null) return false;
+    if (
+        record.source !== 'structured_provider_error'
+        && record.source !== 'stable_provider_message'
+        && record.source !== 'provider_runtime_marker'
+    ) {
+        return false;
+    }
+    return true;
+}
+
+function readRuntimeAuthClassification(error: unknown): ConnectedServiceRuntimeFailureClassification | null {
     if (!error || typeof error !== 'object' || Array.isArray(error)) return null;
     const record = error as Record<string, unknown>;
-    return record.runtimeAuthClassification ?? null;
+    const classification = record.runtimeAuthClassification ?? null;
+    return isRuntimeAuthFailureClassification(classification) ? classification : null;
 }
 
 function readRuntimeAuthClassificationLogField(
@@ -176,7 +197,7 @@ function readChatGptPlanType(value: unknown): string | null {
 
 function attachRuntimeAuthClassificationToError(
     error: unknown,
-    classification: Readonly<Record<string, unknown>>,
+    classification: ConnectedServiceRuntimeFailureClassification,
 ): Error {
     const nextError = error instanceof Error ? error : new Error('connected_service_chatgpt_refresh_unavailable');
     return Object.assign(nextError, { runtimeAuthClassification: classification });
@@ -962,6 +983,24 @@ export async function runCodex(opts: {
         process,
         exit: (code) => process.exit(code),
         onTerminate: async (event, outcome) => {
+            logger.debug('[Codex] Runner termination requested', {
+                kind: event.kind,
+                outcome,
+                ...(event.kind === 'signal' ? { signal: event.signal } : {}),
+                ...(event.kind === 'exit' ? { code: event.code } : {}),
+                ...(event.kind === 'unhandledRejection'
+                    ? {
+                        reasonName: event.reason instanceof Error ? event.reason.name : typeof event.reason,
+                        reasonMessage: formatErrorForUi(event.reason),
+                    }
+                    : {}),
+                ...(event.kind === 'uncaughtException'
+                    ? {
+                        errorName: event.error instanceof Error ? event.error.name : typeof event.error,
+                        errorMessage: formatErrorForUi(event.error),
+                    }
+                    : {}),
+            });
             shouldExit = true;
             await handleAbort();
             const archiveDecision = resolveTerminationArchiveDecision({
@@ -1282,6 +1321,7 @@ export async function runCodex(opts: {
             onRateLimitSnapshot: async (rawSnapshot) => {
                 await reportCodexRateLimitSnapshotToDaemon({
                     env: codexAppServerProcessEnv,
+                    session,
                     sessionId: session.sessionId,
                     rawSnapshot,
                 });
@@ -1295,6 +1335,7 @@ export async function runCodex(opts: {
                 });
                 projectConnectedServiceRuntimeAuthRecoveryReport({
                     report: recoveryReport,
+                    classification,
                     addStatusMessage: (message) => {
                         messageBuffer.addMessage(message, 'status');
                     },
@@ -1307,6 +1348,15 @@ export async function runCodex(opts: {
                             return true;
                         }
                         return false;
+                    },
+                    commitUsageLimitRecoveryMetadata: (updater) => {
+                        updateMetadataBestEffort(
+                            session,
+                            updater,
+                            '[Codex]',
+                            'runtime_auth_usage_limit_recovery',
+                        );
+                        return true;
                     },
                 });
                 return recoveryReport.report;
@@ -1332,6 +1382,7 @@ export async function runCodex(opts: {
                     });
                     projectConnectedServiceRuntimeAuthRecoveryReport({
                         report: recoveryReport,
+                        classification,
                         addStatusMessage: (message) => {
                             messageBuffer.addMessage(message, 'status');
                         },
@@ -1344,6 +1395,15 @@ export async function runCodex(opts: {
                                 return true;
                             }
                             return false;
+                        },
+                        commitUsageLimitRecoveryMetadata: (updater) => {
+                            updateMetadataBestEffort(
+                                session,
+                                updater,
+                                '[Codex]',
+                                'runtime_auth_usage_limit_recovery',
+                            );
+                            return true;
                         },
                     });
                     throw attachRuntimeAuthClassificationToError(error, classification);
@@ -1669,6 +1729,7 @@ export async function runCodex(opts: {
                         await seedCodexAppServerOverridesBeforeStartOrLoad();
                         const startOrLoadPromise = Promise.resolve(codexRuntime.startOrLoad({
                             existingSessionId: existingAppServerSessionId,
+                            importHistory: false,
                             ...consumeInitialGoalForStartOrLoad(),
                         })).then(() => undefined);
                         try {
@@ -2112,6 +2173,7 @@ export async function runCodex(opts: {
                         });
                         runtimeAuthRecoveryStatusEmitted = projectConnectedServiceRuntimeAuthRecoveryReport({
                             report: recoveryReport,
+                            classification: runtimeAuthClassification,
                             addStatusMessage: (message) => {
                                 messageBuffer.addMessage(message, 'status');
                             },
@@ -2124,6 +2186,15 @@ export async function runCodex(opts: {
                                     return true;
                                 }
                                 return false;
+                            },
+                            commitUsageLimitRecoveryMetadata: (updater) => {
+                                updateMetadataBestEffort(
+                                    session,
+                                    updater,
+                                    '[Codex]',
+                                    'runtime_auth_usage_limit_recovery',
+                                );
+                                return true;
                             },
                         }).emitted;
                     } else {

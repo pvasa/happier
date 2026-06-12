@@ -2,7 +2,7 @@ import { hashObject } from '@/utils/deterministicJson';
 
 import type { EnhancedMode } from '@/backends/claude/loop';
 import { resolveClaudeSdkPermissionModeFromEnhancedMode } from '@/backends/claude/utils/permissionMode';
-import { resolveClaudeEffortForModel } from '@/backends/claude/utils/claudeEffort';
+import { resolveClaudeEffortForModel, resolveClaudeUltracodeForModel } from '@/backends/claude/utils/claudeEffort';
 import { normalizeClaudeRemoteMode } from './normalizeClaudeRemoteMode';
 
 function resolveClaudeRemoteSettingSourcesOverrideForAgentSdk(mode: EnhancedMode): readonly ('user' | 'project' | 'local')[] | null {
@@ -63,10 +63,15 @@ function buildClaudeUnifiedTerminalLaunchOptionsHashInput(mode: EnhancedMode): R
         modelId: mode.model,
         effort: mode.reasoningEffort,
     });
+    const resolvedUltracode = resolveClaudeUltracodeForModel({
+        modelId: mode.model,
+        ultracode: mode.ultracode,
+    });
     const debugCategories = normalizeClaudeRemoteDebugCategories(mode);
 
     return {
         claudeUnifiedTerminalHost: mode.claudeUnifiedTerminalHost ?? 'auto',
+        ultracode: resolvedUltracode,
         claudeSdkPermissionMode,
         agentModeId: effectiveAgentModeId || null,
         model: mode.model,
@@ -102,6 +107,10 @@ export function hashClaudeEnhancedModeForQueue(mode: EnhancedMode): string {
     const resolvedEffort = resolveClaudeEffortForModel({
         modelId: mode.model,
         effort: mode.reasoningEffort,
+    });
+    const resolvedUltracode = resolveClaudeUltracodeForModel({
+        modelId: mode.model,
+        ultracode: mode.ultracode,
     });
 
     const debugCategories = normalizeClaudeRemoteDebugCategories(mode);
@@ -147,6 +156,7 @@ export function hashClaudeEnhancedModeForQueue(mode: EnhancedMode): string {
         claudeRemoteDebugCategories: debugCategories,
         claudeRemoteAdvancedOptionsJson: mode.claudeRemoteAdvancedOptionsJson,
         effort: resolvedEffort,
+        ultracode: resolvedUltracode,
         // Restart-required (SDK has no dynamic setter)
         fallbackModel: mode.fallbackModel,
         customSystemPrompt: mode.customSystemPrompt,

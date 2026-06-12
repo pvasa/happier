@@ -106,6 +106,13 @@ export function createCodexConnectedServiceRuntimeAuthAdapter(): ConnectedServic
           recovery: 'restart_resume',
         };
       }
+      if (typeof readRecord(input.selection)?.persistAuthStore !== 'function') {
+        return {
+          supported: false,
+          reason: 'auth_store_persistence_unavailable',
+          recovery: 'restart_resume',
+        };
+      }
       return { supported: true };
     },
     async hotApply(input) {
@@ -118,6 +125,7 @@ export function createCodexConnectedServiceRuntimeAuthAdapter(): ConnectedServic
         candidate: record,
         forcedWorkspaceId: readForcedWorkspaceId(input),
         invalidateTransports: readAsyncCallback(readRecord(input.selection)?.invalidateTransports),
+        persistAuthStore: readAsyncCallback(readRecord(input.selection)?.persistAuthStore),
       });
     },
     async recoverAfterRuntimeAuthSwitch(input) {

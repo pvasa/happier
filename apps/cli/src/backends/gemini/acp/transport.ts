@@ -32,6 +32,24 @@ import {
 } from '@/agent/transport/utils/toolPatternInference';
 
 /**
+ * Structured provider runtime error surfaced from Gemini CLI stderr.
+ *
+ * Contract with `createGeminiBackendMessageHandler`: the raw stderr text is NEVER rendered to the
+ * transcript (Gemini CLI retries 429s internally); the payload exists solely so the
+ * connected-services producer can classify it (usage limit / rate limit) and report the
+ * STRUCTURED classification to the daemon for reactive recovery intake.
+ */
+export const GEMINI_PROVIDER_RUNTIME_ERROR_EVENT = 'gemini_provider_runtime_error';
+
+export type GeminiProviderRuntimeErrorEventPayload = Readonly<{
+  source: 'gemini_stderr';
+  status?: number;
+  message: string;
+}>;
+
+const GEMINI_PROVIDER_RUNTIME_ERROR_PAYLOAD_MAX_CHARS = 2_000;
+
+/**
  * Gemini-specific timeout values (in milliseconds)
  */
 export const GEMINI_TIMEOUTS = {
@@ -190,15 +208,28 @@ export class GeminiTransport implements TransportHandler {
       return { message: null, suppress: true };
     }
 
-    // Rate limit error (429) - Gemini CLI handles retries internally
+    // Rate limit / quota exhaustion (429, RESOURCE_EXHAUSTED): Gemini CLI handles retries
+    // internally, so the raw stderr stays suppressed from the user-facing transcript. Surface a
+    // STRUCTURED provider runtime error event instead so the connected-services producer can
+    // classify it and report it to the daemon (reactive usage-limit/throttle recovery intake).
     if (
       trimmed.includes('status 429') ||
       trimmed.includes('code":429') ||
       trimmed.includes('rateLimitExceeded') ||
       trimmed.includes('RESOURCE_EXHAUSTED')
     ) {
+      const hasExplicit429 = trimmed.includes('status 429') || trimmed.includes('code":429');
+      const payload: GeminiProviderRuntimeErrorEventPayload = {
+        source: 'gemini_stderr',
+        ...(hasExplicit429 ? { status: 429 } : {}),
+        message: trimmed.slice(0, GEMINI_PROVIDER_RUNTIME_ERROR_PAYLOAD_MAX_CHARS),
+      };
       return {
-        message: null,
+        message: {
+          type: 'event',
+          name: GEMINI_PROVIDER_RUNTIME_ERROR_EVENT,
+          payload,
+        },
         suppress: false, // Log for debugging but don't show to user
       };
     }

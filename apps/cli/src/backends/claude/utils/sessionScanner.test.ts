@@ -408,6 +408,73 @@ describe('sessionScanner', () => {
     expect(collectedMessages[0].uuid).toBe('missing_during_runner_restart')
   })
 
+  it('suppresses control-command XML rows in the one-time resume snapshot but keeps live rows and genuine backfill (resume-replay leak)', async () => {
+    const altProjectDir = join(testDir, 'alt-project-command-replay')
+    await mkdir(altProjectDir, { recursive: true })
+
+    const sessionId = '22222222-2222-2222-2222-222222222224'
+    const transcriptPath = join(altProjectDir, `${sessionId}.jsonl`)
+
+    // A previous runner suppressed these controller-typed command rows WITHOUT committing them,
+    // so they are absent from the committed-keys baseline and replay as "new" on every respawn.
+    await writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: 'user',
+          uuid: 'cmd_replay',
+          timestamp: '2026-06-11T19:02:34.665Z',
+          message: {
+            role: 'user',
+            content: '<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args>medium</command-args>',
+          },
+        }),
+        JSON.stringify({
+          type: 'user',
+          uuid: 'stdout_replay',
+          timestamp: '2026-06-11T19:02:34.665Z',
+          message: { role: 'user', content: '<local-command-stdout>Set effort level to medium</local-command-stdout>' },
+        }),
+        JSON.stringify({
+          type: 'user',
+          uuid: 'genuine_backfill',
+          timestamp: '2026-06-11T19:02:35.310Z',
+          message: { role: 'user', content: 'genuinely missed while the runner was down' },
+        }),
+      ].join('\n') + '\n',
+    )
+
+    scanner = await createSessionScanner({
+      sessionId,
+      transcriptPath,
+      workingDirectory: testDir,
+      initialProcessedMessageKeys: new Set<string>(),
+      replayInitialMessages: true,
+      onMessage: (msg: RawJSONLines) => collectedMessages.push(msg),
+    })
+
+    await waitFor(() => collectedMessages.length >= 1, 1000)
+    expect(collectedMessages.map((m) => (m as { uuid?: string }).uuid)).toEqual(['genuine_backfill'])
+
+    // Live rows are never shape-filtered: a genuine user-typed TUI command surfaces
+    // (controller-typed echoes are handled downstream by the registration-based suppressor).
+    await appendFile(
+      transcriptPath,
+      JSON.stringify({
+        type: 'user',
+        uuid: 'cmd_live',
+        timestamp: '2026-06-11T19:05:00.000Z',
+        message: {
+          role: 'user',
+          content: '<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>',
+        },
+      }) + '\n',
+    )
+
+    await waitFor(() => collectedMessages.length >= 2, 3000)
+    expect(collectedMessages.map((m) => (m as { uuid?: string }).uuid)).toEqual(['genuine_backfill', 'cmd_live'])
+  })
+
   it('normalizes Claude Agent Teams tool names to canonical tool names', async () => {
     scanner = await createSessionScanner({
       sessionId: null,
@@ -797,6 +864,108 @@ describe('sessionScanner', () => {
     expect(missing).toEqual([
       { sessionId, filePath: join(projectDir, `${sessionId}.jsonl`) },
     ])
+  })
+
+  it('never emits rows from a pre-existing sibling session that grows in a shared project dir (cross-session contamination, pid-14419)', async () => {
+    const foreignSessionId = '3ea969fd-29f1-42d8-88f2-52b2696c085b'
+    const boundSessionId = '8ead631a-b6ba-4559-a308-4ff8f4310b1f'
+    const foreignFile = join(projectDir, `${foreignSessionId}.jsonl`)
+    const boundFile = join(projectDir, `${boundSessionId}.jsonl`)
+
+    // Foreign sibling session pre-exists at scanner start and contains an API-error
+    // assistant row (which used to satisfy shouldDiscoverUnhookedSession).
+    await writeFile(foreignFile, JSON.stringify({
+      type: 'assistant',
+      uuid: 'foreign-api-error',
+      timestamp: new Date().toISOString(),
+      sessionId: foreignSessionId,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'overloaded' }] },
+      isApiErrorMessage: true,
+    } as RawJSONLines) + '\n')
+    await writeFile(boundFile, JSON.stringify({
+      type: 'user',
+      uuid: 'bound-old',
+      timestamp: new Date().toISOString(),
+      sessionId: boundSessionId,
+      message: { content: 'bound history' },
+    } as RawJSONLines) + '\n')
+
+    // Hook-driven resume shape: scanner starts unbound with discovery on.
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      discoverNewSessions: true,
+      bindToFirstSession: true,
+      bindDiscoveredSessions: false,
+      replayInitialMessages: true,
+    })
+
+    // The foreign session keeps running: its pre-existing file grows after scanner start.
+    await appendFile(foreignFile, JSON.stringify({
+      type: 'assistant',
+      uuid: 'foreign-live-row',
+      timestamp: new Date().toISOString(),
+      sessionId: foreignSessionId,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'foreign answer' }] },
+      isApiErrorMessage: true,
+    } as RawJSONLines) + '\n')
+
+    // The SessionStart hook arrives only after discovery has had time to run
+    // (pid-14419: binding lagged ~3s behind the scanner's first discovery pass).
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+
+    // SessionStart hook binds the real session; its rows must flow.
+    scanner.onNewSession({ sessionId: boundSessionId, transcriptPath: boundFile })
+    await appendFile(boundFile, JSON.stringify({
+      type: 'assistant',
+      uuid: 'bound-live-row',
+      timestamp: new Date().toISOString(),
+      sessionId: boundSessionId,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'bound answer' }] },
+    } as RawJSONLines) + '\n')
+
+    await waitFor(() => collectedMessages.some((m) => (m as any).uuid === 'bound-live-row'), 4000)
+    // Give discovery interval (1s) a chance to run before asserting the negative.
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+
+    const uuids = collectedMessages.map((m) => (m as any).uuid)
+    expect(uuids).not.toContain('foreign-api-error')
+    expect(uuids).not.toContain('foreign-live-row')
+    expect(uuids).toContain('bound-live-row')
+  }, 10_000)
+
+  it('drops rows whose sessionId differs from the bound session (hard per-row filter)', async () => {
+    const boundSessionId = '44444444-4444-4444-4444-444444444444'
+    const boundFile = join(projectDir, `${boundSessionId}.jsonl`)
+    await writeFile(boundFile, '')
+
+    scanner = await createSessionScanner({
+      sessionId: boundSessionId,
+      transcriptPath: boundFile,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      bindToFirstSession: true,
+    })
+
+    await appendFile(boundFile,
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'foreign-row-in-bound-file',
+        timestamp: new Date().toISOString(),
+        sessionId: '55555555-5555-5555-5555-555555555555',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'foreign' }] },
+      } as RawJSONLines) + '\n'
+      + JSON.stringify({
+        type: 'assistant',
+        uuid: 'own-row',
+        timestamp: new Date().toISOString(),
+        sessionId: boundSessionId,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'own' }] },
+      } as RawJSONLines) + '\n')
+
+    await waitFor(() => collectedMessages.some((m) => (m as any).uuid === 'own-row'), 3000)
+    expect(collectedMessages.map((m) => (m as any).uuid)).not.toContain('foreign-row-in-bound-file')
   })
 
   it('discovers new unhooked API-error transcripts even when filesystem mtime is older than scanner startup', async () => {

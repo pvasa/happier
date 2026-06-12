@@ -146,4 +146,41 @@ describe('createCodexAppServerClient large responses', () => {
             });
         });
     });
+
+    it('rejects an oversized JSON-RPC line instead of throwing from the stdout parser', async () => {
+        await withTempDir('happier-codex-app-server-client-oversized-line-', async (root) => {
+            const fakeAppServer = await writeInitializingFakeAppServer({
+                root,
+                extraBodyLines: [
+                    'if (msg.method === "thread/resume") {',
+                    '  const payload = "x".repeat(4 * 1024);',
+                    '  const response = JSON.stringify({ id: msg.id, result: { thread: { id: "thread-too-large", payload } } }) + "\\n";',
+                    '  await writeChunked(response, 512);',
+                    '  continue;',
+                    '}',
+                    'if (msg.method === "state/read") {',
+                    '  process.stdout.write(JSON.stringify({ id: msg.id, result: { ok: true } }) + "\\n");',
+                    '  continue;',
+                    '}',
+                ],
+            });
+
+            const client = await createCodexAppServerClient({
+                processEnv: createCodexAppServerProcessEnv(fakeAppServer, {
+                    HAPPIER_CODEX_APP_SERVER_MAX_JSON_LINE_CHARS: '1024',
+                    HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '3000',
+                    HAPPIER_CODEX_APP_SERVER_STARTUP_RPC_TIMEOUT_MS: '3000',
+                }),
+            });
+
+            try {
+                await expect(client.request('thread/resume', { threadId: 'thread-too-large' }))
+                    .rejects
+                    .toThrow(/Codex app-server JSON output exceeded 1024 characters/);
+                await expect(client.request('state/read')).resolves.toEqual({ ok: true });
+            } finally {
+                await client.dispose();
+            }
+        });
+    }, 10_000);
 });

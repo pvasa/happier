@@ -182,6 +182,9 @@ vi.mock('@/configuration', () => ({
   configuration: {
     pendingQueueIdleWakePollIntervalMs: 10,
     startupPermissionSeedTranscriptTake: 5,
+    // Required transitively by the connected-services runtime-auth producer import in runGemini:
+    // resolveExistingSessionAttachContext constructs its concurrency gate at import time. 0 = unlimited.
+    daemonReattachCatchUpConcurrency: 0,
   },
 }));
 

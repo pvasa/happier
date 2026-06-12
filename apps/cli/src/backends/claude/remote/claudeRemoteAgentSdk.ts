@@ -23,7 +23,11 @@ import { isCompactHookLocalCommandStdout } from '@/backends/claude/utils/isCompa
 import { normalizeClaudeToolUseNamesInSdkMessage } from '@/backends/claude/utils/normalizeClaudeToolUseNames';
 import { tryMergeUserMcpConfigArgsIntoHappierMcp } from '@/backends/claude/utils/mcpConfigMerge';
 import { ensureClaudeJsRuntimeExecutable } from '@/backends/claude/utils/ensureClaudeJsRuntimeExecutable';
-import { resolveClaudeEffortForModel } from '@/backends/claude/utils/claudeEffort';
+import {
+    buildClaudeUltracodeSettingsJson,
+    resolveClaudeEffortForModel,
+    resolveClaudeUltracodeForModel,
+} from '@/backends/claude/utils/claudeEffort';
 import { resolveClaudeCodeXdgIsolation } from '@/backends/claude/utils/resolveClaudeCodeXdgIsolation';
 
 import type { SDKMessage, SDKSystemMessage, SDKUserMessage } from '@/backends/claude/sdk';
@@ -609,11 +613,19 @@ export async function claudeRemoteAgentSdk(opts: {
             modelId: argOverrides.model ?? mode.model,
             effort: argOverrides.effort ?? mode.reasoningEffort,
         });
+        // Ultracode is a session-only SETTING, not an effort level. The vendored Agent SDK
+        // (0.2.123) has no typed `ultracode` option yet, so it rides the spawned CLI's
+        // `--settings` overlay via extraArgs. Revisit on SDK bump (typed control request).
+        const resolvedUltracode = resolveClaudeUltracodeForModel({
+            modelId: argOverrides.model ?? mode.model,
+            ultracode: mode.ultracode,
+        });
         const extraArgs = (() => {
             const out: Record<string, string | null> = Object.create(null);
             if (enableFileCheckpointing) out['replay-user-messages'] = null;
             if (debugEnabled) out.debug = debugCategories.length > 0 ? debugCategories.join(',') : null;
             if (verboseEnabled) out.verbose = null;
+            if (resolvedUltracode) out.settings = buildClaudeUltracodeSettingsJson();
             return Object.keys(out).length > 0 ? out : undefined;
         })();
         const claudeSubprocessEnv = { ...xdgIsolationEnv, ...buildClaudeSubprocessEnv(), ...experimentalEnvOverlay };

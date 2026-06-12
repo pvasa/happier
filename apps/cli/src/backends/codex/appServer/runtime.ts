@@ -17,6 +17,7 @@ import {
     type SessionRuntimeIssueV1,
     type SessionRuntimeUsageLimitDetailsV1,
     type SessionUsageLimitRecoveryAuthSelectionV1,
+    type SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { isChangeTitleToolNameAlias, normalizePatchInputRecord } from '@happier-dev/protocol/tools/v2';
@@ -30,6 +31,11 @@ import {
     recordSessionTurnInProgress,
     surfacePrimarySessionRuntimeIssue,
 } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
+import {
+    resolveRecoverableTurnFailureRetryDecision,
+    resolveRecoverableTurnFailureSecondFailure,
+    type RecoverableTurnFailurePromptMode,
+} from '@/agent/runtime/session/recoverableTurnFailurePolicy';
 import { publishCodexSessionIdMetadata } from '../utils/codexSessionIdMetadata';
 import { resolveApprovalChoiceLabel } from '../runtime/codexRequestUserInputBridge';
 import {
@@ -43,8 +49,10 @@ import { resolveTrustedSessionAttachmentLocalImagePaths } from '@/session/attach
 
 import {
     createCodexAppServerClient,
+    isCodexAppServerJsonLineTooLargeError,
     type DisposableCodexAppServerClient,
 } from './client/createCodexAppServerClient';
+import { readCodexAppServerResumeRecoveryTimeoutMs } from './client/codexAppServerRpcTimeout';
 import {
     createCodexAppServerStreamEventBridge,
     type CodexAppServerStreamUpdate,
@@ -70,6 +78,7 @@ import {
     isCodexAppServerMethodNotFoundError,
     isCodexAppServerNoActiveTurnToSteerError,
 } from './appServerCompatibility';
+import { readCodexRateLimitsSnapshot } from './readCodexRateLimitsSnapshot';
 import {
     buildCodexAppServerLegacyPermissionParams,
     buildCodexAppServerPermissionsParams,
@@ -110,6 +119,7 @@ import {
     type CodexUsageLimitSwitchAttemptStatus,
 } from './recovery/resolveCodexUsageLimitSwitchProgress';
 import { resolveCodexUsageLimitSuppressionWait } from './recovery/resolveCodexUsageLimitSuppressionWait';
+import { resolveCodexUsageLimitProbeFailureWait } from './recovery/resolveCodexUsageLimitProbeFailureWait';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { deriveUsageLimitRecoveryTiming } from '@/session/usageLimitRecoveryControls/deriveUsageLimitRecoveryTiming';
 
@@ -297,11 +307,11 @@ function readUsageLimitRecoveryIntentFromMetadata(session: RuntimeSession): unkn
 
 async function writeUsageLimitRecoveryIntentToMetadata(
     session: RuntimeSession,
-    intent: unknown,
+    intent: SessionUsageLimitRecoveryV1,
 ): Promise<void> {
     await session.updateMetadata((metadata) => ({
         ...metadata,
-        [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: intent,
+        sessionUsageLimitRecoveryV1: intent,
     }));
 }
 
@@ -560,7 +570,7 @@ const CODEX_CONTEXT_WINDOW_CONTINUATION_PROMPT_ENV_KEY = 'HAPPIER_CODEX_CONTEXT_
 const CODEX_CONTEXT_WINDOW_RECOVERY_CONTINUATION_PROMPT =
     'Please continue the interrupted work from the compacted Codex context. Do not restart or repeat completed work.';
 
-type CodexAppServerContextWindowRecoveryMode = 'activity_aware' | 'continue' | 'retry_original' | 'off';
+type CodexAppServerContextWindowRecoveryMode = RecoverableTurnFailurePromptMode;
 
 type CodexAppServerContextWindowRecoveryConfig = Readonly<{
     mode: CodexAppServerContextWindowRecoveryMode;
@@ -576,17 +586,20 @@ type CodexAppServerErrorPayload = Readonly<{
 class CodexAppServerTurnFailure extends Error {
     readonly isAuthAccountChanged: boolean;
     readonly isContextWindowExhausted: boolean;
+    readonly isTemporaryRecoverableTurnFailure: boolean;
     readonly runtimeAuthClassification: CodexConnectedServiceRuntimeFailureClassification | null;
 
     constructor(message: string, options: Readonly<{
         isAuthAccountChanged: boolean;
         isContextWindowExhausted: boolean;
+        isTemporaryRecoverableTurnFailure: boolean;
         runtimeAuthClassification: CodexConnectedServiceRuntimeFailureClassification | null;
     }>) {
         super(message);
         this.name = 'CodexAppServerTurnFailure';
         this.isAuthAccountChanged = options.isAuthAccountChanged;
         this.isContextWindowExhausted = options.isContextWindowExhausted;
+        this.isTemporaryRecoverableTurnFailure = options.isTemporaryRecoverableTurnFailure;
         this.runtimeAuthClassification = options.runtimeAuthClassification;
     }
 }
@@ -694,9 +707,19 @@ function textMatchesCodexContextWindowExhaustedMessage(value: string | null): bo
     return CODEX_APP_SERVER_CONTEXT_WINDOW_EXHAUSTED_MESSAGE_MARKERS.every((marker) => normalized.includes(marker));
 }
 
+function textMatchesCodexTemporaryRecoverableTurnFailureMessage(value: string | null): boolean {
+    const normalized = value?.toLowerCase() ?? '';
+    return normalized.includes('selected model is at capacity')
+        || (normalized.includes('model is at capacity') && normalized.includes('try a different model'));
+}
+
 function isCodexAppServerContextWindowExhaustedPayload(payload: CodexAppServerErrorPayload): boolean {
     return normalizeCodexErrorInfo(payload.codexErrorInfo) === 'contextwindowexceeded'
         || [payload.message, payload.additionalDetails].some(textMatchesCodexContextWindowExhaustedMessage);
+}
+
+function isCodexAppServerTemporaryRecoverableTurnFailurePayload(payload: CodexAppServerErrorPayload): boolean {
+    return [payload.message, payload.additionalDetails].some(textMatchesCodexTemporaryRecoverableTurnFailureMessage);
 }
 
 function isCodexAppServerContextWindowExhaustedError(error: unknown): boolean {
@@ -707,8 +730,18 @@ function isCodexAppServerContextWindowExhaustedError(error: unknown): boolean {
     return textMatchesCodexContextWindowExhaustedMessage(error.message);
 }
 
+function isCodexAppServerTemporaryRecoverableTurnFailureError(error: unknown): boolean {
+    if (error instanceof CodexAppServerTurnFailure) {
+        return error.isTemporaryRecoverableTurnFailure;
+    }
+    if (!(error instanceof Error)) return false;
+    return textMatchesCodexTemporaryRecoverableTurnFailureMessage(error.message);
+}
+
 function shouldDeferCodexAppServerTurnFailureToPromptLoop(error: unknown): boolean {
-    return isCodexAppServerAuthAccountChangedError(error) || isCodexAppServerContextWindowExhaustedError(error);
+    return isCodexAppServerAuthAccountChangedError(error)
+        || isCodexAppServerContextWindowExhaustedError(error)
+        || isCodexAppServerTemporaryRecoverableTurnFailureError(error);
 }
 
 function normalizeCodexContextWindowRecoveryMode(value: unknown): CodexAppServerContextWindowRecoveryMode | null {
@@ -740,16 +773,6 @@ function resolveCodexContextWindowRecoveryConfig(input: Readonly<{
             ?? normalizeCodexContinuationPrompt(input.runtimeEnv[CODEX_CONTEXT_WINDOW_CONTINUATION_PROMPT_ENV_KEY])
             ?? CODEX_CONTEXT_WINDOW_RECOVERY_CONTINUATION_PROMPT,
     };
-}
-
-function resolveCodexContextWindowRecoveryAction(input: Readonly<{
-    mode: CodexAppServerContextWindowRecoveryMode;
-    failedTurnHadMeaningfulActivity: boolean;
-}>): 'continue' | 'retry_original' | 'disabled' {
-    if (input.mode === 'off') return 'disabled';
-    if (input.mode === 'continue') return 'continue';
-    if (input.mode === 'retry_original') return 'retry_original';
-    return input.failedTurnHadMeaningfulActivity ? 'continue' : 'retry_original';
 }
 
 function isMeaningfulCodexContextWindowRecoveryActivity(update: CodexAppServerStreamUpdate): boolean {
@@ -791,6 +814,7 @@ function createCodexAppServerTurnFailure(
         {
             isAuthAccountChanged: payload ? isCodexAppServerAuthAccountChangedPayload(payload) : false,
             isContextWindowExhausted: payload ? isCodexAppServerContextWindowExhaustedPayload(payload) : false,
+            isTemporaryRecoverableTurnFailure: payload ? isCodexAppServerTemporaryRecoverableTurnFailurePayload(payload) : false,
             runtimeAuthClassification,
         },
     );
@@ -947,6 +971,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         sessionId: string;
         issueFingerprint?: string;
         rememberPreference?: boolean;
+        resumePromptMode?: 'standard' | 'off' | 'custom';
     }>) => Promise<Readonly<{ ok: true; recovery: unknown }> | UnsupportedSessionRuntimeMethodResult | Readonly<{ ok: false; errorCode: string; error: string }>>;
     cancelUsageLimitWaitResume: (_request: Readonly<{
         sessionId: string;
@@ -955,6 +980,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     checkUsageLimitRecoveryNow: (_request: Readonly<{
         sessionId: string;
         provider?: string;
+        resumePromptMode?: 'standard' | 'off' | 'custom';
     }>) => Promise<Readonly<{ ok: true; status: string }> | UnsupportedSessionRuntimeMethodResult>;
     listVendorPlugins: (_options?: Readonly<{ cwd?: string }>) => ReturnType<typeof listCodexVendorPlugins>;
     listSkills: (_options?: Readonly<{ cwd?: string }>) => ReturnType<typeof listCodexAppServerSkills>;
@@ -1060,7 +1086,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
             }
             const client = await ensureClient();
             try {
-                const rawSnapshot = await client.request('account/rateLimits/read');
+                const rawSnapshot = await readCodexRateLimitsSnapshot({
+                    request: async (_method, params) => await client.request('account/rateLimits/read', params),
+                });
                 await params.onRateLimitSnapshot?.(rawSnapshot);
                 if (isCodexRateLimitSnapshotExhausted(rawSnapshot)) {
                     const resetAtMs = readEarliestCodexRateLimitResetAtMs(rawSnapshot) ?? intent.nextCheckAtMs ?? intent.resetAtMs ?? null;
@@ -1143,11 +1171,16 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 }
                 return { status: 'ready' as const };
             } catch (error) {
-                logger.debug('[codex-app-server] Usage-limit recovery probe failed', error);
-                return {
-                    status: 'exhausted' as const,
-                    lastProbeError: 'codex_app_server_rate_limit_probe_unavailable',
-                };
+                // RD-CDX-8: a failed probe is never an authoritative provider verdict. Transient
+                // transport/RPC failures (timeouts, conn resets, probes racing the hot-swap
+                // app-server restart) must keep the durable intent WAITING — marking it
+                // `exhausted` here durably killed auto wait/resume for the fingerprint.
+                logger.debug('[codex-app-server] Usage-limit recovery probe failed (transient, keep waiting)', error);
+                return resolveCodexUsageLimitProbeFailureWait({
+                    resetAtMs: intent.resetAtMs ?? null,
+                    nextCheckAtMs: intent.nextCheckAtMs ?? null,
+                    nowMs: Date.now(),
+                });
             }
         },
         resume: async () => {
@@ -1252,14 +1285,18 @@ export function createCodexAppServerRuntime(params: Readonly<{
     };
 
     const recordCompletedBestEffort = async (providerTurnId?: string | null): Promise<void> => {
-        if (params.session.sessionTurnLifecycle) return;
-        await recordSessionTurnCompleted({
-            provider: 'codex',
-            providerTurnId,
-            session: params.session,
-        }).catch((error) => {
-            logger.debug('[codex-app-server] Failed to record session turn completion (non-fatal)', error);
-        });
+        // The turn ledger (sessionTurnLifecycle) owns turn-status persistence, but
+        // usage-limit recovery settlement on normal completion is owned HERE for both
+        // paths: a turn that completed normally supersedes any pending recovery intent.
+        if (!params.session.sessionTurnLifecycle) {
+            await recordSessionTurnCompleted({
+                provider: 'codex',
+                providerTurnId,
+                session: params.session,
+            }).catch((error) => {
+                logger.debug('[codex-app-server] Failed to record session turn completion (non-fatal)', error);
+            });
+        }
         await usageLimitRecoveryScheduler.cancel({ sessionId: params.session.sessionId }).catch((error) => {
             logger.debug('[codex-app-server] Failed to cancel stale usage-limit recovery intent after completion (non-fatal)', error);
         });
@@ -1294,6 +1331,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
             processEnv: runtimeEnv,
             lastPublished: lastPublishedThreadId,
         });
+    };
+
+    const publishRequestedResumeThreadId = (requestedThreadId: string): void => {
+        const nextThreadId = trimSessionId(requestedThreadId);
+        if (!nextThreadId) return;
+        threadId = nextThreadId;
+        publishThreadId();
     };
 
     const publishSessionControls = async (client: DisposableCodexAppServerClient): Promise<void> => {
@@ -2686,7 +2730,18 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         void runBridgeWork(async () => {
                             if (!notificationMatchesPendingTurn(notificationParams)) return;
                             const notificationRecord = readRecord(notificationParams);
-                            if (notificationRecord?.willRetry === true) return;
+                            if (resolveRecoverableTurnFailureRetryDecision({
+                                attemptCount: 0,
+                                maxRetries: 1,
+                                providerWillRetry: notificationRecord?.willRetry === true,
+                                failureRetryAfterMs: null,
+                                failedTurnHadMeaningfulActivity: false,
+                                promptMode: 'activity_aware',
+                                originalPrompt: '',
+                                continuationPrompt: '',
+                            }).action === 'await_provider_retry') {
+                                return;
+                            }
                             const failure = createCodexAppServerTurnFailure(notificationParams, runtimeEnv, params.session);
                             if (shouldDeferCodexAppServerTurnFailureToPromptLoop(failure)) {
                                 const failedTurnId = readProviderEventTurnId(notificationParams);
@@ -2834,8 +2889,46 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const resumeThread = async (
         client: DisposableCodexAppServerClient,
         requestedThreadId: string,
-        options: Readonly<{ preserveRequestedThreadId: boolean }>,
+        options: Readonly<{ preserveRequestedThreadId: boolean; allowOversizedResponseRecovery?: boolean }>,
     ): Promise<Readonly<{ nextThreadId: string; response: unknown }>> => {
+        const requestOptions = options.allowOversizedResponseRecovery
+            ? { timeoutMs: readCodexAppServerResumeRecoveryTimeoutMs(runtimeEnv) }
+            : undefined;
+        const readResumedThreadMetadata = async (): Promise<unknown> => {
+            const startedAt = Date.now();
+            logger.debug('[codex-app-server] Reading lean thread metadata after oversized resume response', {
+                threadId: requestedThreadId,
+                timeoutMs: requestOptions?.timeoutMs ?? null,
+            });
+            try {
+                const result = await client.request('thread/read', {
+                    threadId: requestedThreadId,
+                    includeTurns: false,
+                }, requestOptions);
+                logger.debug('[codex-app-server] Lean thread metadata read completed after oversized resume response', {
+                    threadId: requestedThreadId,
+                    elapsedMs: Date.now() - startedAt,
+                });
+                return result;
+            } catch (error) {
+                logger.debug('[codex-app-server] Lean thread metadata read failed after oversized resume response', {
+                    threadId: requestedThreadId,
+                    elapsedMs: Date.now() - startedAt,
+                    error,
+                });
+                throw error;
+            }
+        };
+        const recoverOversizedResumeResponse = async (error: unknown): Promise<unknown | null> => {
+            if (!options.allowOversizedResponseRecovery || !isCodexAppServerJsonLineTooLargeError(error)) {
+                return null;
+            }
+            logger.debug('[codex-app-server] thread/resume response exceeded JSON line limit; using lean thread/read metadata after resume side effect', {
+                threadId: requestedThreadId,
+                maxChars: error.maxChars,
+            });
+            return await readResumedThreadMetadata();
+        };
         const requestParams = {
             threadId: requestedThreadId,
             ...(currentModelId ? { model: currentModelId } : {}),
@@ -2846,23 +2939,39 @@ export function createCodexAppServerRuntime(params: Readonly<{
         };
         let response: unknown;
         try {
-            response = await client.request('thread/resume', requestParams);
+            response = await client.request('thread/resume', requestParams, requestOptions);
             if (Object.prototype.hasOwnProperty.call(requestParams, 'permissions')) {
                 permissionSupport = 'supported';
             }
         } catch (error) {
-            if (!shouldRetryWithoutPermissionProfile(error, requestParams)) {
-                throw error;
+            const recoveredResponse = await recoverOversizedResumeResponse(error);
+            if (recoveredResponse) {
+                if (Object.prototype.hasOwnProperty.call(requestParams, 'permissions')) {
+                    permissionSupport = 'supported';
+                }
+                response = recoveredResponse;
+            } else {
+                if (!shouldRetryWithoutPermissionProfile(error, requestParams)) {
+                    throw error;
+                }
+                permissionSupport = 'legacy';
+                try {
+                    response = await client.request('thread/resume', {
+                        threadId: requestedThreadId,
+                        ...(currentModelId ? { model: currentModelId } : {}),
+                        ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
+                        ...buildThreadConfigOverrideParams(currentReasoningEffort),
+                        ...buildCurrentLegacyPermissionParams('thread'),
+                        persistExtendedHistory: true,
+                    }, requestOptions);
+                } catch (legacyError) {
+                    const legacyRecoveredResponse = await recoverOversizedResumeResponse(legacyError);
+                    if (!legacyRecoveredResponse) {
+                        throw legacyError;
+                    }
+                    response = legacyRecoveredResponse;
+                }
             }
-            permissionSupport = 'legacy';
-            response = await client.request('thread/resume', {
-                threadId: requestedThreadId,
-                ...(currentModelId ? { model: currentModelId } : {}),
-                ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                ...buildThreadConfigOverrideParams(currentReasoningEffort),
-                ...buildCurrentLegacyPermissionParams('thread'),
-                persistExtendedHistory: true,
-            });
         }
         return {
             nextThreadId: options.preserveRequestedThreadId ? requestedThreadId : readThreadId(response) ?? requestedThreadId,
@@ -2907,11 +3016,20 @@ export function createCodexAppServerRuntime(params: Readonly<{
         const existingSessionId = trimSessionId(options.existingSessionId);
         const client = await ensureClient();
         const startOrLoadResult = await (async (): Promise<Readonly<{ nextThreadId: string; response: unknown }>> => {
+            const importHistory = options.importHistory === true;
             if (resumeId) {
-                return await resumeThread(client, resumeId, { preserveRequestedThreadId: false });
+                publishRequestedResumeThreadId(resumeId);
+                return await resumeThread(client, resumeId, {
+                    preserveRequestedThreadId: false,
+                    allowOversizedResponseRecovery: !importHistory,
+                });
             }
             if (existingSessionId) {
-                return await resumeThread(client, existingSessionId, { preserveRequestedThreadId: false });
+                publishRequestedResumeThreadId(existingSessionId);
+                return await resumeThread(client, existingSessionId, {
+                    preserveRequestedThreadId: false,
+                    allowOversizedResponseRecovery: !importHistory,
+                });
             }
             const requestParams = {
                 cwd: params.directory,
@@ -3121,7 +3239,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
         request: CodexAppServerReviewStartRequest,
     ): Promise<string | UnsupportedSessionRuntimeMethodResult | void> => {
         let recoveredContextWindowExhaustion = false;
+        let recoveredTemporaryRecoverableTurnFailure = false;
         let originalContextWindowExhaustionFailure: Error | null = null;
+        let originalTemporaryRecoverableTurnFailure: Error | null = null;
         while (true) {
             const activeThreadId = threadId;
             if (!activeThreadId) {
@@ -3155,10 +3275,45 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 }
                 activeTurn.promise.catch(() => undefined);
                 await finishPendingTurn({ error: failure, flushReason: 'abort' });
+                if (isCodexAppServerTemporaryRecoverableTurnFailureError(failure)) {
+                    const originalFailure: Error = originalTemporaryRecoverableTurnFailure ?? failure;
+                    originalTemporaryRecoverableTurnFailure = originalFailure;
+                    const retryDecision = resolveRecoverableTurnFailureRetryDecision({
+                        attemptCount: recoveredTemporaryRecoverableTurnFailure ? 1 : 0,
+                        maxRetries: 1,
+                        providerWillRetry: false,
+                        failureRetryAfterMs: null,
+                        failedTurnHadMeaningfulActivity: false,
+                        promptMode: 'retry_original',
+                        originalPrompt: '',
+                        continuationPrompt: '',
+                    });
+                    if (retryDecision.action === 'retry') {
+                        recoveredTemporaryRecoverableTurnFailure = true;
+                        continue;
+                    }
+                    if (retryDecision.action === 'budget_exhausted') {
+                        throw resolveRecoverableTurnFailureSecondFailure({
+                            originalFailure,
+                            latestFailure: failure,
+                        }).failure;
+                    }
+                    throw originalFailure;
+                }
                 if (isCodexAppServerContextWindowExhaustedError(failure)) {
                     const originalFailure: Error = originalContextWindowExhaustionFailure ?? failure;
                     originalContextWindowExhaustionFailure = originalFailure;
-                    if (!recoveredContextWindowExhaustion) {
+                    const retryDecision = resolveRecoverableTurnFailureRetryDecision({
+                        attemptCount: recoveredContextWindowExhaustion ? 1 : 0,
+                        maxRetries: 1,
+                        providerWillRetry: false,
+                        failureRetryAfterMs: null,
+                        failedTurnHadMeaningfulActivity: false,
+                        promptMode: 'retry_original',
+                        originalPrompt: '',
+                        continuationPrompt: '',
+                    });
+                    if (retryDecision.action === 'retry') {
                         recoveredContextWindowExhaustion = true;
                         try {
                             await recoverFromCodexContextWindowExhaustion(activeThreadId, originalFailure);
@@ -3168,7 +3323,14 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         }
                         continue;
                     }
-                    await surfaceOriginalContextWindowFailureAfterRecoveryError(originalFailure, failure);
+                    if (retryDecision.action === 'budget_exhausted') {
+                        const secondFailureDecision = resolveRecoverableTurnFailureSecondFailure({
+                            originalFailure,
+                            latestFailure: failure,
+                        });
+                        await surfaceOriginalContextWindowFailureAfterRecoveryError(secondFailureDecision.failure, failure);
+                        throw secondFailureDecision.failure;
+                    }
                     throw originalFailure;
                 }
                 throw failure;
@@ -3413,7 +3575,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
         },
         sendPrompt: async (prompt: string, options?: CodexAppServerPromptOptions) => {
             let recoveredContextWindowExhaustion = false;
+            let recoveredTemporaryRecoverableTurnFailure = false;
             let originalContextWindowExhaustionFailure: Error | null = null;
+            let originalTemporaryRecoverableTurnFailure: Error | null = null;
             let promptForAttempt = prompt;
             let optionsForAttempt: CodexAppServerPromptOptions | undefined = options;
             while (true) {
@@ -3505,36 +3669,82 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         }
                         continue;
                     }
+                    if (isCodexAppServerTemporaryRecoverableTurnFailureError(failure)) {
+                        const originalFailure: Error = originalTemporaryRecoverableTurnFailure ?? failure;
+                        originalTemporaryRecoverableTurnFailure = originalFailure;
+                        const retryDecision = resolveRecoverableTurnFailureRetryDecision({
+                            attemptCount: recoveredTemporaryRecoverableTurnFailure ? 1 : 0,
+                            maxRetries: 1,
+                            providerWillRetry: false,
+                            failureRetryAfterMs: null,
+                            failedTurnHadMeaningfulActivity,
+                            promptMode: contextWindowRecoveryConfig.mode,
+                            originalPrompt: prompt,
+                            continuationPrompt: contextWindowRecoveryConfig.continuationPrompt,
+                        });
+                        if (retryDecision.action === 'retry') {
+                            recoveredTemporaryRecoverableTurnFailure = true;
+                            promptForAttempt = retryDecision.prompt;
+                            if (retryDecision.promptKind === 'continuation') {
+                                optionsForAttempt = undefined;
+                            } else {
+                                optionsForAttempt = options;
+                            }
+                            continue;
+                        }
+                        if (retryDecision.action === 'budget_exhausted') {
+                            throw resolveRecoverableTurnFailureSecondFailure({
+                                originalFailure,
+                                latestFailure: failure,
+                            }).failure;
+                        }
+                        throw originalFailure;
+                    }
                     if (isCodexAppServerContextWindowExhaustedError(failure)) {
                         const originalFailure: Error = originalContextWindowExhaustionFailure ?? failure;
                         originalContextWindowExhaustionFailure = originalFailure;
-                        if (!recoveredContextWindowExhaustion) {
+                        const retryDecision = resolveRecoverableTurnFailureRetryDecision({
+                            attemptCount: recoveredContextWindowExhaustion ? 1 : 0,
+                            maxRetries: 1,
+                            providerWillRetry: false,
+                            failureRetryAfterMs: null,
+                            failedTurnHadMeaningfulActivity,
+                            promptMode: contextWindowRecoveryConfig.mode,
+                            originalPrompt: prompt,
+                            continuationPrompt: contextWindowRecoveryConfig.continuationPrompt,
+                        });
+                        if (retryDecision.action === 'retry') {
                             recoveredContextWindowExhaustion = true;
-                            const recoveryAction = resolveCodexContextWindowRecoveryAction({
-                                mode: contextWindowRecoveryConfig.mode,
-                                failedTurnHadMeaningfulActivity,
-                            });
-                            if (recoveryAction === 'disabled') {
-                                await surfaceOriginalContextWindowFailure(
-                                    originalFailure,
-                                    '[codex-app-server] Codex context-window recovery disabled; surfacing original turn failure',
-                                    { mode: contextWindowRecoveryConfig.mode },
-                                );
-                                throw originalFailure;
-                            }
                             try {
                                 await recoverFromCodexContextWindowExhaustion(activeThreadId, originalFailure);
                             } catch (recoveryError) {
                                 await surfaceOriginalContextWindowFailureAfterRecoveryError(originalFailure, recoveryError);
                                 throw originalFailure;
                             }
-                            if (recoveryAction === 'continue') {
-                                promptForAttempt = contextWindowRecoveryConfig.continuationPrompt;
+                            promptForAttempt = retryDecision.prompt;
+                            if (retryDecision.promptKind === 'continuation') {
                                 optionsForAttempt = undefined;
+                            } else {
+                                optionsForAttempt = options;
                             }
                             continue;
                         }
-                        await surfaceOriginalContextWindowFailureAfterRecoveryError(originalFailure, failure);
+                        if (retryDecision.action === 'disabled') {
+                            await surfaceOriginalContextWindowFailure(
+                                originalFailure,
+                                '[codex-app-server] Codex context-window recovery disabled; surfacing original turn failure',
+                                { mode: contextWindowRecoveryConfig.mode },
+                            );
+                            throw originalFailure;
+                        }
+                        if (retryDecision.action === 'budget_exhausted') {
+                            const secondFailureDecision = resolveRecoverableTurnFailureSecondFailure({
+                                originalFailure,
+                                latestFailure: failure,
+                            });
+                            await surfaceOriginalContextWindowFailureAfterRecoveryError(secondFailureDecision.failure, failure);
+                            throw secondFailureDecision.failure;
+                        }
                         throw originalFailure;
                     }
                     throw failure;
@@ -3583,6 +3793,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 issueFingerprint: request.issueFingerprint ?? buildUsageLimitIssueFingerprint(issue),
                 resetAtMs: timing.resetAtMs,
                 nextCheckAtMs: timing.nextCheckAtMs,
+                resumePromptMode: request.resumePromptMode,
                 selectedAuth: resolveUsageLimitRecoveryAuthSelection({
                     runtimeEnv,
                     usageLimit: issue.usageLimit,
@@ -3600,6 +3811,20 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 return unsupportedSessionRuntimeMethod(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW);
             }
             const currentIntent = usageLimitRecoveryScheduler.read(request.sessionId);
+            if (
+                currentIntent
+                && currentIntent.status !== 'cancelled'
+                && request.resumePromptMode
+                && currentIntent.resumePromptMode !== request.resumePromptMode
+            ) {
+                await usageLimitRecoveryScheduler.upsert({
+                    sessionId: request.sessionId,
+                    intent: {
+                        ...currentIntent,
+                        resumePromptMode: request.resumePromptMode,
+                    },
+                });
+            }
             if (!currentIntent || currentIntent.status === 'cancelled') {
                 const issue = latestUsageLimitIssue;
                 if (issue?.usageLimit) {
@@ -3609,6 +3834,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         issueFingerprint: buildUsageLimitIssueFingerprint(issue),
                         resetAtMs: timing.resetAtMs,
                         nextCheckAtMs: timing.nextCheckAtMs,
+                        resumePromptMode: request.resumePromptMode,
                         selectedAuth: resolveUsageLimitRecoveryAuthSelection({
                             runtimeEnv,
                             usageLimit: issue.usageLimit,

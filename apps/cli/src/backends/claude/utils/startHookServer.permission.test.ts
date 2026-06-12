@@ -103,6 +103,30 @@ describe('startHookServer (session hook)', () => {
       tool_use_id: 'toolu_1',
     }));
   });
+
+  it('rejects oversized hook bodies with 413 instead of buffering them in memory', async () => {
+    const onSessionHook = vi.fn();
+    const server = await startHookServer({ onSessionHook });
+    servers.push(server);
+
+    const oversized = 'x'.repeat(11 * 1024 * 1024);
+    const res = await fetch(`http://127.0.0.1:${server.port}/hook/session-start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: 'sess_big', payload: oversized }),
+    }).then(
+      async (response) => ({ status: response.status, text: await response.text() }),
+      // The server may also abort the socket mid-stream, which fetch reports as a network error.
+      () => ({ status: 413, text: 'aborted' }),
+    );
+
+    expect(res.status).toBe(413);
+    expect(onSessionHook).not.toHaveBeenCalled();
+
+    // The server stays healthy for well-formed requests afterwards.
+    const ok = await postSessionHook({ port: server.port, body: { session_id: 'sess_after', hook_event_name: 'PostToolUse' } });
+    expect(ok).toEqual({ status: 200, text: 'ok' });
+  });
 });
 
 describe('startHookServer (permission hook)', () => {

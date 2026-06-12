@@ -6,6 +6,7 @@ import { claudeUsageLimitRecoveryControlAdapter } from '@/backends/claude/connec
 import { claudeConnectedServiceStateSharingDescriptor } from '@/backends/claude/connectedServices/claudeConnectedServiceStateSharingDescriptor';
 import { materializeClaudeConnectedServiceRuntimeAuthSelection } from '@/backends/claude/connectedServices/materializeClaudeConnectedServiceRuntimeAuthSelection';
 import { resolveClaudeConnectedServiceSwitchContinuity } from '@/backends/claude/connectedServices/resolveClaudeConnectedServiceSwitchContinuity';
+import { resolveClaudeConnectedServiceCandidatePersistedSessionFile } from '@/backends/claude/connectedServices/resolveClaudeConnectedServiceCandidatePersistedSessionFile';
 import { claudeDaemonSpawnHooks } from '@/backends/claude/daemon/spawnHooks';
 import type { AgentCatalogEntry } from '../types';
 import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/connectedServices/credentials/lifecycleTypes';
@@ -14,9 +15,8 @@ const claudeConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCrede
   providerId: 'claude',
   serviceIds: AGENTS_CORE.claude.connectedServices.supportedServiceIds,
   spawnPreflightOauthRefresh: { mode: 'force' },
-  refreshTokenRuntimeHandling: 'daemon_only',
   refreshedCredentialApplication: { mode: 'restart_required' },
-  runtimeAuthFailureClassifier: { available: true },
+  predictiveSoftSwitch: { mode: 'unsupported' },
 };
 
 export const agent = {
@@ -35,13 +35,18 @@ export const agent = {
   getConnectedServiceStateSharingDescriptor: async () => claudeConnectedServiceStateSharingDescriptor,
   getSessionUsageLimitRecoveryControlAdapter: async () => claudeUsageLimitRecoveryControlAdapter,
   resolveConnectedServiceSwitchContinuity: async (params) => await resolveClaudeConnectedServiceSwitchContinuity(params),
-  // Claude's underlying probe takes a `{ vendorResumeId, processEnv }` shape rather than the
-  // normalized `VerifyResumeReachableInput`. Adapt here (behavior-preserving: same mapping the
-  // former central dispatcher applied — the materialized target env is the process env Claude reads).
+  resolveConnectedServiceCandidatePersistedSessionFile: ({ metadata }) =>
+    resolveClaudeConnectedServiceCandidatePersistedSessionFile({ metadata }),
+  // Claude's underlying probe takes a `{ vendorResumeId, processEnv, ... }` shape rather than the
+  // normalized `VerifyResumeReachableInput`. Adapt here — the materialized target env is the
+  // process env Claude reads; the persisted candidate hint and the §2 strict flag pass through
+  // (RD-MAT-5: the probe consults the candidate file the switch WILL import, except target-strict).
   verifyResumeReachable: async (input) =>
     await (await import('@/backends/claude/connectedServices/verifyResumeReachableClaude')).verifyResumeReachableClaude({
       vendorResumeId: input.vendorResumeId,
       processEnv: input.targetMaterializedEnv as NodeJS.ProcessEnv,
+      candidatePersistedSessionFile: input.candidatePersistedSessionFile ?? null,
+      targetStrict: input.targetStrict === true,
     }),
   getDirectSessionProviderOps: async () => (await import('@/backends/claude/directSessions/providerOps')).claudeDirectSessionProviderOps,
   vendorResumeSupport: AGENTS_CORE.claude.resume.vendorResume,

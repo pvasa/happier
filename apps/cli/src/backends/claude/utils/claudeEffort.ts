@@ -18,6 +18,9 @@ function resolveClaudeEffortLevelsForKnownAliasOrModel(modelIdRaw: unknown): rea
     const direct = agentProviders.claude.resolveClaudeEffortLevelsForModelId(modelId) as readonly ClaudeEffortLevel[];
     if (direct.length > 0) return direct;
 
+    if (modelId === 'fable' || modelId.includes('fable-5')) {
+        return agentProviders.claude.resolveClaudeEffortLevelsForModelId('claude-fable-5') as readonly ClaudeEffortLevel[];
+    }
     if (modelId === 'opus' || modelId.includes('opus-4-8')) {
         return agentProviders.claude.resolveClaudeEffortLevelsForModelId('claude-opus-4-8') as readonly ClaudeEffortLevel[];
     }
@@ -43,6 +46,9 @@ function resolveClaudeDefaultEffortForKnownAliasOrModel(modelIdRaw: unknown): Cl
     const direct = agentProviders.claude.resolveClaudeDefaultEffortLevelForModelId(modelId) as ClaudeEffortLevel | null;
     if (direct) return direct;
 
+    if (modelId === 'fable' || modelId.includes('fable-5')) {
+        return agentProviders.claude.resolveClaudeDefaultEffortLevelForModelId('claude-fable-5') as ClaudeEffortLevel | null;
+    }
     if (modelId === 'opus' || modelId.includes('opus-4-8')) {
         return agentProviders.claude.resolveClaudeDefaultEffortLevelForModelId('claude-opus-4-8') as ClaudeEffortLevel | null;
     }
@@ -97,4 +103,34 @@ export function buildClaudeEffortCliArgs(params: Readonly<{
 }>): string[] {
     const resolved = resolveClaudeEffortForModel(params);
     return resolved ? ['--effort', resolved] : [];
+}
+
+/** Alias-aware default effort for a Claude model id (tolerates `[1m]` variants). */
+export function resolveClaudeDefaultEffortForModel(modelIdRaw: unknown): ClaudeEffortLevel | null {
+    return resolveClaudeDefaultEffortForKnownAliasOrModel(modelIdRaw);
+}
+
+function normalizeUltracodeRequest(raw: unknown): boolean {
+    if (raw === true) return true;
+    return typeof raw === 'string' && raw.trim().toLowerCase() === 'true';
+}
+
+/**
+ * Resolve the effective ultracode setting for a spawn/launch.
+ *
+ * Ultracode is a session-only Claude Code SETTING (forces xhigh + Dynamic Workflows) —
+ * it is NOT an effort level and must never ride `--effort`/the SDK `effort` option.
+ * It is honored only on xhigh-capable models (alias- and `[1m]`-tolerant).
+ */
+export function resolveClaudeUltracodeForModel(params: Readonly<{
+    modelId: unknown;
+    ultracode: unknown;
+}>): boolean {
+    if (!normalizeUltracodeRequest(params.ultracode)) return false;
+    return resolveClaudeEffortLevelsForKnownAliasOrModel(params.modelId).includes('xhigh');
+}
+
+/** The `--settings` JSON overlay value that turns ultracode on for a spawned Claude CLI. */
+export function buildClaudeUltracodeSettingsJson(): string {
+    return JSON.stringify({ ultracode: true });
 }

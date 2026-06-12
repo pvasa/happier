@@ -85,6 +85,36 @@ describe('turnInput', () => {
         ]);
     });
 
+    it('converts final structured image inputs into Codex app-server image input', () => {
+        const imagePath = '.happier/uploads/messages/m1/image.png';
+        expect(buildCodexAppServerTurnInput({
+            text: 'Use uploaded image',
+            trustedLocalImagePaths: new Set([imagePath]),
+            metadata: {
+                happierStructuredInputV1: {
+                    v: 1,
+                    imageInputs: [
+                        {
+                            kind: 'image',
+                            mimeType: 'image/png',
+                            localPath: imagePath,
+                            provenance: { kind: 'sessionAttachmentUpload' },
+                        },
+                        {
+                            kind: 'image',
+                            mimeType: 'image/png',
+                            url: 'https://example.test/image.png',
+                        },
+                    ],
+                },
+            },
+        })).toEqual([
+            { type: 'text', text: 'Use uploaded image' },
+            { type: 'localImage', path: imagePath },
+            { type: 'image', url: 'https://example.test/image.png' },
+        ]);
+    });
+
     it('does not convert untrusted structured attachment paths into Codex localImage input', () => {
         expect(buildCodexAppServerTurnInput({
             text: 'crafted',

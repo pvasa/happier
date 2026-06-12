@@ -17,6 +17,8 @@ import type { TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantP
 import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 
 import { normalizeAvailableCommands, publishSlashCommandsToMetadata } from '@/agent/acp/commands/publishSlashCommands';
+import { GEMINI_PROVIDER_RUNTIME_ERROR_EVENT } from '../acp/transport';
+import { reportGeminiConnectedServiceRuntimeAuthFailureBestEffort } from '../connectedServices/surfaceGeminiConnectedServiceRuntimeAuthFailure';
 import { GeminiDiffProcessor } from '../utils/diffProcessor';
 import { buildGeminiWorkspaceProjectAuthenticationMessage } from '../utils/buildGeminiWorkspaceProjectGuidance';
 import { GeminiTurnMessageState } from './geminiTurnMessageState';
@@ -112,6 +114,15 @@ export function createGeminiBackendMessageHandler(params: {
             errorMessage = buildGeminiWorkspaceProjectAuthenticationMessage();
           }
 
+          // Connected-services producer: report the STRUCTURED classification (usage limit /
+          // throttle / auth) to the daemon so reactive recovery can engage; the raw provider
+          // error keeps flowing through the existing sanitized error surfaces below.
+          const runtimeAuthClassification = reportGeminiConnectedServiceRuntimeAuthFailureBestEffort({
+            session: params.session,
+            error: msg.detail && typeof msg.detail === 'object' ? msg.detail : errorMessage,
+            logPrefix: '[gemini]',
+          });
+
           params.messageBuffer.addMessage(`Error: ${errorMessage}`, 'status');
           void (async () => {
             if (hadActiveTurn && !params.state.taskStartedSent && params.session.sessionTurnLifecycle) {
@@ -120,7 +131,9 @@ export function createGeminiBackendMessageHandler(params: {
             await surfacePrimarySessionRuntimeIssue({
               cause: 'status_error',
               provider: 'gemini',
-              error: errorMessage,
+              error: runtimeAuthClassification
+                ? Object.assign(new Error(errorMessage), { runtimeAuthClassification })
+                : errorMessage,
               sessionSeq: params.session.getLastObservedMessageSeq?.() ?? null,
               session: params.session,
             });
@@ -280,6 +293,18 @@ export function createGeminiBackendMessageHandler(params: {
       }
 
       case 'event':
+        if (msg.name === GEMINI_PROVIDER_RUNTIME_ERROR_EVENT) {
+          // Structured provider runtime errors from the ACP transport (429 / RESOURCE_EXHAUSTED
+          // stderr). The raw payload is suppressed from the transcript by contract — Gemini CLI
+          // retries these internally — and only the structured daemon report may surface
+          // recovery projections.
+          reportGeminiConnectedServiceRuntimeAuthFailureBestEffort({
+            session: params.session,
+            error: msg.payload,
+            logPrefix: '[gemini]',
+          });
+          break;
+        }
         if (msg.name === 'available_commands_update') {
           const payload = msg.payload as any;
           const details = normalizeAvailableCommands(payload?.availableCommands ?? payload);

@@ -15,6 +15,7 @@ import { createJsonlFollowController, type JsonlFollowController } from '@/agent
 import { INTERNAL_CLAUDE_EVENT_TYPES } from './internalClaudeEventTypes';
 import { parseRawJsonLinesObject } from './parseRawJsonLines';
 import { isClaudeInternalTranscriptMessage } from './isClaudeInternalTranscriptMessage';
+import { readClaudeControlCommandRowShape } from './controlCommandRows';
 
 export type SessionScannerSessionInfo = {
     sessionId: string;
@@ -47,6 +48,14 @@ export async function createSessionScanner(opts: {
     initialProcessedMessageKeys?: Iterable<string>
     /** Replay initial transcript rows instead of treating the whole file as already processed. */
     replayInitialMessages?: boolean
+    /**
+     * Replay-coverage cutoff (Lane N4): one-time session SNAPSHOT rows older than this timestamp
+     * (or without a parseable timestamp) are marked processed without being emitted — they
+     * predate the committed-keys baseline coverage and cannot be proven uncommitted. Live
+     * follower rows are never filtered. `Infinity` suppresses the snapshot replay entirely
+     * (fail-closed when no baseline could be loaded).
+     */
+    replaySuppressRowsBeforeMs?: number | null
     /**
      * Discover fresh Claude JSONL sessions in the project directory before hooks
      * announce a SessionStart. This covers early Claude failures that write JSONL
@@ -131,7 +140,8 @@ export async function createSessionScanner(opts: {
     const taskToolUseIdByAgentId = new Map<string, string>();
     let invalidate: (() => void) | null = null;
     const discoveredSessions = new Set<string>();
-    const sessionDiscoveryBaselines = new Map<string, { mtimeMs: number; size: number }>();
+    /** Session JSONLs that already existed at scanner start — never discoverable (see pid-14419 guard). */
+    const sessionDiscoveryBaselines = new Set<string>();
     let boundSessionId: string | null = opts.bindToFirstSession && opts.sessionId ? opts.sessionId : null;
     let closed = false;
 
@@ -174,14 +184,16 @@ export async function createSessionScanner(opts: {
             if (currentSessionId === sessionId || sessionFollowers.has(sessionId)) continue;
             if (!isMainSessionAllowed(sessionId)) continue;
             const filePath = join(projectDir, entry);
-            let stats: Awaited<ReturnType<typeof stat>>;
+            // Cross-session contamination guard (incident pid-14419): the project dir can be
+            // SHARED across config roots/profiles (projects symlinked to ~/.claude/projects), so a
+            // pre-existing JSONL that grows is by definition another live session writing — never a
+            // fresh spawn of THIS runner. Only files created after scanner start are discoverable.
+            if (sessionDiscoveryBaselines.has(sessionId)) continue;
             try {
-                stats = await stat(filePath);
+                await stat(filePath);
             } catch {
                 continue;
             }
-            const baseline = sessionDiscoveryBaselines.get(sessionId);
-            if (baseline && stats.mtimeMs <= baseline.mtimeMs && stats.size <= baseline.size) continue;
             const messages = await readClaudeSessionJsonlMessages({
                 sessionFilePath: filePath,
                 logLabel: 'SESSION_SCANNER',
@@ -366,15 +378,7 @@ export async function createSessionScanner(opts: {
             for (const entry of entries) {
                 const sessionId = readClaudeSessionJsonlEntrySessionId(entry);
                 if (!sessionId) continue;
-                try {
-                    const stats = await stat(join(initialProjectDir, entry));
-                    sessionDiscoveryBaselines.set(sessionId, {
-                        mtimeMs: stats.mtimeMs,
-                        size: stats.size,
-                    });
-                } catch {
-                    // Ignore entries that disappear while taking the startup baseline.
-                }
+                sessionDiscoveryBaselines.add(sessionId);
             }
         } catch {
             // Missing or unreadable project directories are handled by later discovery attempts.
@@ -388,7 +392,32 @@ export async function createSessionScanner(opts: {
         return parsed ? normalizeClaudeToolUseNamesInRawJsonLines(parsed) : null;
     }
 
-    function processSessionMessage(file: RawJSONLines): boolean {
+    function isReplaySuppressedRow(file: RawJSONLines, suppressBeforeMs: number | null | undefined): boolean {
+        if (typeof suppressBeforeMs !== 'number') return false;
+        const rawTimestamp = (file as Record<string, unknown>).timestamp;
+        const timestampMs = typeof rawTimestamp === 'string' ? Date.parse(rawTimestamp) : Number.NaN;
+        // Fail closed: a snapshot row without a parseable timestamp cannot be proven newer than
+        // the committed baseline coverage, so it must not replay-as-new.
+        return !Number.isFinite(timestampMs) || timestampMs < suppressBeforeMs;
+    }
+
+    function isForeignBoundSessionRow(file: RawJSONLines): boolean {
+        if (!opts.bindToFirstSession || !boundSessionId) return false;
+        const rawSessionId = (file as Record<string, unknown>).sessionId;
+        const rowSessionId = typeof rawSessionId === 'string' ? rawSessionId.trim() : '';
+        return rowSessionId.length > 0 && rowSessionId !== boundSessionId;
+    }
+
+    function processSessionMessage(
+        file: RawJSONLines,
+        replayOpts?: Readonly<{ suppressBeforeMs?: number | null }>,
+    ): boolean {
+        // Hard per-row provider-session filter (incident pid-14419): once this scanner is bound
+        // to a Claude session, rows belonging to ANY other session must be structurally impossible
+        // to import or observe (no transcript emit, no sidechain/team-inbox collection).
+        if (isForeignBoundSessionRow(file)) {
+            return false;
+        }
         try {
             observeTaskToolResultMapping(file);
             subagentCollector.observe(file as any);
@@ -405,6 +434,18 @@ export async function createSessionScanner(opts: {
             return false;
         }
         if (isClaudeInternalTranscriptMessage(file)) {
+            return false;
+        }
+        if (isReplaySuppressedRow(file, replayOpts?.suppressBeforeMs)) {
+            return false;
+        }
+        // Resume-replay leak (2026-06-11): slash-command XML rows (`<command-name>…` /
+        // `<local-command-stdout>…`) that reach a one-time snapshot replay UNCOMMITTED were
+        // suppressed by a previous runner whose registration-based echo suppressor does not
+        // survive a relaunch. They are control bookkeeping, never conversation — drop them
+        // deterministically. Live follower rows are never shape-filtered (a genuine user-typed
+        // TUI command may surface; controller echoes are handled by the live suppressor).
+        if (replayOpts && readClaudeControlCommandRowShape(file) !== null) {
             return false;
         }
         logger.debug(`[SESSION_SCANNER] Sending new message: type=${file.type}, uuid=${file.type === 'summary' ? file.leafUuid : file.uuid}`);
@@ -451,7 +492,9 @@ export async function createSessionScanner(opts: {
         let skipped = 0;
         let sent = 0;
         for (const file of sessionMessages) {
-            if (processSessionMessage(normalizeClaudeToolUseNamesInRawJsonLines(file))) sent += 1;
+            if (processSessionMessage(normalizeClaudeToolUseNamesInRawJsonLines(file), {
+                suppressBeforeMs: opts.replaySuppressRowsBeforeMs ?? null,
+            })) sent += 1;
             else skipped += 1;
         }
         if (sessionMessages.length > 0) {

@@ -34,6 +34,9 @@ if (process.argv.includes("models")) {
     "gpt-5.5 - GPT-5.5",
     "gpt-5.5-low - GPT-5.5 Low",
     "gpt-5.5-high-fast - GPT-5.5 High Fast",
+    "claude-fable-5 - Fable 5",
+    "claude-fable-5-thinking-low - Fable 5 Thinking Low",
+    "claude-fable-5-thinking-max-fast - Fable 5 Thinking Max Fast",
     "claude-opus-4-8 - Opus 4.8",
     "claude-opus-4-8-thinking-low - Opus 4.8 Thinking Low",
     "claude-opus-4-8-thinking-max-fast - Opus 4.8 Thinking Max Fast",
@@ -71,6 +74,7 @@ class FakeCursorAgent {
             { value: "default", name: "Use CLI settings" },
             { value: "composer-2.5", name: "Composer 2.5" },
             { value: "gpt-5.5", name: "GPT-5.5" },
+            { value: "claude-fable-5", name: "Fable 5" },
             { value: "claude-opus-4-8", name: "Opus 4.8" },
             { value: "gemini-3.1-pro", name: "Gemini 3.1 Pro" }
           ]
@@ -195,6 +199,41 @@ describe('cursorPreflightSessionControlsProbeAdapter', () => {
         },
       ]);
       expect(models.find((model) => model.id === 'claude-opus-4-8')?.modelOptions).toEqual([
+        {
+          id: 'reasoning_effort',
+          name: 'Reasoning effort',
+          category: 'model_config',
+          type: 'select',
+          currentValue: 'low',
+          options: [
+            { value: 'low', name: 'Low' },
+            { value: 'max', name: 'Max' },
+          ],
+        },
+        {
+          id: 'thinking',
+          name: 'Thinking',
+          category: 'model_config',
+          type: 'boolean',
+          currentValue: 'false',
+          options: [
+            { value: 'false', name: 'Off' },
+            { value: 'true', name: 'On' },
+          ],
+        },
+        {
+          id: 'fast',
+          name: 'Fast',
+          category: 'model_config',
+          type: 'select',
+          currentValue: 'false',
+          options: [
+            { value: 'false', name: 'Off' },
+            { value: 'true', name: 'Fast' },
+          ],
+        },
+      ]);
+      expect(models.find((model) => model.id === 'claude-fable-5')?.modelOptions).toEqual([
         {
           id: 'reasoning_effort',
           name: 'Reasoning effort',

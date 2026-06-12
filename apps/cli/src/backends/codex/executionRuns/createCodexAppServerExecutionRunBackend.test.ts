@@ -42,6 +42,35 @@ describe('createCodexAppServerExecutionRunBackend', () => {
     expect(params?.processEnv?.PATH).toBe('/tmp/isolated-bin:/usr/bin');
   });
 
+  it('loads existing execution-run sessions without importing provider history', async () => {
+    const startOrLoad = vi.fn(async () => undefined);
+    createCodexAppServerRuntimeMock.mockReturnValueOnce({
+      startOrLoad,
+      getSessionId: () => 'thread_existing',
+      sendPrompt: async () => undefined,
+      startReview: async () => undefined,
+      compactContext: async () => undefined,
+      cancel: async () => undefined,
+      reset: async () => undefined,
+    });
+
+    const { createCodexAppServerExecutionRunBackend } = await import('./createCodexAppServerExecutionRunBackend');
+    const backend = createCodexAppServerExecutionRunBackend({
+      cwd: '/tmp/happier-worktree',
+      env: {},
+      permissionMode: 'read-only' as any,
+      permissionHandler: null,
+    });
+
+    if (!backend.loadSession) throw new Error('Expected Codex app-server execution backend to support loadSession');
+    await expect(backend.loadSession('thread_existing' as any)).resolves.toEqual({ sessionId: 'thread_existing' });
+
+    expect(startOrLoad).toHaveBeenCalledWith({
+      existingSessionId: 'thread_existing',
+      importHistory: false,
+    });
+  });
+
   it('routes /compact to the app-server compaction RPC instead of a normal prompt', async () => {
     const sendPrompt = vi.fn(async () => undefined);
     const compactContext = vi.fn(async () => undefined);

@@ -230,7 +230,7 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
       return sessionId;
     }
     await runtime.startOrLoad({
-      ...(requestedSessionId ? { existingSessionId: requestedSessionId } : {}),
+      ...(requestedSessionId ? { existingSessionId: requestedSessionId, importHistory: false } : {}),
     });
     const startedSessionId = runtime.getSessionId();
     if (!startedSessionId) {

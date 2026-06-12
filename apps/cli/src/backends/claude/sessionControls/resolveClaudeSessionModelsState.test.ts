@@ -33,6 +33,26 @@ describe('resolveClaudeSessionModelsState', () => {
         currentModelId: 'claude-sonnet-4-6',
         availableModels: expect.arrayContaining([
           expect.objectContaining({
+            id: 'claude-fable-5',
+            name: expect.any(String),
+            contextWindowTokens: 1_000_000,
+            modelOptions: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'reasoning_effort',
+                name: 'Thinking',
+                type: 'select',
+                currentValue: 'high',
+                options: expect.arrayContaining([
+                  expect.objectContaining({ value: 'low', name: 'Low' }),
+                  expect.objectContaining({ value: 'medium', name: 'Medium' }),
+                  expect.objectContaining({ value: 'high', name: 'High' }),
+                  expect.objectContaining({ value: 'xhigh', name: 'XHigh' }),
+                  expect.objectContaining({ value: 'max', name: 'Max' }),
+                ]),
+              }),
+            ]),
+          }),
+          expect.objectContaining({
             id: 'claude-opus-4-8',
             name: expect.any(String),
             contextWindowTokens: 1_000_000,

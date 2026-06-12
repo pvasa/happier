@@ -1,7 +1,7 @@
 import type { Dirent } from 'node:fs';
 import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import type { DirectSessionsSource } from '@happier-dev/protocol';
 import { resolveConfiguredCodexHome } from '../utils/resolveConfiguredCodexHome';
@@ -45,6 +45,24 @@ function normalizeHomePath(raw: string): string {
   return resolve(raw.trim());
 }
 
+function isPathWithin(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  if (rel.length === 0) return true;
+  return !rel.startsWith('..') && !rel.startsWith(sep) && !rel.includes(`..${sep}`);
+}
+
+function resolveMaterializedRootsForActiveServerDir(activeServerDir: string): string[] {
+  const normalizedActiveServerDir = resolve(activeServerDir);
+  const roots = [
+    join(normalizedActiveServerDir, 'daemon', 'connected-services', 'materialized'),
+  ];
+  const serversDir = dirname(normalizedActiveServerDir);
+  if (basename(serversDir) === 'servers') {
+    roots.unshift(join(dirname(serversDir), 'daemon', 'connected-services', 'materialized'));
+  }
+  return Array.from(new Set(roots));
+}
+
 function buildConnectedServiceCodexHome(activeServerDir: string, connectedServiceId: string, connectedServiceProfileId: string): string {
   return join(activeServerDir, 'daemon', 'connected-services', 'homes', connectedServiceId, connectedServiceProfileId, 'codex', 'codex-home');
 }
@@ -70,6 +88,39 @@ async function resolveVerifiedCodexHomePath(expectedPath: string, exactHomePath:
   } catch {
     return null;
   }
+}
+
+async function resolveVerifiedMaterializedCodexHomePathInRoot(materializedRootInput: string, exactHomePath: string): Promise<string | null> {
+  const materializedRoot = resolve(materializedRootInput);
+  if (!isPathWithin(exactHomePath, materializedRoot)) return null;
+  const relativeParts = relative(materializedRoot, exactHomePath).split(/[/\\]+/).filter(Boolean);
+  if (relativeParts.length !== 3 || relativeParts[1] !== 'codex' || relativeParts[2] !== 'codex-home') {
+    return null;
+  }
+  try {
+    const linkStats = await lstat(exactHomePath);
+    if (linkStats.isSymbolicLink()) {
+      return null;
+    }
+    const materializedRootReal = await realpath(materializedRoot);
+    const real = await realpath(exactHomePath);
+    if (!isPathWithin(real, materializedRootReal)) {
+      return null;
+    }
+    const stats = await stat(real);
+    return stats.isDirectory() ? exactHomePath : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveVerifiedMaterializedCodexHomePath(activeServerDir: string, exactHomePath: string | null): Promise<string | null> {
+  if (!exactHomePath) return null;
+  for (const materializedRoot of resolveMaterializedRootsForActiveServerDir(activeServerDir)) {
+    const verified = await resolveVerifiedMaterializedCodexHomePathInRoot(materializedRoot, exactHomePath);
+    if (verified) return verified;
+  }
+  return null;
 }
 
 export function inferCodexDirectSessionsSourceFromHome(params: Readonly<{
@@ -149,6 +200,19 @@ export async function resolveCodexHomeEntriesForDirectSessionsSource(params: Rea
     : null;
 
   if (connectedServiceProfileId) {
+    const materializedHome = await resolveVerifiedMaterializedCodexHomePath(params.activeServerDir, exactHomePath);
+    if (materializedHome) {
+      return [{
+        codexHome: materializedHome,
+        source: {
+          kind: 'codexHome',
+          home: 'connectedService',
+          connectedServiceId,
+          connectedServiceProfileId,
+          homePath: materializedHome,
+        },
+      }];
+    }
     const codexHome = buildConnectedServiceCodexHome(params.activeServerDir, connectedServiceId, connectedServiceProfileId);
     const verifiedHome = await resolveVerifiedCodexHomePath(codexHome, exactHomePath);
     if (!verifiedHome) {
@@ -167,6 +231,19 @@ export async function resolveCodexHomeEntriesForDirectSessionsSource(params: Rea
   }
 
   if (connectedServiceGroupId) {
+    const materializedHome = await resolveVerifiedMaterializedCodexHomePath(params.activeServerDir, exactHomePath);
+    if (materializedHome) {
+      return [{
+        codexHome: materializedHome,
+        source: {
+          kind: 'codexHome',
+          home: 'connectedService',
+          connectedServiceId,
+          connectedServiceGroupId,
+          homePath: materializedHome,
+        },
+      }];
+    }
     const codexHome = buildConnectedServiceGroupCodexHome(params.activeServerDir, connectedServiceId, connectedServiceGroupId);
     const verifiedHome = await resolveVerifiedCodexHomePath(codexHome, exactHomePath);
     if (!verifiedHome) {

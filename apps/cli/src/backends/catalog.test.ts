@@ -203,9 +203,7 @@ describe('AGENTS', () => {
       providerId: 'claude',
       serviceIds: expect.arrayContaining(['claude-subscription']),
       spawnPreflightOauthRefresh: { mode: 'force' },
-      refreshTokenRuntimeHandling: 'daemon_only',
       refreshedCredentialApplication: { mode: 'restart_required' },
-      runtimeAuthFailureClassifier: { available: true },
     });
     await expect(resolveDescriptor('pi')).resolves.toMatchObject({
       providerId: 'pi',
@@ -219,17 +217,15 @@ describe('AGENTS', () => {
       providerId: 'gemini',
       serviceIds: ['gemini'],
       spawnPreflightOauthRefresh: { mode: 'expiry_window' },
-      refreshTokenRuntimeHandling: 'daemon_only',
       refreshedCredentialApplication: { mode: 'restart_required' },
-      runtimeAuthFailureClassifier: { available: true },
+      predictiveSoftSwitch: { mode: 'unsupported' },
     });
     await expect(resolveDescriptor('kilo')).resolves.toEqual({
       providerId: 'kilo',
       serviceIds: [],
       spawnPreflightOauthRefresh: { mode: 'expiry_window' },
-      refreshTokenRuntimeHandling: 'not_applicable',
       refreshedCredentialApplication: { mode: 'no_restart_required' },
-      runtimeAuthFailureClassifier: { available: false },
+      predictiveSoftSwitch: { mode: 'unsupported' },
     });
   });
 
@@ -833,8 +829,10 @@ describe('AGENTS', () => {
       toBindings: { v: 1, bindingsByServiceId: { openai: { source: 'connected', selection: 'profile', profileId: 'same' } } },
       ...exactContinuityContext,
     })).resolves.toEqual({
-      mode: 'unsupported',
-      reason: 'provider_session_state_unavailable_for_resume',
+      // Identical re-selection routes through the same restart/rematerialize action as changed
+      // selections: OpenCode session state is global, not home-scoped (RD-OPI-4).
+      mode: 'restart_same_home',
+      reason: 'opencode_restart_rematerialize_required',
     });
   });
 

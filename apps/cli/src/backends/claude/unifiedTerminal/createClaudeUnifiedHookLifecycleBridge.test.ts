@@ -572,6 +572,161 @@ describe('createClaudeUnifiedHookLifecycleBridge', () => {
     }
   });
 
+  it('ignores sidechain-attributed terminal hooks so a subagent StopFailure cannot terminalize the turn', async () => {
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const onThinkingChange = vi.fn();
+    const onPromptTurnTerminal = vi.fn();
+    const onSessionEnd = vi.fn();
+    const onReady = vi.fn();
+    const bridge = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      arbiter: {
+        observeLifecycle: vi.fn(),
+        confirmPromptAcceptedByProvider: vi.fn().mockResolvedValue(false),
+        drainWhenSafe: vi.fn().mockResolvedValue(undefined),
+      },
+      completionQuiescenceMs: 0,
+      onThinkingChange,
+      onPromptTurnTerminal,
+      onSessionEnd,
+      onReady,
+    });
+
+    try {
+      bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+
+      hook({ hook_event_name: 'UserPromptSubmit', session_id: 'claude-session-id' });
+      await vi.waitFor(() => {
+        expect(onThinkingChange).toHaveBeenCalledWith(true);
+      });
+
+      // Live incident 2026-06-12 (session cmq8171…): five subagent auth StopFailures
+      // marked the primary turn failed while the main agent kept working.
+      hook({
+        hook_event_name: 'StopFailure',
+        session_id: 'claude-session-id',
+        agent_id: 'agent_sidechain_1',
+        agent_type: 'general-purpose',
+        error: 'authentication_failed',
+      } as any);
+      hook({
+        hook_event_name: 'SessionEnd',
+        session_id: 'claude-session-id',
+        agent_id: 'agent_sidechain_1',
+        reason: 'other',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(onPromptTurnTerminal).not.toHaveBeenCalled();
+      expect(onSessionEnd).not.toHaveBeenCalled();
+      expect(onThinkingChange).not.toHaveBeenCalledWith(false);
+
+      // The main-agent Stop still completes the turn normally afterwards.
+      hook({ hook_event_name: 'Stop', session_id: 'claude-session-id', background_tasks: [] });
+      await vi.waitFor(() => {
+        expect(onReady).toHaveBeenCalledTimes(1);
+      });
+      expect(onPromptTurnTerminal).not.toHaveBeenCalled();
+    } finally {
+      bridge.dispose();
+    }
+  });
+
+  it('does not release main-agent permission blocks on sidechain terminal hooks', async () => {
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const observeLifecycle = vi.fn();
+    const bridge = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      arbiter: {
+        observeLifecycle,
+        confirmPromptAcceptedByProvider: vi.fn().mockResolvedValue(false),
+        drainWhenSafe: vi.fn().mockResolvedValue(undefined),
+      },
+      completionQuiescenceMs: 0,
+    });
+
+    try {
+      bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+
+      hook({ hook_event_name: 'PermissionRequest', session_id: 'claude-session-id', tool_use_id: 'toolu_main' });
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'permission', blocked: true });
+
+      hook({
+        hook_event_name: 'StopFailure',
+        session_id: 'claude-session-id',
+        agent_id: 'agent_sidechain_1',
+        error: 'authentication_failed',
+      } as any);
+      expect(observeLifecycle).not.toHaveBeenCalledWith({ type: 'permission', blocked: false });
+
+      hook({ hook_event_name: 'PostToolUse', session_id: 'claude-session-id', tool_use_id: 'toolu_main' });
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'permission', blocked: false });
+    } finally {
+      bridge.dispose();
+    }
+  });
+
+  it('ignores sidechain UserPromptSubmit for prompt acceptance, prompt start, and config metadata', async () => {
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const confirmPromptAcceptedByProvider = vi.fn().mockResolvedValue(true);
+    const onProviderPromptStarted = vi.fn();
+    const onTrustedProviderProgress = vi.fn();
+    const onProviderPromptSubmitMetadata = vi.fn();
+    const bridge = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      arbiter: {
+        observeLifecycle: vi.fn(),
+        confirmPromptAcceptedByProvider,
+        drainWhenSafe: vi.fn().mockResolvedValue(undefined),
+      },
+      completionQuiescenceMs: 0,
+      onProviderPromptStarted,
+      onTrustedProviderProgress,
+      onProviderPromptSubmitMetadata,
+    });
+
+    try {
+      bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+
+      hook({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'claude-session-id',
+        agent_id: 'agent_sidechain_1',
+        permission_mode: 'auto',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(confirmPromptAcceptedByProvider).not.toHaveBeenCalled();
+      expect(onProviderPromptStarted).not.toHaveBeenCalled();
+      expect(onTrustedProviderProgress).not.toHaveBeenCalled();
+      expect(onProviderPromptSubmitMetadata).not.toHaveBeenCalled();
+    } finally {
+      bridge.dispose();
+    }
+  });
+
   it('surfaces transcript-only provider API errors as terminal prompt failures', async () => {
     let subscribedHook: ((data: SessionHookData) => void) | undefined;
     const observeLifecycle = vi.fn();

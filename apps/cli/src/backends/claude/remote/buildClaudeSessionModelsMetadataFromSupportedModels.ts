@@ -122,10 +122,54 @@ function resolveCurrentModelId(metadata: Metadata | null | undefined): string {
     return 'default';
 }
 
+/**
+ * Direct facts about the CURRENT model (e.g. from Claude's statusline payload, which carries
+ * the authoritative `context_window.context_window_size`). When provided, the matching
+ * `availableModels` entry is upserted so window resolution can read it ahead of catalog guesses.
+ */
+export type ClaudeCurrentModelFacts = Readonly<{
+    name?: string | undefined;
+    contextWindowTokens?: number | undefined;
+}>;
+
+function normalizePositiveTokens(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : null;
+}
+
+function findModelEntry(state: SessionModelsState | null, modelId: string): SessionModelEntry | null {
+    if (!state || !Array.isArray(state.availableModels)) return null;
+    return state.availableModels.find((model) => model.id === modelId) ?? null;
+}
+
+function upsertCurrentModelEntry(params: Readonly<{
+    availableModels: SessionModelsState['availableModels'];
+    currentModelId: string;
+    name: string;
+    contextWindowTokens: number;
+}>): SessionModelsState['availableModels'] {
+    const existing = params.availableModels.find((model) => model.id === params.currentModelId);
+    if (existing) {
+        return params.availableModels.map((model) => (
+            model.id === params.currentModelId
+                ? { ...model, contextWindowTokens: params.contextWindowTokens }
+                : model
+        ));
+    }
+    return [
+        ...params.availableModels,
+        {
+            id: params.currentModelId,
+            name: params.name,
+            contextWindowTokens: params.contextWindowTokens,
+        },
+    ];
+}
+
 export function buildClaudeSessionModelsMetadataWithCurrentModelId(params: Readonly<{
     currentModelId: unknown;
     metadata: Metadata | null | undefined;
     nowMs?: () => number;
+    currentModel?: ClaudeCurrentModelFacts | undefined;
 }>): Pick<Metadata, 'sessionModelsV1' | 'acpSessionModelsV1'> | null {
     const currentModelId = normalizeNonEmptyString(params.currentModelId);
     if (!currentModelId) return null;
@@ -137,45 +181,52 @@ export function buildClaudeSessionModelsMetadataWithCurrentModelId(params: Reado
         ? params.metadata.acpSessionModelsV1
         : null;
 
+    const contextWindowTokens = normalizePositiveTokens(params.currentModel?.contextWindowTokens);
+    const windowAlreadyReflected = contextWindowTokens === null || (
+        findModelEntry(existingSessionState, currentModelId)?.contextWindowTokens === contextWindowTokens
+        && findModelEntry(existingAcpState, currentModelId)?.contextWindowTokens === contextWindowTokens
+    );
+
     if (
         existingSessionState?.currentModelId === currentModelId &&
-        existingAcpState?.currentModelId === currentModelId
+        existingAcpState?.currentModelId === currentModelId &&
+        windowAlreadyReflected
     ) {
         return null;
     }
 
     const updatedAt = params.nowMs ? params.nowMs() : Date.now();
+    const currentModelName = normalizeNonEmptyString(params.currentModel?.name) || currentModelId;
 
-    const sessionModelsV1: SessionModelsState = existingSessionState
-        ? {
-            ...existingSessionState,
-            currentModelId,
-            updatedAt,
-        }
-        : {
-            v: 1,
-            provider: 'claude',
-            updatedAt,
-            currentModelId,
-            availableModels: [],
+    const buildState = (existing: SessionModelsState | null): SessionModelsState => {
+        const base: SessionModelsState = existing
+            ? {
+                ...existing,
+                currentModelId,
+                updatedAt,
+            }
+            : {
+                v: 1,
+                provider: 'claude',
+                updatedAt,
+                currentModelId,
+                availableModels: [],
+            };
+        if (contextWindowTokens === null) return base;
+        return {
+            ...base,
+            availableModels: upsertCurrentModelEntry({
+                availableModels: Array.isArray(base.availableModels) ? base.availableModels : [],
+                currentModelId,
+                name: currentModelName,
+                contextWindowTokens,
+            }),
         };
-    const acpSessionModelsV1: SessionModelsState = existingAcpState
-        ? {
-            ...existingAcpState,
-            currentModelId,
-            updatedAt,
-        }
-        : {
-            v: 1,
-            provider: 'claude',
-            updatedAt,
-            currentModelId,
-            availableModels: [],
-        };
+    };
 
     return {
-        sessionModelsV1,
-        acpSessionModelsV1,
+        sessionModelsV1: buildState(existingSessionState),
+        acpSessionModelsV1: buildState(existingAcpState),
     };
 }
 

@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKAssistantMessage } from '../sdk';
 import type { EnhancedMode } from '../loop';
 import { createPermissionHandlerSessionStub } from './permissionHandler.testkit';
+import { ClaudePermissionRpcRouter } from './permissionRpcRouter';
+import type { PermissionRpcPayload } from './permissionRpc';
 
 vi.mock('@/lib', () => ({
   logger: {
@@ -84,6 +86,77 @@ describe('permission RPC routing', () => {
     ]);
 
     expect(result).toEqual({ behavior: 'allow', updatedInput: { command: 'npm --version' } });
+  });
+
+  it('returns an unhandled result for stale permission ids', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('s1');
+
+    const { ClaudeLocalPermissionBridge } = await import('../localPermissions/localPermissionBridge');
+    const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: 5_000 });
+    bridge.activate();
+
+    const permissionRpc = client.rpcHandlerManager.getHandler('permission');
+    expect(permissionRpc).toBeDefined();
+
+    await expect(permissionRpc?.({ id: 'toolu_missing_permission_1', approved: true })).resolves.toEqual({
+      ok: false,
+      errorCode: 'permission_request_not_found',
+      errorMessage: 'permission_request_not_found',
+      requestId: 'toolu_missing_permission_1',
+    });
+  });
+
+  it('returns an unhandled result for stale user-action ids', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('s1');
+
+    const { ClaudeLocalPermissionBridge } = await import('../localPermissions/localPermissionBridge');
+    const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: 5_000 });
+    bridge.activate();
+
+    const permissionRpc = client.rpcHandlerManager.getHandler('permission');
+    expect(permissionRpc).toBeDefined();
+
+    await expect(permissionRpc?.({ id: 'toolu_missing_ask_1', approved: true, answers: { Continue: 'Yes' } })).resolves.toEqual({
+      ok: false,
+      errorCode: 'permission_request_not_found',
+      errorMessage: 'permission_request_not_found',
+      requestId: 'toolu_missing_ask_1',
+    });
+  });
+
+  it('maps an expired consumer outcome to a typed permission_request_expired result', async () => {
+    let registered: ((payload: PermissionRpcPayload) => unknown) | null = null;
+    const router = new ClaudePermissionRpcRouter({
+      registerHandler: (_method, handler) => {
+        registered = handler;
+      },
+    });
+    router.registerConsumer({
+      name: 'expiring',
+      tryHandlePermissionRpc: () => ({ status: 'expired' }),
+    });
+
+    expect(registered).not.toBeNull();
+    await expect(registered!({ id: 'toolu_expired_1', approved: true })).resolves.toEqual({
+      ok: false,
+      errorCode: 'permission_request_expired',
+      errorMessage: 'permission_request_expired',
+      requestId: 'toolu_expired_1',
+    });
+  });
+
+  it('treats a handled object outcome like a boolean true and continues past unhandled outcomes', async () => {
+    let registered: ((payload: PermissionRpcPayload) => unknown) | null = null;
+    const router = new ClaudePermissionRpcRouter({
+      registerHandler: (_method, handler) => {
+        registered = handler;
+      },
+    });
+    router.registerConsumer({ name: 'skip', tryHandlePermissionRpc: () => ({ status: 'unhandled' }) });
+    router.registerConsumer({ name: 'take', tryHandlePermissionRpc: () => ({ status: 'handled' }) });
+
+    expect(registered).not.toBeNull();
+    await expect(registered!({ id: 'toolu_handled_1', approved: true })).resolves.toEqual({ ok: true });
   });
 
   it('does not let remote permission cleanup cancel local-bridge requests', async () => {

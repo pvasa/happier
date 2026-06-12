@@ -36,6 +36,100 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
     });
   });
 
+  it('reports restart recovery when no durable auth-store persistence hook is available for hot apply', () => {
+    const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
+
+    expect(adapter.canHotApply({
+      target: { agentId: 'codex' },
+      selection: {
+        record: buildConnectedServiceCredentialRecord({
+          now: 1_000,
+          serviceId: 'openai-codex',
+          profileId: 'work',
+          kind: 'oauth',
+          expiresAt: 2_000,
+          oauth: {
+            accessToken: 'access',
+            refreshToken: 'refresh',
+            idToken: 'id',
+            scope: null,
+            tokenType: null,
+            providerAccountId: 'acct',
+            providerEmail: 'codex-user@example.test',
+          },
+        }),
+        invalidateTransports: async () => {},
+      },
+    })).toEqual({
+      supported: false,
+      reason: 'auth_store_persistence_unavailable',
+      recovery: 'restart_resume',
+    });
+  });
+
+  it('supports hot apply when transport invalidation and auth-store persistence hooks are present', () => {
+    const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
+
+    expect(adapter.canHotApply({
+      target: { agentId: 'codex' },
+      selection: {
+        record: buildConnectedServiceCredentialRecord({
+          now: 1_000,
+          serviceId: 'openai-codex',
+          profileId: 'work',
+          kind: 'oauth',
+          expiresAt: 2_000,
+          oauth: {
+            accessToken: 'access',
+            refreshToken: 'refresh',
+            idToken: 'id',
+            scope: null,
+            tokenType: null,
+            providerAccountId: 'acct',
+            providerEmail: 'codex-user@example.test',
+          },
+        }),
+        invalidateTransports: async () => {},
+        persistAuthStore: async () => {},
+      },
+    })).toEqual({ supported: true });
+  });
+
+  it('threads the auth-store persistence hook through hot apply', async () => {
+    const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
+    const persistAuthStore = vi.fn(async () => {});
+    const invalidateTransports = vi.fn(async () => {});
+    const client = { request: vi.fn(async () => ({ ok: true })) };
+
+    await expect(adapter.hotApply({
+      target: { agentId: 'codex' },
+      selection: {
+        record: buildConnectedServiceCredentialRecord({
+          now: 1_000,
+          serviceId: 'openai-codex',
+          profileId: 'work',
+          kind: 'oauth',
+          expiresAt: 2_000,
+          oauth: {
+            accessToken: 'access',
+            refreshToken: 'refresh',
+            idToken: 'id',
+            scope: null,
+            tokenType: null,
+            providerAccountId: 'acct',
+            providerEmail: 'codex-user@example.test',
+          },
+        }),
+        client,
+        invalidateTransports,
+        persistAuthStore,
+      },
+    })).resolves.toEqual({ applied: true, via: 'hot' });
+
+    expect(persistAuthStore).toHaveBeenCalledOnce();
+    expect(invalidateTransports).toHaveBeenCalledOnce();
+  });
+
   it('reports restart recovery when hot apply has no active app-server client', async () => {
     const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
 

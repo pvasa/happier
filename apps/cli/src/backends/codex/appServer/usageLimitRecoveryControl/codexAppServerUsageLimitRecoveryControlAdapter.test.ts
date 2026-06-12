@@ -152,6 +152,63 @@ describe('codexAppServerUsageLimitRecoveryControlAdapter', () => {
     });
   });
 
+  it('preserves group identity when the latest failed usage-limit issue has no active profile id', async () => {
+    const runWithControlClient: RunWithControlClient = async (params) => ({
+      ok: true,
+      value: await params.run(createClient(async () => ({
+        primary: { usedPercent: 100 },
+      }))),
+    });
+    const adapter = createCodexAppServerUsageLimitRecoveryControlAdapter({ runWithControlClient });
+    const metadata = {
+      machineId: 'machine-local',
+      agentRuntimeDescriptorV1: {
+        v: 1,
+        providerId: 'codex',
+        provider: { backendMode: 'appServer', vendorSessionId: 'thread-1' },
+      },
+    };
+
+    await expect(adapter.checkNow?.(createParams(metadata, {
+      latestTurnStatus: 'failed',
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        provider: 'codex',
+        providerTurnId: 'turn-1',
+        occurredAt: 1_700_000_000_000,
+        usageLimit: {
+          v: 1,
+          resetAtMs: null,
+          retryAfterMs: 120_000,
+          quotaScope: 'account',
+          recoverability: 'wait',
+          connectedService: {
+            serviceId: 'openai-codex',
+            groupId: 'codex-main',
+            profileId: null,
+          },
+        },
+      },
+    }))).resolves.toMatchObject({
+      ok: true,
+      status: 'waiting',
+      metadata: {
+        sessionUsageLimitRecoveryV1: {
+          selectedAuth: {
+            kind: 'group',
+            serviceId: 'openai-codex',
+            groupId: 'codex-main',
+            profileId: null,
+          },
+        },
+      },
+    });
+  });
+
   it('keeps waiting and records the reset time when Codex still reports exhaustion', async () => {
     const runWithControlClient: RunWithControlClient = async (params) => ({
       ok: true,
@@ -223,6 +280,7 @@ describe('codexAppServerUsageLimitRecoveryControlAdapter', () => {
       attemptCount: 1,
       maxAttempts: 1,
       lastProbeError: null,
+      resumePromptMode: 'standard',
       selectedAuth: { kind: 'native', serviceId: 'openai-codex' },
     };
     const adapter = createCodexAppServerUsageLimitRecoveryControlAdapter({ runWithControlClient });
