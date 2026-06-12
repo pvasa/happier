@@ -27,4 +27,42 @@ describe('connectedServiceMaterializationIdentityV1', () => {
     });
     expect(schema?.safeParse({ v: 1, id: '../provider-home', createdAtMs: 123 }).success).toBe(false);
   });
+
+  it('accepts the dev-tree identity timestamp shape (createdAt) and normalizes it to createdAtMs', () => {
+    const parsed = protocol.ConnectedServiceMaterializationIdentityV1Schema.safeParse({
+      v: 1,
+      id: 'csm_dev_shape',
+      createdAt: 456,
+    });
+    expect(parsed).toMatchObject({
+      success: true,
+      data: {
+        v: 1,
+        id: 'csm_dev_shape',
+        createdAtMs: 456,
+      },
+    });
+
+    const fromMetadata = protocol.readConnectedServiceMaterializationIdentityV1FromMetadata({
+      connectedServiceMaterializationIdentityV1: { v: 1, id: 'csm_dev_shape', createdAt: 456 },
+    });
+    expect(fromMetadata).toMatchObject({ id: 'csm_dev_shape', createdAtMs: 456 });
+  });
+
+  it('prefers the canonical createdAtMs when both timestamp shapes are present', () => {
+    const parsed = protocol.ConnectedServiceMaterializationIdentityV1Schema.safeParse({
+      v: 1,
+      id: 'csm_both_shapes',
+      createdAtMs: 123,
+      createdAt: 456,
+    });
+    expect(parsed).toMatchObject({
+      success: true,
+      data: {
+        v: 1,
+        id: 'csm_both_shapes',
+        createdAtMs: 123,
+      },
+    });
+  });
 });

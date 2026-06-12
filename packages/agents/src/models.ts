@@ -1,9 +1,14 @@
 import type { AgentId } from './types.js';
 import {
   formatClaudeEffortLevelLabel,
+  isClaudeUltracodeSupportedModelId,
   resolveClaudeDefaultEffortLevelForModelId,
   resolveClaudeEffortLevelsForModelId,
 } from './providers/claude/effort.js';
+import {
+  isClaude1mContextOptInModelId,
+  toClaude1mModelId,
+} from './providers/claude/contextWindow.js';
 
 export type AgentModelNonAcpApplyScope = 'spawn_only' | 'next_prompt';
 export type AgentModelOptionValueId = string;
@@ -24,6 +29,14 @@ export type AgentModelDescriptor = Readonly<{
   name: string;
   description?: string;
   contextWindowTokens?: number;
+  /**
+   * Provider-declared extended-context variant id (e.g. `claude-sonnet-4-6[1m]`).
+   *
+   * Present only when the larger context window is genuinely OPT-IN for this model.
+   * UIs surface it as a "Context" toggle that switches the effective model id between
+   * `id` and this variant through the regular model-override pipeline.
+   */
+  extendedContextModelId?: string;
   modelOptions?: readonly AgentModelOption[];
 }>;
 
@@ -84,19 +97,41 @@ function withClaudeEffortModelOptions(model: AgentModelDescriptor): AgentModelDe
   if (levels.length === 0 || !currentValue) return model;
 
   const options = levels.map((level) => ({ value: level, name: formatClaudeEffortLevelLabel(level) }));
-  return {
-    ...model,
-    modelOptions: [{
-      id: 'reasoning_effort',
-      name: 'Thinking',
-      type: 'select',
-      currentValue,
-      options,
-    }],
-  };
+  const modelOptions: AgentModelOption[] = [{
+    id: 'reasoning_effort',
+    name: 'Thinking',
+    type: 'select',
+    currentValue,
+    options,
+  }];
+
+  // Ultracode is a session-only Claude Code setting (forces xhigh + Dynamic Workflows),
+  // orthogonal to the effort axis — surfaced as a boolean toggle, never a 6th effort pill.
+  if (isClaudeUltracodeSupportedModelId(model.id)) {
+    modelOptions.push({
+      id: 'ultracode',
+      name: 'Ultracode',
+      description: 'Maximum reasoning with dynamic workflows (forces XHigh effort). Applies to the current session only.',
+      type: 'boolean',
+      currentValue: 'false',
+    });
+  }
+
+  return { ...model, modelOptions };
+}
+
+function withClaude1mContextVariant(model: AgentModelDescriptor): AgentModelDescriptor {
+  if (!isClaude1mContextOptInModelId(model.id)) return model;
+  return { ...model, extendedContextModelId: toClaude1mModelId(model.id) };
 }
 
 const CLAUDE_STATIC_MODELS = Object.freeze(([
+  {
+    id: 'claude-fable-5',
+    name: 'Fable 5',
+    description: 'Newest highest-capability generally available Claude model for the hardest coding and reasoning tasks.',
+    contextWindowTokens: 1_000_000,
+  },
   {
     id: 'claude-opus-4-8',
     name: 'Opus 4.8',
@@ -134,7 +169,7 @@ const CLAUDE_STATIC_MODELS = Object.freeze(([
     name: 'Sonnet 4.5',
     description: 'Prior Sonnet generation alias for compatibility with existing Claude setups.',
   },
-] satisfies readonly AgentModelDescriptor[]).map(withClaudeEffortModelOptions));
+] satisfies readonly AgentModelDescriptor[]).map(withClaudeEffortModelOptions).map(withClaude1mContextVariant));
 
 const GEMINI_STATIC_MODELS = Object.freeze([
   {

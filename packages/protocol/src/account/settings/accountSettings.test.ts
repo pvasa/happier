@@ -49,6 +49,25 @@ describe('accountSettings', () => {
     });
   });
 
+  it('accepts a custom resume prompt mode with trimmed custom text', () => {
+    const parsed = accountSettingsParse({
+      usageLimitRecoverySettingsV1: {
+        v: 1,
+        mode: 'auto_wait',
+        resumePromptMode: 'custom',
+        customResumePrompt: '  Pick up the task again.  ',
+      },
+    });
+
+    expect(parsed.usageLimitRecoverySettingsV1).toEqual({
+      v: 1,
+      mode: 'auto_wait',
+      promptMode: 'standard',
+      resumePromptMode: 'custom',
+      customResumePrompt: 'Pick up the task again.',
+    });
+  });
+
   it('falls back to asking when usage-limit recovery settings are malformed', () => {
     const parsed = accountSettingsParse({
       usageLimitRecoverySettingsV1: {

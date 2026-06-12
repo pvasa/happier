@@ -103,6 +103,15 @@ describe('feature catalog', () => {
     expect(FEATURE_CATALOG['providers.claude.unifiedTerminal']?.defaultFailMode).toBe('fail_closed');
   });
 
+  it('includes the Claude unified terminal TUI runtime-control feature gating live controls', () => {
+    expect(isFeatureId('providers.claude.unifiedTerminal.tuiRuntimeControl')).toBe(true);
+    expect(FEATURE_CATALOG['providers.claude.unifiedTerminal.tuiRuntimeControl']?.representation).toBe('client');
+    expect(FEATURE_CATALOG['providers.claude.unifiedTerminal.tuiRuntimeControl']?.dependencies).toEqual([
+      'providers.claude.unifiedTerminal',
+    ]);
+    expect(FEATURE_CATALOG['providers.claude.unifiedTerminal.tuiRuntimeControl']?.defaultFailMode).toBe('fail_closed');
+  });
+
   it('includes session handoff feature ids', () => {
     expect(isFeatureId('sessions.handoff')).toBe(true);
     expect(isFeatureId('sessions.handoff.serverRoutedTransfer')).toBe(false);

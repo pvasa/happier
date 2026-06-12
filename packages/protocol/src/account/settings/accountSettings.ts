@@ -171,7 +171,13 @@ export const UsageLimitRecoverySettingsV1Schema = z
     v: z.literal(1).default(1),
     mode: z.enum(['ask', 'auto_wait']).default('ask'),
     promptMode: z.literal('standard').default('standard'),
-    resumePromptMode: z.enum(['standard', 'off']).default('standard'),
+    resumePromptMode: z.enum(['standard', 'off', 'custom']).default('standard'),
+    /**
+     * Account-level custom resume prompt text; only meaningful when
+     * `resumePromptMode === 'custom'`. Empty/missing text fails safe to the
+     * standard prompt (never silently off).
+     */
+    customResumePrompt: z.string().trim().max(2000).optional(),
   })
   .strict()
   .catch({

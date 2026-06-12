@@ -399,6 +399,12 @@ const FEATURE_CATALOG_DEFINITION = {
     dependencies: [],
     representation: 'client',
   },
+  'providers.claude.unifiedTerminal.tuiRuntimeControl': {
+    description: 'Claude unified terminal TUI runtime-control controller (live model/effort/permission-mode controls). Falls back to restart/unsupported outcomes when disabled.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['providers.claude.unifiedTerminal'],
+    representation: 'client',
+  },
   'zen.navigation': {
     description: 'Zen navigation entry and related UX.',
     defaultFailMode: 'fail_closed',

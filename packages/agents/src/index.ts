@@ -59,6 +59,12 @@ export {
   supportsAgentTerminalPromptInjection,
 } from './runtimeInput.js';
 export {
+  isConnectedServiceAccountGroupConfigurationSupported,
+  isConnectedServiceRuntimeFallbackSupported,
+  resolveConnectedServiceRuntimeFallbackCapability,
+  supportsAgentConnectedServiceSessionAuthSwitchTransition,
+} from './connectedServices/runtimeFallbackCapability.js';
+export {
   type TerminalHostKind,
   type TerminalInjectionDuplicateRisk,
   type TerminalInjectionFailurePhase,
@@ -66,6 +72,17 @@ export {
   type TerminalInputInjectionV1,
   type TerminalPromptInput,
 } from './runtime/terminal/inputInjection.js';
+export {
+  TERMINAL_SHIFT_TAB_SEQUENCE,
+  TERMINAL_SPECIAL_KEYS,
+  type TerminalControlCapture,
+  type TerminalControlCaptureResult,
+  type TerminalControlPort,
+  type TerminalControlSendFailureReason,
+  type TerminalControlSendResult,
+  type TerminalControlUnsupportedReason,
+  type TerminalSpecialKey,
+} from './runtime/terminal/control.js';
 export { resolveAgentIdFromFlavor } from './resolveAgentIdFromFlavor.js';
 export { inferAgentIdFromSessionMetadata, resolveAgentIdFromSessionMetadata } from './resolveAgentIdFromSessionMetadata.js';
 export {

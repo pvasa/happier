@@ -3,10 +3,26 @@ export {
   formatClaudeEffortLevelLabel,
   isClaudeEffortMaxSupportedModelId,
   isClaudeEffortSupportedModelId,
+  isClaudeUltracodeSupportedModelId,
   resolveClaudeDefaultEffortLevelForModelId,
   resolveClaudeEffortLevelsForModelId,
   type ClaudeEffortLevel,
 } from './effort.js';
+
+export {
+  CLAUDE_1M_CONTEXT_WINDOW_TOKENS,
+  CLAUDE_1M_SUFFIX,
+  CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS,
+  CLAUDE_KNOWN_CONTEXT_WINDOW_TOKENS,
+  bumpClaudeContextWindowTokensForObservedUsage,
+  isClaude1mAlwaysOnModelId,
+  isClaude1mContextOptInModelId,
+  isClaude1mContextSupportedModelId,
+  isClaude1mModelId,
+  resolveClaudeContextWindowTokensForModelId,
+  stripClaude1mSuffix,
+  toClaude1mModelId,
+} from './contextWindow.js';
 
 export {
   CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,

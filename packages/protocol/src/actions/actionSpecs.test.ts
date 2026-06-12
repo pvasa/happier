@@ -255,6 +255,27 @@ describe('Action Spec Registry', () => {
       issueFingerprint: null,
     });
     expect(checkNow.inputSchema.parse({ sessionId: 's1' })).toEqual({ sessionId: 's1' });
+    expect(checkNow.inputHints?.fields.find((field) => field.path === 'provider')).toMatchObject({
+      path: 'provider',
+      widget: 'text',
+    });
+    expect(checkNow.inputHints?.fields.find((field) => field.path === 'operation')).toMatchObject({
+      path: 'operation',
+      widget: 'select',
+      options: [
+        expect.objectContaining({ value: 'check_now' }),
+        expect.objectContaining({ value: 'switch_account_now' }),
+      ],
+    });
+    expect(checkNow.inputHints?.fields.find((field) => field.path === 'resumePromptMode')).toMatchObject({
+      path: 'resumePromptMode',
+      widget: 'select',
+      options: [
+        expect.objectContaining({ value: 'standard' }),
+        expect.objectContaining({ value: 'off' }),
+        expect.objectContaining({ value: 'custom' }),
+      ],
+    });
   });
 
   it('accepts session.list filter fields in the action schema', () => {

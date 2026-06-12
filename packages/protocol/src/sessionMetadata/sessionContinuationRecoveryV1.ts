@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const SESSION_CONTINUATION_RECOVERY_METADATA_KEY = 'sessionContinuationRecoveryV1' as const;
 
-export const SessionContinuationResumePromptModeV1Schema = z.enum(['standard', 'off']);
+export const SessionContinuationResumePromptModeV1Schema = z.enum(['standard', 'off', 'custom']);
 export type SessionContinuationResumePromptModeV1 =
   z.infer<typeof SessionContinuationResumePromptModeV1Schema>;
 

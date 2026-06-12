@@ -20,6 +20,22 @@ describe('agent model config', () => {
     const claudeModels = getAgentStaticModels('claude');
     const geminiModels = getAgentStaticModels('gemini');
 
+    expect(claude.staticModels?.find((model) => model.id === 'claude-fable-5')).toMatchObject({
+      id: 'claude-fable-5',
+      name: 'Fable 5',
+      description: expect.any(String),
+      contextWindowTokens: 1_000_000,
+      modelOptions: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'reasoning_effort',
+          currentValue: 'high',
+          options: expect.arrayContaining([
+            expect.objectContaining({ value: 'xhigh' }),
+            expect.objectContaining({ value: 'max' }),
+          ]),
+        }),
+      ]),
+    });
     expect(claude.staticModels?.find((model) => model.id === 'claude-opus-4-8')).toMatchObject({
       id: 'claude-opus-4-8',
       name: 'Opus 4.8',
@@ -60,12 +76,48 @@ describe('agent model config', () => {
     expect(claude.staticModels?.map((model) => model.id)).toEqual(claude.allowedModes);
     expect(gemini.staticModels?.map((model) => model.id)).toEqual(gemini.allowedModes);
     expect(claudeModels[0]).toMatchObject({
-      id: 'claude-opus-4-8',
-      name: 'Opus 4.8',
+      id: 'claude-fable-5',
+      name: 'Fable 5',
       description: expect.any(String),
       contextWindowTokens: 1_000_000,
     });
     expect(geminiModels[0]?.name).toBe('Auto');
+  });
+
+  it('adds an Ultracode boolean model option only to xhigh-capable Claude models', () => {
+    const claudeModels = getAgentStaticModels('claude');
+    const optionIdsFor = (modelId: string): string[] =>
+      claudeModels.find((model) => model.id === modelId)?.modelOptions?.map((option) => option.id) ?? [];
+
+    for (const modelId of ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7']) {
+      expect(optionIdsFor(modelId)).toContain('ultracode');
+      const ultracode = claudeModels
+        .find((model) => model.id === modelId)?.modelOptions?.find((option) => option.id === 'ultracode');
+      expect(ultracode).toMatchObject({
+        id: 'ultracode',
+        name: 'Ultracode',
+        type: 'boolean',
+        currentValue: 'false',
+      });
+    }
+
+    for (const modelId of ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-5']) {
+      expect(optionIdsFor(modelId)).not.toContain('ultracode');
+    }
+  });
+
+  it('declares the [1m] extended-context variant only on 1M opt-in Claude models', () => {
+    const claudeModels = getAgentStaticModels('claude');
+    const variantFor = (modelId: string): string | undefined =>
+      claudeModels.find((model) => model.id === modelId)?.extendedContextModelId;
+
+    expect(variantFor('claude-sonnet-4-6')).toBe('claude-sonnet-4-6[1m]');
+    expect(variantFor('claude-opus-4-6')).toBe('claude-opus-4-6[1m]');
+    // Always-1M on the API: no opt-in toggle surfaced.
+    expect(variantFor('claude-fable-5')).toBeUndefined();
+    expect(variantFor('claude-opus-4-8')).toBeUndefined();
+    expect(variantFor('claude-opus-4-7')).toBeUndefined();
+    expect(variantFor('claude-haiku-4-5')).toBeUndefined();
   });
 
   it('ships a non-empty static model list for Codex as a robust fallback when dynamic probing fails', () => {

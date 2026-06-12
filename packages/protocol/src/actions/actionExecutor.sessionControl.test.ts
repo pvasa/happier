@@ -437,7 +437,7 @@ describe('createActionExecutor (session control)', () => {
 
     await executor.execute(
       'session.usageLimit.waitResume.enable' as any,
-      { sessionId: 's1', issueFingerprint: 'usage-limit:s1:reset', remember: true },
+      { sessionId: 's1', issueFingerprint: 'usage-limit:s1:reset', remember: true, resumePromptMode: 'off' },
       { surface: 'cli' },
     );
     await executor.execute(
@@ -448,7 +448,7 @@ describe('createActionExecutor (session control)', () => {
     await executor.execute('session.usageLimit.checkNow' as any, { sessionId: 's1', provider: ' codex ' }, { surface: 'cli' });
     const switchResult = await executor.execute(
       'session.usageLimit.checkNow' as any,
-      { sessionId: 's1', provider: ' codex ', operation: 'switch_account_now' },
+      { sessionId: 's1', provider: ' codex ', operation: 'switch_account_now', resumePromptMode: 'off' },
       { surface: 'cli' },
     );
 
@@ -456,6 +456,7 @@ describe('createActionExecutor (session control)', () => {
       sessionId: 's1',
       issueFingerprint: 'usage-limit:s1:reset',
       remember: true,
+      resumePromptMode: 'off',
       serverId: 'server-a',
     });
     expect(sessionUsageLimitWaitResumeCancel).toHaveBeenCalledWith({
@@ -468,13 +469,42 @@ describe('createActionExecutor (session control)', () => {
       provider: 'codex',
       serverId: 'server-a',
     });
-    expect(switchResult).toEqual({ ok: true, result: { ok: true, status: 'waiting' } });
+    expect(switchResult).toEqual({
+      ok: true,
+      result: { ok: true, status: 'waiting', sessionId: 's1' },
+    });
     expect(sessionUsageLimitSwitchAccountNow).toHaveBeenCalledWith({
       sessionId: 's1',
       provider: 'codex',
+      resumePromptMode: 'off',
       serverId: 'server-a',
     });
     expect(sessionUsageLimitCheckNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes malformed usage-limit action results to typed failure payloads', async () => {
+    const sessionUsageLimitCheckNow = vi.fn(async () => ({
+      ok: true,
+      status: 'future_success_token',
+    }));
+    const executor = createExecutor({ sessionUsageLimitCheckNow });
+
+    const result = await executor.execute(
+      'session.usageLimit.checkNow' as any,
+      { sessionId: 's1' },
+      { surface: 'cli' },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        ok: false,
+        status: 'unsupported',
+        sessionId: 's1',
+        errorCode: 'unsupported_session_usage_limit_recovery_operation_result_status',
+        diagnostics: { status: 'future_success_token' },
+      },
+    });
   });
 
   it('executes session.spawn_new via deps.sessionSpawnNew (including backendTargetKey/title)', async () => {

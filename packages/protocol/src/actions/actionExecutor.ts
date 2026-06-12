@@ -22,7 +22,10 @@ import {
   SessionHandoffWorkspaceTransferSchema,
   type SessionHandoffWorkspaceTransfer,
 } from '../sessionControl/handoff/handoffSchemas.js';
-import { SessionControlErrorCodeSchema } from '../sessionControl/contract.js';
+import {
+  SessionControlErrorCodeSchema,
+  normalizeSessionUsageLimitRecoveryOperationResultV1,
+} from '../sessionControl/contract.js';
 import type { ReviewStartInput } from '../reviews/reviewStart.js';
 
 export type ActionExecuteResult =
@@ -151,6 +154,7 @@ export type ActionExecutorDeps = Readonly<{
     sessionId: string;
     issueFingerprint?: string;
     remember?: boolean;
+    resumePromptMode?: 'standard' | 'off' | 'custom';
     serverId?: string | null;
   }>) => Promise<unknown>;
   sessionUsageLimitWaitResumeCancel?: (args: Readonly<{
@@ -158,8 +162,18 @@ export type ActionExecutorDeps = Readonly<{
     issueFingerprint?: string | null;
     serverId?: string | null;
   }>) => Promise<unknown>;
-  sessionUsageLimitCheckNow?: (args: Readonly<{ sessionId: string; provider?: string; serverId?: string | null }>) => Promise<unknown>;
-  sessionUsageLimitSwitchAccountNow?: (args: Readonly<{ sessionId: string; provider?: string; serverId?: string | null }>) => Promise<unknown>;
+  sessionUsageLimitCheckNow?: (args: Readonly<{
+    sessionId: string;
+    provider?: string;
+    resumePromptMode?: 'standard' | 'off' | 'custom';
+    serverId?: string | null;
+  }>) => Promise<unknown>;
+  sessionUsageLimitSwitchAccountNow?: (args: Readonly<{
+    sessionId: string;
+    provider?: string;
+    resumePromptMode?: 'standard' | 'off' | 'custom';
+    serverId?: string | null;
+  }>) => Promise<unknown>;
   sessionHistoryGet?: (args: Readonly<{
     sessionId: string;
     limit?: number;
@@ -344,6 +358,10 @@ export type ActionExecutorDeps = Readonly<{
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
+}
+
+function normalizeUsageLimitActionResult(result: unknown, sessionId: string): unknown {
+  return normalizeSessionUsageLimitRecoveryOperationResultV1(result, { sessionId });
 }
 
 function resolveApprovalOriginForRequest(
@@ -1574,9 +1592,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             sessionId,
             ...(typeof data.issueFingerprint === 'string' ? { issueFingerprint: data.issueFingerprint } : {}),
             ...(data.remember === true ? { remember: true } : {}),
+            ...(data.resumePromptMode === 'standard' || data.resumePromptMode === 'off' || data.resumePromptMode === 'custom'
+              ? { resumePromptMode: data.resumePromptMode }
+              : {}),
             ...(serverId ? { serverId } : {}),
           });
-          return { ok: true, result: res };
+          return { ok: true, result: normalizeUsageLimitActionResult(res, sessionId) };
         }
 
         if (actionId === 'session.usageLimit.waitResume.cancel') {
@@ -1593,7 +1614,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(typeof issueFingerprint === 'string' || issueFingerprint === null ? { issueFingerprint } : {}),
             ...(serverId ? { serverId } : {}),
           });
-          return { ok: true, result: res };
+          return { ok: true, result: normalizeUsageLimitActionResult(res, sessionId) };
         }
 
         if (actionId === 'session.usageLimit.checkNow') {
@@ -1614,9 +1635,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const res = await handler?.({
             sessionId,
             ...(typeof data.provider === 'string' && data.provider.trim().length > 0 ? { provider: data.provider.trim() } : {}),
+            ...(data.resumePromptMode === 'standard' || data.resumePromptMode === 'off' || data.resumePromptMode === 'custom'
+              ? { resumePromptMode: data.resumePromptMode }
+              : {}),
             ...(serverId ? { serverId } : {}),
           });
-          return { ok: true, result: res };
+          return { ok: true, result: normalizeUsageLimitActionResult(res, sessionId) };
         }
 
         if (actionId === 'session.history.get') {

@@ -2011,6 +2011,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
         { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
         { path: 'issueFingerprint', title: 'Issue fingerprint', widget: 'text' },
         { path: 'remember', title: 'Remember preference', widget: 'toggle' },
+        { path: 'resumePromptMode', title: 'Resume prompt mode', widget: 'text' },
       ],
     },
     inputSchema: SessionUsageLimitWaitResumeEnableRequestV1Schema,
@@ -2066,7 +2067,34 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     },
     inputHints: {
       title: 'Check usage limit',
-      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+      fields: [
+        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        {
+          path: 'provider',
+          title: 'Provider',
+          description: 'Optional provider/backend id used to match the active usage-limit issue.',
+          widget: 'text',
+        },
+        {
+          path: 'operation',
+          title: 'Operation',
+          widget: 'select',
+          options: [
+            { value: 'check_now', label: 'Check now' },
+            { value: 'switch_account_now', label: 'Switch account now' },
+          ],
+        },
+        {
+          path: 'resumePromptMode',
+          title: 'Resume prompt mode',
+          widget: 'select',
+          options: [
+            { value: 'standard', label: 'Standard' },
+            { value: 'off', label: 'Off' },
+            { value: 'custom', label: 'Custom' },
+          ],
+        },
+      ],
     },
     inputSchema: SessionUsageLimitCheckNowRequestV1Schema,
   },

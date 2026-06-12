@@ -22,12 +22,13 @@ export type PermissionModeGroupId = 'claude' | 'codexLike';
 export function normalizePermissionModeForGroup(mode: PermissionMode, group: PermissionModeGroupId): PermissionMode {
     if (group === 'claude') {
         switch (mode) {
-            case 'safe-yolo':
-                return 'acceptEdits';
-            case 'yolo':
-                return 'bypassPermissions';
+            case 'acceptEdits':
+                return 'safe-yolo';
+            case 'bypassPermissions':
+                return 'yolo';
+            case 'plan':
             case 'read-only':
-                return 'default';
+                return 'read-only';
             default:
                 return mode;
         }

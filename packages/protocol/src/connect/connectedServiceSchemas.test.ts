@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import * as schemas from './connectedServiceSchemas.js';
 
 const {
+    ConnectedServiceAuthGroupErrorResponseV1Schema,
     ConnectedServiceIdSchema,
     ConnectedServiceCredentialRecordV1Schema,
     ConnectedServiceCredentialHealthV1Schema,
@@ -196,6 +197,7 @@ describe('connectedServiceSchemas', () => {
             providerLimitId: 'weekly_tokens',
             observedAtMs: now - 100,
         });
+        expect(parsed.meters[0]?.details?.limitCategory).toBeUndefined();
         expect(parsed.meters[0]).toEqual(expect.objectContaining({
             remaining: 18,
             remainingPct: 18,
@@ -216,6 +218,56 @@ describe('connectedServiceSchemas', () => {
                 rawScope: 'account:weekly',
             }),
         }));
+    });
+
+    it('normalizes legacy connected-service limit categories to canonical public names', () => {
+        const now = Date.now();
+        const parsed = ConnectedServiceQuotaSnapshotV1Schema.parse({
+            v: 1,
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            fetchedAt: now,
+            staleAfterMs: 60_000,
+            planLabel: null,
+            accountLabel: null,
+            meters: [
+                {
+                    meterId: 'weekly',
+                    label: 'Weekly',
+                    used: 100,
+                    limit: 100,
+                    unit: 'requests',
+                    utilizationPct: 100,
+                    resetsAt: null,
+                    status: 'ok',
+                    details: { limitCategory: 'quota' },
+                },
+                {
+                    meterId: 'auth',
+                    label: 'Auth',
+                    used: null,
+                    limit: null,
+                    unit: 'unknown',
+                    utilizationPct: 100,
+                    resetsAt: null,
+                    status: 'ok',
+                    details: { limitCategory: 'auth' },
+                },
+            ],
+        });
+
+        expect(parsed.meters.map((meter) => meter.details?.limitCategory)).toEqual([
+            'usage_limit',
+            'auth_invalid',
+        ]);
+    });
+
+    it('accepts the typed runtime-fallback-unsupported auth-group error code', () => {
+        expect(ConnectedServiceAuthGroupErrorResponseV1Schema.parse({
+            error: 'connect_group_runtime_fallback_unsupported',
+        })).toEqual({
+            error: 'connect_group_runtime_fallback_unsupported',
+        });
     });
 
     it('rejects unsafe raw quota evidence payloads', () => {
@@ -426,10 +478,14 @@ describe('connectedServiceSchemas', () => {
             rateLimitedUntilMs: 20,
             capacityLimitedUntilMs: 30,
             authInvalidUntilMs: 40,
+            planUnavailableUntilMs: 45,
+            validationBlockedUntilMs: 46,
             lastFailureKind: 'usage_limit',
             lastFailureCode: 'usage_limit_reached',
             lastObservedPlanType: 'team',
             lastObservedAtMs: 50,
+            providerResetsAtMs: 60,
+            credentialHealthStatus: 'connected',
         });
 
         expect(parsed).toEqual({
@@ -437,13 +493,23 @@ describe('connectedServiceSchemas', () => {
             rateLimitedUntilMs: 20,
             capacityLimitedUntilMs: 30,
             authInvalidUntilMs: 40,
+            planUnavailableUntilMs: 45,
+            validationBlockedUntilMs: 46,
             lastFailureKind: 'usage_limit',
             lastFailureCode: 'usage_limit_reached',
             lastObservedPlanType: 'team',
             lastObservedAtMs: 50,
+            providerResetsAtMs: 60,
+            credentialHealthStatus: 'connected',
         });
         expect(ConnectedServiceAuthGroupMemberStateV1Schema.safeParse({
             quotaExhaustedUntilMs: -1,
+        }).success).toBe(false);
+        expect(ConnectedServiceAuthGroupMemberStateV1Schema.safeParse({
+            providerResetsAtMs: -1,
+        }).success).toBe(false);
+        expect(ConnectedServiceAuthGroupMemberStateV1Schema.safeParse({
+            credentialHealthStatus: 'invalid',
         }).success).toBe(false);
     });
 
@@ -501,11 +567,13 @@ describe('connectedServiceSchemas', () => {
             policy: { softSwitchRemainingPercent: 9 },
             activeProfileId: 'personal',
             expectedGeneration: 2,
+            overrideRuntimeCooldown: true,
         })).toEqual({
             displayName: null,
             policy: { softSwitchRemainingPercent: 9 },
             activeProfileId: 'personal',
             expectedGeneration: 2,
+            overrideRuntimeCooldown: true,
         });
         expect(ConnectedServiceAuthGroupPatchRequestV1Schema.safeParse({
             policy: { autoSwitch: false },
@@ -644,9 +712,11 @@ describe('connectedServiceSchemas', () => {
         expect(ConnectedServiceAuthGroupActiveProfileRequestV1Schema.parse({
             profileId: 'backup',
             expectedGeneration: 3,
+            overrideRuntimeCooldown: true,
         })).toEqual({
             profileId: 'backup',
             expectedGeneration: 3,
+            overrideRuntimeCooldown: true,
         });
         expect(ConnectedServiceAuthGroupActiveProfileRequestV1Schema.safeParse({
             profileId: 'backup',
@@ -711,7 +781,7 @@ describe('connectedServiceSchemas', () => {
         }).success).toBe(false);
     });
 
-    it('requires expected generation for generation-sensitive group patch and runtime-state writes', () => {
+    it('requires expected generation for generation-sensitive group patch but keeps runtime-state generation-neutral', () => {
         const ConnectedServiceAuthGroupPatchRequestV1Schema = expectSchema('ConnectedServiceAuthGroupPatchRequestV1Schema');
         const ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema = expectSchema('ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema');
 
@@ -756,14 +826,21 @@ describe('connectedServiceSchemas', () => {
                 v: 1,
                 groupSwitchInProgress: false,
             },
-        }).success).toBe(false);
-        expect(ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema.safeParse({
+        }).success).toBe(true);
+        expect(ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema.parse({
             memberStates: [
                 {
                     profileId: 'work',
                     state: { v: 1 },
                 },
             ],
-        }).success).toBe(false);
+        })).toEqual({
+            memberStates: [
+                {
+                    profileId: 'work',
+                    state: { v: 1 },
+                },
+            ],
+        });
     });
 });
