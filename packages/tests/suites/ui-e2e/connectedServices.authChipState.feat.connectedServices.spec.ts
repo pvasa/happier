@@ -10,7 +10,11 @@ import { acknowledgeTerminalConnectSuccessIfPresent } from '../../src/testkit/ui
 import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
 import { enableEnhancedSessionWizard } from '../../src/testkit/uiE2e/enableEnhancedSessionWizard';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
-import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import {
+  gotoDomContentLoadedWithPathFallback,
+  gotoDomContentLoadedWithRetries,
+  normalizeLoopbackBaseUrl,
+} from '../../src/testkit/uiE2e/pageNavigation';
 import { setUiFeatureToggle } from '../../src/testkit/uiE2e/setUiFeatureToggle';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
@@ -65,9 +69,8 @@ test.describe('ui e2e: connected-services auth chip state', () => {
     if (!server || !uiBaseUrl) throw new Error('missing server/ui fixtures');
 
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(uiBaseUrl, { waitUntil: 'domcontentloaded' });
+    await gotoDomContentLoadedWithPathFallback(page, uiBaseUrl, '/', 90_000);
     await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
-    await setUiFeatureToggle({ page, baseUrl: uiBaseUrl, featureId: 'connectedServices', enabled: true });
 
     const testDir = resolve(join(suiteDir, 'terminal-connect-daemon'));
     await mkdir(testDir, { recursive: true });
@@ -111,11 +114,12 @@ test.describe('ui e2e: connected-services auth chip state', () => {
     });
 
     await enableEnhancedSessionWizard({ page, baseUrl: uiBaseUrl });
+    await setUiFeatureToggle({ page, baseUrl: uiBaseUrl, featureId: 'connectedServices', enabled: true });
     await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/new?happier_hmr=0`);
     await expect(page.getByTestId('new-session-composer-input')).toHaveCount(1, { timeout: 180_000 });
 
     const authChip = page.getByTestId('new-session-connected-services-auth-chip');
     await expect(authChip).toHaveCount(1, { timeout: 120_000 });
-    await expect(authChip).toContainText(/\bNative\b/i, { timeout: 10_000 });
+    await expect(authChip).toHaveAttribute('data-auth-source', 'native', { timeout: 10_000 });
   });
 });

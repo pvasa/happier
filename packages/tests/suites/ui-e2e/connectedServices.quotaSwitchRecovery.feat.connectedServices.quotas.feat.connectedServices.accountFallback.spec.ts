@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -12,7 +13,6 @@ import {
 } from '@happier-dev/protocol';
 
 import { seedCliAuthForServer } from '../../src/testkit/cliAuth';
-import { daemonControlPostJson } from '../../src/testkit/daemon/controlServerClient';
 import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { fetchJson } from '../../src/testkit/http';
@@ -22,6 +22,7 @@ import { createRunDirs } from '../../src/testkit/runDir';
 import { fetchMessagesPage, fetchSessionV2 } from '../../src/testkit/sessions';
 import { waitFor } from '../../src/testkit/timing';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import { setUiFeatureToggle } from '../../src/testkit/uiE2e/setUiFeatureToggle';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
@@ -46,6 +47,38 @@ function readString(record: UnknownRecord, key: string): string {
     const value = record[key];
     if (typeof value !== 'string') throw new Error(`Expected string ${key}`);
     return value;
+}
+
+function resolveServerLightSqliteDbPath(params: { suiteDir: string }): string {
+    return resolve(join(params.suiteDir, 'server-light-data', 'happier-server-light.sqlite'));
+}
+
+function readLatestMachineIdFromServerLightDb(params: { suiteDir: string }): string {
+    const dbPath = resolveServerLightSqliteDbPath({ suiteDir: params.suiteDir });
+    try {
+        const raw = execFileSync('sqlite3', ['-json', dbPath, 'select id from Machine order by createdAt desc limit 1;'], {
+            encoding: 'utf8',
+        });
+        const parsed = JSON.parse(raw) as Array<{ id?: unknown }>;
+        const id = parsed?.[0]?.id;
+        if (typeof id === 'string' && id.trim()) return id.trim();
+    } catch {
+        // Pollers can retry while the daemon is registering.
+    }
+    throw new Error(`Failed to read machine id from server light sqlite db: ${dbPath}`);
+}
+
+async function waitForLatestMachineId(params: { suiteDir: string; timeoutMs?: number }): Promise<string> {
+    const timeoutMs = params.timeoutMs ?? 60_000;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        try {
+            return readLatestMachineIdFromServerLightDb({ suiteDir: params.suiteDir });
+        } catch {
+            await new Promise((r) => setTimeout(r, 250));
+        }
+    }
+    return readLatestMachineIdFromServerLightDb({ suiteDir: params.suiteDir });
 }
 
 async function postSessionTurnMutation(params: Readonly<{
@@ -88,6 +121,12 @@ async function enableConnectedServiceQuotaUi(params: Readonly<{
     await ensureSwitchEnabled(params.page.getByTestId('settings-feature-experiments-toggle'));
     await ensureSwitchEnabled(params.page.getByTestId('settings-feature-toggle-connectedServices'));
     await ensureSwitchEnabled(params.page.getByTestId('settings-feature-toggle-connectedServices.quotas'));
+    await setUiFeatureToggle({
+        page: params.page,
+        baseUrl: params.baseUrl,
+        featureId: 'sessions.usageLimitRecovery',
+        enabled: true,
+    });
     await gotoDomContentLoadedWithRetries(params.page, `${params.baseUrl}/?happier_hmr=0`, 180_000);
     await waitForInitialAppUi({ page: params.page, timeoutMs: 180_000 });
 }
@@ -115,6 +154,45 @@ async function readAuthTokenFromBrowserStorage(page: Page): Promise<string> {
         return token.trim();
     }
     throw new Error('Failed to read auth token from browser storage');
+}
+
+async function readLegacyAuthCredentialsFromBrowserStorage(page: Page): Promise<Readonly<{
+    token: string;
+    secret: Uint8Array;
+}>> {
+    const credentials = await page.evaluate(() => {
+        for (let index = 0; index < localStorage.length; index += 1) {
+            const key = localStorage.key(index);
+            if (!key?.startsWith('auth_credentials')) continue;
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            try {
+                const parsed = JSON.parse(raw) as { token?: unknown; secret?: unknown };
+                if (
+                    typeof parsed.token === 'string'
+                    && parsed.token.trim()
+                    && typeof parsed.secret === 'string'
+                    && parsed.secret.trim()
+                ) {
+                    return {
+                        token: parsed.token.trim(),
+                        secret: parsed.secret.trim(),
+                    };
+                }
+            } catch {
+                // Keep scanning other auth storage entries.
+            }
+        }
+        return null;
+    });
+
+    if (!credentials) {
+        throw new Error('Failed to read legacy auth credentials from browser storage');
+    }
+    return {
+        token: credentials.token,
+        secret: Buffer.from(credentials.secret, 'base64url'),
+    };
 }
 
 async function createPlainSession(params: Readonly<{
@@ -186,6 +264,8 @@ async function createProfileBoundPlainSession(params: Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
     groupId?: string;
+    machineId?: string;
+    path?: string;
 }>): Promise<string> {
     const binding = params.groupId
         ? {
@@ -210,7 +290,8 @@ async function createProfileBoundPlainSession(params: Readonly<{
             metadata: JSON.stringify({
                 v: 1,
                 name: 'Connected auth chip UI e2e',
-                path: '/tmp/connected-auth-chip-ui-e2e',
+                path: params.path ?? '/tmp/connected-auth-chip-ui-e2e',
+                ...(params.machineId ? { machineId: params.machineId } : {}),
                 flavor: 'claude',
                 connectedServices: {
                     v: 1,
@@ -363,84 +444,6 @@ async function fetchConnectedServiceAuthGroup(params: Readonly<{
     return group;
 }
 
-async function spawnConnectedServiceGroupDaemonSession(params: Readonly<{
-    daemon: StartedDaemon;
-    directory: string;
-    serviceId: ConnectedServiceId;
-    groupId: string;
-    profileId: string;
-}>): Promise<string> {
-    if (!params.daemon.state.controlToken) throw new Error('daemon control token missing');
-    const response = await daemonControlPostJson<{ success?: boolean; sessionId?: unknown }>({
-        port: params.daemon.state.httpPort,
-        controlToken: params.daemon.state.controlToken,
-        path: '/spawn-session',
-        body: {
-            directory: params.directory,
-            agent: 'claude',
-            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-            terminal: { mode: 'plain' },
-            connectedServices: {
-                v: 1,
-                bindingsByServiceId: {
-                    [params.serviceId]: {
-                        source: 'connected',
-                        selection: 'group',
-                        profileId: params.profileId,
-                        groupId: params.groupId,
-                    },
-                },
-            },
-        },
-        timeoutMs: 120_000,
-    });
-    expect(response.status).toBe(200);
-    expect(response.data.success).toBe(true);
-    if (typeof response.data.sessionId !== 'string' || !response.data.sessionId) {
-        throw new Error('Expected daemon spawn-session response sessionId');
-    }
-    return response.data.sessionId;
-}
-
-async function triggerRuntimeAuthGroupSwitch(params: Readonly<{
-    daemon: StartedDaemon;
-    sessionId: string;
-    serviceId: ConnectedServiceId;
-}>): Promise<void> {
-    if (!params.daemon.state.controlToken) throw new Error('daemon control token missing');
-    const response = await daemonControlPostJson<{ ok?: boolean; result?: unknown }>({
-        port: params.daemon.state.httpPort,
-        controlToken: params.daemon.state.controlToken,
-        path: '/connected-service-runtime-auth/failure',
-        body: {
-            sessionId: params.sessionId,
-            switchesThisTurn: 0,
-            classification: {
-                kind: 'usage_limit',
-                limitCategory: 'quota',
-                serviceId: params.serviceId,
-                profileId: null,
-                groupId: null,
-                resetsAtMs: null,
-                retryAfterMs: 30_000,
-                quotaScope: 'account',
-                providerLimitId: 'weekly',
-                action: null,
-                planType: null,
-                rateLimits: null,
-                source: 'structured_provider_error',
-            },
-        },
-        timeoutMs: 60_000,
-    });
-    expect(response.status).toBe(200);
-    expect(response.data.ok).toBe(true);
-    const result = asRecord(response.data.result);
-    expect(result?.status).toBe('switch_attempted');
-    const switchResult = asRecord(result?.result);
-    expect(switchResult?.status).toBe('switched');
-}
-
 async function expectRealSwitchSessionEventRecorded(params: Readonly<{
     baseUrl: string;
     token: string;
@@ -449,25 +452,28 @@ async function expectRealSwitchSessionEventRecorded(params: Readonly<{
     groupId: string;
 }>): Promise<void> {
     await waitFor(async () => {
-        const page = await fetchMessagesPage({
-            baseUrl: params.baseUrl,
-            token: params.token,
-            sessionId: params.sessionId,
-            afterSeq: 0,
-            limit: 100,
-            scope: 'main',
-            roles: ['event', 'agent'],
+        const url = new URL(`${params.baseUrl}/v1/sessions/${params.sessionId}/messages`);
+        url.searchParams.set('limit', '100');
+        url.searchParams.set('afterSeq', '0');
+        url.searchParams.set('scope', 'main');
+        url.searchParams.set('roles', 'event,agent');
+        const response = await fetchJson<{ messages?: unknown }>(url.toString(), {
+            headers: { Authorization: `Bearer ${params.token}` },
+            timeoutMs: 20_000,
         });
+        expect(response.status).toBe(200);
+        const messages = Array.isArray(response.data?.messages) ? response.data.messages : [];
         const localIdPrefix = [
             'connected-service-account-switch',
             params.serviceId,
             params.groupId,
         ].join(':');
-        return page.messages.some((message) =>
-            message.messageRole === 'event' &&
-            typeof message.localId === 'string' &&
-            message.localId.startsWith(`${localIdPrefix}:`),
-        );
+        return messages.some((message) => {
+            const record = asRecord(message);
+            return record?.messageRole === 'event'
+                && typeof record.localId === 'string'
+                && record.localId.startsWith(`${localIdPrefix}:`);
+        });
     }, {
         timeoutMs: 30_000,
         context: 'real auth-group switch path records a session event',
@@ -521,16 +527,24 @@ async function publishProviderUsageRuntimeIssue(params: Readonly<{
     baseUrl: string;
     token: string;
     sessionId: string;
+    provider?: string;
+    serviceId?: ConnectedServiceId;
+    profileId?: string;
+    groupId?: string;
+    groupExhausted?: boolean;
 }>): Promise<void> {
     const occurredAt = Date.now();
     const turnId = `turn-${randomUUID()}`;
+    const serviceId = params.serviceId ?? 'openai-codex';
+    const profileId = params.profileId ?? 'primary';
+    const groupId = params.groupId ?? 'main-group';
     const issue: SessionRuntimeIssueV1 = {
         v: 1,
         scope: 'primary_session',
         status: 'failed',
         code: 'provider_usage_limit',
         source: 'usage_limit',
-        provider: 'codex',
+        provider: params.provider ?? 'codex',
         occurredAt,
         sanitizedPreview: 'Provider usage limit reached.',
         usageLimit: {
@@ -539,11 +553,11 @@ async function publishProviderUsageRuntimeIssue(params: Readonly<{
             retryAfterMs: 3_600_000,
             quotaScope: 'account',
             recoverability: 'switch_account',
-            limitCategory: 'quota',
+            limitCategory: 'usage_limit',
             quotaSnapshotRef: {
-                serviceId: 'openai-codex',
-                profileId: 'primary',
-                groupId: 'main-group',
+                serviceId,
+                profileId,
+                groupId,
                 fetchedAtMs: occurredAt,
             },
             effectiveMeterId: 'weekly',
@@ -553,10 +567,10 @@ async function publishProviderUsageRuntimeIssue(params: Readonly<{
                 { meterId: 'daily', scope: 'daily', remainingPct: 44, resetAtMs: occurredAt + 1_800_000, status: 'ok' },
             ],
             connectedService: {
-                serviceId: 'openai-codex',
-                profileId: 'primary',
-                groupId: 'main-group',
-                groupExhausted: false,
+                serviceId,
+                profileId,
+                groupId,
+                groupExhausted: params.groupExhausted ?? false,
             },
         },
     };
@@ -570,7 +584,7 @@ async function publishProviderUsageRuntimeIssue(params: Readonly<{
             turnId,
             mutationId: `mutation-${randomUUID()}`,
             observedAt: occurredAt,
-            provider: 'codex',
+            provider: params.provider ?? 'codex',
         },
     });
     await postSessionTurnMutation({
@@ -582,7 +596,7 @@ async function publishProviderUsageRuntimeIssue(params: Readonly<{
             turnId,
             mutationId: `mutation-${randomUUID()}`,
             observedAt: occurredAt + 1,
-            provider: 'codex',
+            provider: params.provider ?? 'codex',
             issue,
         },
     });
@@ -877,7 +891,7 @@ test.describe('ui e2e: connected-service quota switch and recovery surfaces', ()
         test.setTimeout(720_000);
         if (!server || !uiBaseUrl) throw new Error('missing ui e2e fixtures');
 
-        const serviceId = 'openai-codex' satisfies ConnectedServiceId;
+        const serviceId = 'claude-subscription' satisfies ConnectedServiceId;
         const groupId = `main-group-${run.runId}`;
         const primaryProfileId = 'primary';
         const backupProfileId = 'backup';
@@ -895,8 +909,7 @@ test.describe('ui e2e: connected-service quota switch and recovery surfaces', ()
         await createAccountIfNeeded(page);
         await enableConnectedServiceQuotaUi({ page, baseUrl: uiBaseUrl });
 
-        const authToken = await readAuthTokenFromBrowserStorage(page);
-        const secret = Uint8Array.from(randomBytes(32));
+        const { token: authToken, secret } = await readLegacyAuthCredentialsFromBrowserStorage(page);
         await seedCliAuthForServer({
             cliHome: cliHomeDir,
             serverUrl: server.baseUrl,
@@ -949,6 +962,8 @@ test.describe('ui e2e: connected-service quota switch and recovery surfaces', ()
                         HAPPIER_E2E_FAKE_CLAUDE_LOG: fakeClaudeLogPath,
                         HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID: `fake-claude-session-${run.runId}`,
                         HAPPIER_E2E_FAKE_CLAUDE_INVOCATION_ID: `fake-claude-invocation-${run.runId}`,
+                        HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: 'false',
+                        HAPPIER_CONNECTED_SERVICES_LEGACY_CLAUDE_RESTART_SAME_HOME: '1',
                         HAPPIER_CONNECTED_SERVICES_AUTH_GROUP_RESTART_SIGNAL_DELAY_MS: '0',
                     },
                 });
@@ -960,14 +975,33 @@ test.describe('ui e2e: connected-service quota switch and recovery surfaces', ()
                 }
             }
 
-            const sessionId = await spawnConnectedServiceGroupDaemonSession({
-                daemon,
-                directory: workspaceDir,
+            const machineId = await waitForLatestMachineId({ suiteDir, timeoutMs: 120_000 });
+            const sessionId = await createProfileBoundPlainSession({
+                baseUrl: server.baseUrl,
+                token: authToken,
                 serviceId,
                 groupId,
                 profileId: primaryProfileId,
+                machineId,
+                path: workspaceDir,
             });
-            await triggerRuntimeAuthGroupSwitch({ daemon, sessionId, serviceId });
+            await publishProviderUsageRuntimeIssue({
+                baseUrl: server.baseUrl,
+                token: authToken,
+                sessionId,
+                provider: 'claude',
+                serviceId,
+                profileId: primaryProfileId,
+                groupId,
+            });
+
+            await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/session/${sessionId}?happier_hmr=0`, 180_000);
+            const recoveryBanner = page.getByTestId('session-usageLimit-recovery');
+            await expect(recoveryBanner).toBeVisible({ timeout: 60_000 });
+            const switchAccountNow = page.getByTestId('session-usageLimit-recovery-switchAccountNow');
+            await expect(switchAccountNow).toBeVisible({ timeout: 60_000 });
+            await expect(switchAccountNow).toBeEnabled({ timeout: 60_000 });
+            await switchAccountNow.click();
 
             await waitFor(async () => {
                 const group = await fetchConnectedServiceAuthGroup({
