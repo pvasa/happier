@@ -10,15 +10,28 @@ export function normalizeInitialTranscriptAfterSeq(value: unknown): number | und
 export function applyInitialTranscriptAfterSeqToAttachPayload(
   payload: SessionAttachFilePayload,
   initialTranscriptAfterSeq: unknown,
+  opts?: Readonly<{
+    /**
+     * Owed-delivery watermark (A-F2): clamps the explicit wake cursor so user rows committed but
+     * never delivered to the runner are redelivered instead of skipped forever.
+     */
+    deliveredUserMessageSeq?: number | null;
+  }>,
 ): SessionAttachFilePayload {
   const normalizedInitialTranscriptAfterSeq = normalizeInitialTranscriptAfterSeq(initialTranscriptAfterSeq);
   if (normalizedInitialTranscriptAfterSeq === undefined) {
     return payload;
   }
 
+  const deliveredFloor = normalizeInitialTranscriptAfterSeq(opts?.deliveredUserMessageSeq ?? undefined);
+  const effectiveCursor =
+    deliveredFloor === undefined
+      ? normalizedInitialTranscriptAfterSeq
+      : Math.min(normalizedInitialTranscriptAfterSeq, deliveredFloor);
+
   return {
     ...payload,
-    lastObservedMessageSeq: normalizedInitialTranscriptAfterSeq,
-    initialTranscriptAfterSeq: normalizedInitialTranscriptAfterSeq,
+    lastObservedMessageSeq: effectiveCursor,
+    initialTranscriptAfterSeq: effectiveCursor,
   };
 }

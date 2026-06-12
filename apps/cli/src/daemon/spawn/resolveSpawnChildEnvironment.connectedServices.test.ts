@@ -175,6 +175,40 @@ describe('resolveSpawnChildEnvironment (connected services)', () => {
     }
   });
 
+  it('does not let daemon spawn hooks override a materialized Claude auth root', async () => {
+    const options: SpawnSessionOptions = {
+      directory: '.',
+      environmentVariables: {},
+    };
+
+    const result = await resolveSpawnChildEnvironment({
+      options,
+      profileEnvironmentVariables: {},
+      daemonSpawnHooks: {
+        buildExtraEnvForChild: () => ({
+          CLAUDE_CONFIG_DIR: '/tmp/source-claude-config',
+        }),
+      },
+      processEnv: {
+        CLAUDE_CONFIG_DIR: '/tmp/source-claude-config',
+      },
+      logDebug: () => {},
+      logInfo: () => {},
+      logWarn: () => {},
+      connectedServiceAuth: {
+        env: { CLAUDE_CONFIG_DIR: '/tmp/materialized-claude-config' },
+        cleanupOnFailure: null,
+        cleanupOnExit: null,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.expandedEnvironmentVariables.CLAUDE_CONFIG_DIR).toBe('/tmp/materialized-claude-config');
+      expect(result.extraEnvForChild.CLAUDE_CONFIG_DIR).toBe('/tmp/materialized-claude-config');
+    }
+  });
+
   it('fails closed when profile env references connected service env injected for the child', async () => {
     const options: SpawnSessionOptions = {
       directory: '.',

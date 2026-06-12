@@ -6,8 +6,12 @@ import {
   type ConnectedServiceAuthGroupPolicyV1,
 } from '../selection/selectConnectedServiceAuthGroupCandidate';
 import { resolveConnectedServiceAuthGroupPreTurnQuotaProbeProfileIds } from '../selection/resolveConnectedServiceAuthGroupPreTurnQuotaProbeProfileIds';
-import { readConnectedServiceAuthGenerationApplyFailure } from '../../runtimeAuth/connectedServiceAuthGenerationApplyFailure';
+import {
+  readConnectedServiceAuthGenerationApplyFailure,
+  type ConnectedServiceAuthGenerationApplyFailure,
+} from '../../runtimeAuth/connectedServiceAuthGenerationApplyFailure';
 import type { AcceptedConnectedServiceAccountVerificationByServiceId } from '../../accountTransitions/acceptedConnectedServiceAccountVerification';
+import { evaluatePredictiveSoftSwitchSessionApplyPolicy } from './predictiveSoftSwitchPolicy';
 
 export type ConnectedServiceAuthGroupSwitchState = Readonly<{
   serviceId: string;
@@ -34,6 +38,8 @@ type ConnectedServiceAuthGroupProviderApplication = 'applied' | 'observed';
 type ConnectedServiceAuthGroupSwitchApplyGenerationResult = Readonly<{
   mode?: ConnectedServiceAuthGroupSwitchApplyMode;
   verificationByServiceId?: AcceptedConnectedServiceAccountVerificationByServiceId;
+  /** Apply-proven context (e.g. resume continuity) surfaced for switch telemetry (INC-6). */
+  diagnostics?: unknown;
 }>;
 
 type LeaseOutcome =
@@ -126,6 +132,8 @@ export type ConnectedServiceAuthGroupSwitchResult =
       mode?: ConnectedServiceAuthGroupSwitchApplyMode;
       providerApplication?: ConnectedServiceAuthGroupProviderApplication;
       verificationByServiceId?: AcceptedConnectedServiceAccountVerificationByServiceId;
+      /** Apply-proven context (e.g. resume continuity) surfaced for switch telemetry (INC-6). */
+      diagnostics?: unknown;
     }>
   | Readonly<{
       status: 'generation_apply_failed';
@@ -141,6 +149,8 @@ export type ConnectedServiceAuthGroupSwitchResult =
       mode?: ConnectedServiceAuthGroupSwitchApplyMode;
       providerApplication?: ConnectedServiceAuthGroupProviderApplication;
       verificationByServiceId?: AcceptedConnectedServiceAccountVerificationByServiceId;
+      /** Apply-proven context (e.g. resume continuity) surfaced for switch telemetry (INC-6). */
+      diagnostics?: unknown;
     }>
   | Readonly<{
       status: 'no_eligible_member';
@@ -253,6 +263,15 @@ function isProfileEligibleForObservedGeneration(input: Readonly<{
     });
 }
 
+function isProfileAdoptableForObservedDivergence(input: Readonly<{
+  profileId: string;
+  members: ReadonlyArray<ConnectedServiceAuthGroupMember>;
+  selected: ReturnType<typeof selectConnectedServiceAuthGroupCandidate>;
+}>): boolean {
+  return input.members.some((member) => member.profileId === input.profileId && member.enabled)
+    && !input.selected.excluded.some((excluded) => excluded.profileId === input.profileId);
+}
+
 function buildLeaseCompletion(input: Readonly<{
   sessionId?: string;
   serviceId: string;
@@ -302,7 +321,7 @@ function switchResultApplyFields(
   applyResult: ConnectedServiceAuthGroupSwitchApplyGenerationResult | void,
 ): Pick<
   Extract<ConnectedServiceAuthGroupSwitchResult, { status: 'switched' | 'observed_generation' }>,
-  'mode' | 'providerApplication' | 'verificationByServiceId'
+  'mode' | 'providerApplication' | 'verificationByServiceId' | 'diagnostics'
 > {
   const providerApplication = providerApplicationForApplyMode(applyResult?.mode);
   return {
@@ -311,6 +330,27 @@ function switchResultApplyFields(
     ...(applyResult?.verificationByServiceId
       ? { verificationByServiceId: applyResult.verificationByServiceId }
       : {}),
+    ...(applyResult?.diagnostics === undefined ? {} : { diagnostics: applyResult.diagnostics }),
+  };
+}
+
+function readPredictiveSoftSwitchSessionApplyFailure(input: Readonly<{
+  reason?: string;
+  sessionId?: string;
+  applyResult?: ConnectedServiceAuthGroupSwitchApplyGenerationResult | void;
+}>): ConnectedServiceAuthGenerationApplyFailure | null {
+  const decision = evaluatePredictiveSoftSwitchSessionApplyPolicy({
+    reason: (input.reason ?? 'unknown') as Parameters<typeof evaluatePredictiveSoftSwitchSessionApplyPolicy>[0]['reason'],
+    sessionId: input.sessionId,
+    applyMode: input.applyResult?.mode,
+  });
+  if (decision.status === 'allow') return null;
+  return {
+    errorCode: 'hot_apply_restart_required',
+    diagnostics: {
+      policyReason: decision.reason,
+      ...(input.applyResult?.mode ? { attemptedMode: input.applyResult.mode } : {}),
+    },
   };
 }
 
@@ -540,6 +580,20 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
     let applyResult: ConnectedServiceAuthGroupSwitchApplyGenerationResult | void;
     try {
       applyResult = await this.deps.applyGeneration(completion);
+      const predictiveFailure = readPredictiveSoftSwitchSessionApplyFailure({
+        reason: completion.reason,
+        sessionId: completion.sessionId,
+        applyResult,
+      });
+      if (predictiveFailure) {
+        return {
+          status: 'generation_apply_failed',
+          activeProfileId: completion.activeProfileId,
+          generation: completion.generation,
+          errorCode: predictiveFailure.errorCode,
+          ...(predictiveFailure.diagnostics === undefined ? {} : { diagnostics: predictiveFailure.diagnostics }),
+        };
+      }
       return {
         status: 'observed_generation',
         activeProfileId: completion.activeProfileId,
@@ -932,12 +986,9 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
           if (
             currentLoadedActiveProfileId
             && currentLoadedActiveProfileId !== observedProfileId
-            && isProfileEligibleForObservedGeneration({
+            && isProfileAdoptableForObservedDivergence({
               profileId: currentLoadedActiveProfileId,
-              reason: input.reason,
-              nowMs: this.deps.nowMs(),
-              quotaFreshnessMs: this.deps.quotaFreshnessMs,
-              memberStatesByProfileId: loaded.memberStatesByProfileId,
+              members: loaded.members,
               selected: observedGenerationSelection,
             })
           ) {
@@ -948,6 +999,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
               activeProfileId: loaded.activeProfileId,
               generation: loaded.generation,
               reason: input.reason,
+              fromProfileId: observedProfileId,
               result: {
                 status: 'observed_generation',
                 activeProfileId: loaded.activeProfileId,
@@ -1108,7 +1160,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
       }
 
       let selectedProfileId = selected.selected.profileId;
-      if (trigger === 'pre_turn' && selectedProfileId === loaded.activeProfileId && allowLoadedActiveProfileRetry) {
+      if (selectedProfileId === loaded.activeProfileId && trigger === 'pre_turn' && allowLoadedActiveProfileRetry) {
         const result: ConnectedServiceAuthGroupSwitchResult = {
           status: 'observed_generation',
           activeProfileId: loaded.activeProfileId,
@@ -1264,6 +1316,31 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
         };
       }
       const sessionSwitchKey = this.resolveSessionSwitchKey(input);
+      const predictiveFailure = readPredictiveSoftSwitchSessionApplyFailure({
+        reason: input.reason,
+        sessionId: input.sessionId,
+        applyResult,
+      });
+      if (predictiveFailure) {
+        this.maybeEmitSwitchPipelineResult({
+          trigger,
+          phase: 'apply_failed',
+          request: input,
+          loaded: trigger === 'classified_failure' ? loaded : commitLoaded,
+          resultStatus: 'generation_apply_failed',
+          toProfileId: committed.activeProfileId ?? selectedProfileId,
+          toGeneration: committed.generation,
+          success: false,
+          startedAtMs,
+        });
+        return {
+          status: 'generation_apply_failed',
+          activeProfileId: committed.activeProfileId ?? selectedProfileId,
+          generation: committed.generation,
+          errorCode: predictiveFailure.errorCode,
+          ...(predictiveFailure.diagnostics === undefined ? {} : { diagnostics: predictiveFailure.diagnostics }),
+        };
+      }
       this.recordSessionSwitch(sessionSwitchKey, this.deps.nowMs());
       this.maybeEmitSwitchPipelineResult({
         trigger,

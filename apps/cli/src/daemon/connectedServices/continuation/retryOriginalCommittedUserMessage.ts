@@ -4,13 +4,17 @@ import {
 } from '@/api/session/transcriptQueries';
 import type { Credentials } from '@/persistence';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
-import { sendSessionMessage } from '@/session/services/sendSessionMessage';
+import {
+  sendSessionMessage,
+  type SendSessionMessageSocketCommit,
+} from '@/session/services/sendSessionMessage';
 
 type RetryOriginalCommittedUserMessageInput = Readonly<{
   credentials: Credentials;
   sessionId: string;
   failureAtMs: number;
   localId: string;
+  onCommittedViaSocket?: (input: SendSessionMessageSocketCommit) => Promise<void> | void;
 }>;
 
 type RetryOriginalCommittedUserMessageDeps = Readonly<{
@@ -49,6 +53,7 @@ export async function retryOriginalCommittedUserMessageWithDeps(
     localId: input.localId,
     wait: false,
     timeoutMs: 1,
+    onCommittedViaSocket: input.onCommittedViaSocket,
     ...(original.permissionMode ? { permissionModeOverride: original.permissionMode } : {}),
     ...(original.model ? { modelOverride: original.model } : {}),
   });

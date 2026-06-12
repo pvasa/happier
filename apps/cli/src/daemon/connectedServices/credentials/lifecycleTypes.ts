@@ -20,21 +20,28 @@ export type ConnectedServiceRefreshFailureCategory =
   | 'missing_refresh_token'
   | 'unknown';
 
+/**
+ * Every field here must have a production consumer; capability declarations without an enforcing
+ * consumer are banned (they rot into false claims — see the removed `refreshTokenRuntimeHandling`,
+ * whose `daemon_only` claim was contradicted by every materialization embedding the OAuth refresh
+ * token, and `runtimeAuthFailureClassifier`, which no dispatch ever read).
+ *
+ * Current consumers:
+ * - `spawnPreflightOauthRefresh` — `resolveConnectedServiceAuthForSpawn`.
+ * - `refreshedCredentialApplication` — `createConnectedServicesAuthUpdatedRestartHandler`.
+ * - `predictiveSoftSwitch` — `predictiveSoftSwitchPolicy` (spawn + daemon scheduling).
+ */
 export type ConnectedServiceCredentialLifecycleDescriptor = Readonly<{
   providerId: CatalogAgentId;
   serviceIds: ReadonlyArray<ConnectedServiceId>;
   spawnPreflightOauthRefresh: Readonly<{
     mode: 'expiry_window' | 'force';
   }>;
-  refreshTokenRuntimeHandling:
-    | 'not_applicable'
-    | 'daemon_only'
-    | 'runtime_provider_self_refresh_allowed';
   refreshedCredentialApplication: Readonly<{
     mode: 'restart_required' | 'hot_apply' | 'no_restart_required';
   }>;
-  runtimeAuthFailureClassifier: Readonly<{
-    available: boolean;
+  predictiveSoftSwitch: Readonly<{
+    mode: 'supported' | 'unsupported';
   }>;
 }>;
 
@@ -45,8 +52,7 @@ export function buildDefaultConnectedServiceCredentialLifecycleDescriptor(
     providerId,
     serviceIds: [],
     spawnPreflightOauthRefresh: { mode: 'expiry_window' },
-    refreshTokenRuntimeHandling: 'not_applicable',
     refreshedCredentialApplication: { mode: 'no_restart_required' },
-    runtimeAuthFailureClassifier: { available: false },
+    predictiveSoftSwitch: { mode: 'unsupported' },
   };
 }

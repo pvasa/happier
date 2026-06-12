@@ -156,6 +156,12 @@ describe('probeAgentModelsBestEffort (static-only providers)', () => {
     expect(res.availableModels).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'default', name: 'Default' }),
       expect.objectContaining({
+        id: 'claude-fable-5',
+        name: 'Fable 5',
+        description: expect.any(String),
+        contextWindowTokens: 1_000_000,
+      }),
+      expect.objectContaining({
         id: 'claude-opus-4-8',
         name: 'Opus 4.8',
         description: expect.any(String),
@@ -179,10 +185,11 @@ describe('probeAgentModelsBestEffort (static-only providers)', () => {
       }),
     ]));
 
-    const opus = res.availableModels.find((model) => model.id === 'claude-opus-4-8') ?? null;
-    expect(opus?.modelOptions?.some((opt) => opt.id === 'reasoning_effort')).toBe(true);
-    expect(opus?.modelOptions?.[0]?.currentValue).toBe('high');
-    expect(opus?.modelOptions?.[0]?.options?.some((opt) => opt.value === 'xhigh')).toBe(true);
+    const fable = res.availableModels.find((model) => model.id === 'claude-fable-5') ?? null;
+    expect(fable?.modelOptions?.some((opt) => opt.id === 'reasoning_effort')).toBe(true);
+    expect(fable?.modelOptions?.[0]?.currentValue).toBe('high');
+    expect(fable?.modelOptions?.[0]?.options?.some((opt) => opt.value === 'xhigh')).toBe(true);
+    expect(fable?.modelOptions?.[0]?.options?.some((opt) => opt.value === 'max')).toBe(true);
     expect(createCatalogAcpBackendMock).not.toHaveBeenCalled();
   });
 });

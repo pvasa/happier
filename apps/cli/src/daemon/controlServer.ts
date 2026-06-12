@@ -38,6 +38,7 @@ import {
   ConnectedServiceRuntimeAuthFailureKindSchema,
   type ConnectedServiceRuntimeFailureClassification,
 } from './connectedServices/runtimeAuth/types';
+import { resolveRuntimeAuthRecoveryDurableWaitPlan } from './connectedServices/runtimeAuth/RuntimeAuthRecoveryScheduler';
 import { isProvenRuntimeAuthRecoverySuccess } from './connectedServices/runtimeAuth/resolveRuntimeAuthRecoveryOutcome';
 import { buildConnectedServiceRuntimeAuthSwitchAttemptLogContext } from './connectedServices/runtimeAuth/buildConnectedServiceRuntimeAuthSwitchAttemptLogContext';
 import { sanitizeConnectedServiceDiagnosticString } from './connectedServices/diagnostics/sanitizeConnectedServiceDiagnosticString';
@@ -92,6 +93,11 @@ type RuntimeAuthRecoverySchedulerForControlServer = Readonly<{
   cancel?: (input: Readonly<{ sessionId: string }>) => Promise<unknown>;
   cancelByKey?: (recoveryKey: string) => Promise<unknown>;
   markTerminalByKey?: (input: Readonly<{ recoveryKey: string; terminalReason: string }>) => Promise<unknown>;
+  markDurableWaitForResultByKey?: (input: Readonly<{
+    recoveryKey: string;
+    result: unknown;
+    classificationResetsAtMs: number | null;
+  }>) => Promise<unknown>;
   markSucceededByKey?: (recoveryKey: string) => Promise<unknown>;
 }>;
 
@@ -132,16 +138,23 @@ function isRuntimeAuthApplyFailureResult(result: unknown): boolean {
   return readRuntimeAuthSwitchResult(result)?.status === 'generation_apply_failed';
 }
 
+// Mirror of the scheduler-retry terminal classification for the in-band report
+// path. `switch_limit_reached`, group-exhausted `no_eligible_member`, and non-group
+// waitable `recovery_action_required` results with a computable reset are NOT here:
+// those are durable waits (resolveRuntimeAuthRecoveryDurableWaitPlan, F0 / INC-2 /
+// FIX-4) and the durable-wait gate runs BEFORE this terminal classification, so this
+// only sees recovery_action_required results without a computable wait-until.
+// Terminalizing waits cancelled the just-intaken intent, whose terminal record then
+// blocked re-arming the same key until the 7-day prune (RD-REC-13).
 function readRuntimeAuthTerminalReason(result: unknown): string | null {
   if (!isRecord(result)) return null;
   if (result.status === 'recovery_action_required') return 'recovery_action_required';
   const switchResult = readRuntimeAuthSwitchResult(result);
   if (!switchResult || typeof switchResult.status !== 'string') return null;
-  if (
-    switchResult.status === 'switch_limit_reached'
-    || switchResult.status === 'no_eligible_member'
-    || switchResult.status === 'recovery_action_required'
-  ) {
+  if (switchResult.status === 'recovery_action_required') return switchResult.status;
+  // A non-group-exhausted `no_eligible_member` has no wait signal and no member to
+  // wait for — terminal, exactly as the scheduler-retry path classifies it.
+  if (switchResult.status === 'no_eligible_member' && switchResult.groupExhausted !== true) {
     return switchResult.status;
   }
   return null;
@@ -241,6 +254,7 @@ export function createDaemonControlApp({
     sessionId: string;
     switchesThisTurn: number;
     classification: ConnectedServiceRuntimeFailureClassification;
+    resumePromptMode?: 'standard' | 'off' | 'custom';
   }>) => Promise<unknown>;
   runtimeAuthRecoveryScheduler?: RuntimeAuthRecoverySchedulerForControlServer;
   // Daemon-lifecycle guard. When the daemon is shutting down (or the control server is
@@ -250,6 +264,7 @@ export function createDaemonControlApp({
   handleConnectedServiceTurnLifecycle?: (input: Readonly<{
     sessionId: string;
     event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled';
+    terminalStatus?: 'completed' | 'failed';
   }>) => Promise<unknown>;
   handleSessionConnectedServiceAuthSwitch?: (input: Readonly<SessionConnectedServiceAuthSwitchRpcParams>) => Promise<unknown>;
   handleConnectedServiceQuotaSnapshot?: (input: Readonly<{
@@ -446,6 +461,7 @@ export function createDaemonControlApp({
       body: z.object({
         sessionId: z.string().min(1),
         switchesThisTurn: z.number().int().nonnegative().optional(),
+        resumePromptMode: z.enum(['standard', 'off', 'custom']).optional(),
         classification: z.object({
           kind: ConnectedServiceRuntimeAuthFailureKindSchema,
           serviceId: z.string().min(1),
@@ -485,6 +501,7 @@ export function createDaemonControlApp({
     const startedAtMs = Date.now();
     const sessionId = request.body.sessionId;
     const switchesThisTurn = request.body.switchesThisTurn ?? 0;
+    const resumePromptMode = request.body.resumePromptMode;
     const classification = request.body.classification as ConnectedServiceRuntimeFailureClassification;
     const intake = await beginRuntimeAuthRecoveryIntake({
       runtimeAuthRecoveryScheduler,
@@ -533,6 +550,7 @@ export function createDaemonControlApp({
         sessionId,
         switchesThisTurn,
         classification,
+        ...(resumePromptMode ? { resumePromptMode } : {}),
       });
       if (isRuntimeAuthApplyFailureResult(result) && runtimeAuthRecoveryScheduler?.enqueueApplyFailure) {
         try {
@@ -597,6 +615,37 @@ export function createDaemonControlApp({
             error: readSafeDaemonControlErrorDiagnostic(error),
           });
         });
+      }
+      // F0/INC-2 (in-band path): group-exhausted and switch-limited results are
+      // durable waits — re-arm the just-intaken intent at the computed/floored
+      // wake time instead of terminalizing it. The classification gate runs here
+      // (so the terminal branch below never sees a durable-wait result even when
+      // the scheduler double lacks the re-arm method); the wake TIME is resolved
+      // by the scheduler on its own clock.
+      const durableWait = resolveRuntimeAuthRecoveryDurableWaitPlan({
+        result,
+        classificationResetsAtMs: classification.resetsAtMs ?? null,
+        nowMs: Date.now(),
+      });
+      if (durableWait) {
+        const recoveryKey = buildRuntimeAuthRecoveryKey({
+          sessionId,
+          serviceId: classification.serviceId,
+          profileId: classification.profileId,
+          groupId: classification.groupId,
+        });
+        await runtimeAuthRecoveryScheduler?.markDurableWaitForResultByKey?.({
+          recoveryKey,
+          result,
+          classificationResetsAtMs: classification.resetsAtMs ?? null,
+        }).catch((error) => {
+          logger.debug('[CONTROL SERVER] Connected-service runtime auth recovery durable-wait re-arm failed after group-exhausted result', {
+            sessionId,
+            recoveryKey,
+            error: readSafeDaemonControlErrorDiagnostic(error),
+          });
+        });
+        return { ok: true as const, result };
       }
       const terminalReason = readRuntimeAuthTerminalReason(result);
       if (terminalReason) {
@@ -684,6 +733,9 @@ export function createDaemonControlApp({
       body: z.object({
         sessionId: z.string().min(1),
         event: z.enum(['prompt_or_steer', 'task_started', 'assistant_message_end', 'turn_cancelled']),
+        // REV-1: failTurn emits assistant_message_end too; the status lets the daemon
+        // distinguish failed turns from genuinely completed ones.
+        terminalStatus: z.enum(['completed', 'failed']).optional(),
       }),
       response: {
         200: z.object({
@@ -709,6 +761,7 @@ export function createDaemonControlApp({
     const result = await handleConnectedServiceTurnLifecycle({
       sessionId: request.body.sessionId,
       event: request.body.event,
+      ...(request.body.terminalStatus ? { terminalStatus: request.body.terminalStatus } : {}),
     });
     return { ok: true as const, result };
   });
@@ -719,6 +772,14 @@ export function createDaemonControlApp({
         sessionId: z.string().min(1),
         serviceId: ConnectedServiceIdSchema,
         snapshot: ConnectedServiceQuotaSnapshotV1Schema,
+      }).superRefine((body, ctx) => {
+        if (body.snapshot.serviceId !== body.serviceId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'snapshot serviceId must match request serviceId',
+            path: ['snapshot', 'serviceId'],
+          });
+        }
       }),
       response: {
         200: z.object({
@@ -1235,12 +1296,14 @@ export function startDaemonControlServer({
     sessionId: string;
     switchesThisTurn: number;
     classification: ConnectedServiceRuntimeFailureClassification;
+    resumePromptMode?: 'standard' | 'off' | 'custom';
   }>) => Promise<unknown>;
   runtimeAuthRecoveryScheduler?: RuntimeAuthRecoverySchedulerForControlServer;
   isShuttingDown?: () => boolean;
   handleConnectedServiceTurnLifecycle?: (input: Readonly<{
     sessionId: string;
     event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled';
+    terminalStatus?: 'completed' | 'failed';
   }>) => Promise<unknown>;
   handleSessionConnectedServiceAuthSwitch?: (input: Readonly<SessionConnectedServiceAuthSwitchRpcParams>) => Promise<unknown>;
   handleConnectedServiceQuotaSnapshot?: (input: Readonly<{

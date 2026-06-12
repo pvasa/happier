@@ -68,6 +68,44 @@ describe('resolveExistingSessionAttachContext', () => {
     expect(vi.mocked(fetchSessionByIdCompat)).toHaveBeenCalledTimes(1);
   });
 
+  it('clamps the attach cursor to the owed-delivery watermark so committed-while-dead user rows are redelivered (D15b)', async () => {
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValueOnce(
+      createSessionRecordFixture({
+        id: 'sess_owed',
+        seq: 42,
+        encryptionMode: 'plain',
+        metadata: JSON.stringify({ flavor: 'claude', path: '/tmp', deliveredUserMessageSeqV1: 4 }),
+        dataEncryptionKey: null,
+      }),
+    );
+
+    const out = await resolveExistingSessionAttachContext({ token: 't', sessionId: 'sess_owed', agent: 'claude', credentials: null });
+    expect(out).toMatchObject({
+      ok: true,
+      attachPayload: { v: 2, encryptionMode: 'plain', lastObservedMessageSeq: 4 },
+      deliveredUserMessageSeq: 4,
+    });
+  });
+
+  it('keeps the session seq as the attach cursor when no delivered watermark exists (legacy sessions)', async () => {
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValueOnce(
+      createSessionRecordFixture({
+        id: 'sess_legacy',
+        seq: 42,
+        encryptionMode: 'plain',
+        metadata: JSON.stringify({ flavor: 'claude', path: '/tmp' }),
+        dataEncryptionKey: null,
+      }),
+    );
+
+    const out = await resolveExistingSessionAttachContext({ token: 't', sessionId: 'sess_legacy', agent: 'claude', credentials: null });
+    expect(out).toMatchObject({
+      ok: true,
+      attachPayload: { v: 2, encryptionMode: 'plain', lastObservedMessageSeq: 42 },
+      deliveredUserMessageSeq: null,
+    });
+  });
+
   it('returns decrypted plaintext metadata for runtime snapshot restoration', async () => {
     vi.mocked(fetchSessionByIdCompat).mockResolvedValueOnce(
       createSessionRecordFixture({

@@ -20,9 +20,16 @@ import {
   type ZellijPane,
 } from './actions';
 import { sanitizeTerminalHostDiagnosticText } from '../terminalHost/sanitizeTerminalHostDiagnosticText';
+import { createZellijTerminalControlPort } from './control';
 import { prepareZellijSocketDir, resolveZellijSocketDir } from './socketDir';
 
 const DEFAULT_INPUT_STABILITY_DELAY_MS = 50;
+/**
+ * R-E2: freshness window for reusing a `listPanes`-backed liveness inspection across the
+ * readiness/liveness bridges' back-to-back `evaluateLiveness` + `captureInputState` calls within one
+ * poll tick. Short enough that injection/control paths still observe near-current pane state.
+ */
+const LIVENESS_INSPECTION_FRESHNESS_MS = 100;
 const DEFAULT_ACTION_TIMEOUT_MS = 5_000;
 const DEFAULT_LAUNCH_PANE_DISCOVERY_POLL_MS = 50;
 const DEFAULT_SESSION_DISCOVERY_ACTION_TIMEOUT_MS = 1_000;
@@ -268,6 +275,12 @@ function truncateScreenDump(value: string): Readonly<{ text: string; truncated: 
 function summarizeDiagnosticError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return sanitizeTerminalHostDiagnosticText(message).replace(/\s+/g, ' ').trim().slice(0, 240) || 'unknown_error';
+}
+
+function isInactiveZellijSessionError(error: unknown): boolean {
+  const message = summarizeDiagnosticError(error);
+  return /\bThere is no active session\b/i.test(message)
+    || /\bEXITED\b.*\battach to resurrect\b/i.test(message);
 }
 
 function resolvePaneExitStatus(pane: ZellijPane | undefined): number | undefined {
@@ -675,19 +688,51 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
     ZELLIJ_SOCKET_DIR: resolveZellijSocketDir(params.happyHomeDir),
   };
 
-  async function inspectLiveness(handle: TerminalHostHandle): Promise<Readonly<{
+  type LivenessInspection = Readonly<{
     liveness: TerminalHostLiveness;
     targetPaneId?: string;
     paneDeadRecoverable?: boolean;
-  }>> {
+  }>;
+  // R-E2: within-tick memo of the last inspection per pane, keyed by session + tracked pane id.
+  const livenessInspectionCache = new Map<string, Readonly<{ atMs: number; value: LivenessInspection }>>();
+
+  async function inspectLiveness(handle: TerminalHostHandle): Promise<LivenessInspection> {
+    const cacheKey = `${handle.sessionName} ${handle.paneId ?? ''}`;
+    const cached = livenessInspectionCache.get(cacheKey);
+    const nowMs = Date.now();
+    if (cached && nowMs - cached.atMs <= LIVENESS_INSPECTION_FRESHNESS_MS) {
+      return cached.value;
+    }
+    const value = await inspectLivenessUncached(handle);
+    livenessInspectionCache.set(cacheKey, { atMs: Date.now(), value });
+    return value;
+  }
+
+  async function inspectLivenessUncached(handle: TerminalHostHandle): Promise<LivenessInspection> {
     const observedAt = Date.now();
     const trackedPaneId = handle.paneId;
     if (!trackedPaneId) return { liveness: { paneAlive: false, paneDead: true, observedAt }, paneDeadRecoverable: true };
-    const panes = await actions.listPanes({
-      zellijBinary: params.zellijBinary,
-      env: sessionEnv(env, handle.sessionName),
-      timeoutMs: actionTimeoutMs,
-    });
+    let panes: ZellijPane[];
+    try {
+      panes = await actions.listPanes({
+        zellijBinary: params.zellijBinary,
+        env: sessionEnv(env, handle.sessionName),
+        timeoutMs: actionTimeoutMs,
+      });
+    } catch (error) {
+      if (isInactiveZellijSessionError(error)) {
+        return {
+          liveness: {
+            paneAlive: false,
+            paneDead: true,
+            paneScreenDumpError: summarizeDiagnosticError(error),
+            observedAt,
+          },
+          paneDeadRecoverable: false,
+        };
+      }
+      throw error;
+    }
     const target = resolveRuntimePaneTarget({
       panes,
       paneId: trackedPaneId,
@@ -1075,6 +1120,18 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
     },
     evaluateLiveness,
     captureInputState,
+    createControlPort(handle: TerminalHostHandle) {
+      if (!handle.paneId || handle.paneId.trim().length === 0) return null;
+      return createZellijTerminalControlPort({
+        actions,
+        zellijBinary: params.zellijBinary,
+        env,
+        sessionName: handle.sessionName,
+        paneId: handle.paneId,
+        ...(params.chunkSize !== undefined ? { chunkSize: params.chunkSize } : {}),
+        timeoutMs: actionTimeoutMs,
+      });
+    },
     async dispose(handle: TerminalHostHandle): Promise<void> {
       await disposeZellijSession({
         actions,

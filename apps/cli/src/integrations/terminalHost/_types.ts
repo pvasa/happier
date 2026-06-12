@@ -1,4 +1,5 @@
 import type {
+  TerminalControlPort,
   TerminalHostKind,
   TerminalInjectionDuplicateRisk,
   TerminalInjectionFailurePhase,
@@ -61,6 +62,14 @@ export type TerminalHostAdapter = Readonly<{
   interruptTurn(handle: TerminalHostHandle): Promise<void>;
   evaluateLiveness(handle: TerminalHostHandle): Promise<TerminalHostLiveness>;
   captureInputState?(handle: TerminalHostHandle): Promise<TerminalInputState>;
+  /**
+   * Build a runtime-control port bound to this host handle. The port is the dedicated control surface
+   * (type literal text / raw sequences / special keys, capture screen) used by the Claude Unified TUI
+   * runtime-control controller. It is intentionally SEPARATE from `injectUserPrompt` (prompt delivery)
+   * so runtime controls never route through the prompt-injection path. Returns `null` when the host
+   * cannot provide a control target (e.g. missing pane id).
+   */
+  createControlPort?(handle: TerminalHostHandle): TerminalControlPort | null;
   dispose(handle: TerminalHostHandle): Promise<void>;
 }>;
 

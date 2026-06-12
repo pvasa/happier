@@ -13,6 +13,10 @@ import {
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import type { SessionSnapshotRefreshReasonInput } from '@/api/session/sessionSnapshotRefreshReason';
 import { tryParseJsonRecord } from '@/utils/tryParseJsonRecord';
+import {
+  clampAttachCursorToDeliveredUserMessageSeq,
+  readDeliveredUserMessageSeqV1,
+} from '@/api/session/deliveredUserMessageSeq';
 
 export type ExistingSessionAttachContext = Readonly<{
   ok: true;
@@ -20,6 +24,8 @@ export type ExistingSessionAttachContext = Readonly<{
   vendorResumeId: string | null;
   sessionPath: string | null;
   metadata: Record<string, unknown> | null;
+  /** Owed-delivery watermark from session metadata (A-F2/D15b); null for legacy sessions. */
+  deliveredUserMessageSeq: number | null;
 }>;
 
 export type ExistingSessionAttachContextFailureReason =
@@ -74,7 +80,13 @@ function buildExistingSessionAttachContext(params: Readonly<{
   });
   const sessionPath = resolveExistingSessionPath(metadata);
   const mode = resolveSessionStoredContentEncryptionMode(params.rawSession);
-  const lastObservedMessageSeq = resolveLastObservedMessageSeq(params.rawSession);
+  // Owed-delivery clamp (A-F2/D15b): never synthesize a catch-up cursor past the highest user row
+  // actually delivered to the runner, or rows committed while the runner was down are skipped forever.
+  const deliveredUserMessageSeq = readDeliveredUserMessageSeqV1(metadata);
+  const lastObservedMessageSeq = clampAttachCursorToDeliveredUserMessageSeq(
+    resolveLastObservedMessageSeq(params.rawSession),
+    deliveredUserMessageSeq,
+  );
   if (mode === 'plain') {
     return {
       ok: true,
@@ -90,6 +102,7 @@ function buildExistingSessionAttachContext(params: Readonly<{
       }),
       sessionPath,
       metadata,
+      deliveredUserMessageSeq,
     };
   }
 
@@ -114,6 +127,7 @@ function buildExistingSessionAttachContext(params: Readonly<{
     }),
     sessionPath,
     metadata,
+    deliveredUserMessageSeq,
   };
 }
 

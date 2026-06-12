@@ -3,6 +3,7 @@ import type {
   ConnectedServiceQuotaMeterV1,
   ConnectedServiceQuotaSnapshotV1,
 } from '@happier-dev/protocol';
+import { readConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol';
 
 import {
   normalizeQuotaMeter,
@@ -62,19 +63,7 @@ function readString(value: unknown): string | null {
 }
 
 function readLimitCategory(value: unknown): ProviderLimitCategory {
-  switch (value) {
-    case 'quota':
-    case 'rate_limit':
-    case 'capacity':
-    case 'auth':
-    case 'plan':
-    case 'validation':
-    case 'account_disabled':
-    case 'unknown':
-      return value;
-    default:
-      return 'quota';
-  }
+  return readConnectedServiceLimitCategoryV1(value) ?? 'usage_limit';
 }
 
 function isReliableMeter(meter: ConnectedServiceQuotaMeterV1): boolean | undefined {

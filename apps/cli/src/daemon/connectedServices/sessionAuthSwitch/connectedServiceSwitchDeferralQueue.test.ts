@@ -179,7 +179,7 @@ describe('connectedServiceSwitchDeferralQueue', () => {
     expect(runSwitch).toHaveBeenCalledTimes(1);
   });
 
-  it('completes deferred boundary switches immediately after a turn cancellation', async () => {
+  it('treats turn cancellation as a real boundary completion instead of a cancelled switch', async () => {
     const emitSessionEvent = vi.fn();
     const runSwitch = vi.fn(async () => {});
     const queue = createConnectedServiceSwitchDeferralQueue({
@@ -203,7 +203,7 @@ describe('connectedServiceSwitchDeferralQueue', () => {
     expect(runSwitch).toHaveBeenCalledTimes(1);
     expect(emitSessionEvent).toHaveBeenCalledWith('sess_1', expect.objectContaining({
       type: 'connected_service_account_switch_deferral_completed',
-      reason: 'switch_cancelled',
+      reason: 'completed_at_boundary',
     }));
   });
 

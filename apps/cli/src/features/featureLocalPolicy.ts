@@ -11,6 +11,12 @@ const LOCAL_POLICY_BY_FEATURE: Readonly<Partial<Record<FeatureId, FeatureLocalPo
   'connectedServices.quotas': (env) => parseBooleanEnv(env.HAPPIER_FEATURE_CONNECTED_SERVICES_QUOTAS__ENABLED, true),
   channelBridges: (env) => parseBooleanEnv(env.HAPPIER_FEATURE_CHANNEL_BRIDGES__ENABLED, true),
   'channelBridges.telegram': (env) => parseBooleanEnv(env.HAPPIER_FEATURE_CHANNEL_BRIDGES_TELEGRAM__ENABLED, true),
+  // Claude Unified TUI runtime-control rides the unified-mode opt-in (unified is itself off by
+  // default), so it defaults ON; the env flag is a KILL-SWITCH (=0) if a Claude update breaks the
+  // screen verification. The controller fails closed on any unverified control regardless, and the
+  // kill-switch restores the legacy restart-notice path.
+  'providers.claude.unifiedTerminal.tuiRuntimeControl': (env) =>
+    parseBooleanEnv(env.HAPPIER_FEATURE_CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL__ENABLED, true),
 };
 
 export function resolveCliLocalFeaturePolicyEnabled(featureId: FeatureId, env: NodeJS.ProcessEnv): boolean {

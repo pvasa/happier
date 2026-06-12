@@ -1,11 +1,51 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { parseClaudeScreenState, resolveClaudeScreenInFlightSteerVeto } from '@/backends/claude/unifiedTerminal/tuiControls/screenState';
+
 import { createTmuxTerminalHostAdapter } from './adapter';
 import { TmuxUtilities } from './TmuxUtilities';
+
+const TMUX_HANDLE = {
+  kind: 'tmux',
+  sessionName: 'happy',
+  paneId: 'claude.1',
+  attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' },
+} as const;
 
 describe('createTmuxTerminalHostAdapter', () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  describe('captureInputState multi-line fidelity (R-E1)', () => {
+    it('returns the FULL pane so multi-line steer vetoes (permission prompt above the bottom line) fire on tmux', async () => {
+      // Live-shaped capture-pane output: a permission dialog sits ABOVE the bottom composer line.
+      const fullPane = [
+        '● Reading file src/index.ts',
+        '',
+        'Do you want to proceed?',
+        '❯ 1. Yes',
+        '  2. No',
+        '',
+        '│ > │',
+      ].join('\n');
+      const tmux = new TmuxUtilities();
+      vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => ({
+        returncode: 0,
+        stdout: args[0] === 'capture-pane' ? `${fullPane}\n` : '',
+        stderr: '',
+        command: [...args],
+      }));
+      const adapter = createTmuxTerminalHostAdapter({ tmux });
+
+      const inputState = await adapter.captureInputState?.(TMUX_HANDLE);
+      expect(inputState).toBeDefined();
+
+      const screen = parseClaudeScreenState(inputState!.currentInput);
+      // The permission prompt is several lines above the bottom; a last-line-only capture cannot see it.
+      expect(screen.permissionPromptVisible).toBe(true);
+      expect(resolveClaudeScreenInFlightSteerVeto(screen)).toBe('permission_prompt');
+    });
   });
 
   it('declares terminal-host attach metadata for created tmux hosts', async () => {
@@ -47,7 +87,6 @@ describe('createTmuxTerminalHostAdapter', () => {
       command: [],
     });
     vi.spyOn(tmux, 'captureCurrentInput').mockResolvedValue('');
-    vi.spyOn(tmux, 'isUserTyping').mockResolvedValue(false);
     const adapter = createTmuxTerminalHostAdapter({ tmux });
 
     await expect(
@@ -400,8 +439,10 @@ describe('createTmuxTerminalHostAdapter', () => {
       stderr: '',
       command: [],
     });
-    const captureCurrentInput = vi.spyOn(tmux, 'captureCurrentInput').mockResolvedValue('partial prompt');
-    const isUserTyping = vi.spyOn(tmux, 'isUserTyping').mockResolvedValue(true);
+    // Two full-pane captures that differ => the user is mid-keystroke => unstable => defer.
+    const captureCurrentInput = vi.spyOn(tmux, 'captureCurrentInput')
+      .mockResolvedValueOnce('partial promp')
+      .mockResolvedValueOnce('partial prompt');
 
     const adapter = createTmuxTerminalHostAdapter({ tmux });
 
@@ -423,7 +464,46 @@ describe('createTmuxTerminalHostAdapter', () => {
     ).resolves.toEqual({ status: 'deferred', reason: 'user_typing', retryAfterMs: 250 });
 
     expect(executeTmuxCommand).toHaveBeenCalledTimes(1);
-    expect(captureCurrentInput).toHaveBeenCalledWith('happy:claude.1');
-    expect(isUserTyping).toHaveBeenCalledWith(50, 2, 'happy:claude.1');
+    expect(captureCurrentInput).toHaveBeenCalledTimes(2);
+    expect(captureCurrentInput).toHaveBeenNthCalledWith(1, 'happy:claude.1');
+    expect(captureCurrentInput).toHaveBeenNthCalledWith(2, 'happy:claude.1');
+  });
+
+  it('exposes a runtime-control port bound to the pane that is distinct from prompt injection', async () => {
+    const tmux = new TmuxUtilities();
+    const adapter = createTmuxTerminalHostAdapter({ tmux });
+
+    const port = adapter.createControlPort?.({
+      kind: 'tmux',
+      sessionName: 'happy',
+      paneId: 'claude.1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        maxClients: null,
+        requiresLocalAttachmentInfo: true,
+        liveProbe: 'required',
+      },
+    });
+
+    expect(port).not.toBeNull();
+    expect(port?.hostKind).toBe('tmux');
+    // The control port is a dedicated surface; it must never expose prompt injection.
+    expect('injectUserPrompt' in (port ?? {})).toBe(false);
+
+    const empty = adapter.createControlPort?.({
+      kind: 'tmux',
+      sessionName: '   ',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        maxClients: null,
+        requiresLocalAttachmentInfo: true,
+        liveProbe: 'required',
+      },
+    });
+    expect(empty).toBeNull();
   });
 });

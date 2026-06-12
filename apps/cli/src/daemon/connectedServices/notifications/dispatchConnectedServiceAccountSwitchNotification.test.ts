@@ -51,7 +51,7 @@ describe('dispatchConnectedServiceAccountSwitchNotificationAsync', () => {
           resetsAt: null,
           status: 'ok',
           confidence: 'exact',
-          details: { limitCategory: 'quota' },
+          details: { limitCategory: 'usage_limit' },
         }],
       },
     });
@@ -79,7 +79,7 @@ describe('dispatchConnectedServiceAccountSwitchNotificationAsync', () => {
           resetsAt: null,
           status: 'ok',
           confidence: 'exact',
-          details: { limitCategory: 'quota' },
+          details: { limitCategory: 'usage_limit' },
         }],
       },
     });

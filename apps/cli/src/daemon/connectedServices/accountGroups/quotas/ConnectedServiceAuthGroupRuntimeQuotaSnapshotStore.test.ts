@@ -87,7 +87,7 @@ describe('ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore', () => {
         meters: [
           {
             meterId: 'primary',
-            limitCategory: 'quota',
+            limitCategory: 'usage_limit',
             remainingPct: 0,
             resetAtMs: 5_000,
             providerLimitId: 'primary_window',
@@ -159,14 +159,14 @@ describe('ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore', () => {
         meters: [
           {
             meterId: 'daily',
-            limitCategory: 'quota',
+            limitCategory: 'usage_limit',
             remainingPct: 30,
             resetAtMs: 7_000,
             providerLimitId: null,
           },
           {
             meterId: 'weekly',
-            limitCategory: 'quota',
+            limitCategory: 'usage_limit',
             remainingPct: 5,
             resetAtMs: 9_000,
             providerLimitId: null,

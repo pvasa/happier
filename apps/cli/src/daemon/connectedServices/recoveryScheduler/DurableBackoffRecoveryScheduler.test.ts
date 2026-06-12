@@ -471,6 +471,87 @@ describe('DurableBackoffRecoveryScheduler', () => {
     }
   });
 
+  it('chunks long timers and rearms when a timer callback fires before the retry time', async () => {
+    const maxSafeTimerDelayMs = 2_147_483_647;
+    const capturedTimers: Array<Readonly<{ delayMs: number; fire: () => void }>> = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay?: number) => {
+      capturedTimers.push({
+        delayMs: Number(delay ?? 0),
+        fire: callback,
+      });
+      // Boundary fake for the timer handle; the scheduler only calls optional unref().
+      return { unref: vi.fn() } as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(() => undefined);
+    try {
+      let nowMs = 1_000;
+      const nextRetryAtMs = nowMs + maxSafeTimerDelayMs + 5_000;
+      const recover = vi.fn(async () => ({ status: 'success' as const }));
+      const written = new Map<string, TestIntent>();
+      const scheduler = new DurableBackoffRecoveryScheduler<TestIntent>({
+        nowMs: () => nowMs,
+        baseBackoffMs: 100,
+        maxBackoffMs: 1_000,
+        jitterMs: () => 0,
+        store: {
+          read: (key) => written.get(key) ?? null,
+          write: (key, intent) => {
+            written.set(key, intent);
+          },
+        },
+        normalizeIntent: (value) => value as TestIntent,
+        getStatus: (intent) => intent.status,
+        getNextRetryAtMs: (intent) => intent.nextRetryAtMs,
+        getAttemptCount: (intent) => intent.attemptCount,
+        getMaxAttempts: (intent) => intent.maxAttempts,
+        markChecking: (intent, attemptCount) => ({ ...intent, status: 'checking', attemptCount }),
+        markWaiting: (intent, input) => ({
+          ...intent,
+          status: 'waiting',
+          nextRetryAtMs: input.nextRetryAtMs,
+          lastError: input.lastError,
+        }),
+        markCancelled: (intent) => ({ ...intent, status: 'cancelled', nextRetryAtMs: null, lastError: null }),
+        markExhausted: (intent, input) => ({
+          ...intent,
+          status: 'exhausted',
+          nextRetryAtMs: null,
+          lastError: input.lastError,
+        }),
+        recover,
+      });
+
+      await scheduler.upsertByKey({
+        sessionId: 'session-1',
+        recoveryKey: 'k1',
+        intent: {
+          ...createIntent(),
+          nextRetryAtMs,
+        },
+      });
+
+      expect(capturedTimers[0]?.delayMs).toBe(maxSafeTimerDelayMs);
+
+      nowMs += maxSafeTimerDelayMs;
+      capturedTimers[0]?.fire();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(recover).not.toHaveBeenCalled();
+      const rearmedTimer = capturedTimers.at(-1);
+      expect(rearmedTimer?.delayMs).toBe(5_000);
+
+      nowMs = nextRetryAtMs;
+      rearmedTimer?.fire();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect(setTimeoutSpy).toHaveBeenCalled();
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('dispose() stops armed timers from firing recover and leaves the intent waiting on disk', async () => {
     vi.useFakeTimers();
     try {
@@ -587,5 +668,62 @@ describe('DurableBackoffRecoveryScheduler', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('removes the durable record on a superseded outcome so the key can re-arm later', async () => {
+    // A superseded recovery (the failure no longer applies — e.g. the group switched off the
+    // failing profile) must REMOVE the record rather than terminalize it: a terminal
+    // `cancelled` record would block re-arming the same recovery key on a genuine future
+    // failure for the whole terminal-record retention window (RD-REC-13).
+    const written = new Map<string, TestIntent>([
+      ['k1', createIntent()],
+    ]);
+    const onSuperseded = vi.fn();
+    const scheduler = new DurableBackoffRecoveryScheduler<TestIntent>({
+      nowMs: () => 2_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      store: {
+        read: (key) => written.get(key) ?? null,
+        readAll: () => [...written.entries()],
+        write: (key, intent) => {
+          written.set(key, intent);
+        },
+        remove: (key) => {
+          written.delete(key);
+        },
+      },
+      normalizeIntent: (value) => value as TestIntent,
+      getStatus: (intent) => intent.status,
+      getNextRetryAtMs: (intent) => intent.nextRetryAtMs,
+      getAttemptCount: (intent) => intent.attemptCount,
+      getMaxAttempts: (intent) => intent.maxAttempts,
+      markChecking: (intent, attemptCount) => ({ ...intent, status: 'checking', attemptCount }),
+      markWaiting: (intent, input) => ({
+        ...intent,
+        status: 'waiting',
+        nextRetryAtMs: input.nextRetryAtMs,
+        lastError: input.lastError,
+      }),
+      markCancelled: (intent) => ({ ...intent, status: 'cancelled', nextRetryAtMs: null, lastError: null }),
+      markExhausted: (intent, input) => ({
+        ...intent,
+        status: 'exhausted',
+        nextRetryAtMs: null,
+        lastError: input.lastError,
+      }),
+      onSuperseded,
+      recover: async () => ({ status: 'superseded', reason: 'failing_profile_inactive' }),
+    });
+
+    await expect(scheduler.wakeByKey({ recoveryKey: 'k1', reason: 'manual', sessionId: 'session-1' }))
+      .resolves.toEqual({ status: 'superseded' });
+    expect(written.has('k1')).toBe(false);
+    expect(scheduler.readByKey('k1')).toBeNull();
+    expect(onSuperseded).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1',
+      reason: 'failing_profile_inactive',
+    }));
   });
 });

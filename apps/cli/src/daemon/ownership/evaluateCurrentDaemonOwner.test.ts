@@ -60,6 +60,7 @@ describe('evaluateCurrentDaemonOwner', () => {
         'HAPPIER_HOME_DIR',
         'HAPPIER_ACTIVE_SERVER_ID',
         'HAPPIER_PUBLIC_RELEASE_CHANNEL',
+        'HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK',
     ]);
 
     afterEach(() => {
@@ -78,6 +79,40 @@ describe('evaluateCurrentDaemonOwner', () => {
 
             const { evaluateCurrentDaemonOwner } = await import('./evaluateCurrentDaemonOwner');
             await expect(evaluateCurrentDaemonOwner()).resolves.toEqual({ kind: 'none' });
+        });
+    });
+
+    it('ignores a state-less daemon process from the same runtime when it belongs to another daemon scope', async () => {
+        await withTempDir('happier-daemon-owner-scope-mismatch-', async (homeDir) => {
+            envScope.patch({
+                HAPPIER_HOME_DIR: homeDir,
+                HAPPIER_ACTIVE_SERVER_ID: 'stack_current__id_default',
+                HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+                HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK: '1',
+            });
+            vi.resetModules();
+            vi.doMock('@/daemon/doctor', () => ({
+                findAllHappyProcesses: async () => [
+                    {
+                        pid: process.pid + 1000,
+                        command: `${process.execPath} ${process.cwd()}/src/index.ts daemon start-sync`,
+                        type: 'dev-daemon',
+                        daemonOwnershipEnvironmentVariables: {
+                            HAPPIER_HOME_DIR: `${homeDir}-other`,
+                            HAPPIER_ACTIVE_SERVER_ID: 'stack_other__id_default',
+                        },
+                    } satisfies HappyProcessInfo & {
+                        daemonOwnershipEnvironmentVariables: Record<string, string>;
+                    },
+                ],
+            }));
+
+            try {
+                const { evaluateCurrentDaemonOwner } = await import('./evaluateCurrentDaemonOwner');
+                await expect(evaluateCurrentDaemonOwner()).resolves.toEqual({ kind: 'none' });
+            } finally {
+                vi.doUnmock('@/daemon/doctor');
+            }
         });
     });
 

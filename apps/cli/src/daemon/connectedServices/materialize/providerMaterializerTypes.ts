@@ -46,6 +46,8 @@ export type ConnectedServicesProviderMaterializerInput = Readonly<{
   selectionsByServiceId?: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedSelection>;
   accountSettings?: AccountSettings | Readonly<Record<string, unknown>> | null;
   processEnv?: NodeJS.ProcessEnv;
+  vendorResumeId?: string | null;
+  candidatePersistedSessionFile?: string | null;
   cleanupRoot: () => void;
 }>;
 

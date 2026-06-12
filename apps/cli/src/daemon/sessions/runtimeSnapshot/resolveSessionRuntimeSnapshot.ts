@@ -242,7 +242,20 @@ function applySnapshotToSpawnOptions(
   options: SpawnSessionOptions,
   snapshot: SessionRuntimeSnapshot,
 ): SpawnSessionOptions {
-  const next: SpawnSessionOptions = { ...options };
+  // The snapshot's spawn options are the DURABLE respawn/resume identity (persisted as tracked
+  // spawn options and replayed by crash/auth respawns). One-shot delivery fields from a single
+  // resume RPC must not survive into it: a stale `initialTranscriptAfterSeq` makes every later
+  // respawn replay already-processed user messages through the explicit startup catch-up
+  // (incident: session cmq7pyqkj, 2026-06-12); stale prompts/goals/attach payloads are equally
+  // single-use.
+  const {
+    initialTranscriptAfterSeq: _initialTranscriptAfterSeq,
+    initialPrompt: _initialPrompt,
+    initialGoal: _initialGoal,
+    existingSessionAttachPayload: _existingSessionAttachPayload,
+    ...durableOptions
+  } = options;
+  const next: SpawnSessionOptions = { ...durableOptions };
 
   if (snapshot.connectedServices) {
     next.connectedServices = snapshot.connectedServices;

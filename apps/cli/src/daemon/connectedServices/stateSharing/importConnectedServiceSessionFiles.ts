@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFile, lstat, mkdir, readdir, readFile, rename, rm } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rm } from 'node:fs/promises';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 
 export type ConnectedServiceSessionFileImportDetail = Readonly<{
@@ -29,7 +29,17 @@ export async function importConnectedServiceSessionFiles(params: Readonly<{
   for (const root of params.roots) {
     const sourceRoot = resolve(root.sourceRoot);
     const destinationRoot = resolve(root.destinationRoot);
-    if (sourceRoot === destinationRoot) continue;
+    // Compare PHYSICAL roots: a destination symlinked into the source store (e.g. a shared-mode
+    // staged home whose `projects` links to the shared store) is the same root even though the
+    // lexical paths differ. Importing a store onto itself would hash every file twice for nothing
+    // and, if a live session appends between the two reads, mint a conflict copy of a file onto
+    // itself inside the shared store. The physical paths are used only for this guard; emitted
+    // details keep the caller-provided (lexically resolved) paths.
+    const [physicalSourceRoot, physicalDestinationRoot] = await Promise.all([
+      resolvePhysicalRoot(sourceRoot),
+      resolvePhysicalRoot(destinationRoot),
+    ]);
+    if (physicalSourceRoot === physicalDestinationRoot) continue;
     for (const sourcePath of await listImportableFiles(sourceRoot)) {
       const relativePath = normalizeRelativePath(relative(sourceRoot, sourcePath));
       if (!isSafeRelativePath(relativePath)) continue;
@@ -79,6 +89,30 @@ async function listImportableFiles(root: string): Promise<readonly string[]> {
   }
   files.sort((a, b) => a.localeCompare(b));
   return files;
+}
+
+/**
+ * Resolves a root to its physical path. When the path does not exist yet (a destination root is
+ * commonly created lazily), the deepest existing ancestor is realpath'd and the missing remainder
+ * re-joined, so symlinked ancestors still resolve. Falls back to the lexical resolve on any
+ * non-ENOENT failure.
+ */
+async function resolvePhysicalRoot(path: string): Promise<string> {
+  const lexical = resolve(path);
+  let current = lexical;
+  const pendingSegments: string[] = [];
+  while (true) {
+    try {
+      const physical = await realpath(current);
+      return pendingSegments.length > 0 ? join(physical, ...pendingSegments) : physical;
+    } catch (error) {
+      if (!isEnoentError(error)) return lexical;
+      const parent = dirname(current);
+      if (parent === current) return lexical;
+      pendingSegments.unshift(basename(current));
+      current = parent;
+    }
+  }
 }
 
 function normalizeRelativePath(path: string): string {

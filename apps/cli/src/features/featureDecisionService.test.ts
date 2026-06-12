@@ -97,6 +97,30 @@ describe('resolveCliFeatureDecision', () => {
     expect(decision.blockedBy).toBe('server');
   });
 
+  // Unified mode is itself opt-in; the TUI runtime-control gate rides it and defaults ON.
+  // The env flag is a KILL-SWITCH (set =0 to disable), not an enable switch.
+  it('enables the Claude Unified TUI runtime-control gate by default (unified mode is the opt-in)', () => {
+    const decision = resolveCliFeatureDecision({
+      featureId: 'providers.claude.unifiedTerminal.tuiRuntimeControl',
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(decision.state).toBe('enabled');
+    expect(decision.blockedBy).toBeNull();
+  });
+
+  it('disables the Claude Unified TUI runtime-control gate via the env kill-switch', () => {
+    const decision = resolveCliFeatureDecision({
+      featureId: 'providers.claude.unifiedTerminal.tuiRuntimeControl',
+      env: {
+        HAPPIER_FEATURE_CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL__ENABLED: '0',
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(decision.state).toBe('disabled');
+    expect(decision.blockedBy).toBe('local_policy');
+  });
+
   it('disables voice.agent when execution.runs dependency is locally disabled', () => {
     const decision = resolveCliFeatureDecision({
       featureId: 'voice.agent',

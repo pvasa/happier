@@ -6,6 +6,7 @@ import {
   type ConnectedServiceCredentialHealthV1,
   type ConnectedServiceCredentialRecordV1,
   type ConnectedServiceId,
+  type ConnectedServiceMaterializationIdentityV1,
 } from '@happier-dev/protocol';
 import { randomBytes } from 'node:crypto';
 
@@ -43,6 +44,7 @@ import {
   readConnectedServiceChildSelectionsFromEnv,
   type ConnectedServiceChildSelection,
 } from '../connectedServiceChildEnvironment';
+import { readConnectedServiceMaterializationIdentityV1 } from '../materialize/createConnectedServiceMaterializationIdentity';
 
 type BoundProfile = Readonly<{ serviceId: ConnectedServiceId; profileId: string }>;
 type ConnectedServiceCredentialSource =
@@ -95,9 +97,35 @@ type SpawnTarget = Readonly<{
   agentId: CatalogAgentId;
   sessionId: string | null;
   materializationKey: string;
+  connectedServiceMaterializationIdentityV1: ConnectedServiceMaterializationIdentityV1 | null;
+  sessionDirectory: string | null;
   bindings: ReadonlyArray<BoundProfile>;
   selectionsByServiceId: ReadonlyMap<ConnectedServiceId, ConnectedServiceChildSelection>;
 }>;
+
+/**
+ * Resolve the materialization identity a refresh-driven rematerialization must target.
+ *
+ * The spawn registers `materializationKey = identity.id` (`csm_*`) and the session reads
+ * `<baseDir>/<identity.id>/<agentId>`. `materializeConnectedServicesForSpawn` falls back to
+ * `sha256(key)` when no identity object is supplied, so a rematerialization that drops the identity
+ * writes fresh credentials into an ORPHAN root no session ever reads (RD-MAT-6). When the caller
+ * did not register the typed identity, reconstruct it from a canonical `csm_*` key — only the `id`
+ * drives root resolution; the timestamp is a sentinel for the schema and is never persisted.
+ */
+function resolveSpawnTargetMaterializationIdentity(
+  target: SpawnTarget,
+): ConnectedServiceMaterializationIdentityV1 | null {
+  if (target.connectedServiceMaterializationIdentityV1) {
+    return target.connectedServiceMaterializationIdentityV1;
+  }
+  if (!target.materializationKey.startsWith('csm_')) return null;
+  return readConnectedServiceMaterializationIdentityV1({
+    v: 1,
+    id: target.materializationKey,
+    createdAtMs: 0,
+  });
+}
 
 function bindingKey(binding: BoundProfile): string {
   return `${binding.serviceId}/${binding.profileId}`;
@@ -329,6 +357,10 @@ export class ConnectedServiceRefreshCoordinator {
     agentId: CatalogAgentId;
     sessionId?: string | null;
     materializationKey: string;
+    /** Tracked session materialization identity; keeps rematerialization on the live `csm_*` root. */
+    connectedServiceMaterializationIdentityV1?: unknown;
+    /** Tracked session working directory; keeps workspace-trust projection on the session cwd. */
+    sessionDirectory?: string | null;
     connectedServicesBindingsRaw: unknown;
     connectedServiceSelectionsEnv?: Pick<NodeJS.ProcessEnv, string>;
   }>): void {
@@ -344,6 +376,12 @@ export class ConnectedServiceRefreshCoordinator {
         ? params.sessionId.trim()
         : null,
       materializationKey: params.materializationKey,
+      connectedServiceMaterializationIdentityV1: readConnectedServiceMaterializationIdentityV1(
+        params.connectedServiceMaterializationIdentityV1,
+      ),
+      sessionDirectory: typeof params.sessionDirectory === 'string' && params.sessionDirectory.trim().length > 0
+        ? params.sessionDirectory.trim()
+        : null,
       bindings,
       selectionsByServiceId,
     });
@@ -401,14 +439,20 @@ export class ConnectedServiceRefreshCoordinator {
       throw new Error('connected_service_chatgpt_refresh_unavailable');
     }
 
-    await materializeCodexChatGptRefreshBridgeSelection({
-      selection: input.selection,
-      record: updated.credential,
-      activeServerDir: this.params.activeServerDir,
-      baseDir: this.params.baseDir,
-      accountSettings: this.params.accountSettingsProvider?.() ?? null,
-      processEnv: this.params.processEnv ?? process.env,
+    const rematerializedTargets = await this.rematerializeTargetsForBinding({
+      serviceId: 'openai-codex',
+      profileId,
     });
+    if (rematerializedTargets.length === 0) {
+      await materializeCodexChatGptRefreshBridgeSelection({
+        selection: input.selection,
+        record: updated.credential,
+        activeServerDir: this.params.activeServerDir,
+        baseDir: this.params.baseDir,
+        accountSettings: this.params.accountSettingsProvider?.() ?? null,
+        processEnv: this.params.processEnv ?? process.env,
+      });
+    }
 
     return {
       accessToken: updated.credential.oauth.accessToken,
@@ -1057,6 +1101,13 @@ export class ConnectedServiceRefreshCoordinator {
       const materialized = await materializeConnectedServicesForSpawn({
         agentId: target.agentId,
         materializationKey: target.materializationKey,
+        // RD-MAT-6: without the identity the root resolver sha256-hashes the key into an orphan
+        // root the session never reads; thread the identity so refresh-driven rematerialization
+        // applies fresh credentials to the LIVE `<baseDir>/<csm_*>/<agentId>` root.
+        connectedServiceMaterializationIdentityV1: resolveSpawnTargetMaterializationIdentity(target),
+        // RD-MAT-6: without the session directory, Claude workspace-trust projection falls back to
+        // the daemon's cwd instead of the session's project directory.
+        sessionDirectory: target.sessionDirectory,
         activeServerDir: this.params.activeServerDir,
         baseDir: this.params.baseDir,
         recordsByServiceId: records,

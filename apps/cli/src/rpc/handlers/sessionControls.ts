@@ -46,6 +46,7 @@ export type SessionRuntimeControls = {
     sessionId: string;
     issueFingerprint?: string;
     rememberPreference?: boolean;
+    resumePromptMode?: 'standard' | 'off' | 'custom';
   }>) => Promise<unknown> | unknown;
   cancelUsageLimitWaitResume?: (request: Readonly<{
     sessionId: string;
@@ -55,6 +56,7 @@ export type SessionRuntimeControls = {
     sessionId: string;
     provider?: string;
     operation?: 'check_now' | 'switch_account_now';
+    resumePromptMode?: 'standard' | 'off' | 'custom';
   }>) => Promise<unknown> | unknown;
   handleUserMessage?: (
     request: Readonly<{
@@ -128,12 +130,15 @@ function buildUsageLimitRecoveryIntent(input: Readonly<{
     attemptCount: 0,
     maxAttempts: 0,
     lastProbeError: null,
+    resumePromptMode: 'standard',
     selectedAuth: { kind: 'native' },
   });
 }
 
-function readCurrentUsageLimitRecoveryIntent(metadata: Metadata): unknown {
-  return (metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY];
+function readCurrentUsageLimitRecoveryIntent(metadata: Metadata | null | undefined): unknown {
+  return metadata && typeof metadata === 'object'
+    ? (metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]
+    : undefined;
 }
 
 function writeUsageLimitRecoveryIntent(
@@ -249,27 +254,20 @@ export function registerSessionControlHandlers(
       sessionId: parsed.data.sessionId,
       ...(typeof parsed.data.issueFingerprint === 'string' ? { issueFingerprint: parsed.data.issueFingerprint } : {}),
       ...((parsed.data.remember === true || parsed.data.rememberPreference === true) ? { rememberPreference: true } : {}),
+      ...(parsed.data.resumePromptMode ? { resumePromptMode: parsed.data.resumePromptMode } : {}),
     };
     if (!await usageLimitRecoveryFeatureEnabled()) {
       return usageLimitRecoveryFeatureDisabledResult({ sessionId: request.sessionId });
     }
+    // F1: without the runtime control there is no runner that can actually wait
+    // and resume — fabricating a persisted `waiting` intent with null timing and
+    // maxAttempts 0 reported a recovery that could never happen (RD-REC-4).
+    // Return the honest typed `unsupported` result instead.
     if (typeof opts.sessionRuntimeControls?.enableUsageLimitWaitResume !== 'function') {
-      if (typeof opts.updateSessionMetadata !== 'function') {
-        return normalizeUsageLimitRecoveryOperationResult(
-          unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE),
-          request.sessionId,
-        );
-      }
-      const intent = buildUsageLimitRecoveryIntent({
-        issueFingerprint: request.issueFingerprint,
-        nowMs: Date.now(),
-      });
-      await opts.updateSessionMetadata((metadata) => writeUsageLimitRecoveryIntent(metadata, intent));
-      return normalizeUsageLimitRecoveryOperationResult({
-        ok: true,
-        status: 'waiting',
-        issueFingerprint: intent.issueFingerprint,
-      }, request.sessionId);
+      return normalizeUsageLimitRecoveryOperationResult(
+        unsupported(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE),
+        request.sessionId,
+      );
     }
     return normalizeUsageLimitRecoveryOperationResult(
       await opts.sessionRuntimeControls.enableUsageLimitWaitResume(request),
@@ -336,6 +334,7 @@ export function registerSessionControlHandlers(
       sessionId: parsed.data.sessionId,
       ...(typeof parsed.data.provider === 'string' ? { provider: parsed.data.provider } : {}),
       ...(parsed.data.operation ? { operation: parsed.data.operation } : {}),
+      ...(parsed.data.resumePromptMode ? { resumePromptMode: parsed.data.resumePromptMode } : {}),
     }), parsed.data.sessionId);
   });
 

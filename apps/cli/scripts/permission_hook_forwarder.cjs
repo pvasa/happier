@@ -2,11 +2,39 @@
 const http = require('http');
 
 const port = Number.parseInt(process.argv[2], 10);
-const rawThirdArg = typeof process.argv[3] === 'string' ? process.argv[3] : '';
-const rawFourthArg = typeof process.argv[4] === 'string' ? process.argv[4] : '';
 const knownHookEvents = new Set(['PermissionRequest', 'PreToolUse']);
-const hookEventName = knownHookEvents.has(rawThirdArg) ? rawThirdArg : '';
-const secret = hookEventName ? rawFourthArg : rawThirdArg;
+
+// Args after the port: an optional hook event name, then either `--secret-file <path>` (current —
+// keeps the secret off the world-visible command line) or a legacy inline secret value.
+let hookEventName = '';
+let secretFilePath = '';
+let inlineSecret = '';
+const restArgs = process.argv.slice(3);
+for (let i = 0; i < restArgs.length; i += 1) {
+    const arg = typeof restArgs[i] === 'string' ? restArgs[i] : '';
+    if (arg === '--secret-file') {
+        secretFilePath = typeof restArgs[i + 1] === 'string' ? restArgs[i + 1] : '';
+        i += 1;
+        continue;
+    }
+    if (!hookEventName && knownHookEvents.has(arg)) {
+        hookEventName = arg;
+        continue;
+    }
+    if (!inlineSecret && arg.length > 0) {
+        inlineSecret = arg;
+    }
+}
+
+let secret = inlineSecret;
+if (secretFilePath) {
+    try {
+        secret = require('fs').readFileSync(secretFilePath, 'utf8').trim();
+    } catch {
+        // Unreadable secret file: fall through with whatever inline secret (if any) was provided;
+        // the hook server rejects the request and the forwarder prints the safe fallback.
+    }
+}
 
 function buildFallback() {
     return JSON.stringify({

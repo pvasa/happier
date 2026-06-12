@@ -119,6 +119,7 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
         payload: {
           sessionId: 'sess_1',
           switchesThisTurn: 0,
+          resumePromptMode: 'custom',
           classification: {
             kind: 'capacity',
             limitCategory: 'capacity',
@@ -144,6 +145,7 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
       expect(handleConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith({
         sessionId: 'sess_1',
         switchesThisTurn: 0,
+        resumePromptMode: 'custom',
         classification: expect.objectContaining({
           kind: 'capacity',
           serviceId: 'openai-codex',
@@ -286,6 +288,267 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
       });
       expect(handleConnectedServiceRuntimeAuthFailure).toHaveBeenCalledOnce();
       expect(calls).toEqual(['begin', 'handler']);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('does not terminalize a group-exhausted no_eligible_member result when a reset wait is armed', async () => {
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const runtimeAuthRecoveryScheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({ status: 'credential_refreshed' }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'main',
+    });
+    const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'switch_attempted' as const,
+      result: {
+        status: 'no_eligible_member' as const,
+        generation: 17,
+        groupExhausted: true,
+        retryAtMs: 5_000,
+        excluded: [
+          { profileId: 'primary', reason: 'quota_exhausted', retryAtMs: 5_000 },
+        ],
+      },
+    }));
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceRuntimeAuthFailure,
+      runtimeAuthRecoveryScheduler,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-runtime-auth/failure',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          sessionId: 'sess_1',
+          switchesThisTurn: 0,
+          classification: {
+            kind: 'usage_limit',
+            serviceId: 'openai-codex',
+            profileId: 'primary',
+            groupId: 'main',
+            resetsAtMs: 5_000,
+            planType: null,
+            rateLimits: null,
+            source: 'structured_provider_error',
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        ok: true,
+        result: {
+          status: 'switch_attempted',
+          result: {
+            status: 'no_eligible_member',
+            generation: 17,
+            groupExhausted: true,
+            retryAtMs: 5_000,
+            excluded: [
+              { profileId: 'primary', reason: 'quota_exhausted', retryAtMs: 5_000 },
+            ],
+          },
+        },
+      });
+      expect(runtimeAuthRecoveryScheduler.readByKey(recoveryKey)).toMatchObject({
+        status: 'waiting',
+        nextRetryAtMs: 5_000,
+        terminalReason: null,
+      });
+      expect(diagnostics).not.toContainEqual(expect.objectContaining({
+        event: 'runtime_auth_recovery_terminal',
+      }));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('re-arms a durable wait instead of terminalizing a timing-less group-exhausted no_eligible_member (F0)', async () => {
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const runtimeAuthRecoveryScheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({ status: 'credential_refreshed' }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'main',
+    });
+    // Genuinely timing-less group exhaustion (live incident cmq7pyq shape): no
+    // retryAtMs, no resetsAtMs anywhere. The in-band path must mirror the
+    // scheduler's F0 fix: durable wait at the policy floor, never terminal.
+    const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'switch_attempted' as const,
+      result: {
+        status: 'no_eligible_member' as const,
+        generation: 17,
+        groupExhausted: true,
+        retryAtMs: null,
+        excluded: [
+          { profileId: 'primary', reason: 'quota_exhausted', retryAtMs: null },
+        ],
+      },
+    }));
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceRuntimeAuthFailure,
+      runtimeAuthRecoveryScheduler,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-runtime-auth/failure',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          sessionId: 'sess_1',
+          switchesThisTurn: 0,
+          classification: {
+            kind: 'usage_limit',
+            serviceId: 'openai-codex',
+            profileId: 'primary',
+            groupId: 'main',
+            resetsAtMs: null,
+            planType: null,
+            rateLimits: null,
+            source: 'structured_provider_error',
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      // Durable wait at the 30s group-exhausted floor, mirroring the scheduler-side
+      // F0 fix — NOT cancelled, so the same key can be re-armed by later reports.
+      expect(runtimeAuthRecoveryScheduler.readByKey(recoveryKey)).toMatchObject({
+        status: 'waiting',
+        nextRetryAtMs: 31_000,
+        terminalReason: null,
+      });
+      expect(diagnostics).not.toContainEqual(expect.objectContaining({
+        event: 'runtime_auth_recovery_terminal',
+      }));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('re-arms a durable wait with the switch-limit floor instead of terminalizing switch_limit_reached (INC-2)', async () => {
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const runtimeAuthRecoveryScheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({ status: 'credential_refreshed' }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'main',
+    });
+    const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'switch_attempted' as const,
+      result: {
+        status: 'switch_limit_reached' as const,
+        limit: 3,
+      },
+    }));
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceRuntimeAuthFailure,
+      runtimeAuthRecoveryScheduler,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-runtime-auth/failure',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          sessionId: 'sess_1',
+          switchesThisTurn: 3,
+          classification: {
+            kind: 'usage_limit',
+            serviceId: 'openai-codex',
+            profileId: 'primary',
+            groupId: 'main',
+            resetsAtMs: null,
+            planType: null,
+            rateLimits: null,
+            source: 'structured_provider_error',
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      // The per-session switch budget frees on a rolling hour window: durable wait
+      // on the 5-minute switch-limit floor (INC-2), never a terminal record that
+      // blocks re-arming the same key.
+      expect(runtimeAuthRecoveryScheduler.readByKey(recoveryKey)).toMatchObject({
+        status: 'waiting',
+        nextRetryAtMs: 301_000,
+        terminalReason: null,
+      });
+      expect(diagnostics).not.toContainEqual(expect.objectContaining({
+        event: 'runtime_auth_recovery_terminal',
+      }));
     } finally {
       await app.close();
     }
@@ -1338,6 +1601,54 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
           profileId: 'primary',
         }),
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects in-band quota snapshots with mismatched service ids before dispatching', async () => {
+    const handleConnectedServiceQuotaSnapshot = vi.fn(async () => ({
+      status: 'recorded',
+    }));
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceQuotaSnapshot,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-quota-snapshot',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          sessionId: 'sess_1',
+          serviceId: 'openai-codex',
+          snapshot: {
+            v: 1,
+            serviceId: 'claude-subscription',
+            profileId: 'native:1234567890abcdef1234567890abcdef1234567890abcdef',
+            fetchedAt: 1_000,
+            staleAfterMs: 300_000,
+            providerId: 'claude',
+            planLabel: null,
+            accountLabel: null,
+            meters: [],
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(handleConnectedServiceQuotaSnapshot).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

@@ -16,7 +16,11 @@ import { logger } from '@/ui/logger';
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 import { ConnectedServiceRefreshCoordinator } from './ConnectedServiceRefreshCoordinator';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '../connectedServiceChildEnvironment';
-import { resolveConnectedServiceGroupHomeDir } from '../homes/resolveConnectedServiceHomeDir';
+import { normalizeMaterializationKeyForPath } from '../materialize/normalizeMaterializationKeyForPath';
+
+function resolveCodexHomeForMaterialization(baseDir: string, materializationKey: string): string {
+  return join(baseDir, normalizeMaterializationKeyForPath(materializationKey), 'codex', 'codex-home');
+}
 
 describe('ConnectedServiceRefreshCoordinator', () => {
   it('refreshes an expiring openai-codex credential and re-materializes for active spawn targets', async () => {
@@ -106,7 +110,7 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     expect(api.acquireConnectedServiceRefreshLease).toHaveBeenCalledTimes(1);
     expect(api.registerConnectedServiceCredentialSealed).toHaveBeenCalledTimes(1);
 
-    const codexHome = join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', 'work', 'codex', 'codex-home');
+    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-1');
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
     expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledWith({
@@ -206,7 +210,7 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     expect(typedApi.registerConnectedServiceCredentialSealed).not.toHaveBeenCalled();
     expect(storedRecord.oauth?.accessToken).toBe('new-access');
 
-    const codexHome = join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', 'work', 'codex', 'codex-home');
+    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-plain');
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
   });
@@ -297,7 +301,7 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     expect(typedApi.registerConnectedServiceCredentialSealed).not.toHaveBeenCalled();
     expect(storedRecord.oauth?.accessToken).toBe('new-access');
 
-    const codexHome = join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', 'work', 'codex', 'codex-home');
+    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-plain-fallback');
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
   });
@@ -408,7 +412,7 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     expect(typedApi.registerConnectedServiceCredentialSealed).toHaveBeenCalledTimes(1);
     expect(storedRecord.oauth?.accessToken).toBe('new-access');
 
-    const codexHome = join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', 'work', 'codex', 'codex-home');
+    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-sealed-fallback');
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
   });
@@ -511,7 +515,7 @@ describe('ConnectedServiceRefreshCoordinator', () => {
 
       await coordinator.tickOnce();
 
-      const codexHome = join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', 'work', 'codex', 'codex-home');
+      const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-1');
       const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
       expect(auth.access_token).toBe('new-access');
       await expect(lstat(join(codexHome, 'config.toml'))).rejects.toThrow();
@@ -689,13 +693,194 @@ describe('ConnectedServiceRefreshCoordinator', () => {
 
     await externalUpdate.handleExternalCredentialUpdate!({ serviceId: 'openai-codex', profileId: 'work' });
 
-    const codexHome = join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', 'work', 'codex', 'codex-home');
+    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-openai');
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('reconnected-access');
     expect(onAuthUpdated).toHaveBeenCalledWith(expect.objectContaining({
       binding: { serviceId: 'openai-codex', profileId: 'work' },
       affectedTargets: [expect.objectContaining({ pid: 123, agentId: 'codex' })],
     }));
+  });
+
+  it('rematerializes into the live identity root instead of an orphan sha256 root for identity-keyed targets (RD-MAT-6)', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-identity-root-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-identity-root-'));
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
+
+    const now = 1_000_000;
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 3_600_000,
+      oauth: {
+        accessToken: 'rotated-access',
+        refreshToken: 'rotated-refresh',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const sealedCiphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: record,
+      randomBytes: (length) => randomBytes(length),
+    });
+    const api = {
+      getConnectedServiceCredentialSealed: vi.fn(async () => ({
+        sealed: { format: 'account_scoped_v1' as const, ciphertext: sealedCiphertext },
+        metadata: {
+          kind: 'oauth',
+          providerEmail: 'user@example.com',
+          providerAccountId: 'acct',
+          expiresAt: now + 3_600_000,
+        },
+      })),
+    } as unknown as ApiClient;
+
+    const coordinator = new ConnectedServiceRefreshCoordinator({
+      api,
+      credentials,
+      machineIdProvider: () => 'machine-1',
+      activeServerDir,
+      baseDir,
+      refreshWindowMs: 60_000,
+      refreshLeaseMs: 30_000,
+      now: () => now,
+    });
+
+    // The spawn registers `materializationKey = identity.id` (csm_*). The session reads
+    // `<baseDir>/<identity.id>/codex/...`; a rematerialization that drops the identity falls back
+    // to sha256(key) and writes fresh credentials into an orphan root no session ever reads.
+    const identityId = `csm_${'a'.repeat(32)}`;
+    coordinator.registerSpawnTarget({
+      pid: 124,
+      agentId: 'codex',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: { 'openai-codex': { source: 'connected', profileId: 'work' } },
+      },
+      materializationKey: identityId,
+    });
+
+    const externalUpdate = coordinator as unknown as {
+      handleExternalCredentialUpdate?: (input: Readonly<{ serviceId: 'openai-codex'; profileId: string }>) => Promise<void>;
+    };
+    await externalUpdate.handleExternalCredentialUpdate!({ serviceId: 'openai-codex', profileId: 'work' });
+
+    const liveIdentityHome = join(baseDir, identityId, 'codex', 'codex-home');
+    const auth = JSON.parse(await readFile(join(liveIdentityHome, 'auth.json'), 'utf8'));
+    expect(auth.access_token).toBe('rotated-access');
+    // No orphan sha256(csm_*) root may be created for an identity-keyed target.
+    const orphanHome = resolveCodexHomeForMaterialization(baseDir, identityId);
+    await expect(lstat(orphanHome)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rematerializes with the tracked session directory so Claude workspace trust targets the session cwd (RD-MAT-6)', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-session-dir-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-session-dir-'));
+    const sourceHomeDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-source-home-'));
+    const sessionDirectory = await mkdtemp(join(tmpdir(), 'happier-connected-services-project-'));
+
+    // The user's own home carries the trust grant for the session directory; the refresh-driven
+    // rematerialization must project it into the target home FOR THAT DIRECTORY — not for the
+    // daemon's cwd, which is what a sessionDirectory-less rematerialization falls back to.
+    await writeFile(join(sourceHomeDir, '.claude.json'), JSON.stringify({
+      projects: { [sessionDirectory]: { hasTrustDialogAccepted: true } },
+    }));
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
+
+    const now = 1_000_000;
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 3_600_000,
+      oauth: {
+        accessToken: 'trusted-access',
+        refreshToken: 'trusted-refresh',
+        idToken: null,
+        scope: 'user:inference user:profile user:sessions:claude_code',
+        tokenType: 'Bearer',
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const sealedCiphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: record,
+      randomBytes: (length) => randomBytes(length),
+    });
+    const api = {
+      getConnectedServiceCredentialSealed: vi.fn(async () => ({
+        sealed: { format: 'account_scoped_v1' as const, ciphertext: sealedCiphertext },
+        metadata: {
+          kind: 'oauth',
+          providerEmail: 'user@example.com',
+          providerAccountId: 'acct',
+          expiresAt: now + 3_600_000,
+        },
+      })),
+    } as unknown as ApiClient;
+
+    const coordinator = new ConnectedServiceRefreshCoordinator({
+      api,
+      credentials,
+      machineIdProvider: () => 'machine-1',
+      activeServerDir,
+      baseDir,
+      refreshWindowMs: 60_000,
+      refreshLeaseMs: 30_000,
+      now: () => now,
+      processEnv: { HOME: sourceHomeDir },
+    });
+
+    coordinator.registerSpawnTarget({
+      pid: 125,
+      agentId: 'claude',
+      sessionDirectory,
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: { 'claude-subscription': { source: 'connected', profileId: 'work' } },
+      },
+      materializationKey: 'session-claude-trust',
+    });
+
+    const externalUpdate = coordinator as unknown as {
+      handleExternalCredentialUpdate?: (input: Readonly<{ serviceId: 'claude-subscription'; profileId: string }>) => Promise<void>;
+    };
+    await externalUpdate.handleExternalCredentialUpdate!({ serviceId: 'claude-subscription', profileId: 'work' });
+
+    const stableConfigDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      'work',
+      'claude',
+      'claude-config',
+    );
+    const rootConfig = JSON.parse(await readFile(join(stableConfigDir, '.claude.json'), 'utf8'));
+    expect(rootConfig.projects?.[sessionDirectory]).toMatchObject({ hasTrustDialogAccepted: true });
   });
 
   it('does not restart affected Claude targets when external credential rematerialization is blocking', async () => {
@@ -1133,15 +1318,111 @@ describe('ConnectedServiceRefreshCoordinator', () => {
       }),
     });
 
-    const codexHome = resolveConnectedServiceGroupHomeDir({
-      activeServerDir,
-      serviceId: 'openai-codex',
-      groupId: 'main',
-      agentId: 'codex',
-    });
-    const auth = JSON.parse(await readFile(join(codexHome, 'codex-home', 'auth.json'), 'utf8'));
+    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'openai-codex-refresh-backup');
+    const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
     expect(auth.refresh_token).toBe('rotated-refresh');
+  });
+
+  it('refreshes Codex bridge tokens into the registered target materialized home', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-bridge-target-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-bridge-target-'));
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
+
+    const now = 1_000_000;
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 90_000,
+      oauth: {
+        accessToken: 'old-access',
+        refreshToken: 'old-refresh',
+        idToken: 'old-id',
+        scope: null,
+        tokenType: 'Bearer',
+        providerAccountId: 'chatgpt-account',
+        providerEmail: 'alice@example.com',
+      },
+    });
+
+    let sealedCiphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: record,
+      randomBytes: (length) => randomBytes(length),
+    });
+
+    const api = {
+      getConnectedServiceCredentialSealed: vi.fn(async () => ({
+        sealed: { format: 'account_scoped_v1', ciphertext: sealedCiphertext },
+        metadata: { kind: 'oauth', providerEmail: 'alice@example.com', providerAccountId: 'chatgpt-account', expiresAt: now + 90_000 },
+      })),
+      acquireConnectedServiceRefreshLease: vi.fn(async () => ({ acquired: true, leaseUntil: now + 60_000 })),
+      registerConnectedServiceCredentialSealed: vi.fn(async (params: { sealed: { ciphertext: string } }) => {
+        sealedCiphertext = params.sealed.ciphertext;
+      }),
+    } as unknown as ApiClient;
+
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        access_token: 'new-access',
+        refresh_token: 'rotated-refresh',
+        id_token: 'new-id',
+        expires_in: 3600,
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const coordinator = new ConnectedServiceRefreshCoordinator({
+      api,
+      credentials,
+      machineIdProvider: () => 'machine-1',
+      ownerIdProvider: () => 'machine-1:daemon-a',
+      activeServerDir,
+      baseDir,
+      refreshWindowMs: 60_000,
+      refreshLeaseMs: 30_000,
+      now: () => now,
+    });
+
+    coordinator.registerSpawnTarget({
+      pid: 123,
+      agentId: 'codex',
+      sessionId: 'happy-session-bridge',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: { 'openai-codex': { source: 'connected', profileId: 'work' } },
+      },
+      materializationKey: 'session-bridge',
+    });
+
+    const result = await coordinator.refreshOpenAiCodexChatGptTokensForBridge({
+      selection: {
+        kind: 'profile',
+        serviceId: 'openai-codex',
+        profileId: 'work',
+      },
+      chatgptPlanType: 'team',
+    });
+
+    expect(result).toEqual({
+      accessToken: 'new-access',
+      chatgptAccountId: 'chatgpt-account',
+      chatgptPlanType: 'team',
+    });
+    const activeCodexHome = resolveCodexHomeForMaterialization(baseDir, 'session-bridge');
+    const activeAuth = JSON.parse(await readFile(join(activeCodexHome, 'auth.json'), 'utf8'));
+    expect(activeAuth.access_token).toBe('new-access');
+    expect(activeAuth.refresh_token).toBe('rotated-refresh');
+    await expect(lstat(resolveCodexHomeForMaterialization(baseDir, 'openai-codex-refresh-work'))).rejects.toThrow();
   });
 
   it('waits and re-reads credentials when another daemon owns the refresh lease for spawn preflight', async () => {
@@ -2689,13 +2970,8 @@ describe('ConnectedServiceRefreshCoordinator', () => {
       profileId: 'backup',
     });
 
-    const codexHome = resolveConnectedServiceGroupHomeDir({
-      activeServerDir,
-      serviceId: 'openai-codex',
-      groupId: 'main',
-      agentId: 'codex',
-    });
-    const auth = JSON.parse(await readFile(join(codexHome, 'codex-home', 'auth.json'), 'utf8'));
+    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-1');
+    const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
     expect(auth.refresh_token).toBe('new-refresh');
   });

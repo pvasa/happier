@@ -255,6 +255,7 @@ describe('registerSessionHandlers session controls', () => {
       sessionId: 'sess_1',
       issueFingerprint: 'usage-limit:sess_1:reset',
       rememberPreference: true,
+      resumePromptMode: 'off',
     }))).toEqual({
       ok: true,
       status: 'waiting',
@@ -280,6 +281,7 @@ describe('registerSessionHandlers session controls', () => {
       sessionId: 'sess_1',
       provider: 'openai-codex',
       operation: 'switch_account_now',
+      resumePromptMode: 'off',
     }))).toEqual({
       ok: true,
       status: 'switch_observed',
@@ -290,6 +292,7 @@ describe('registerSessionHandlers session controls', () => {
       sessionId: 'sess_1',
       issueFingerprint: 'usage-limit:sess_1:reset',
       rememberPreference: true,
+      resumePromptMode: 'off',
     });
     expect(cancelUsageLimitWaitResume).toHaveBeenCalledWith({
       sessionId: 'sess_1',
@@ -303,6 +306,7 @@ describe('registerSessionHandlers session controls', () => {
       sessionId: 'sess_1',
       provider: 'openai-codex',
       operation: 'switch_account_now',
+      resumePromptMode: 'off',
     });
   });
 
@@ -361,7 +365,7 @@ describe('registerSessionHandlers session controls', () => {
     expect(enableUsageLimitWaitResume).not.toHaveBeenCalled();
   });
 
-  it('persists usage-limit recovery intent when no runtime recovery hook is installed', async () => {
+  it('returns a typed unsupported result instead of fabricating a waiting intent when no runtime recovery hook is installed (F1)', async () => {
     const { handlers, registrar } = createRegistrar();
     let metadata: Metadata = {
       path: process.cwd(),
@@ -380,29 +384,22 @@ describe('registerSessionHandlers session controls', () => {
       updateSessionMetadata,
     });
 
+    // F1: never `ok: true, status: 'waiting'` with no finite timing and no runner.
+    // Without the runtime control there is nothing that can actually wait/resume,
+    // so the honest typed result is `unsupported` — not a fabricated intent with
+    // null timing and maxAttempts 0.
     expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE)?.({
       sessionId: 'sess_1',
       issueFingerprint: 'usage-limit:sess_1:reset',
       rememberPreference: true,
     }))).toEqual({
-      ok: true,
-      status: 'waiting',
+      ok: false,
+      status: 'unsupported',
       sessionId: 'sess_1',
-      issueFingerprint: 'usage-limit:sess_1:reset',
+      errorCode: 'unsupported_session_runtime_method',
     });
-    expect(metadata).toMatchObject({
-      sessionUsageLimitRecoveryV1: {
-        v: 1,
-        status: 'waiting',
-        issueFingerprint: 'usage-limit:sess_1:reset',
-        resetAtMs: null,
-        nextCheckAtMs: null,
-        attemptCount: 0,
-        maxAttempts: 0,
-        lastProbeError: null,
-        selectedAuth: { kind: 'native' },
-      },
-    });
+    expect((metadata as Record<string, unknown>).sessionUsageLimitRecoveryV1).toBeUndefined();
+    expect(updateSessionMetadata).not.toHaveBeenCalled();
 
     expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW)?.({
       sessionId: 'sess_1',
@@ -412,11 +409,25 @@ describe('registerSessionHandlers session controls', () => {
       sessionId: 'sess_1',
       errorCode: 'unsupported_session_runtime_method',
     });
-    expect((metadata as Record<string, unknown>).sessionUsageLimitRecoveryV1).toMatchObject({
-      status: 'waiting',
-      attemptCount: 0,
-    });
 
+    // Cancelling an EXISTING intent stays a valid local metadata operation: it
+    // needs no timing and no runner.
+    metadata = {
+      ...metadata,
+      sessionUsageLimitRecoveryV1: {
+        v: 1,
+        status: 'waiting',
+        issueFingerprint: 'usage-limit:sess_1:reset',
+        armedAtMs: 1,
+        resetAtMs: null,
+        nextCheckAtMs: null,
+        attemptCount: 0,
+        maxAttempts: 0,
+        lastProbeError: null,
+        resumePromptMode: 'standard',
+        selectedAuth: { kind: 'native' },
+      },
+    } as Metadata;
     expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
       sessionId: 'sess_1',
     }))).toEqual({
@@ -428,7 +439,7 @@ describe('registerSessionHandlers session controls', () => {
     expect((metadata as Record<string, unknown>).sessionUsageLimitRecoveryV1).toMatchObject({
       status: 'cancelled',
     });
-    expect(updateSessionMetadata).toHaveBeenCalledTimes(2);
+    expect(updateSessionMetadata).toHaveBeenCalledTimes(1);
   });
 
   it('lets runtime message controls intercept provider-specific messages before enqueueing', async () => {

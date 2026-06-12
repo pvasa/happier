@@ -602,7 +602,20 @@ describe('switchSessionConnectedServiceAuth', () => {
         }),
         getConnectedServiceAuthGroup: async () => null,
       },
-      resolveContinuity: async () => ({ mode: 'restart_rematerialize' }),
+      resolveContinuity: async () => ({
+        mode: 'restart_rematerialize',
+        // INC-6: the proven continuity context must surface on the success result so switch
+        // telemetry is not all-null for spawn_next_turn switches.
+        diagnostics: {
+          materializationIdentityId: materializationIdentity.id,
+          targetMaterializedRoot: '/tmp/new-claude-config',
+          vendorResumeId: 'claude-session-1',
+          cwd: '/tmp/project',
+          candidatePersistedSessionFile: null,
+          requestedStateMode: 'shared',
+          effectiveStateMode: 'shared',
+        },
+      }),
       materializeRuntimeAuthSelection: async () => ({
         targetMaterializedEnv: { CLAUDE_CONFIG_DIR: '/tmp/new-claude-config' },
         targetMaterializedRoot: '/tmp/new-claude-config',
@@ -626,6 +639,15 @@ describe('switchSessionConnectedServiceAuth', () => {
       action: 'metadata_updated',
       normalizedBindings: bindings('new-profile'),
       continuityByServiceId: { anthropic: 'restart_rematerialize' },
+      // INC-6: the success result carries the proven continuity context for switch telemetry.
+      diagnostics: {
+        continuity: {
+          targetMaterializedRoot: '/tmp/new-claude-config',
+          vendorResumeId: 'claude-session-1',
+          candidatePersistedSessionFile: null,
+          effectiveStateMode: 'shared',
+        },
+      },
     });
     expect(tracked.spawnOptions?.connectedServices).toEqual(bindings('new-profile'));
     expect(tracked.spawnOptions?.environmentVariables).toEqual({
@@ -648,12 +670,15 @@ describe('switchSessionConnectedServiceAuth', () => {
       toProfileId: 'new-profile',
       mode: 'spawn_next_turn',
     }));
+    // INC-7: a metadata-only commit is NOT a proven switch — no restart happened and no provider
+    // adoption was verified. The transcript outcome must stay observed-intermediate until proof
+    // lands; only failed/terminal/succeeded-with-proof shapes may render as final.
     expect(emitSessionEvent).toHaveBeenCalledWith('sess_1', expect.objectContaining({
       type: 'connected_service_account_switch_attempt',
       ok: true,
       action: 'metadata_updated',
       attemptedContinuityMode: 'metadata_only',
-      outcome: 'succeeded',
+      outcome: 'observed',
       outcomeAction: 'metadata_updated',
       errorCode: null,
     }));
@@ -896,6 +921,215 @@ describe('switchSessionConnectedServiceAuth', () => {
       attemptId: 'connected-service-auth-switch|hot_applied|anthropic:group:work:group-active:67',
       action: 'hot_applied',
     }));
+  });
+
+  it('suppresses continuation replay for pre-turn group switches through the unchanged-binding path (F5)', async () => {
+    // The canonical pre-turn member switch keeps the group binding unchanged (only the generation
+    // moves), so it flows through rematerializeUnchangedConnectedServiceBinding. The switch reason
+    // must reach the continuation gate there too, otherwise `pre_turn_group_policy` replay
+    // suppression never engages and the original user message can be delivered twice.
+    const tracked = trackedSession({
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        connectedServices: {
+          v: 1,
+          bindingsByServiceId: {
+            anthropic: {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'work',
+              profileId: 'group-active',
+            },
+          },
+        },
+        connectedServiceMaterializationIdentityV1: materializationIdentity,
+      },
+    });
+    const restartSession = vi.fn(async () => {});
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
+
+    const result = await switchSessionConnectedServiceAuth({
+      core: createCore(),
+      switchReason: 'pre_turn_group_policy',
+      postSwitchVerificationMode: {
+        kind: 'disabled_for_test_only',
+        reason: 'pre-turn restart fixture does not exercise provider adoption verification',
+      },
+      getChildren: () => [tracked],
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'anthropic',
+          profiles: [{ profileId: 'group-active', status: 'connected' }],
+        }),
+        getConnectedServiceAuthGroup: async () => group({
+          activeProfileId: 'group-active',
+          generation: 67,
+        }),
+      },
+      resolveContinuity: async () => ({ mode: 'restart_rematerialize' }),
+      materializeRuntimeAuthSelection: async () => ({ kind: 'materialized' }),
+      restartSession,
+      hotApply: async () => ({ ok: true }),
+      recoverAfterRuntimeAuthSwitch: async () => ({ ok: true }),
+      continueAfterRuntimeAuthSwitch,
+      persistSessionBindings: async () => {},
+      registerHotApplyTargets: () => {},
+      emitSessionEvent: () => {},
+      request: {
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        expectedGroupGenerationByServiceId: { anthropic: 67 },
+        bindings: {
+          v: 1,
+          bindingsByServiceId: {
+            anthropic: {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'work',
+              profileId: 'group-active',
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      action: 'restart_requested',
+      continuityByServiceId: { anthropic: 'restart_rematerialize' },
+    });
+    expect(restartSession).toHaveBeenCalledWith(tracked);
+    // F5: pre-turn switches always suppress replay — no continuation may fire.
+    expect(continueAfterRuntimeAuthSwitch).not.toHaveBeenCalled();
+  });
+
+  it('gates a predictive soft-threshold switch before side effects when the session cannot hot-apply (RD-SW-9)', async () => {
+    // A `soft_threshold` switch must never disrupt a live session: if continuity resolves to a
+    // restart, the FSM must refuse BEFORE committing bindings or requesting a restart — not let
+    // the coordinator backstop classify `generation_apply_failed` after the damage is done.
+    const tracked = trackedSession();
+    const previousSpawnOptions = tracked.spawnOptions;
+    const persistSessionBindings = vi.fn(async () => {});
+    const restartSession = vi.fn(async () => {});
+    const emitSessionEvent = vi.fn();
+
+    const result = await switchSessionConnectedServiceAuth({
+      core: createCore(),
+      switchReason: 'pre_turn_group_policy',
+      groupSwitchTriggerReason: 'soft_threshold',
+      postSwitchVerificationMode: {
+        kind: 'disabled_for_test_only',
+        reason: 'predictive gate fixture never reaches provider adoption verification',
+      },
+      getChildren: () => [tracked],
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'anthropic',
+          profiles: [{ profileId: 'new-profile', status: 'connected' }],
+        }),
+        getConnectedServiceAuthGroup: async () => null,
+      },
+      resolveContinuity: async () => ({ mode: 'restart_rematerialize' }),
+      restartSession,
+      hotApply: async () => ({ ok: true }),
+      registerHotApplyTargets: () => {},
+      emitSessionEvent,
+      persistSessionBindings,
+      request: {
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        bindings: bindings('new-profile'),
+      },
+    } as any);
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'hot_apply_restart_required',
+    });
+    expect(persistSessionBindings).not.toHaveBeenCalled();
+    expect(restartSession).not.toHaveBeenCalled();
+    expect(emitSessionEvent).not.toHaveBeenCalled();
+    expect(tracked.spawnOptions).toBe(previousSpawnOptions);
+    expect(tracked.spawnOptions?.connectedServices).toEqual(bindings('old-profile'));
+  });
+
+  it('gates a predictive soft-threshold switch through the unchanged-binding rematerialize path before side effects (RD-SW-9)', async () => {
+    const tracked = trackedSession({
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        connectedServices: {
+          v: 1,
+          bindingsByServiceId: {
+            anthropic: {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'work',
+              profileId: 'group-active',
+            },
+          },
+        },
+        connectedServiceMaterializationIdentityV1: materializationIdentity,
+      },
+    });
+    const previousSpawnOptions = tracked.spawnOptions;
+    const restartSession = vi.fn(async () => {});
+    const persistSessionBindings = vi.fn(async () => {});
+
+    const result = await switchSessionConnectedServiceAuth({
+      core: createCore(),
+      switchReason: 'pre_turn_group_policy',
+      groupSwitchTriggerReason: 'soft_threshold',
+      postSwitchVerificationMode: {
+        kind: 'disabled_for_test_only',
+        reason: 'predictive gate fixture never reaches provider adoption verification',
+      },
+      getChildren: () => [tracked],
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'anthropic',
+          profiles: [{ profileId: 'group-active', status: 'connected' }],
+        }),
+        getConnectedServiceAuthGroup: async () => group({
+          activeProfileId: 'group-active',
+          generation: 67,
+        }),
+      },
+      resolveContinuity: async () => ({ mode: 'restart_rematerialize' }),
+      materializeRuntimeAuthSelection: async () => ({ kind: 'materialized' }),
+      restartSession,
+      hotApply: async () => ({ ok: true }),
+      recoverAfterRuntimeAuthSwitch: async () => ({ ok: true }),
+      continueAfterRuntimeAuthSwitch: async () => {},
+      persistSessionBindings,
+      registerHotApplyTargets: () => {},
+      emitSessionEvent: () => {},
+      request: {
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        expectedGroupGenerationByServiceId: { anthropic: 67 },
+        bindings: {
+          v: 1,
+          bindingsByServiceId: {
+            anthropic: {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'work',
+              profileId: 'group-active',
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'hot_apply_restart_required',
+    });
+    expect(restartSession).not.toHaveBeenCalled();
+    expect(persistSessionBindings).not.toHaveBeenCalled();
+    expect(tracked.spawnOptions).toBe(previousSpawnOptions);
   });
 
   it('does not hot-apply an unchanged group binding when the tracked runtime already adopted the expected generation', async () => {
@@ -1532,6 +1766,51 @@ describe('switchSessionConnectedServiceAuth', () => {
 	      },
 	    });
 	  });
+
+  it.each([
+    { continuityMode: 'restart_rematerialize' as const, expectedAction: 'restart_requested' as const },
+    { continuityMode: 'hot_apply' as const, expectedAction: 'hot_applied' as const },
+  ])('does not continue interrupted work for pre-turn group policy switches (%s)', async ({ continuityMode, expectedAction }) => {
+    const tracked = trackedSession();
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {
+      throw new Error('pre-turn policy switches must not enqueue continuation recovery');
+    });
+
+    await expect(switchSessionConnectedServiceAuth({
+      core: createCore(),
+      switchReason: 'pre_turn_group_policy',
+      postSwitchVerificationMode: {
+        kind: 'disabled_for_test_only',
+        reason: 'pre-turn switches should never drive continuation replay',
+      },
+      getChildren: () => [tracked],
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'anthropic',
+          profiles: [{ profileId: 'new-profile', status: 'connected' as const }],
+        }),
+        getConnectedServiceAuthGroup: async () => null,
+      },
+      resolveContinuity: async () => ({ mode: continuityMode }),
+      restartSession: vi.fn(async () => {}),
+      hotApply: async () => ({ ok: true as const }),
+      persistSessionBindings: vi.fn(),
+      registerHotApplyTargets: vi.fn(),
+      recoverAfterRuntimeAuthSwitch: vi.fn(async () => ({ ok: true as const })),
+      continueAfterRuntimeAuthSwitch,
+      emitSessionEvent: vi.fn(),
+      request: {
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        bindings: bindings('new-profile'),
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      action: expectedAction,
+    });
+
+    expect(continueAfterRuntimeAuthSwitch).not.toHaveBeenCalled();
+  });
 
   it('treats an omitted previously connected service as a native switch', async () => {
     const tracked = trackedSession({
@@ -3390,6 +3669,7 @@ describe('switchSessionConnectedServiceAuth', () => {
     const binding = { source: 'connected', selection: 'profile', profileId: 'new-codex-profile' } as const;
     const client = { request: vi.fn(async () => ({ ok: true })) };
     const invalidateTransports = vi.fn(async () => {});
+    const persistAuthStore = vi.fn(async () => {});
     const runtimeAuthSelection = {
       serviceId: 'openai-codex',
       binding,
@@ -3397,6 +3677,7 @@ describe('switchSessionConnectedServiceAuth', () => {
       record,
       client,
       invalidateTransports,
+      persistAuthStore,
     };
     type RuntimeAuthSelectionContinuityInput =
       Parameters<SwitchSessionConnectedServiceAuthInput['resolveContinuity']>[0]
@@ -3464,6 +3745,7 @@ describe('switchSessionConnectedServiceAuth', () => {
       chatgptAccountId: 'acct',
     });
     expect(invalidateTransports).toHaveBeenCalledOnce();
+    expect(persistAuthStore).toHaveBeenCalledOnce();
     expect(registerHotApplyTargets).toHaveBeenCalledWith(expect.objectContaining({
       spawnOptions: expect.objectContaining({
         environmentVariables: expect.objectContaining({

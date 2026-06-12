@@ -1,6 +1,11 @@
+import {
+  DurableBackoffRecoveryScheduler,
+  type DurableRecoveryStore,
+} from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
+
 type TemporaryThrottleStatus = 'waiting' | 'checking' | 'exhausted' | 'cancelled';
 
-type TemporaryThrottleRecoveryIntent = Readonly<{
+export type TemporaryThrottleRecoveryIntent = Readonly<{
   v: 1;
   status: TemporaryThrottleStatus;
   issueFingerprint: string;
@@ -32,6 +37,7 @@ type TemporaryThrottleRecoverySchedulerDeps = Readonly<{
     intent: TemporaryThrottleRecoveryIntent,
     context: { sessionId: string },
   ) => Promise<void> | void;
+  store?: DurableRecoveryStore<TemporaryThrottleRecoveryIntent>;
 }>;
 
 type EnableTemporaryThrottleRecoveryInput = Readonly<{
@@ -45,7 +51,6 @@ type EnableTemporaryThrottleRecoveryInput = Readonly<{
 const defaultMaxAttempts = 3;
 const defaultBaseBackoffMs = 1_000;
 const defaultMaxBackoffMs = 60_000;
-type TimerHandle = ReturnType<typeof setTimeout>;
 
 function normalizeNonNegativeInteger(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
@@ -103,15 +108,49 @@ function normalizeIntent(value: unknown): TemporaryThrottleRecoveryIntent | null
 }
 
 export class TemporaryThrottleRecoveryScheduler {
-  private readonly memoryStore = new Map<string, TemporaryThrottleRecoveryIntent>();
-  private readonly timersBySessionId = new Map<string, TimerHandle>();
-  private readonly wakePromisesBySessionId = new Map<string, Promise<{ status: string }>>();
   private readonly baseBackoffMs: number;
   private readonly maxBackoffMs: number;
+  private readonly scheduler: DurableBackoffRecoveryScheduler<TemporaryThrottleRecoveryIntent>;
 
   constructor(private readonly deps: TemporaryThrottleRecoverySchedulerDeps) {
     this.baseBackoffMs = Math.max(1, Math.trunc(deps.baseBackoffMs ?? defaultBaseBackoffMs));
     this.maxBackoffMs = Math.max(this.baseBackoffMs, Math.trunc(deps.maxBackoffMs ?? defaultMaxBackoffMs));
+    this.scheduler = new DurableBackoffRecoveryScheduler<TemporaryThrottleRecoveryIntent>({
+      nowMs: deps.nowMs,
+      baseBackoffMs: this.baseBackoffMs,
+      maxBackoffMs: this.maxBackoffMs,
+      jitterMs: deps.jitterMs,
+      store: deps.store,
+      normalizeIntent,
+      getStatus: (intent) => intent.status,
+      getNextRetryAtMs: (intent) => intent.nextRetryAtMs,
+      getAttemptCount: (intent) => intent.attemptCount,
+      getMaxAttempts: (intent) => intent.maxAttempts,
+      markChecking: (intent, attemptCount) => ({
+        ...intent,
+        status: 'checking',
+        attemptCount,
+      }),
+      markWaiting: (intent, input) => ({
+        ...intent,
+        status: 'waiting',
+        nextRetryAtMs: input.nextRetryAtMs,
+        lastError: input.lastError,
+      }),
+      markCancelled: (intent) => ({
+        ...intent,
+        status: 'cancelled',
+        nextRetryAtMs: null,
+        lastError: null,
+      }),
+      markExhausted: (intent, input) => ({
+        ...intent,
+        status: 'exhausted',
+        nextRetryAtMs: null,
+        lastError: input.lastError,
+      }),
+      recover: async (intent, { sessionId }) => await this.recoverIntent(intent, { sessionId }),
+    });
   }
 
   async enable(input: EnableTemporaryThrottleRecoveryInput): Promise<{
@@ -138,8 +177,11 @@ export class TemporaryThrottleRecoveryScheduler {
       maxAttempts: Math.max(1, Math.trunc(input.maxAttempts ?? defaultMaxAttempts)),
       lastError: null,
     };
-    const intent = this.mergeSameTemporaryThrottleIntent(this.read(input.sessionId), nextIntent);
-    await this.write(input.sessionId, intent);
+    const intent = await this.scheduler.upsertMerged({
+      sessionId: input.sessionId,
+      intent: nextIntent,
+      merge: (previous, next) => this.mergeSameTemporaryThrottleIntent(previous, next),
+    });
     return {
       status: intent.status,
       nextRetryAtMs: intent.nextRetryAtMs,
@@ -153,6 +195,7 @@ export class TemporaryThrottleRecoveryScheduler {
   ): TemporaryThrottleRecoveryIntent {
     if (!previous || previous.issueFingerprint !== next.issueFingerprint) return next;
     if (previous.status === 'exhausted') return previous;
+    if (previous.status === 'cancelled') return previous;
     if (previous.status === 'checking') return previous;
     if (previous.status !== 'waiting') return next;
     const previousRetrySooner = previous.nextRetryAtMs !== null
@@ -170,127 +213,92 @@ export class TemporaryThrottleRecoveryScheduler {
   }
 
   read(sessionId: string): TemporaryThrottleRecoveryIntent | null {
-    const intent = normalizeIntent(this.memoryStore.get(sessionId) ?? null);
-    if (intent) {
-      this.memoryStore.set(sessionId, intent);
-      this.schedule(sessionId, intent);
-    }
-    return intent;
+    return this.scheduler.read(sessionId);
+  }
+
+  hydrate(): ReadonlyArray<TemporaryThrottleRecoveryIntent> {
+    return this.scheduler.hydrate();
+  }
+
+  dispose(): void {
+    this.scheduler.dispose();
   }
 
   async wake(input: { sessionId: string; reason: 'timer' | 'retry_now' }): Promise<{ status: string }> {
-    const currentWake = this.wakePromisesBySessionId.get(input.sessionId);
-    if (currentWake) return await currentWake;
-    const wakePromise = this.performWake(input);
-    this.wakePromisesBySessionId.set(input.sessionId, wakePromise);
-    try {
-      return await wakePromise;
-    } finally {
-      if (this.wakePromisesBySessionId.get(input.sessionId) === wakePromise) {
-        this.wakePromisesBySessionId.delete(input.sessionId);
-      }
-    }
+    const result = await this.scheduler.wake({
+      sessionId: input.sessionId,
+      reason: input.reason,
+    });
+    return result.status === 'succeeded' ? { status: 'resumed' } : result;
   }
 
-  private async performWake(input: { sessionId: string; reason: 'timer' | 'retry_now' }): Promise<{ status: string }> {
-    const intent = this.read(input.sessionId);
-    if (!intent || intent.status === 'cancelled') return { status: 'inactive' };
-    if (intent.status === 'exhausted') return { status: 'exhausted' };
+  private async recoverIntent(
+    intent: TemporaryThrottleRecoveryIntent,
+    context: { sessionId: string },
+  ): Promise<
+    | Readonly<{ status: 'success'; intent: TemporaryThrottleRecoveryIntent }>
+    | Readonly<{ status: 'wait'; nextRetryAtMs: number; lastError: string | null; intent: TemporaryThrottleRecoveryIntent }>
+    | Readonly<{ status: 'exhausted'; lastError: string | null }>
+  > {
     const nowMs = this.deps.nowMs();
-    if (input.reason === 'timer' && intent.nextRetryAtMs !== null && nowMs < intent.nextRetryAtMs) {
-      return { status: 'waiting' };
-    }
-    if (intent.attemptCount >= intent.maxAttempts) {
-      await this.write(input.sessionId, {
-        ...intent,
-        status: 'exhausted',
-        nextRetryAtMs: null,
-        lastError: intent.lastError ?? 'max_attempts_exhausted',
-      });
-      return { status: 'exhausted' };
-    }
-
-    const checkingIntent: TemporaryThrottleRecoveryIntent = {
-      ...intent,
-      status: 'checking',
-      attemptCount: intent.attemptCount + 1,
-    };
-    await this.write(input.sessionId, checkingIntent);
-
     let result: TemporaryThrottleRetryResult;
     try {
-      result = await (this.deps.retry?.(checkingIntent, { sessionId: input.sessionId })
+      result = await (this.deps.retry?.(intent, { sessionId: context.sessionId })
         ?? Promise.resolve({ status: 'ready' as const }));
     } catch {
-      if (checkingIntent.attemptCount >= checkingIntent.maxAttempts) {
-        await this.write(input.sessionId, {
-          ...checkingIntent,
-          status: 'exhausted',
-          nextRetryAtMs: null,
-          lastError: 'temporary_throttle_probe_failed',
-        });
-        return { status: 'exhausted' };
-      }
-      await this.write(input.sessionId, {
-        ...checkingIntent,
-        status: 'waiting',
-        retryAfterMs: null,
-        nextRetryAtMs: nowMs + this.computeBackoffMs(checkingIntent.attemptCount),
+      return {
+        status: 'wait',
+        nextRetryAtMs: nowMs + this.computeBackoffMs(intent.attemptCount),
         lastError: 'temporary_throttle_probe_failed',
-      });
-      return { status: 'waiting' };
+        intent: {
+          ...intent,
+          retryAfterMs: null,
+        },
+      };
     }
     if (result.status === 'ready') {
       try {
-        await this.deps.resume?.(checkingIntent, { sessionId: input.sessionId });
+        await this.deps.resume?.(intent, { sessionId: context.sessionId });
       } catch {
-        if (checkingIntent.attemptCount >= checkingIntent.maxAttempts) {
-          await this.write(input.sessionId, {
-            ...checkingIntent,
-            status: 'exhausted',
-            nextRetryAtMs: null,
-            lastError: 'temporary_throttle_resume_failed',
-          });
-          return { status: 'exhausted' };
-        }
-        await this.write(input.sessionId, {
-          ...checkingIntent,
-          status: 'waiting',
-          retryAfterMs: null,
-          nextRetryAtMs: nowMs + this.computeBackoffMs(checkingIntent.attemptCount),
+        return {
+          status: 'wait',
+          nextRetryAtMs: nowMs + this.computeBackoffMs(intent.attemptCount),
           lastError: 'temporary_throttle_resume_failed',
-        });
-        return { status: 'waiting' };
+          intent: {
+            ...intent,
+            retryAfterMs: null,
+          },
+        };
       }
-      await this.write(input.sessionId, {
-        ...checkingIntent,
-        status: 'cancelled',
-        nextRetryAtMs: null,
-        lastError: null,
-      });
-      return { status: 'resumed' };
+      return {
+        status: 'success',
+        intent: {
+          ...intent,
+          status: 'cancelled',
+          nextRetryAtMs: null,
+          lastError: null,
+        },
+      };
     }
-    if (result.status === 'exhausted' || checkingIntent.attemptCount >= checkingIntent.maxAttempts) {
-      await this.write(input.sessionId, {
-        ...checkingIntent,
+    if (result.status === 'exhausted') {
+      return {
         status: 'exhausted',
-        nextRetryAtMs: null,
         lastError: result.lastError ?? 'max_attempts_exhausted',
-      });
-      return { status: 'exhausted' };
+      };
     }
 
     const retryAfterMs = normalizeNonNegativeInteger(result.retryAfterMs);
-    await this.write(input.sessionId, {
-      ...checkingIntent,
-      status: 'waiting',
-      retryAfterMs,
-      nextRetryAtMs: nowMs + (retryAfterMs ?? this.computeBackoffMs(checkingIntent.attemptCount)),
+    return {
+      status: 'wait',
+      nextRetryAtMs: nowMs + (retryAfterMs ?? this.computeBackoffMs(intent.attemptCount)),
       lastError: typeof result.lastError === 'string' && result.lastError.trim().length > 0
         ? result.lastError.trim()
         : null,
-    });
-    return { status: 'waiting' };
+      intent: {
+        ...intent,
+        retryAfterMs,
+      },
+    };
   }
 
   retryNow(input: { sessionId: string }): Promise<{ status: string }> {
@@ -298,14 +306,8 @@ export class TemporaryThrottleRecoveryScheduler {
   }
 
   async stopRetrying(input: { sessionId: string }): Promise<{ status: string } | null> {
-    const intent = this.read(input.sessionId);
-    if (!intent) return null;
-    await this.write(input.sessionId, {
-      ...intent,
-      status: 'cancelled',
-      nextRetryAtMs: null,
-    });
-    return { status: 'cancelled' };
+    const intent = await this.scheduler.cancel({ sessionId: input.sessionId });
+    return intent ? { status: 'cancelled' } : null;
   }
 
   private computeBackoffMs(attemptCount: number): number {
@@ -320,30 +322,5 @@ export class TemporaryThrottleRecoveryScheduler {
   }>): number {
     if (input.resetAtMs !== null && input.resetAtMs >= input.nowMs) return input.resetAtMs;
     return input.nowMs + (input.retryAfterMs ?? this.computeBackoffMs(0));
-  }
-
-  private async write(sessionId: string, intent: TemporaryThrottleRecoveryIntent): Promise<void> {
-    this.memoryStore.set(sessionId, intent);
-    this.schedule(sessionId, intent);
-  }
-
-  private clearTimer(sessionId: string): void {
-    const timer = this.timersBySessionId.get(sessionId);
-    if (!timer) return;
-    clearTimeout(timer);
-    this.timersBySessionId.delete(sessionId);
-  }
-
-  private schedule(sessionId: string, intent: TemporaryThrottleRecoveryIntent): void {
-    this.clearTimer(sessionId);
-    if (intent.status !== 'waiting') return;
-    if (typeof intent.nextRetryAtMs !== 'number' || !Number.isFinite(intent.nextRetryAtMs)) return;
-    const delayMs = Math.max(0, intent.nextRetryAtMs - this.deps.nowMs());
-    const timer = setTimeout(() => {
-      this.timersBySessionId.delete(sessionId);
-      void this.wake({ sessionId, reason: 'timer' }).catch(() => {});
-    }, delayMs);
-    timer.unref?.();
-    this.timersBySessionId.set(sessionId, timer);
   }
 }

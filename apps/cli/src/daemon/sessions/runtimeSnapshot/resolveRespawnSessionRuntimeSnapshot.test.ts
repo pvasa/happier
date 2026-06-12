@@ -47,6 +47,7 @@ describe('resolveRespawnSessionRuntimeSnapshot', () => {
       attachPayload: { v: 2 as const, encryptionMode: 'plain' as const },
       vendorResumeId: 'persisted-vendor-resume',
       sessionPath: '/tmp/repo',
+      deliveredUserMessageSeq: null,
       metadata: {
         connectedServices: persistedConnectedServices,
         connectedServiceMaterializationIdentityV1: persistedMaterializationIdentity,

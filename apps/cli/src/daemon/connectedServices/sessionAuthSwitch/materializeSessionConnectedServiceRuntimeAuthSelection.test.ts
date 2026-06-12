@@ -387,21 +387,23 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
     });
   });
 
-  it('rewrites the Claude group stable config dir when refreshing the same active profile', async () => {
+  it('rewrites the active member canonical profile config dir when refreshing the same active profile', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-session-runtime-selection-refresh-'));
-    const groupConfigDir = join(
+    // P5 contract: claude-subscription group selections materialize into the ACTIVE MEMBER'S
+    // canonical profile home, never a shared `__groups/<groupId>` home (group homes are abolished
+    // as auth owners for credential-rotation-race reasons).
+    const activeMemberConfigDir = join(
       activeServerDir,
       'daemon',
       'connected-services',
       'homes',
       'claude-subscription',
-      '__groups',
-      'work',
+      'primary',
       'claude',
       'claude-config',
     );
-    await mkdir(groupConfigDir, { recursive: true });
-    await writeFile(join(groupConfigDir, '.credentials.json'), JSON.stringify({
+    await mkdir(activeMemberConfigDir, { recursive: true });
+    await writeFile(join(activeMemberConfigDir, '.credentials.json'), JSON.stringify({
       claudeAiOauth: {
         accessToken: 'stale-access-placeholder',
         refreshToken: 'stale-refresh-placeholder',
@@ -515,8 +517,8 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
     });
 
     const materializedEnv = (result as { targetMaterializedEnv?: Record<string, string> }).targetMaterializedEnv;
-    expect(materializedEnv?.CLAUDE_CONFIG_DIR).toBe(groupConfigDir);
-    const credential = JSON.parse(await readFile(join(groupConfigDir, '.credentials.json'), 'utf8'));
+    expect(materializedEnv?.CLAUDE_CONFIG_DIR).toBe(activeMemberConfigDir);
+    const credential = JSON.parse(await readFile(join(activeMemberConfigDir, '.credentials.json'), 'utf8'));
     expect(credential.claudeAiOauth.accessToken).toBe('refreshed-access-placeholder');
     expect(credential.claudeAiOauth.accessToken).not.toBe('stale-access-placeholder');
     expect(credential.claudeAiOauth.refreshToken).toBe('refreshed-refresh-placeholder');
@@ -621,6 +623,7 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
     });
 
     const materializedEnv = (result as { targetMaterializedEnv?: Record<string, string> }).targetMaterializedEnv;
+    // P5 contract: the group switch lands in the NEW active member's canonical profile home.
     expect(materializedEnv).toEqual({
       CLAUDE_CONFIG_DIR: join(
         activeServerDir,
@@ -628,8 +631,7 @@ describe('materializeSessionConnectedServiceRuntimeAuthSelection', () => {
         'connected-services',
         'homes',
         'claude-subscription',
-        '__groups',
-        'work',
+        'backup',
         'claude',
         'claude-config',
       ),

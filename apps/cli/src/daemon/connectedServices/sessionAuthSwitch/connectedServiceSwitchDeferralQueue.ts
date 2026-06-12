@@ -357,7 +357,10 @@ export function createConnectedServiceSwitchDeferralQueue(
       void executePendingSwitch(pending, 'completed_at_boundary');
       return;
     }
-    void executePendingSwitch(pending, 'switch_cancelled');
+    // A cancelled turn still gives the deferred switch its safe boundary. Treat the switch as
+    // completed at the boundary so the transcript does not claim it was cancelled right before the
+    // real restart/switch attempt is emitted.
+    void executePendingSwitch(pending, 'completed_at_boundary');
   };
 
   const isTurnInFlight = (sessionId: string): boolean => {

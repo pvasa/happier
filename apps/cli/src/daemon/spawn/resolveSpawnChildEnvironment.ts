@@ -223,13 +223,14 @@ export async function resolveSpawnChildEnvironment(params: {
     extraEnvForChild[HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR] = JSON.stringify(explicitEnvKeysForChild);
   }
   if (params.daemonSpawnHooks?.buildExtraEnvForChild) {
-    Object.assign(
-      extraEnvForChild,
-      params.daemonSpawnHooks.buildExtraEnvForChild({
-        experimentalCodexAcp: effectiveExperimentalCodexAcp,
-        codexBackendMode: effectiveCodexBackendMode,
-      }),
-    );
+    const hookExtraEnvForChild = params.daemonSpawnHooks.buildExtraEnvForChild({
+      experimentalCodexAcp: effectiveExperimentalCodexAcp,
+      codexBackendMode: effectiveCodexBackendMode,
+    });
+    for (const [key, value] of Object.entries(hookExtraEnvForChild)) {
+      if (typeof extraEnvForChild[key] === 'string') continue;
+      extraEnvForChild[key] = value;
+    }
   }
   if (params.options.transcriptStorage === 'direct') {
     extraEnvForChild.HAPPIER_TRANSCRIPT_STORAGE = 'direct';

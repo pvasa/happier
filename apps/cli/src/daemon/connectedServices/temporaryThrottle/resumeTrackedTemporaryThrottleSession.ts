@@ -3,9 +3,10 @@ import type {
   SpawnSessionOptions,
   SpawnSessionResult,
 } from '@/rpc/handlers/registerSessionHandlers';
-import type { TrackedSession } from '@/daemon/types';
 
 import { resolveRespawnSessionRuntimeSnapshot } from '@/daemon/sessions/runtimeSnapshot/resolveRespawnSessionRuntimeSnapshot';
+
+import type { TemporaryThrottleResumeSource } from './resolveInactiveTemporaryThrottleResumeSource';
 
 type ResolveRespawnOptions = (input: Readonly<{
   sessionId: string;
@@ -32,7 +33,7 @@ function normalizeString(value: unknown): string {
 }
 
 function buildTemporaryThrottleDefaultRespawnOptions(input: Readonly<{
-  tracked: TrackedSession;
+  tracked: TemporaryThrottleResumeSource;
   sessionId: string;
   vendorResumeId: string;
 }>): SpawnSessionOptions | null {
@@ -53,7 +54,7 @@ function readSpawnErrorCode(result: SpawnSessionResult): string | null {
 }
 
 export async function resumeTrackedTemporaryThrottleSession(input: Readonly<{
-  tracked: TrackedSession;
+  tracked: TemporaryThrottleResumeSource;
   sessionId?: string | null;
   credentials: Credentials | null;
   readCredentials: () => Promise<Credentials | null>;

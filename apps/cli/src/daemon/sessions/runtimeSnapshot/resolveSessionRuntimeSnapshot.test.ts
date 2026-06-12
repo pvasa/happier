@@ -280,4 +280,29 @@ describe('resolveSessionRuntimeSnapshot', () => {
     expect((result.spawnOptions as { connectedServiceMaterializationIdentityV1?: unknown }).connectedServiceMaterializationIdentityV1)
       .toEqual(materializationIdentity);
   });
+
+  // D15a (session cmq7pyqkj, 2026-06-12): a UI resume RPC carries one-shot delivery fields
+  // (initialTranscriptAfterSeq etc.). Persisting them into tracked spawn options made every later
+  // crash/auth respawn replay already-processed user messages via explicit startup catch-up.
+  it('strips one-shot delivery fields from the durable spawn-options snapshot', () => {
+    const result = resolveSessionRuntimeSnapshot({
+      incomingOptions: baseIncomingOptions({
+        initialTranscriptAfterSeq: 33294,
+        initialPrompt: 'one-shot prompt',
+        initialGoal: { goalText: 'one-shot goal' } as unknown as SpawnSessionOptions['initialGoal'],
+        existingSessionAttachPayload: { v: 2, encryptionMode: 'plain' },
+        permissionMode: 'yolo',
+        permissionModeUpdatedAt: 100,
+      }),
+      persistedMetadata: null,
+    });
+
+    expect(result.spawnOptions.initialTranscriptAfterSeq).toBeUndefined();
+    expect(result.spawnOptions.initialPrompt).toBeUndefined();
+    expect(result.spawnOptions.initialGoal).toBeUndefined();
+    expect(result.spawnOptions.existingSessionAttachPayload).toBeUndefined();
+    // Durable runtime controls are preserved.
+    expect(result.spawnOptions.permissionMode).toBe('yolo');
+    expect(result.spawnOptions.directory).toBe('/tmp/repo');
+  });
 });

@@ -14,7 +14,12 @@ export type DurableRecoveryOutcome<TIntent> =
   | Readonly<{ status: 'success'; intent?: TIntent }>
   | Readonly<{ status: 'wait'; nextRetryAtMs?: number | null; lastError?: string | null; intent?: TIntent }>
   | Readonly<{ status: 'terminal'; lastError?: string | null; intent?: TIntent }>
-  | Readonly<{ status: 'exhausted'; lastError?: string | null; intent?: TIntent }>;
+  | Readonly<{ status: 'exhausted'; lastError?: string | null; intent?: TIntent }>
+  // The recovery no longer applies (the condition it was armed for was superseded by other
+  // progress, e.g. a group switch off the failing profile). The durable record is REMOVED —
+  // not terminalized — so the same recovery key can re-arm on a genuine future failure
+  // (a terminal record blocks re-arming for the whole retention window, RD-REC-13).
+  | Readonly<{ status: 'superseded'; reason?: string | null }>;
 
 export type DurableRecoveryGateResult =
   | Readonly<{ status: 'open' }>
@@ -63,12 +68,14 @@ type DurableBackoffRecoverySchedulerDeps<TIntent> = Readonly<{
   onSuccess?: (input: Readonly<{ sessionId: string; intent: TIntent }>) => Promise<void> | void;
   clearOnSuccess?: boolean;
   onTerminal?: (input: Readonly<{ sessionId: string; intent: TIntent; lastError: string | null }>) => void;
+  onSuperseded?: (input: Readonly<{ sessionId: string; intent: TIntent; reason: string | null }>) => void;
   onExhausted?: (input: Readonly<{ sessionId: string; intent: TIntent; lastError: string | null }>) => void;
   onDelayed?: (input: Readonly<{ sessionId: string; intent: TIntent; retryAtMs: number; reason: string }>) => void;
 }>;
 
 const defaultBaseBackoffMs = 1_000;
 const defaultMaxBackoffMs = 60_000;
+const maxSafeTimerDelayMs = 2_147_483_647;
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
@@ -319,6 +326,7 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
     const nowMs = this.deps.nowMs();
     const nextRetryAtMs = this.deps.getNextRetryAtMs(intent);
     if (input.reason === 'timer' && status === 'waiting' && nextRetryAtMs !== null && nowMs < nextRetryAtMs) {
+      this.schedule(input.recoveryKey, intent);
       return { status: 'waiting' };
     }
 
@@ -407,6 +415,17 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
       return { status: 'succeeded' };
     }
 
+    if (outcome.status === 'superseded') {
+      await this.remove(input.recoveryKey);
+      this.clearTimer(input.recoveryKey);
+      this.deps.onSuperseded?.({
+        sessionId,
+        intent: checking,
+        reason: normalizeError(outcome.reason),
+      });
+      return { status: 'superseded' };
+    }
+
     if (outcome.status === 'terminal') {
       const terminal = this.prepareWakeWrite(input.recoveryKey, {
         base: checking,
@@ -421,7 +440,15 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
     }
 
     const exhaustAfterOutcome = this.deps.exhaustOnMaxAttemptOutcome !== false;
-    if (outcome.status === 'exhausted' || (exhaustAfterOutcome && maxAttempts > 0 && attemptCount >= maxAttempts)) {
+    // Honor an outcome-provided intent's attempt count: recover loops may roll the
+    // markChecking increment back for outcomes that must not consume the attempt
+    // budget (degraded local outages, durable group-exhausted waits). Exhaustion
+    // must respect that rollback, or a durable wait reached AT the ceiling still
+    // dead-letters even though the recover loop asked to keep waiting (F0).
+    const settledAttemptCount = outcome.intent === undefined
+      ? attemptCount
+      : this.deps.getAttemptCount(outcome.intent);
+    if (outcome.status === 'exhausted' || (exhaustAfterOutcome && maxAttempts > 0 && settledAttemptCount >= maxAttempts)) {
       const lastError = this.sanitizeLastError(outcome.lastError) ?? 'max_attempts_exhausted';
       const exhausted = this.prepareWakeWrite(input.recoveryKey, {
         base: checking,
@@ -565,7 +592,7 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
       ? this.deps.nowMs()
       : this.deps.getNextRetryAtMs(intent);
     if (typeof nextRetryAtMs !== 'number' || !Number.isFinite(nextRetryAtMs)) return;
-    const delayMs = Math.max(0, nextRetryAtMs - this.deps.nowMs());
+    const delayMs = Math.min(maxSafeTimerDelayMs, Math.max(0, nextRetryAtMs - this.deps.nowMs()));
     const timer = setTimeout(() => {
       this.timersByRecoveryKey.delete(recoveryKey);
       void this.wakeByKey({ recoveryKey, reason: 'timer' }).catch(() => {});

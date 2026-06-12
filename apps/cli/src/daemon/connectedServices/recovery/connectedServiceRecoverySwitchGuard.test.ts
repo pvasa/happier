@@ -62,6 +62,7 @@ function usageLimitIntent(input: Readonly<{
     attemptCount: 0,
     maxAttempts: 3,
     lastProbeError: null,
+    resumePromptMode: 'standard',
     selectedAuth: {
       kind: 'group',
       serviceId: input.serviceId,
@@ -123,6 +124,35 @@ describe('createConnectedServiceRecoverySwitchGuard', () => {
       groupId: 'team',
       activeProfileId: 'active',
       reason: 'usage_limit',
+    })).resolves.toEqual({
+      status: 'suppress',
+      reason: 'quota_soft_switch_suppressed_recovery_pending',
+    });
+  });
+
+  it('suppresses a quota soft switch while runtime-auth recovery is resumed awaiting proof', async () => {
+    const runtimeAuthRecovery = {
+      readForSession: vi.fn(() => [
+        runtimeAuthIntent({
+          sessionId: 'session-1',
+          serviceId: SERVICE_ID,
+          profileId: 'active',
+          groupId: 'team',
+          status: 'resumed_awaiting_proof' as RuntimeAuthRecoveryIntent['status'],
+        }),
+      ]),
+    };
+    const guard = createConnectedServiceRecoverySwitchGuard({
+      runtimeAuthRecovery,
+      usageLimitRecovery: null,
+    });
+
+    await expect(guard({
+      sessionId: 'session-1',
+      serviceId: SERVICE_ID,
+      groupId: 'team',
+      activeProfileId: 'active',
+      reason: 'soft_threshold',
     })).resolves.toEqual({
       status: 'suppress',
       reason: 'quota_soft_switch_suppressed_recovery_pending',

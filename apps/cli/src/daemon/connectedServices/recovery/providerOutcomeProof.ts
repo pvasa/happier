@@ -34,8 +34,17 @@
  *   timeout state; schedulers consume the proof through this shared vocabulary.
  * - `native_resume`: provider-specific evidence that the recovered provider
  *   accepted vendor/session resume state.
+ *   RESERVED (RD-REC-14): no producer exists yet. Provider leaves must pass it
+ *   through the explicit `proofKind` pass-through seam on switch/recovery results
+ *   (see `resolveRuntimeAuthRecoveryProof`) when the P7 capability-descriptor work
+ *   lands (e.g. Codex `thread/resume` acceptance). The host must NOT fabricate it
+ *   from local spawn success — that is exactly the local-substep mistake this
+ *   contract exists to kill.
  * - `quota_probe_fresh`: a provider quota probe proves the selected profile is
  *   not exhausted for the same service/fingerprint.
+ *   RESERVED (RD-REC-14): no producer exists yet. The quotas coordinator /
+ *   provider quota fetchers own this evidence and must emit it through the same
+ *   `proofKind` pass-through (or `markProviderOutcomeProofByKey`) under P7.
  * - `fresh_candidate_selected`: the adopted connected-service profile/account is
  *   genuinely DIFFERENT from the exhausted/failed one (and not known-exhausted
  *   for the same fingerprint). This is useful evidence, but it is still
@@ -88,6 +97,16 @@ const TERMINAL_PROOF_KINDS: ReadonlySet<ProviderOutcomeProofKind> = new Set<Prov
   'terminal_exhausted',
 ]);
 
+const PROVIDER_OUTCOME_PROOF_KINDS: ReadonlySet<string> = new Set<ProviderOutcomeProofKind>([
+  'provider_activity',
+  'native_resume',
+  'quota_probe_fresh',
+  'fresh_candidate_selected',
+  'account_adoption_verified',
+  'terminal_action_required',
+  'terminal_exhausted',
+]);
+
 /**
  * Things that are explicitly NOT provider-outcome proof. These are the local
  * substeps that the live loops mistook for success. Resolvers that observe these
@@ -111,6 +130,10 @@ export const NON_PROOF_LOCAL_SUBSTEPS = [
 ] as const;
 
 export type NonProofLocalSubstep = (typeof NON_PROOF_LOCAL_SUBSTEPS)[number];
+
+export function isProviderOutcomeProofKind(kind: unknown): kind is ProviderOutcomeProofKind {
+  return typeof kind === 'string' && PROVIDER_OUTCOME_PROOF_KINDS.has(kind);
+}
 
 /**
  * True when the proof means the provider actually recovered (clear-as-recovered).

@@ -3,7 +3,7 @@ import { logger } from '@/ui/logger';
 import { writeSessionExitReport } from '@/daemon/sessionExitReport';
 
 import type { TrackedSession } from '../types';
-import { reportDaemonObservedSessionExit } from '../sessionTermination';
+import { reportDaemonObservedSessionExit, settleDaemonObservedOpenTurn } from '../sessionTermination';
 import { removeSessionMarker } from '../sessionRegistry';
 import { cleanupPidSessionResources } from './cleanupPidSessionResources';
 
@@ -123,6 +123,17 @@ export function createOnChildExited(params: Readonly<{
       }
 
       const apiMachineForSessions = getApiMachineForSessions();
+      if (apiMachineForSessions) {
+        // Settle the dead runner's open canonical turn even when a live replacement exists
+        // (the case where the full session-end below is skipped). Without this, a respawn-kill
+        // (e.g. usage-limit account switch) leaves the turn 'in_progress' forever and the UI
+        // stuck "working" (Lane N1, incident cmq7pyqkj).
+        settleDaemonObservedOpenTurn({
+          apiMachine: apiMachineForSessions,
+          trackedSession: tracked,
+          now: () => Date.now(),
+        });
+      }
       if (shouldReportSessionEnd && apiMachineForSessions) {
         reportDaemonObservedSessionExit({
           apiMachine: apiMachineForSessions,

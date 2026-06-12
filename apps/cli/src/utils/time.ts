@@ -14,6 +14,27 @@ export function delayUnref(ms: number): Promise<void> {
     });
 }
 
+/**
+ * Like {@link delayUnref}, but additionally resolves early (without throwing) when the given
+ * signal aborts. For poll loops that re-check their abort/dispose state after every wait: the
+ * pending timer neither keeps the event loop alive nor outlives an aborted session.
+ */
+export function delayUnrefAbortable(ms: number, abortSignal: AbortSignal): Promise<void> {
+    if (abortSignal.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+        const onAbort = () => {
+            clearTimeout(timer);
+            resolve();
+        };
+        const timer = setTimeout(() => {
+            abortSignal.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        timer.unref?.();
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
 export function exponentialBackoffDelay(currentFailureCount: number, minDelay: number, maxDelay: number, maxFailureCount: number) {
     const safeMaxFailureCount = Number.isFinite(maxFailureCount) ? Math.max(maxFailureCount, 1) : 50;
     const clampedFailureCount = Math.min(Math.max(currentFailureCount, 0), safeMaxFailureCount);

@@ -10,6 +10,8 @@ import {
   type SessionContinuationResumePromptModeV1,
 } from '@happier-dev/protocol';
 
+import { buildContinuationResumePrompt } from './continuationResumePrompt';
+
 type ContinuationStore = Readonly<{
   read: (sessionId: string) => Promise<unknown | null> | unknown | null;
   write: (sessionId: string, state: unknown) => Promise<void> | void;
@@ -19,6 +21,11 @@ type SessionContinuationRecoveryControllerDeps = Readonly<{
   nowMs: () => number;
   providerActivityTimeoutMs?: number;
   store: ContinuationStore;
+  /**
+   * Account-level custom resume prompt text, consulted at send time when an
+   * attempt's effective resume prompt mode is `custom`.
+   */
+  readCustomResumePrompt?: () => string | null | undefined;
 }>;
 
 type BeginContinuationAttemptInput = Readonly<{
@@ -35,6 +42,11 @@ type ResolveContinuationAttemptInput = BeginContinuationAttemptInput & Readonly<
   exactProviderContextAvailable: boolean;
   hasUserMessageAfterFailure: () => Promise<boolean> | boolean;
   sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
+  canRetryOriginalUserMessage?: (input: { failureAtMs: number }) =>
+    | Promise<'allowed' | 'blocked_provider_activity' | 'unknown'>
+    | 'allowed'
+    | 'blocked_provider_activity'
+    | 'unknown';
   retryOriginalUserMessage?: (input: { localId: string }) => Promise<void> | void;
 }>;
 
@@ -298,12 +310,26 @@ export function createSessionContinuationRecoveryController(
           await setAttempt(attemptInput, 'retry_required', { errorCode: 'original_user_message_retry_unavailable' });
           return { status: 'retry_required' };
         }
+        const retrySafety = input.canRetryOriginalUserMessage
+          ? await input.canRetryOriginalUserMessage({ failureAtMs: input.failureAtMs })
+          : 'unknown';
+        if (retrySafety !== 'allowed') {
+          await setAttempt(attemptInput, 'retry_required', {
+            errorCode: retrySafety === 'blocked_provider_activity'
+              ? 'original_user_message_retry_provider_activity_detected'
+              : 'original_user_message_retry_evidence_unavailable',
+          });
+          return { status: 'retry_required' };
+        }
         await input.retryOriginalUserMessage({
           localId: buildOriginalUserMessageRetryLocalId(input),
         });
       } else {
         await input.sendContinuationPrompt({
-          prompt: 'Please continue the interrupted work from the recovered provider context. Do not restart or repeat completed work.',
+          prompt: buildContinuationResumePrompt({
+            resumePromptMode: input.resumePromptMode,
+            customResumePrompt: deps.readCustomResumePrompt?.() ?? null,
+          }),
           localId: buildContinuationPromptLocalId(input),
         });
       }
@@ -436,6 +462,11 @@ export function createSessionContinuationRecoveryController(
       exactProviderContextAvailable: boolean;
       hasUserMessageAfterFailure: (input: { failureAtMs: number }) => Promise<boolean> | boolean;
       sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
+      canRetryOriginalUserMessage?: (input: { attemptId: string; failureAtMs: number }) =>
+        | Promise<'allowed' | 'blocked_provider_activity' | 'unknown'>
+        | 'allowed'
+        | 'blocked_provider_activity'
+        | 'unknown';
       retryOriginalUserMessage?: (input: { attemptId: string; localId: string; failureAtMs: number }) => Promise<void> | void;
     }>): Promise<{ resolved: Array<{ attemptId: string; status: ResolveContinuationAttemptResult['status'] }> }> {
       const recovery = await readRecovery(deps.store, input.sessionId);
@@ -455,6 +486,12 @@ export function createSessionContinuationRecoveryController(
           hasUserMessageAfterFailure: () =>
             input.hasUserMessageAfterFailure({ failureAtMs: attempt.failureAtMs }),
           sendContinuationPrompt: input.sendContinuationPrompt,
+          canRetryOriginalUserMessage: input.canRetryOriginalUserMessage
+            ? () => input.canRetryOriginalUserMessage?.({
+                attemptId: attempt.attemptId,
+                failureAtMs: attempt.failureAtMs,
+              }) ?? 'unknown'
+            : undefined,
           retryOriginalUserMessage: input.retryOriginalUserMessage
             ? ({ localId }) => input.retryOriginalUserMessage?.({
                 attemptId: attempt.attemptId,

@@ -46,9 +46,13 @@ export async function resolveSharedStateRequiredSwitchContinuity(input: Readonly
   warnings?: readonly string[];
 }>): Promise<SessionConnectedServiceSwitchContinuity> {
   if (!input.accountSettings) {
+    // Incident Jun-11 H-A: a NULL settings snapshot means "settings unknown" (e.g. a freshly
+    // restarted daemon that has not bootstrapped its snapshot yet), NOT "sharing disabled".
+    // Surface a RETRYABLE settings-unavailable code so the recovery scheduler arms a durable
+    // retry instead of terminalizing as non_retryable_apply_failure.
     return {
       mode: 'unsupported',
-      errorCode: 'provider_state_sharing_unavailable',
+      errorCode: 'provider_state_sharing_settings_unavailable',
       warnings: input.warnings ?? [],
     };
   }
@@ -78,6 +82,17 @@ export async function resolveSharedStateRequiredSwitchContinuity(input: Readonly
       || !materializationIdentity
       || !input.targetMaterializedEnv
     ) {
+      // TEMP qaC instrumentation — REMOVE before lane closeout
+      // eslint-disable-next-line no-console
+      const { logger: qaCLogger } = await import('@/ui/logger');
+      qaCLogger.debug('[qaC TEMP] shared-state continuity missing inputs', {
+        serviceId,
+        targetMaterializedRoot,
+        vendorResumeId,
+        cwd,
+        hasMaterializationIdentity: Boolean(materializationIdentity),
+        hasTargetMaterializedEnv: Boolean(input.targetMaterializedEnv),
+      });
       return {
         mode: 'unsupported',
         errorCode: 'provider_session_state_unavailable_for_resume',
@@ -98,6 +113,16 @@ export async function resolveSharedStateRequiredSwitchContinuity(input: Readonly
       candidatePersistedSessionFile: input.candidatePersistedSessionFile ?? null,
     });
     if (!reachability.ok) {
+      // TEMP qaC instrumentation — REMOVE before lane closeout
+      const { logger: qaCLogger } = await import('@/ui/logger');
+      qaCLogger.debug('[qaC TEMP] shared-state continuity reachability failed', {
+        reason: reachability.reason,
+        vendorResumeId,
+        targetMaterializedRoot,
+        cwd,
+        candidatePersistedSessionFile: input.candidatePersistedSessionFile ?? null,
+        continuityDiagnostics: reachability.continuityDiagnostics,
+      });
       return {
         mode: 'unsupported',
         errorCode: 'provider_session_state_unavailable_for_resume',
@@ -108,6 +133,17 @@ export async function resolveSharedStateRequiredSwitchContinuity(input: Readonly
     return {
       mode: 'restart_rematerialize',
       warnings: input.warnings ?? [],
+      // INC-6: surface what was PROVEN so successful switches carry the continuity context in
+      // telemetry instead of all-null fields.
+      diagnostics: {
+        materializationIdentityId: materializationIdentity.id,
+        targetMaterializedRoot,
+        vendorResumeId,
+        cwd,
+        candidatePersistedSessionFile: input.candidatePersistedSessionFile ?? null,
+        requestedStateMode: 'shared',
+        effectiveStateMode: reachability.effectiveStateMode,
+      },
     };
   }
   return {

@@ -16,6 +16,7 @@ import type { Credentials } from '@/persistence';
 import {
   parseConnectedServiceBindingSelections,
   type ConnectedServiceBindingSelection,
+  type ConnectedServicesBindingsV1,
 } from './parseConnectedServicesBindings';
 import { resolveConnectedServiceCredentials } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
 import {
@@ -33,6 +34,7 @@ import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from './accountGro
 import { selectConnectedServiceAuthGroupCandidate } from './accountGroups/selection/selectConnectedServiceAuthGroupCandidate';
 import { resolveConnectedServiceAuthGroupPreTurnQuotaProbeProfileIds } from './accountGroups/selection/resolveConnectedServiceAuthGroupPreTurnQuotaProbeProfileIds';
 import { buildConnectedServiceAuthGroupSwitchState } from './accountGroups/switching/buildConnectedServiceAuthGroupSwitchState';
+import { evaluatePredictiveSoftSwitchPolicy } from './accountGroups/switching/predictiveSoftSwitchPolicy';
 import type { ConnectedServiceRefreshFailureCategory } from './credentials/lifecycleTypes';
 import { verifySpawnResumeReachability } from './verifySpawnResumeReachability';
 import type {
@@ -55,12 +57,6 @@ type ConnectedServiceAuthGroupApi = Readonly<{
     serviceId: ConnectedServiceId;
     groupId: string;
   }>) => Promise<ConnectedServiceAuthGroupResponse | null>;
-  updateConnectedServiceAuthGroupActiveProfile?: (params: Readonly<{
-    serviceId: ConnectedServiceId;
-    groupId: string;
-    activeProfileId: string;
-    expectedGeneration: number;
-  }>) => Promise<ConnectedServiceAuthGroupResponse>;
 }>;
 
 type ConnectedServiceProfilesHealthApi = Readonly<{
@@ -418,12 +414,13 @@ async function maybeSelectGroupActiveProfileForSpawn(params: Readonly<{
   sessionId?: string;
   authGroupSwitchCoordinator?: ConnectedServiceAuthGroupPreTurnSwitchCoordinator | null;
   softSwitchRecoveryGuard?: ConnectedServiceRecoverySoftSwitchGuard | null;
+  predictiveSoftSwitchMode: 'supported' | 'unsupported';
 }>): Promise<ConnectedServiceAuthGroupResponse> {
   if (!params.runtimeQuotaSnapshots || !isFullAuthGroup(params.group)) return params.group;
-  if (
-    !params.authGroupSwitchCoordinator
-    && typeof params.api.updateConnectedServiceAuthGroupActiveProfile !== 'function'
-  ) return params.group;
+  // Pre-spawn switches only happen through the injected switch coordinator FSM. There is no
+  // direct active-profile API fallback: a raw write would be a lease-less, event-less parallel
+  // switching mechanism invisible to switch telemetry and locking (RD-SW-4).
+  if (!params.authGroupSwitchCoordinator) return params.group;
 
   const state = buildConnectedServiceAuthGroupSwitchState({
     group: params.group,
@@ -445,6 +442,13 @@ async function maybeSelectGroupActiveProfileForSpawn(params: Readonly<{
     });
     if (guardResult.status === 'suppress') return params.group;
   }
+
+  const predictivePolicy = evaluatePredictiveSoftSwitchPolicy({
+    context: 'pre_spawn',
+    reason: switchReason,
+    predictiveSoftSwitchMode: params.predictiveSoftSwitchMode,
+  });
+  if (predictivePolicy.status === 'suppress') return params.group;
 
   if (
     params.authGroupSwitchCoordinator
@@ -488,33 +492,23 @@ async function maybeSelectGroupActiveProfileForSpawn(params: Readonly<{
   const selectedProfileId = selected.selected?.profileId ?? null;
   if (!selectedProfileId || selectedProfileId === readProfileId(state.activeProfileId)) return params.group;
 
-  if (params.authGroupSwitchCoordinator) {
-    const switched = await params.authGroupSwitchCoordinator.switchBeforeTurn({
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      serviceId: params.serviceId,
-      groupId: params.groupId,
-      reason: switchReason,
-    });
-    const activeProfileId = readProfileId(switched.activeProfileId);
-    if (activeProfileId) {
-      return {
-        ...params.group,
-        activeProfileId,
-        generation: typeof switched.generation === 'number' && Number.isFinite(switched.generation)
-          ? switched.generation
-          : params.group.generation,
-      };
-    }
-    return params.group;
-  }
-
-  if (typeof params.api.updateConnectedServiceAuthGroupActiveProfile !== 'function') return params.group;
-  return await params.api.updateConnectedServiceAuthGroupActiveProfile({
+  const switched = await params.authGroupSwitchCoordinator.switchBeforeTurn({
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     serviceId: params.serviceId,
     groupId: params.groupId,
-    activeProfileId: selectedProfileId,
-    expectedGeneration: state.generation,
+    reason: switchReason,
   });
+  const activeProfileId = readProfileId(switched.activeProfileId);
+  if (activeProfileId) {
+    return {
+      ...params.group,
+      activeProfileId,
+      generation: typeof switched.generation === 'number' && Number.isFinite(switched.generation)
+        ? switched.generation
+        : params.group.generation,
+    };
+  }
+  return params.group;
 }
 
 async function resolveCredentialBindings(params: Readonly<{
@@ -526,6 +520,7 @@ async function resolveCredentialBindings(params: Readonly<{
   sessionId?: string;
   authGroupSwitchCoordinator?: ConnectedServiceAuthGroupPreTurnSwitchCoordinator | null;
   softSwitchRecoveryGuard?: ConnectedServiceRecoverySoftSwitchGuard | null;
+  predictiveSoftSwitchMode: 'supported' | 'unsupported';
 }>): Promise<Readonly<{
   credentialBindings: ReadonlyArray<{ serviceId: ConnectedServiceId; profileId: string }>;
   groupSelections: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedGroupSelection>;
@@ -556,13 +551,14 @@ async function resolveCredentialBindings(params: Readonly<{
       serviceId: selection.serviceId,
       groupId: selection.groupId,
       api: groupApi,
-        runtimeQuotaSnapshots: params.runtimeQuotaSnapshots,
-        quotaFreshnessMs: params.quotaFreshnessMs,
-        nowMs: params.nowMs,
-        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
-        softSwitchRecoveryGuard: params.softSwitchRecoveryGuard ?? null,
-      });
+      runtimeQuotaSnapshots: params.runtimeQuotaSnapshots,
+      quotaFreshnessMs: params.quotaFreshnessMs,
+      nowMs: params.nowMs,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
+      softSwitchRecoveryGuard: params.softSwitchRecoveryGuard ?? null,
+      predictiveSoftSwitchMode: params.predictiveSoftSwitchMode,
+    });
     const activeProfileId = readProfileId(selectedGroup.activeProfileId);
     if (!activeProfileId) {
       throw new Error(`Connected service auth group has no active profile (${selection.serviceId}/${selection.groupId})`);
@@ -789,6 +785,37 @@ function buildSelectionsByServiceIdForSpawn(params: Readonly<{
   return selectionsByServiceId;
 }
 
+function buildCanonicalConnectedServicesBindingsForSpawn(params: Readonly<{
+  selections: ReadonlyArray<ConnectedServiceBindingSelection>;
+  groupSelections: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedGroupSelection>;
+}>): ConnectedServicesBindingsV1 {
+  const bindingsByServiceId: ConnectedServicesBindingsV1['bindingsByServiceId'] = {};
+
+  for (const selection of params.selections) {
+    if (selection.kind === 'profile') {
+      bindingsByServiceId[selection.serviceId] = {
+        source: 'connected',
+        selection: 'profile',
+        profileId: selection.profileId,
+      };
+      continue;
+    }
+    const group = params.groupSelections.get(selection.serviceId);
+    if (!group) continue;
+    bindingsByServiceId[selection.serviceId] = {
+      source: 'connected',
+      selection: 'group',
+      groupId: group.groupId,
+      profileId: group.activeProfileId,
+    };
+  }
+
+  return {
+    v: 1,
+    bindingsByServiceId,
+  };
+}
+
 function resolveMaxSpawnMaterializationAttempts(
   groupSelections: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedGroupSelection>,
 ): number {
@@ -824,6 +851,8 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
     selectionsByServiceId: params.selectionsByServiceId,
     accountSettings: params.accountSettings,
     processEnv: params.processEnv,
+    vendorResumeId: params.vendorResumeId,
+    candidatePersistedSessionFile: params.candidatePersistedSessionFile,
   });
 
   if (!materialized) return null;
@@ -884,6 +913,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
   env: Record<string, string>;
   cleanupOnFailure: (() => void) | null;
   cleanupOnExit: (() => void) | null;
+  connectedServicesBindings: ConnectedServicesBindingsV1;
   diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
 }> | null> {
   const selections = parseConnectedServiceBindingSelections(params.connectedServicesBindingsRaw);
@@ -902,6 +932,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     authGroupSwitchCoordinator: params.authGroupSwitchCoordinator ?? null,
     softSwitchRecoveryGuard: params.softSwitchRecoveryGuard ?? null,
+    predictiveSoftSwitchMode: credentialLifecycleDescriptor.predictiveSoftSwitch.mode,
   });
 
   const recordsByServiceId: Map<ConnectedServiceId, ConnectedServiceCredentialRecordV1> =
@@ -946,9 +977,13 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
       recordsByServiceId,
       groupSelections,
     });
+    const connectedServicesBindings = buildCanonicalConnectedServicesBindingsForSpawn({
+      selections,
+      groupSelections,
+    });
 
     try {
-      return await materializeAndVerifyConnectedServiceAuthForSpawn({
+      const materialized = await materializeAndVerifyConnectedServiceAuthForSpawn({
         agentId: params.agentId,
         materializationKey: params.materializationKey,
         connectedServiceMaterializationIdentityV1: params.connectedServiceMaterializationIdentityV1 ?? null,
@@ -963,6 +998,11 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
         resumeReachabilityRequired: params.resumeReachabilityRequired ?? false,
         candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
       });
+      if (materialized === null) return null;
+      return {
+        ...materialized,
+        connectedServicesBindings,
+      };
     } catch (error) {
       if (!(error instanceof ConnectedServiceSpawnMaterializationError)) throw error;
       if (attempt >= maxMaterializationAttempts - 1) throw error;

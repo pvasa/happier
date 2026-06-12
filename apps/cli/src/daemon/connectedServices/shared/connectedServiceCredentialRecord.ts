@@ -32,6 +32,15 @@ export function requireConnectedServiceTokenCredentialRecord(
   return record;
 }
 
+/**
+ * RESIDUAL RISK (dual-refresher rotation race, RD-CDX-7 analogue — accepted, recorded here):
+ * this entry embeds the OAuth REFRESH token into provider-materialized auth (Pi `auth.json`,
+ * OpenCode `OPENCODE_AUTH_CONTENT`; Gemini's `oauth_creds.json` embeds it independently), so
+ * provider runtimes can and do self-refresh (Pi even watches `auth.json` mtime and restarts).
+ * The daemon refresher is NOT the only writer: daemon-side refresh flows must tolerate the
+ * provider rotating the same refresh token concurrently (e.g. treat invalid_grant after a
+ * provider-side rotation as re-resolvable, never as immediate profile invalidation).
+ */
 export function buildConnectedServiceOauthAuthEntry(record: ConnectedServiceOauthCredentialRecordWithExpiry): Record<string, unknown> {
   return {
     type: 'oauth',

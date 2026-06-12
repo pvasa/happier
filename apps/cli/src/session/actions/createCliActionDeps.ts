@@ -79,6 +79,7 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { routeSessionCatalogControl } from '@/session/catalogControls/sessionCatalogControlRouter';
 import { routeSessionGoalControl } from '@/session/goalControls/sessionGoalControlRouter';
+import { buildRoutedResumePromptTierSources } from '@/session/usageLimitRecoveryControls/buildRoutedResumePromptTierSources';
 import {
   routeSessionUsageLimitRecoveryCheckNow,
   routeSessionUsageLimitRecoveryWaitResumeCancel,
@@ -217,6 +218,59 @@ function resolveOnlyPendingRequestId(params: Readonly<{
     .filter((id) => id.length > 0);
 
   return matchingIds.length === 1 ? matchingIds[0] : null;
+}
+
+function resolvePendingRequestKind(params: Readonly<{
+  rawSession: Readonly<{ agentState?: unknown }>;
+  mode: SessionStoredContentEncryptionMode;
+  ctx: SessionEncryptionContext;
+  requestId: string;
+}>): PendingAgentRequestKind | null {
+  const agentState = readSessionAgentState(params);
+  const requests = agentState?.requests;
+  if (!requests || typeof requests !== 'object' || Array.isArray(requests)) {
+    return null;
+  }
+
+  const request = (requests as Record<string, unknown>)[params.requestId];
+  if (!request || typeof request !== 'object' || Array.isArray(request)) {
+    return null;
+  }
+
+  const requestKind = (request as Record<string, unknown>).kind;
+  return requestKind === 'user_action' ? 'user_action' : 'permission';
+}
+
+function isKnownCompletedRequestId(params: Readonly<{
+  rawSession: Readonly<{ agentState?: unknown }>;
+  mode: SessionStoredContentEncryptionMode;
+  ctx: SessionEncryptionContext;
+  requestId: string;
+  kind: PendingAgentRequestKind;
+}>): boolean {
+  const agentState = readSessionAgentState(params);
+  const completedRequests = agentState?.completedRequests;
+  if (!completedRequests || typeof completedRequests !== 'object' || Array.isArray(completedRequests)) {
+    return false;
+  }
+
+  const completed = (completedRequests as Record<string, unknown>)[params.requestId];
+  if (!completed || typeof completed !== 'object' || Array.isArray(completed)) {
+    return false;
+  }
+
+  const requestKind = (completed as Record<string, unknown>).kind;
+  if (params.kind === 'user_action') return requestKind === 'user_action';
+  return requestKind === 'permission' || typeof requestKind === 'undefined';
+}
+
+function permissionRequestNotFoundResult(sessionId: string) {
+  return {
+    ok: false,
+    errorCode: 'permission_request_not_found',
+    errorMessage: 'permission_request_not_found',
+    sessionId,
+  } as const;
 }
 
 function readMetadataObjectFromResult(result: unknown): Record<string, unknown> | null {
@@ -760,6 +814,7 @@ export function createCliActionDeps(params: Readonly<{
     });
 
     const currentMachineIdentity = await readCurrentMachineControlIdentity();
+    const requestProvider = typeof request.provider === 'string' ? request.provider : null;
     const routeParams = {
       token: params.credentials.token,
       credentials: params.credentials,
@@ -771,6 +826,12 @@ export function createCliActionDeps(params: Readonly<{
       currentMachineHomeDir: currentMachineIdentity.homeDir,
       ctx: transport.ctx,
       mode: transport.mode,
+      resumePromptTierSources: buildRoutedResumePromptTierSources({
+        credentials: params.credentials,
+        metadata,
+        rawSession: transport.rawSession,
+        requestProvider,
+      }),
       ...(params.resumeInactiveSessionWhenUsageLimitReady
         ? { resumeInactiveSessionWhenReady: params.resumeInactiveSessionWhenUsageLimitReady }
         : {}),
@@ -791,7 +852,13 @@ export function createCliActionDeps(params: Readonly<{
     if (operation === 'enable') {
       return await routeSessionUsageLimitRecoveryWaitResumeEnable({
         ...routeParams,
-        request: request as { sessionId: string; issueFingerprint?: string; remember?: boolean; rememberPreference?: boolean },
+        request: request as {
+          sessionId: string;
+          issueFingerprint?: string;
+          remember?: boolean;
+          rememberPreference?: boolean;
+          resumePromptMode?: 'standard' | 'off' | 'custom';
+        },
       });
     }
     if (operation === 'cancel') {
@@ -803,7 +870,7 @@ export function createCliActionDeps(params: Readonly<{
     if (operation === 'switchAccountNow') {
       return await routeSessionUsageLimitRecoverySwitchAccountNow({
         ...routeParams,
-        request: request as { sessionId: string; provider?: string },
+        request: request as { sessionId: string; provider?: string; resumePromptMode?: 'standard' | 'off' | 'custom' },
         ...(params.notifyConnectedServiceRuntimeAuthFailure
           ? { notifyRuntimeAuthFailure: params.notifyConnectedServiceRuntimeAuthFailure }
           : {}),
@@ -811,7 +878,7 @@ export function createCliActionDeps(params: Readonly<{
     }
     return await routeSessionUsageLimitRecoveryCheckNow({
       ...routeParams,
-      request: request as { sessionId: string; provider?: string },
+      request: request as { sessionId: string; provider?: string; resumePromptMode?: 'standard' | 'off' | 'custom' },
     });
   };
 
@@ -830,6 +897,8 @@ export function createCliActionDeps(params: Readonly<{
       params.scheduleInactiveSessionUsageLimitRecoveryCheck?.({
         sessionId,
         recovery,
+        // No explicit mode: the stored intent supplies the resume prompt mode
+        // at its own precedence tier when the routed check runs.
         runCheckNow: async () => await runUsageLimitCheckNow({ sessionId }),
       });
       return;
@@ -839,25 +908,38 @@ export function createCliActionDeps(params: Readonly<{
     }
   };
 
+  // Forward only a real per-operation choice as the explicit precedence tier;
+  // the routed owner resolves stored intent, account setting, group policy, and
+  // provider config when no explicit value was requested (RD-REC-5).
+  const readExplicitUsageLimitRecoveryResumePromptMode = (
+    explicit?: 'standard' | 'off' | 'custom',
+  ): 'standard' | 'off' | 'custom' | undefined => (
+    explicit === 'standard' || explicit === 'off' || explicit === 'custom' ? explicit : undefined
+  );
+
   const runUsageLimitCheckNow = async (
-    input: Readonly<{ sessionId: string; provider?: string }>,
+    input: Readonly<{ sessionId: string; provider?: string; resumePromptMode?: 'standard' | 'off' | 'custom' }>,
   ): Promise<unknown> => {
     const normalizedProvider = typeof input.provider === 'string' ? input.provider.trim() : '';
+    const resumePromptMode = readExplicitUsageLimitRecoveryResumePromptMode(input.resumePromptMode);
     const result = await callRoutedUsageLimitRecoveryControl(input.sessionId, 'checkNow', {
       sessionId: input.sessionId,
       ...(normalizedProvider.length > 0 ? { provider: normalizedProvider } : {}),
+      ...(resumePromptMode ? { resumePromptMode } : {}),
     });
     scheduleUsageLimitRecoveryCheckFromResult(input.sessionId, result);
     return result;
   };
 
   const runUsageLimitSwitchAccountNow = async (
-    input: Readonly<{ sessionId: string; provider?: string }>,
+    input: Readonly<{ sessionId: string; provider?: string; resumePromptMode?: 'standard' | 'off' | 'custom' }>,
   ): Promise<unknown> => {
     const normalizedProvider = typeof input.provider === 'string' ? input.provider.trim() : '';
+    const resumePromptMode = readExplicitUsageLimitRecoveryResumePromptMode(input.resumePromptMode);
     return await callRoutedUsageLimitRecoveryControl(input.sessionId, 'switchAccountNow', {
       sessionId: input.sessionId,
       ...(normalizedProvider.length > 0 ? { provider: normalizedProvider } : {}),
+      ...(resumePromptMode ? { resumePromptMode } : {}),
     });
   };
 
@@ -1197,16 +1279,18 @@ export function createCliActionDeps(params: Readonly<{
       return await callRoutedSessionCatalogControl(sessionId, 'skills', { cwd });
     },
 
-    sessionUsageLimitWaitResumeEnable: async ({ sessionId, issueFingerprint, remember }) => {
+    sessionUsageLimitWaitResumeEnable: async ({ sessionId, issueFingerprint, remember, resumePromptMode }) => {
       if (!await usageLimitRecoveryFeatureEnabled()) {
         return usageLimitRecoveryFeatureDisabledResult({ sessionId });
       }
+      const explicitResumePromptMode = readExplicitUsageLimitRecoveryResumePromptMode(resumePromptMode);
       const request = {
         sessionId,
         ...(typeof issueFingerprint === 'string' && issueFingerprint.trim().length > 0
           ? { issueFingerprint: issueFingerprint.trim() }
           : {}),
         ...(remember === true ? { remember: true } : {}),
+        ...(explicitResumePromptMode ? { resumePromptMode: explicitResumePromptMode } : {}),
       };
       const result = await callRoutedUsageLimitRecoveryControl(sessionId, 'enable', request);
       scheduleUsageLimitRecoveryCheckFromResult(sessionId, result);
@@ -1236,18 +1320,26 @@ export function createCliActionDeps(params: Readonly<{
       return result;
     },
 
-    sessionUsageLimitCheckNow: async ({ sessionId, provider }) => {
+    sessionUsageLimitCheckNow: async ({ sessionId, provider, resumePromptMode }) => {
       if (!await usageLimitRecoveryFeatureEnabled()) {
         return usageLimitRecoveryFeatureDisabledResult({ sessionId });
       }
-      return await runUsageLimitCheckNow({ sessionId, ...(typeof provider === 'string' ? { provider } : {}) });
+      return await runUsageLimitCheckNow({
+        sessionId,
+        ...(typeof provider === 'string' ? { provider } : {}),
+        ...(resumePromptMode ? { resumePromptMode } : {}),
+      });
     },
 
-    sessionUsageLimitSwitchAccountNow: async ({ sessionId, provider }) => {
+    sessionUsageLimitSwitchAccountNow: async ({ sessionId, provider, resumePromptMode }) => {
       if (!await usageLimitRecoveryFeatureEnabled()) {
         return usageLimitRecoveryFeatureDisabledResult({ sessionId });
       }
-      return await runUsageLimitSwitchAccountNow({ sessionId, ...(typeof provider === 'string' ? { provider } : {}) });
+      return await runUsageLimitSwitchAccountNow({
+        sessionId,
+        ...(typeof provider === 'string' ? { provider } : {}),
+        ...(resumePromptMode ? { resumePromptMode } : {}),
+      });
     },
 
     sessionTranscriptGet: async ({
@@ -1377,14 +1469,36 @@ export function createCliActionDeps(params: Readonly<{
         };
       }
 
-      const reqId = String(requestId ?? '').trim() || resolveOnlyPendingRequestId({
+      const explicitRequestId = String(requestId ?? '').trim();
+      if (explicitRequestId && isKnownCompletedRequestId({
+        rawSession: transport.rawSession,
+        mode: transport.mode,
+        ctx: transport.ctx,
+        requestId: explicitRequestId,
+        kind: 'permission',
+      })) {
+        return permissionRequestNotFoundResult(transport.sessionId);
+      }
+
+      // A permission decision must not resolve a pending user-action (AskUserQuestion / ExitPlanMode).
+      // Approving one answer-less would silently complete an interactive request with no answers.
+      if (explicitRequestId && resolvePendingRequestKind({
+        rawSession: transport.rawSession,
+        mode: transport.mode,
+        ctx: transport.ctx,
+        requestId: explicitRequestId,
+      }) === 'user_action') {
+        return permissionRequestNotFoundResult(transport.sessionId);
+      }
+
+      const reqId = explicitRequestId || resolveOnlyPendingRequestId({
         rawSession: transport.rawSession,
         mode: transport.mode,
         ctx: transport.ctx,
         kind: 'permission',
       });
       if (!reqId) {
-        return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId: transport.sessionId };
+        return permissionRequestNotFoundResult(transport.sessionId);
       }
 
       const approved = decision === 'allow';
@@ -1421,14 +1535,35 @@ export function createCliActionDeps(params: Readonly<{
         };
       }
 
-      const reqId = String(requestId ?? '').trim() || resolveOnlyPendingRequestId({
+      const explicitRequestId = String(requestId ?? '').trim();
+      if (explicitRequestId && isKnownCompletedRequestId({
+        rawSession: transport.rawSession,
+        mode: transport.mode,
+        ctx: transport.ctx,
+        requestId: explicitRequestId,
+        kind: 'user_action',
+      })) {
+        return permissionRequestNotFoundResult(transport.sessionId);
+      }
+
+      // A user-action answer must not resolve a plain permission request.
+      if (explicitRequestId && resolvePendingRequestKind({
+        rawSession: transport.rawSession,
+        mode: transport.mode,
+        ctx: transport.ctx,
+        requestId: explicitRequestId,
+      }) === 'permission') {
+        return permissionRequestNotFoundResult(transport.sessionId);
+      }
+
+      const reqId = explicitRequestId || resolveOnlyPendingRequestId({
         rawSession: transport.rawSession,
         mode: transport.mode,
         ctx: transport.ctx,
         kind: 'user_action',
       });
       if (!reqId) {
-        return { ok: false, errorCode: 'permission_request_not_found', errorMessage: 'permission_request_not_found', sessionId: transport.sessionId };
+        return permissionRequestNotFoundResult(transport.sessionId);
       }
 
       const normalizedAnswers = Object.fromEntries(

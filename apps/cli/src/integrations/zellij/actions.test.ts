@@ -105,6 +105,40 @@ describe('zellij actions', () => {
     expect(options?.env).toMatchObject({ ZELLIJ_SOCKET_DIR: '/tmp/zellij sock' });
   });
 
+  it('dumps the screen with --ansi so dim placeholder styling survives (QA-B F6)', async () => {
+    const { dumpScreen } = await import('./actions');
+    spawnMock.mockImplementationOnce(() => mockChild(0, '\u001b[2mdim hint\u001b[22m\n'));
+    const text = await dumpScreen({
+      zellijBinary: '/tools/zellij',
+      paneId: 'terminal_1',
+      env: { ZELLIJ_SOCKET_DIR: '/tmp/sock' },
+    });
+    expect(spawnMock).toHaveBeenCalledWith(
+      '/tools/zellij',
+      ['action', 'dump-screen', '--ansi', '--pane-id', 'terminal_1'],
+      expect.objectContaining({ shell: false }),
+    );
+    expect(text).toBe('\u001b[2mdim hint\u001b[22m\n');
+  });
+
+  it('falls back to a plain dump-screen when the binary rejects --ansi', async () => {
+    const { dumpScreen } = await import('./actions');
+    spawnMock
+      .mockImplementationOnce(() => mockChild(2, '', "error: Found argument '--ansi' which wasn't expected"))
+      .mockImplementationOnce(() => mockChild(0, 'plain screen\n'));
+    const text = await dumpScreen({
+      zellijBinary: '/tools/zellij',
+      paneId: 'terminal_1',
+      env: { ZELLIJ_SOCKET_DIR: '/tmp/sock' },
+    });
+    expect(spawnMock).toHaveBeenLastCalledWith(
+      '/tools/zellij',
+      ['action', 'dump-screen', '--pane-id', 'terminal_1'],
+      expect.objectContaining({ shell: false }),
+    );
+    expect(text).toBe('plain screen\n');
+  });
+
   it('passes leading-dash bytes as numeric input instead of zellij options', async () => {
     const { writeBytesChunked } = await import('./actions');
     await writeBytesChunked({

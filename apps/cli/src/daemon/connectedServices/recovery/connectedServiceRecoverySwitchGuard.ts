@@ -28,6 +28,7 @@ export const QUOTA_SOFT_SWITCH_SUPPRESSED_RECOVERY_PENDING_REASON =
 
 function isPendingRuntimeAuthRecovery(intent: RuntimeAuthRecoveryIntent | null): boolean {
   return intent?.status === 'waiting'
+    || intent?.status === 'resumed_awaiting_proof'
     || intent?.status === 'checking';
 }
 

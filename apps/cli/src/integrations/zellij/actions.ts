@@ -388,13 +388,18 @@ export async function listPanes(params: ZellijActionParams & ZellijTimeoutParams
 }
 
 export async function dumpScreen(params: ZellijPaneActionParams & ZellijTimeoutParams): Promise<string> {
-  const result = await runZellij(
-    params,
-    ['action', 'dump-screen', '--pane-id', params.paneId],
-    params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, action: 'dump-screen' } : { action: 'dump-screen' },
-  );
-  await requireSuccess(result, 'dump-screen');
-  return result.stdout;
+  // `--ansi` preserves SGR styling: dim (SGR 2) text is the only honest discriminator between a
+  // Claude Code empty-composer suggestion placeholder and a real typed draft (QA-B F6). Consumers
+  // normalize/strip via the shared `controlCapture` owner, so plain-text behavior is unchanged.
+  const timeoutOpts = params.timeoutMs !== undefined
+    ? { timeoutMs: params.timeoutMs, action: 'dump-screen' }
+    : { action: 'dump-screen' };
+  const styled = await runZellij(params, ['action', 'dump-screen', '--ansi', '--pane-id', params.paneId], timeoutOpts);
+  if (styled.exitCode === 0) return styled.stdout;
+  // Older zellij builds reject `--ansi`; fall back to the plain dump (no styling info available).
+  const plain = await runZellij(params, ['action', 'dump-screen', '--pane-id', params.paneId], timeoutOpts);
+  await requireSuccess(plain, 'dump-screen');
+  return plain.stdout;
 }
 
 export async function killSession(

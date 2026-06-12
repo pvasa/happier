@@ -139,6 +139,13 @@ export function resolveTrackedConnectedServiceSwitchContinuityContext(input: Rea
   vendorResumeId?: string | null;
   cwd?: string | null;
   candidatePersistedSessionFile?: string | null;
+  /**
+   * Freshly materialized runtime-auth selection (opaque), when the switch rematerialized the target
+   * BEFORE continuity. Its materialized env/root take precedence over the tracked session's
+   * inherited (pre-switch) env so the Rule-A proof evaluates the POST-materialization target the
+   * next spawn reads (RD-SW-2 — a vacuous old-home proof can strand the session).
+   */
+  runtimeAuthSelection?: unknown;
 }>): Readonly<{
   connectedServiceMaterializationIdentityV1: ConnectedServiceMaterializationIdentityV1 | null;
   targetMaterializedRoot: string | null;
@@ -165,6 +172,7 @@ export function resolveTrackedConnectedServiceSwitchContinuityContext(input: Rea
       baseDir: input.baseDir,
       inheritedEnv: input.tracked?.spawnOptions?.environmentVariables ?? null,
       effectiveIdentity,
+      runtimeAuthSelection: input.runtimeAuthSelection,
     });
   return {
     connectedServiceMaterializationIdentityV1: effectiveIdentity,

@@ -80,6 +80,110 @@ describe('createOnChildExited', () => {
     killSpy.mockRestore();
   });
 
+  // Lane N1 (incident cmq7pyqkj): a killed runner's open canonical turn must be settled
+  // server-side by the daemon even when a live replacement runner exists (the case where the
+  // full session-end is deliberately skipped). The daemon is the single owner of
+  // "I observed this runner die ⇒ its open turn is cancelled".
+  it('settles the open canonical turn even when a live replacement owns the same session', () => {
+    const obsoletePid = 123;
+    const livePid = 456;
+    const obsolete = { pid: obsoletePid, startedBy: 'daemon', happySessionId: 'session-1' };
+    const replacement = { pid: livePid, startedBy: 'daemon', happySessionId: 'session-1' };
+
+    const pidToTrackedSession = new Map<number, any>([
+      [obsoletePid, obsolete],
+      [livePid, replacement],
+    ]);
+    const apiMachine = {
+      emitSessionEnd: vi.fn(),
+      enqueueSessionEndMutation: vi.fn(),
+      enqueueSessionTurnSettlementMutation: vi.fn(),
+    };
+    const originalKill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: any) => {
+      if (targetPid === livePid && signal === 0) {
+        return true;
+      }
+      return originalKill(targetPid, signal as any);
+    }) as any);
+
+    const onChildExited = createOnChildExited({
+      pidToTrackedSession,
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => apiMachine,
+    } as any);
+
+    onChildExited(obsoletePid, { reason: 'process-exited', code: 0, signal: 'SIGTERM' });
+
+    expect(apiMachine.enqueueSessionTurnSettlementMutation).toHaveBeenCalledWith(expect.objectContaining({
+      sid: 'session-1',
+      time: expect.any(Number),
+    }));
+    expect(apiMachine.enqueueSessionEndMutation).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it('settles the open canonical turn on a normal tracked exit too', () => {
+    const pid = 123;
+    const tracked = { pid, startedBy: 'daemon', happySessionId: 'session-1' };
+    const apiMachine = {
+      emitSessionEnd: vi.fn(),
+      enqueueSessionEndMutation: vi.fn(),
+      enqueueSessionTurnSettlementMutation: vi.fn(),
+    };
+
+    const onChildExited = createOnChildExited({
+      pidToTrackedSession: new Map<number, any>([[pid, tracked]]),
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => apiMachine,
+    } as any);
+
+    onChildExited(pid, { reason: 'process-exited', code: 0, signal: null });
+
+    expect(apiMachine.enqueueSessionTurnSettlementMutation).toHaveBeenCalledWith(expect.objectContaining({
+      sid: 'session-1',
+    }));
+    expect(apiMachine.enqueueSessionEndMutation).toHaveBeenCalled();
+  });
+
+  it('does not settle the canonical turn when a wrapper pid promotes to a live runner pid', () => {
+    const wrapperPid = 123;
+    const runnerPid = 456;
+    const tracked = {
+      pid: wrapperPid,
+      startedBy: 'daemon',
+      happySessionId: 'session-1',
+      sessionRunnerPid: runnerPid,
+    };
+    const apiMachine = {
+      emitSessionEnd: vi.fn(),
+      enqueueSessionEndMutation: vi.fn(),
+      enqueueSessionTurnSettlementMutation: vi.fn(),
+    };
+    const originalKill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: any) => {
+      if (targetPid === runnerPid && signal === 0) {
+        return true;
+      }
+      return originalKill(targetPid, signal as any);
+    }) as any);
+
+    const onChildExited = createOnChildExited({
+      pidToTrackedSession: new Map<number, any>([[wrapperPid, tracked]]),
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => apiMachine,
+    } as any);
+
+    onChildExited(wrapperPid, { reason: 'process-exited', code: 0, signal: null });
+
+    expect(apiMachine.enqueueSessionTurnSettlementMutation).not.toHaveBeenCalled();
+    expect(apiMachine.enqueueSessionEndMutation).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
   it('invokes onUnexpectedExit hook for non-zero exits with a known session id', () => {
     const pid = 123;
     const tracked = { pid, startedBy: 'daemon', happySessionId: 'session-1' };

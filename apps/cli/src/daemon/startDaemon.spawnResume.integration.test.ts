@@ -7,6 +7,10 @@ import { resolveConnectedServiceSwitchContinuity } from '@/backends/catalog';
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import {
+  HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY,
+  parseSessionConnectedServicesBindingsJson,
+} from '@/agent/runtime/sessionConnectedServicesBindingsEnv';
 import { waitForSessionWebhook } from './spawn/waitForSessionWebhook';
 import { isSessionRunnerActive } from './sessions/isSessionRunnerActive';
 import type { ConnectedServicesMaterializationDiagnostic } from './connectedServices/materialize/providerMaterializerTypes';
@@ -51,6 +55,10 @@ const resolveConnectedServiceAuthForSpawnMock = vi.hoisted(() => vi.fn(async ():
   env: Record<string, string>;
   cleanupOnFailure: (() => void) | null;
   cleanupOnExit: (() => void) | null;
+  connectedServicesBindings?: {
+    v: 1;
+    bindingsByServiceId: Record<string, unknown>;
+  };
   diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
 }> => ({
   env: { CLAUDE_CONFIG_DIR: '/tmp/claude-connected' },
@@ -658,6 +666,134 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         delete process.env.HAPPIER_DAEMON_STARTUP_SOURCE;
       } else {
         process.env.HAPPIER_DAEMON_STARTUP_SOURCE = startupSourceOriginal;
+      }
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('propagates canonicalized connected-service group bindings into the launched child env and tracked spawn options', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+
+    try {
+      const onHappySessionWebhookModule = await import('./sessions/onHappySessionWebhook');
+      const trackedSessionCapture: {
+        current: Map<number, {
+          pid: number;
+          spawnOptions?: {
+            connectedServices?: unknown;
+          };
+        }> | null;
+      } = { current: null };
+
+      vi.mocked(onHappySessionWebhookModule.createOnHappySessionWebhook).mockImplementation(({ pidToTrackedSession }) => {
+        trackedSessionCapture.current = pidToTrackedSession as typeof trackedSessionCapture.current;
+        return vi.fn();
+      });
+
+      resolveConnectedServiceAuthForSpawnMock.mockResolvedValueOnce({
+        env: { CODEX_HOME: '/tmp/codex-connected' },
+        cleanupOnFailure: null,
+        cleanupOnExit: null,
+        connectedServicesBindings: {
+          v: 1,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'happier',
+              profileId: 'codex4',
+            },
+          },
+        },
+      });
+
+      const { startDaemon } = await import('./startDaemon');
+      const run = startDaemon();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      let spawnSession = harness.getSpawnSession();
+      for (let attempt = 0; !spawnSession && attempt < 100; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        spawnSession = harness.getSpawnSession();
+      }
+      if (!spawnSession) {
+        throw new Error('Expected spawnSession to be registered');
+      }
+
+      const spawnResult = await spawnSession({
+        directory: '/tmp',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        connectedServices: {
+          v: 1,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'happier',
+              profileId: 'we-are',
+            },
+          },
+        },
+        token: 't',
+      });
+
+      expect(spawnResult.type).toBe('success');
+
+      const directLaunchCall = spawnHappyCLI.mock.calls.at(-1);
+      const wrappedLaunchCall = spawnChildProcess.mock.calls.at(-1) as unknown;
+      const wrappedLaunchOptions =
+        Array.isArray(wrappedLaunchCall) && wrappedLaunchCall.length >= 3
+          ? (wrappedLaunchCall[2] as { env?: Record<string, string> } | undefined)
+          : undefined;
+      const launchedEnv = directLaunchCall
+        ? (directLaunchCall[1] as { env?: Record<string, string> } | undefined)?.env
+        : wrappedLaunchOptions?.env;
+
+      if (!launchedEnv) {
+        throw new Error('Expected daemon session spawn to capture the launched child environment');
+      }
+
+      expect(parseSessionConnectedServicesBindingsJson(
+        launchedEnv[HAPPIER_SESSION_CONNECTED_SERVICES_BINDINGS_ENV_KEY] ?? null,
+      )).toEqual({
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'happier',
+            profileId: 'codex4',
+          },
+        },
+      });
+
+      const trackedSessions = trackedSessionCapture.current;
+      if (!trackedSessions) {
+        throw new Error('Expected tracked session map from webhook wiring');
+      }
+      expect(trackedSessions.get(12345)?.spawnOptions?.connectedServices).toEqual({
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'happier',
+            profileId: 'codex4',
+          },
+        },
+      });
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    } finally {
+      const onHappySessionWebhookModule = await import('./sessions/onHappySessionWebhook');
+      vi.mocked(onHappySessionWebhookModule.createOnHappySessionWebhook).mockImplementation(() => vi.fn());
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
       }
       exitSpy.mockRestore();
     }

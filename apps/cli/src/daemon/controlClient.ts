@@ -305,6 +305,7 @@ export async function notifyDaemonConnectedServiceRuntimeAuthFailure(
     sessionId: string;
     switchesThisTurn?: number;
     classification: unknown;
+    resumePromptMode?: 'standard' | 'off' | 'custom';
   }>,
   options: DaemonControlRequestOptions = {},
 ): Promise<{ error?: string } | any> {
@@ -312,6 +313,7 @@ export async function notifyDaemonConnectedServiceRuntimeAuthFailure(
     sessionId: body.sessionId,
     switchesThisTurn: body.switchesThisTurn ?? 0,
     classification: body.classification,
+    ...(body.resumePromptMode ? { resumePromptMode: body.resumePromptMode } : {}),
   }, options);
 }
 
@@ -319,12 +321,15 @@ export async function notifyDaemonConnectedServiceTurnLifecycle(
   body: Readonly<{
     sessionId: string;
     event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled';
+    // REV-1: distinguishes completed from failed turns on `assistant_message_end`.
+    terminalStatus?: 'completed' | 'failed';
   }>,
   options: DaemonControlRequestOptions = {},
 ): Promise<{ error?: string } | any> {
   return await daemonPost('/connected-service-turn-lifecycle', {
     sessionId: body.sessionId,
     event: body.event,
+    ...(body.terminalStatus ? { terminalStatus: body.terminalStatus } : {}),
   }, options);
 }
 

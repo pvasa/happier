@@ -91,6 +91,8 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
   selectionsByServiceId?: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedSelection>;
   accountSettings?: AccountSettings | Readonly<Record<string, unknown>> | null;
   processEnv?: NodeJS.ProcessEnv;
+  vendorResumeId?: string | null;
+  candidatePersistedSessionFile?: string | null;
 }>): Promise<ConnectedServicesMaterializeResult | null> {
   const rootDir = resolveConnectedServiceMaterializedRootDir({
     baseDir: params.baseDir,
@@ -117,6 +119,8 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
       selectionsByServiceId: params.selectionsByServiceId,
       accountSettings: params.accountSettings ?? null,
       processEnv: params.processEnv ?? process.env,
+      vendorResumeId: params.vendorResumeId ?? null,
+      candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
       cleanupRoot,
     });
   } catch (error) {

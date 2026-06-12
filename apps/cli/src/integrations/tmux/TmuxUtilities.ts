@@ -337,38 +337,20 @@ export class TmuxUtilities {
   }
 
   /**
-   * Capture current input from tmux pane
+   * Capture the FULL visible pane as raw screen text with SGR styling preserved (`-e`).
+   *
+   * R-E1: the in-flight steer evaluator and the readiness bridge parse this through the multi-line
+   * `parseClaudeScreenState` owner (dialogs / spinner / permission prompt / user draft all sit ABOVE
+   * the bottom composer line). Returning only the last line blinded every multi-line veto on tmux.
+   * QA-B F6: the parser normalizes internally, but it needs the RAW styling to distinguish a DIM
+   * empty-composer suggestion placeholder from a real typed draft, so this no longer pre-strips.
    */
   async captureCurrentInput(session?: string, window?: string, pane?: string): Promise<string> {
-    const result = await this.executeTmuxCommand(['capture-pane', '-p'], session, window, pane);
+    const result = await this.executeTmuxCommand(['capture-pane', '-p', '-e'], session, window, pane);
     if (result && result.returncode === 0) {
-      const lines = result.stdout.trim().split('\n');
-      return lines[lines.length - 1] || '';
+      return result.stdout;
     }
     return '';
-  }
-
-  /**
-   * Check if user is actively typing
-   */
-  async isUserTyping(
-    checkInterval = 500,
-    maxChecks = 3,
-    session?: string,
-    window?: string,
-    pane?: string,
-  ): Promise<boolean> {
-    const initialInput = await this.captureCurrentInput(session, window, pane);
-
-    for (let i = 0; i < maxChecks - 1; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, checkInterval));
-      const currentInput = await this.captureCurrentInput(session, window, pane);
-      if (currentInput !== initialInput) {
-        return true;
-      }
-    }
-
-    return false;
   }
 
   /**

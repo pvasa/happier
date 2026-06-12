@@ -59,12 +59,13 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
+    const expectedCodexRoot = join(baseDir, normalizeMaterializationKeyForPath('session-1'), 'codex');
     expect(result!.env.CODEX_HOME).toBe(
-      join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', 'work', 'codex', 'codex-home'),
+      join(expectedCodexRoot, 'codex-home'),
     );
     expect(result!.env.CODEX_SQLITE_HOME).toBe(result!.env.CODEX_HOME);
     expect(result!.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]).toBe(
-      join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', 'work', 'codex'),
+      expectedCodexRoot,
     );
     expect(result!.cleanupOnFailure).toBeNull();
     expect(result!.cleanupOnExit).toBeNull();
@@ -361,8 +362,9 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
+    const expectedCodexRoot = join(baseDir, normalizeMaterializationKeyForPath('session-1'), 'codex');
     expect(result!.env.CODEX_HOME).toBe(
-      join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', '__groups', 'main', 'codex', 'codex-home'),
+      join(expectedCodexRoot, 'codex-home'),
     );
     expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]!)).toEqual([
       {
@@ -410,7 +412,7 @@ describe('materializeConnectedServicesForSpawn', () => {
 
     expect(result).not.toBeNull();
     const codexHome = result!.env.CODEX_HOME!;
-    expect(resolve(codexHome).startsWith(resolve(activeServerDir))).toBe(true);
+    expect(resolve(codexHome).startsWith(resolve(baseDir))).toBe(true);
     expect(codexHome).not.toContain('evil');
   });
 

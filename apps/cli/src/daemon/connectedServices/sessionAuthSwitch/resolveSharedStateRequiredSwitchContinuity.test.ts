@@ -101,6 +101,17 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
     } as any)).resolves.toEqual({
       mode: 'restart_rematerialize',
       warnings: ['codex_shared_state_required'],
+      // INC-6: the PROVEN switch must surface what was proven (target root, resume id, state mode)
+      // so switch telemetry is not all-null for successful spawn_next_turn/restart switches.
+      diagnostics: {
+        materializationIdentityId: 'csm_1',
+        targetMaterializedRoot: materializedRoot,
+        vendorResumeId: 'resume-id',
+        cwd: '/tmp/project',
+        candidatePersistedSessionFile: null,
+        requestedStateMode: 'shared',
+        effectiveStateMode: 'shared',
+      },
     });
   });
 
@@ -190,6 +201,15 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
       } as any)).resolves.toEqual({
         mode: 'restart_rematerialize',
         warnings: ['pi_session_state_sharing_required'],
+        diagnostics: {
+          materializationIdentityId: 'csm_inactive',
+          targetMaterializedRoot: reconstructedRoot,
+          vendorResumeId: 'pi-session-inactive',
+          cwd,
+          candidatePersistedSessionFile: null,
+          requestedStateMode: 'shared',
+          effectiveStateMode: 'shared',
+        },
       });
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
@@ -273,7 +293,11 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
     });
   });
 
-  it('reports provider state sharing as unavailable when account settings are not loaded', async () => {
+  it('distinguishes a missing account-settings snapshot from genuinely unavailable sharing (retryable settings_unavailable)', async () => {
+    // Incident Jun-11 H-A: a freshly restarted daemon has a NULL in-memory settings snapshot.
+    // "Settings unknown" must NOT be reported as "sharing unavailable" (which the recovery
+    // scheduler terminalizes as non_retryable_apply_failure) — it is a retryable infrastructure
+    // gap that resolves once the snapshot is bootstrapped.
     await expect(resolveSharedStateRequiredSwitchContinuity({
       agentId: 'codex',
       accountSettings: null,
@@ -286,7 +310,7 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
       cwd: '/tmp/project',
     } as any)).resolves.toEqual({
       mode: 'unsupported',
-      errorCode: 'provider_state_sharing_unavailable',
+      errorCode: 'provider_state_sharing_settings_unavailable',
       warnings: ['codex_shared_state_required'],
     });
   });

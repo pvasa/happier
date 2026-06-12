@@ -50,4 +50,40 @@ describe('applyInitialTranscriptAfterSeqToAttachPayload', () => {
 
     expect(applyInitialTranscriptAfterSeqToAttachPayload(payload, -1)).toBe(payload);
   });
+
+  it('clamps the explicit wake cursor down to the owed-delivery watermark so undelivered rows are redelivered (A-F2)', () => {
+    expect(
+      applyInitialTranscriptAfterSeqToAttachPayload(
+        { v: 2, encryptionMode: 'plain', lastObservedMessageSeq: 4 },
+        5,
+        { deliveredUserMessageSeq: 4 },
+      ),
+    ).toEqual({
+      v: 2,
+      encryptionMode: 'plain',
+      lastObservedMessageSeq: 4,
+      initialTranscriptAfterSeq: 4,
+    });
+  });
+
+  it('keeps the explicit wake cursor when the delivered watermark is not lower', () => {
+    expect(
+      applyInitialTranscriptAfterSeqToAttachPayload(
+        { v: 2, encryptionMode: 'plain', lastObservedMessageSeq: 4 },
+        5,
+        { deliveredUserMessageSeq: 9 },
+      ),
+    ).toEqual({
+      v: 2,
+      encryptionMode: 'plain',
+      lastObservedMessageSeq: 5,
+      initialTranscriptAfterSeq: 5,
+    });
+  });
+
+  it('ignores the delivered watermark when no explicit cursor is provided (attach-context clamp owns that leg)', () => {
+    const payload = { v: 2, encryptionMode: 'plain', lastObservedMessageSeq: 4 } as const;
+
+    expect(applyInitialTranscriptAfterSeqToAttachPayload(payload, undefined, { deliveredUserMessageSeq: 2 })).toBe(payload);
+  });
 });

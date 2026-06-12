@@ -58,11 +58,11 @@ describe('buildHappySessionControlArgs', () => {
     })).toEqual(['--permission-mode', 'bypassPermissions', '--permission-mode-updated-at', '123']);
   });
 
-  it('normalizes safe-yolo to a Claude-compatible permission token for built-in Claude sessions', () => {
+  it('keeps safe-yolo as the Happier intent for built-in Claude child sessions', () => {
     expect(buildHappySessionControlArgs({
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
       permissionMode: 'safe-yolo',
-    })).toEqual(['--permission-mode', 'acceptEdits']);
+    })).toEqual(['--permission-mode', 'safe-yolo']);
   });
 
   it('supports model timestamp boundary value zero', () => {

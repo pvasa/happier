@@ -663,7 +663,7 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
     ]);
   });
 
-  it('does not fast-apply a divergent group-active profile when canonical selection prefers another eligible member', async () => {
+  it('adopts a divergent group-active profile even when canonical selection prefers another eligible member', async () => {
     const applied: string[] = [];
     const committed: string[] = [];
     const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
@@ -714,15 +714,15 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
       observedProfileId: 'primary',
       retryAtMs: 30_000,
     })).resolves.toMatchObject({
-      status: 'switched',
-      activeProfileId: 'tertiary',
-      generation: 3,
+      status: 'observed_generation',
+      activeProfileId: 'backup',
+      generation: 2,
     });
-    expect(committed).toEqual(['backup->tertiary']);
-    expect(applied).toEqual(['tertiary:3']);
+    expect(committed).toEqual([]);
+    expect(applied).toEqual(['backup:2']);
   });
 
-  it('does not fast-apply a preferred divergent group-active profile when only another member has fresh quota proof', async () => {
+  it('adopts a divergent group-active profile even when another member has fresh quota proof', async () => {
     const applied: string[] = [];
     const committed: string[] = [];
     const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
@@ -773,12 +773,12 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
       observedProfileId: 'primary',
       retryAtMs: 30_000,
     })).resolves.toMatchObject({
-      status: 'switched',
-      activeProfileId: 'tertiary',
-      generation: 3,
+      status: 'observed_generation',
+      activeProfileId: 'backup',
+      generation: 2,
     });
-    expect(committed).toEqual(['backup->tertiary']);
-    expect(applied).toEqual(['tertiary:3']);
+    expect(committed).toEqual([]);
+    expect(applied).toEqual(['backup:2']);
   });
 
   it('keeps the divergent observed-generation fast path when the group-active profile is eligible', async () => {
@@ -828,6 +828,53 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
     });
     expect(commitSwitch).not.toHaveBeenCalled();
     expect(applied).toEqual(['backup:2']);
+  });
+
+  it('adopts the current group-active profile before globally advancing a group after a stale session member fails', async () => {
+    const applied: string[] = [];
+    const commitSwitch = vi.fn(async ({ toProfileId }) => state(toProfileId, 3));
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => ({
+        ...state('backup', 2),
+        members: [
+          { profileId: 'primary', priority: 1, createdAtMs: 1, enabled: true },
+          { profileId: 'tertiary', priority: 2, createdAtMs: 2, enabled: true },
+          { profileId: 'backup', priority: 3, createdAtMs: 3, enabled: true },
+        ],
+        memberStatesByProfileId: new Map([
+          ['primary', {
+            quotaExhaustedUntilMs: 30_000,
+            lastFailureKind: 'usage_limit',
+            lastObservedAtMs: 1_000,
+          }],
+        ]),
+      }),
+      commitSwitch,
+      applyGeneration: async ({ sessionId, activeProfileId, generation }) => {
+        applied.push(`${sessionId ?? 'none'}:${activeProfileId}:${generation}`);
+        return { mode: 'restart_resume' as const };
+      },
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+      observedProfileId: 'primary',
+      retryAtMs: 30_000,
+    })).resolves.toEqual({
+      status: 'observed_generation',
+      activeProfileId: 'backup',
+      generation: 2,
+      mode: 'restart_resume',
+      providerApplication: 'applied',
+    });
+    expect(commitSwitch).not.toHaveBeenCalled();
+    expect(applied).toEqual(['sess_1:backup:2']);
   });
 
   it('does not blindly apply a generation-conflict winner when canonical selection prefers another eligible member', async () => {
@@ -1765,10 +1812,14 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
     ]);
   });
 
-  it('applies an already-advanced pre-turn group generation to a stale session profile', async () => {
+  it('fails closed when an already-advanced pre-turn group generation would require restart-resume adoption', async () => {
     const current: ConnectedServiceAuthGroupSwitchState = {
       ...state('backup', 2),
       policy: { ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, strategy: 'least_limited', autoSwitch: true },
+      members: [
+        { profileId: 'primary', priority: 1, createdAtMs: 1, enabled: false },
+        { profileId: 'backup', priority: 2, createdAtMs: 2, enabled: true },
+      ],
       memberStatesByProfileId: new Map([
         ['primary', {
           quotaSnapshot: {
@@ -1805,18 +1856,21 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
       reason: 'soft_threshold',
       observedProfileId: 'primary',
     })).resolves.toEqual({
-      status: 'observed_generation',
+      status: 'generation_apply_failed',
       activeProfileId: 'backup',
       generation: 2,
-      mode: 'restart_resume',
-      providerApplication: 'applied',
+      errorCode: 'hot_apply_restart_required',
+      diagnostics: {
+        attemptedMode: 'restart_resume',
+        policyReason: 'predictive_soft_switch_hot_apply_required',
+      },
     });
 
     expect(commitSwitch).not.toHaveBeenCalled();
     expect(applied).toEqual(['session-1:backup:2']);
   });
 
-  it('does not return observed_generation for an unproven already-advanced pre-turn group profile', async () => {
+  it('fails closed when an unproven already-advanced pre-turn group profile would require restart-resume application', async () => {
     const current: ConnectedServiceAuthGroupSwitchState = {
       ...state('backup', 2),
       policy: { ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, strategy: 'least_limited', autoSwitch: true },
@@ -1865,11 +1919,14 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
       reason: 'soft_threshold',
       observedProfileId: 'primary',
     })).resolves.toEqual({
-      status: 'switched',
+      status: 'generation_apply_failed',
       activeProfileId: 'tertiary',
       generation: 3,
-      mode: 'restart_resume',
-      providerApplication: 'applied',
+      errorCode: 'hot_apply_restart_required',
+      diagnostics: {
+        attemptedMode: 'restart_resume',
+        policyReason: 'predictive_soft_switch_hot_apply_required',
+      },
     });
 
     expect(commitSwitch).toHaveBeenCalledWith(expect.objectContaining({

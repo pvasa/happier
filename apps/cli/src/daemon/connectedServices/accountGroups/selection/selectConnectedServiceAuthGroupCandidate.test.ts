@@ -316,6 +316,204 @@ describe('selectConnectedServiceAuthGroupCandidate', () => {
     ]));
   });
 
+  it('uses fresh usable quota evidence to ignore stale future quota blockers in the same selection pass', () => {
+    const result = selectConnectedServiceAuthGroupCandidate({
+      nowMs: 1_000,
+      quotaFreshnessMs: 60_000,
+      activeProfileId: 'active',
+      policy: { ...basePolicy, strategy: 'priority', cooldownMs: 500 },
+      members: [
+        member('blocked-but-usable', 1, 1),
+        member('fallback', 2, 2),
+      ],
+      memberStatesByProfileId: new Map([
+        ['blocked-but-usable', {
+          quotaExhaustedUntilMs: 10_000,
+          lastFailureKind: 'usage_limit',
+          lastObservedAtMs: 500,
+          providerResetsAtMs: 10_000,
+          quotaSnapshot: {
+            capturedAtMs: 900,
+            effectiveMeterId: 'weekly',
+            effectiveRemainingPercent: 75,
+            meters: [{
+              meterId: 'weekly',
+              limitCategory: 'usage_limit',
+              remainingPct: 75,
+              resetAtMs: 4_000,
+              providerLimitId: 'weekly',
+            }],
+          },
+        }],
+        ['fallback', { quotaSnapshot: { capturedAtMs: 900, effectiveMeterId: 'weekly', effectiveRemainingPercent: 30 } }],
+      ]),
+    });
+
+    expect(result.selected?.profileId).toBe('blocked-but-usable');
+    expect(result.excluded).not.toContainEqual(expect.objectContaining({
+      profileId: 'blocked-but-usable',
+    }));
+  });
+
+  it('keeps a true fresh secondary quota blocker and uses its fresh reset instead of stale persisted reset', () => {
+    const result = selectConnectedServiceAuthGroupCandidate({
+      nowMs: 1_000,
+      quotaFreshnessMs: 60_000,
+      activeProfileId: 'active',
+      policy: { ...basePolicy, strategy: 'priority', cooldownMs: 500 },
+      members: [
+        member('weekly-exhausted', 1, 1),
+        member('fallback', 2, 2),
+      ],
+      memberStatesByProfileId: new Map([
+        ['weekly-exhausted', {
+          quotaExhaustedUntilMs: 10_000,
+          lastFailureKind: 'usage_limit',
+          lastObservedAtMs: 500,
+          providerResetsAtMs: 4_000,
+          quotaSnapshot: {
+            capturedAtMs: 900,
+            effectiveMeterId: 'primary',
+            effectiveRemainingPercent: 80,
+            exhausted: true,
+            meters: [
+              {
+                meterId: 'primary',
+                limitCategory: 'usage_limit',
+                remainingPct: 80,
+                resetAtMs: 2_000,
+                providerLimitId: 'primary',
+              },
+              {
+                meterId: 'weekly',
+                limitCategory: 'usage_limit',
+                remainingPct: 0,
+                resetAtMs: 4_000,
+                providerLimitId: 'weekly',
+              },
+            ],
+          },
+        }],
+        ['fallback', { quotaSnapshot: { capturedAtMs: 900, effectiveMeterId: 'weekly', effectiveRemainingPercent: 30 } }],
+      ]),
+    });
+
+    expect(result.selected?.profileId).toBe('fallback');
+    expect(result.excluded).toContainEqual({
+      profileId: 'weekly-exhausted',
+      reason: 'quota_exhausted',
+      retryAtMs: 4_000,
+    });
+  });
+
+  it('uses newer fresh usable quota evidence to clear a same-category blocker during the recent failure cooldown', () => {
+    const result = selectConnectedServiceAuthGroupCandidate({
+      nowMs: 1_100,
+      quotaFreshnessMs: 60_000,
+      activeProfileId: 'active',
+      policy: { ...basePolicy, strategy: 'priority', cooldownMs: 500 },
+      members: [
+        member('just-proven-usable', 1, 1),
+        member('fallback', 2, 2),
+      ],
+      memberStatesByProfileId: new Map([
+        ['just-proven-usable', {
+          quotaExhaustedUntilMs: 10_000,
+          lastFailureKind: 'usage_limit',
+          lastObservedAtMs: 1_050,
+          quotaSnapshot: {
+            capturedAtMs: 1_060,
+            effectiveMeterId: 'weekly',
+            effectiveRemainingPercent: 90,
+            meters: [{
+              meterId: 'weekly',
+              limitCategory: 'usage_limit',
+              remainingPct: 90,
+              resetAtMs: 4_000,
+              providerLimitId: 'weekly',
+            }],
+          },
+        }],
+        ['fallback', { quotaSnapshot: { capturedAtMs: 1_060, effectiveMeterId: 'weekly', effectiveRemainingPercent: 30 } }],
+      ]),
+    });
+
+    expect(result.selected?.profileId).toBe('just-proven-usable');
+    expect(result.excluded).not.toContainEqual(expect.objectContaining({
+      profileId: 'just-proven-usable',
+    }));
+  });
+
+  it('does not clear a same-category quota blocker from stale evidence after a newer provider failure', () => {
+    const result = selectConnectedServiceAuthGroupCandidate({
+      nowMs: 1_100,
+      quotaFreshnessMs: 60_000,
+      activeProfileId: 'active',
+      policy: { ...basePolicy, strategy: 'priority', cooldownMs: 500 },
+      members: [
+        member('just-failed', 1, 1),
+        member('fallback', 2, 2),
+      ],
+      memberStatesByProfileId: new Map([
+        ['just-failed', {
+          quotaExhaustedUntilMs: 10_000,
+          lastFailureKind: 'usage_limit',
+          lastObservedAtMs: 1_050,
+          quotaSnapshot: {
+            capturedAtMs: 1_040,
+            effectiveMeterId: 'weekly',
+            effectiveRemainingPercent: 90,
+            meters: [{
+              meterId: 'weekly',
+              limitCategory: 'usage_limit',
+              remainingPct: 90,
+              resetAtMs: 4_000,
+              providerLimitId: 'weekly',
+            }],
+          },
+        }],
+        ['fallback', { quotaSnapshot: { capturedAtMs: 1_060, effectiveMeterId: 'weekly', effectiveRemainingPercent: 30 } }],
+      ]),
+    });
+
+    expect(result.selected?.profileId).toBe('fallback');
+    expect(result.excluded).toContainEqual({
+      profileId: 'just-failed',
+      reason: 'quota_exhausted',
+      retryAtMs: 1_550,
+    });
+  });
+
+  it('applies policy fallback cooldowns to recent rate-limit and capacity failures without provider timing', () => {
+    const result = selectConnectedServiceAuthGroupCandidate({
+      nowMs: 1_000,
+      quotaFreshnessMs: 60_000,
+      activeProfileId: 'active',
+      policy: { ...basePolicy, strategy: 'priority', cooldownMs: 500 },
+      members: [
+        member('rate-limited', 1, 1),
+        member('capacity-limited', 2, 2),
+        member('fallback', 3, 3),
+      ],
+      memberStatesByProfileId: new Map([
+        ['rate-limited', {
+          lastFailureKind: 'rate_limit',
+          lastObservedAtMs: 750,
+        }],
+        ['capacity-limited', {
+          lastFailureKind: 'capacity',
+          lastObservedAtMs: 750,
+        }],
+      ]),
+    });
+
+    expect(result.selected?.profileId).toBe('fallback');
+    expect(result.excluded).toEqual(expect.arrayContaining([
+      { profileId: 'rate-limited', reason: 'quota_exhausted', retryAtMs: 1_250 },
+      { profileId: 'capacity-limited', reason: 'capacity_limited', retryAtMs: 1_250 },
+    ]));
+  });
+
   it('temporarily excludes recently observed usage-limit failures when no reset timestamp was available', () => {
     const result = selectConnectedServiceAuthGroupCandidate({
       nowMs: 1_000,
@@ -330,7 +528,6 @@ describe('selectConnectedServiceAuthGroupCandidate', () => {
         ['recently-limited', {
           lastFailureKind: 'usage_limit',
           lastObservedAtMs: 750,
-          quotaSnapshot: { capturedAtMs: 900, effectiveMeterId: 'daily', effectiveRemainingPercent: 90 },
         }],
         ['healthy', { quotaSnapshot: { capturedAtMs: 900, effectiveMeterId: 'daily', effectiveRemainingPercent: 30 } }],
       ]),
@@ -430,7 +627,7 @@ describe('selectConnectedServiceAuthGroupCandidate', () => {
             capturedAtMs: 900,
             meters: [{
               meterId: 'plan',
-              limitCategory: 'plan',
+              limitCategory: 'plan_invalid',
               remainingPct: null,
               resetAtMs: null,
               providerLimitId: 'plan',

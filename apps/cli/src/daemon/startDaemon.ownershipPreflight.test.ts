@@ -44,6 +44,7 @@ describe('startDaemon ownership preflight', () => {
         'HAPPIER_PUBLIC_RELEASE_CHANNEL',
         'HAPPIER_DAEMON_STARTUP_SOURCE',
         'HAPPIER_DAEMON_TAKEOVER',
+        'HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK',
         'HAPPIER_DAEMON_SERVICE_PLATFORM',
         'HAPPIER_DAEMON_SERVICE_USER_HOME_DIR',
         'HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR',
@@ -112,6 +113,107 @@ describe('startDaemon ownership preflight', () => {
             expect(logContent).toContain('Daemon ownership conflict prevented daemon startup');
             expect(logContent).toContain('already running for the selected relay');
             expect(logContent).not.toContain('[DAEMON RUN][FATAL] Failed somewhere unexpectedly');
+        });
+    });
+
+    it('fails closed before auth setup when daemon state is missing but a same-runtime daemon process is alive', async () => {
+        await withTempDir('happier-start-daemon-orphan-process-conflict-', async (homeDir) => {
+            envScope.patch({
+                HAPPIER_HOME_DIR: homeDir,
+                HAPPIER_ACTIVE_SERVER_ID: 'cloud',
+                HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+                HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK: '1',
+            });
+            vi.resetModules();
+            vi.doMock('@/daemon/doctor', () => ({
+                findAllHappyProcesses: async () => [
+                    {
+                        pid: 4242,
+                        type: 'dev-daemon',
+                        command: `${process.execPath} --import tsx ${join(process.cwd(), 'src/index.ts')} daemon start-sync`,
+                    },
+                ],
+                findHappyProcessByPid: async () => null,
+            }));
+
+            const [{ startDaemon }, { logger }] = await Promise.all([
+                import('./startDaemon'),
+                import('@/ui/logger'),
+            ]);
+
+            const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+                throw new Error(`process.exit(${code ?? ''})`);
+            }) as typeof process.exit);
+
+            try {
+                await expect(startDaemon()).rejects.toThrow('process.exit(1)');
+            } finally {
+                exitSpy.mockRestore();
+                vi.doUnmock('@/daemon/doctor');
+            }
+
+            const logContent = await readFile(logger.logFilePath, 'utf8');
+            expect(logContent).toContain('Daemon ownership conflict prevented daemon startup');
+            expect(logContent).toContain('Another running daemon is already using the selected relay');
+            expect(waitForInitialCredentialsMock).not.toHaveBeenCalled();
+        });
+    });
+
+    it('force-stops a state-less same-runtime daemon process when takeover is requested', async () => {
+        await withTempDir('happier-start-daemon-orphan-process-takeover-', async (homeDir) => {
+            envScope.patch({
+                HAPPIER_HOME_DIR: homeDir,
+                HAPPIER_ACTIVE_SERVER_ID: 'cloud',
+                HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+                HAPPIER_DAEMON_TAKEOVER: '1',
+                HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK: '1',
+            });
+            vi.resetModules();
+
+            let orphanAlive = true;
+            const processKill = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+                if (pid !== 4242) return true;
+                if (signal === 0 || signal === undefined) {
+                    if (orphanAlive) return true;
+                    throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+                }
+                if (signal === 'SIGTERM') {
+                    orphanAlive = false;
+                    return true;
+                }
+                return true;
+            }) as typeof process.kill);
+
+            vi.doMock('@/daemon/doctor', () => ({
+                findAllHappyProcesses: async () => [
+                    {
+                        pid: 4242,
+                        type: 'dev-daemon',
+                        command: `${process.execPath} --import tsx ${join(process.cwd(), 'src/index.ts')} daemon start-sync`,
+                    },
+                ],
+                findHappyProcessByPid: async (pid: number) => (
+                    pid === 4242
+                        ? {
+                            pid,
+                            type: 'dev-daemon',
+                            command: `${process.execPath} --import tsx ${join(process.cwd(), 'src/index.ts')} daemon start-sync`,
+                        }
+                        : null
+                ),
+            }));
+
+            const { startDaemon } = await import('./startDaemon');
+
+            try {
+                await expect(startDaemon()).resolves.toBeUndefined();
+                expect(processKill).toHaveBeenCalledWith(4242, 'SIGTERM');
+            } finally {
+                processKill.mockRestore();
+                vi.doUnmock('@/daemon/doctor');
+            }
+
+            expect(waitForInitialCredentialsMock).toHaveBeenCalledTimes(1);
         });
     });
 

@@ -7,10 +7,19 @@ import type {
   TerminalInputState,
   TerminalPromptInput,
 } from '../terminalHost/_types';
+import { delay } from '@/utils/time';
+
+import { createTmuxTerminalControlPort } from './control';
 import { resolveTmuxPromptSubmitDelayMs, resolveTmuxSendKeysChunkSize } from './env';
 import { evaluateTmuxPaneLiveness } from './paneLiveness';
 import { TmuxUtilities } from './TmuxUtilities';
 import { typeTextViaSendKeys } from './typeText';
+
+/**
+ * Stability sampling delay between the two full-pane captures used to detect that the user is
+ * actively typing into the attached TUI. Mirrors zellij's `inputStabilityDelayMs` default.
+ */
+const INPUT_STABILITY_DELAY_MS = 50;
 
 function targetFromHandle(handle: TerminalHostHandle): string {
   return handle.paneId ? `${handle.sessionName}:${handle.paneId}` : handle.sessionName;
@@ -52,9 +61,16 @@ export function createTmuxTerminalHostAdapter(params?: Readonly<{ tmux?: TmuxUti
   }
 
   async function captureInputState(handle: TerminalHostHandle): Promise<TerminalInputState> {
+    // R-E1/R-E3: two FULL-pane normalized captures (matching the zellij adapter) give the multi-line
+    // `parseClaudeScreenState` parser the whole screen AND a real stability signal in one path. The
+    // previous `captureCurrentInput` + `isUserTyping(50, 2)` combination did 3 captures (the first
+    // `isUserTyping` sample re-read what `captureCurrentInput` had just read) and fed the parser only
+    // the bottom line.
     const target = targetFromHandle(handle);
+    const firstInput = await tmux.captureCurrentInput(target);
+    await delay(INPUT_STABILITY_DELAY_MS);
     const currentInput = await tmux.captureCurrentInput(target);
-    return { stable: !(await tmux.isUserTyping(50, 2, target)), currentInput, observedAt: Date.now() };
+    return { stable: firstInput === currentInput, currentInput, observedAt: Date.now() };
   }
 
   return {
@@ -148,6 +164,21 @@ export function createTmuxTerminalHostAdapter(params?: Readonly<{ tmux?: TmuxUti
     },
     evaluateLiveness,
     captureInputState,
+    createControlPort(handle: TerminalHostHandle) {
+      if (handle.sessionName.trim().length === 0) return null;
+      return createTmuxTerminalControlPort({
+        target: targetFromHandle(handle),
+        executor: (args, options) => tmux.executeTmuxCommand(
+          [...args],
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : undefined,
+        ),
+      });
+    },
     async dispose(handle: TerminalHostHandle) {
       await tmux.killWindow(targetFromHandle(handle));
     },

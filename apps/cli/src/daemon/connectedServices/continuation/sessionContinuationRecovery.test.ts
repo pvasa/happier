@@ -9,12 +9,13 @@ type ContinuationModule = Readonly<{
       read: (sessionId: string) => Promise<unknown | null> | unknown | null;
       write: (sessionId: string, state: unknown) => Promise<void> | void;
     };
+    readCustomResumePrompt?: () => string | null | undefined;
   }) => {
     beginAttempt: (input: {
       sessionId: string;
       attemptId: string;
       failureAtMs: number;
-      resumePromptMode: 'standard' | 'off';
+      resumePromptMode: 'standard' | 'off' | 'custom';
       replayMode?: 'continuation_prompt' | 'retry_original_user_message' | 'suppress';
       recoveryIdentity?: {
         serviceId: string;
@@ -30,7 +31,7 @@ type ContinuationModule = Readonly<{
       sessionId: string;
       attemptId: string;
       failureAtMs: number;
-      resumePromptMode: 'standard' | 'off';
+      resumePromptMode: 'standard' | 'off' | 'custom';
       replayMode?: 'continuation_prompt' | 'retry_original_user_message' | 'suppress';
       recoveryIdentity?: {
         serviceId: string;
@@ -44,6 +45,7 @@ type ContinuationModule = Readonly<{
       exactProviderContextAvailable: boolean;
       hasUserMessageAfterFailure: () => Promise<boolean> | boolean;
       sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
+      canRetryOriginalUserMessage?: (input: { failureAtMs: number }) => Promise<'allowed' | 'blocked_provider_activity' | 'unknown'> | 'allowed' | 'blocked_provider_activity' | 'unknown';
       retryOriginalUserMessage?: (input: { localId: string }) => Promise<void> | void;
     }) => Promise<{ status: string }>;
     resolvePendingAttempts: (input: {
@@ -51,6 +53,7 @@ type ContinuationModule = Readonly<{
       exactProviderContextAvailable: boolean;
       hasUserMessageAfterFailure: (input: { failureAtMs: number }) => Promise<boolean> | boolean;
       sendContinuationPrompt: (input: { prompt: string; localId: string }) => Promise<void> | void;
+      canRetryOriginalUserMessage?: (input: { attemptId: string; failureAtMs: number }) => Promise<'allowed' | 'blocked_provider_activity' | 'unknown'> | 'allowed' | 'blocked_provider_activity' | 'unknown';
       retryOriginalUserMessage?: (input: { attemptId: string; localId: string; failureAtMs: number }) => Promise<void> | void;
     }) => Promise<{ resolved: Array<{ attemptId: string; status: string }> }>;
     recordProviderActivity: (input: {
@@ -137,7 +140,78 @@ describe('session continuation recovery', () => {
     })).resolves.toEqual({ status: 'already_awaiting_provider_activity' });
 
     expect(sentPrompts).toHaveLength(1);
-    expect(sentPrompts[0]).toContain('continue');
+    expect(sentPrompts[0]).toBe('The interrupted turn was recovered. Continue from where you left off.');
+  });
+
+  it('sends the account-level custom resume prompt when the effective mode is custom', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const sentPrompts: string[] = [];
+    const controller = createSessionContinuationRecoveryController({
+      nowMs: () => 2_000,
+      store: createStore(),
+      readCustomResumePrompt: () => '  Pick the task back up exactly where it stopped.  ',
+    });
+
+    await expect(controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'custom',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt }) => {
+        sentPrompts.push(prompt);
+      },
+    })).resolves.toEqual({ status: 'awaiting_provider_activity' });
+
+    expect(sentPrompts).toEqual(['Pick the task back up exactly where it stopped.']);
+  });
+
+  it('falls back to the standard resume prompt when custom mode has no usable text', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const sentPrompts: string[] = [];
+    const controller = createSessionContinuationRecoveryController({
+      nowMs: () => 2_000,
+      store: createStore(),
+      readCustomResumePrompt: () => '   ',
+    });
+
+    await expect(controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'custom',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt }) => {
+        sentPrompts.push(prompt);
+      },
+    })).resolves.toEqual({ status: 'awaiting_provider_activity' });
+
+    expect(sentPrompts).toEqual(['The interrupted turn was recovered. Continue from where you left off.']);
+  });
+
+  it('falls back to the standard resume prompt when custom mode has no custom text source', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const sentPrompts: string[] = [];
+    const controller = createSessionContinuationRecoveryController({
+      nowMs: () => 2_000,
+      store: createStore(),
+    });
+
+    await expect(controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'custom',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt }) => {
+        sentPrompts.push(prompt);
+      },
+    })).resolves.toEqual({ status: 'awaiting_provider_activity' });
+
+    expect(sentPrompts).toEqual(['The interrupted turn was recovered. Continue from where you left off.']);
   });
 
   it('preserves idempotency through async metadata stores', async () => {
@@ -497,7 +571,7 @@ describe('session continuation recovery', () => {
 
     expect(sentPrompts).toEqual([
       {
-        prompt: expect.stringContaining('continue'),
+        prompt: expect.stringContaining('Continue'),
         localId: expect.stringMatching(/^connected-service-continuation:/),
       },
     ]);
@@ -661,6 +735,7 @@ describe('session continuation recovery', () => {
       exactProviderContextAvailable: true,
       hasUserMessageAfterFailure: () => false,
       sendContinuationPrompt,
+      canRetryOriginalUserMessage: () => 'allowed',
       retryOriginalUserMessage,
     })).resolves.toEqual({ status: 'awaiting_provider_activity' });
 
@@ -700,6 +775,7 @@ describe('session continuation recovery', () => {
       exactProviderContextAvailable: true,
       hasUserMessageAfterFailure: () => false,
       sendContinuationPrompt: vi.fn(),
+      canRetryOriginalUserMessage: () => 'allowed',
       retryOriginalUserMessage,
     })).resolves.toEqual({
       resolved: [],
@@ -732,6 +808,7 @@ describe('session continuation recovery', () => {
       exactProviderContextAvailable: false,
       hasUserMessageAfterFailure: () => false,
       sendContinuationPrompt,
+      canRetryOriginalUserMessage: () => 'allowed',
       retryOriginalUserMessage,
     })).resolves.toEqual({ status: 'awaiting_provider_activity' });
 
@@ -744,6 +821,76 @@ describe('session continuation recovery', () => {
         'claude-first-prompt': {
           replayMode: 'retry_original_user_message',
           status: 'awaiting_provider_activity',
+        },
+      },
+    });
+  });
+
+  it('requires durable no-activity evidence before retrying the original user message', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const sendContinuationPrompt = vi.fn();
+    const retryOriginalUserMessage = vi.fn();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await expect(controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'claude-first-prompt',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      replayMode: 'retry_original_user_message',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt,
+      canRetryOriginalUserMessage: () => 'blocked_provider_activity',
+      retryOriginalUserMessage,
+    })).resolves.toEqual({ status: 'retry_required' });
+
+    expect(sendContinuationPrompt).not.toHaveBeenCalled();
+    expect(retryOriginalUserMessage).not.toHaveBeenCalled();
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'claude-first-prompt': {
+          replayMode: 'retry_original_user_message',
+          status: 'retry_required',
+          errorCode: 'original_user_message_retry_provider_activity_detected',
+        },
+      },
+    });
+  });
+
+  it('does not replay stored original-message retry attempts when durable activity evidence is unavailable after restart', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const retryOriginalUserMessage = vi.fn();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await controller.beginAttempt({
+      sessionId: 'session-1',
+      attemptId: 'old-daemon-attempt',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      replayMode: 'retry_original_user_message',
+    });
+
+    await expect(controller.resolvePendingAttempts({
+      sessionId: 'session-1',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: vi.fn(),
+      canRetryOriginalUserMessage: () => 'unknown',
+      retryOriginalUserMessage,
+    })).resolves.toEqual({
+      resolved: [{ attemptId: 'old-daemon-attempt', status: 'retry_required' }],
+    });
+
+    expect(retryOriginalUserMessage).not.toHaveBeenCalled();
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'old-daemon-attempt': {
+          replayMode: 'retry_original_user_message',
+          status: 'retry_required',
+          errorCode: 'original_user_message_retry_evidence_unavailable',
         },
       },
     });

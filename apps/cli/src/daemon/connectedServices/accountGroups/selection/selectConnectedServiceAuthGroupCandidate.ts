@@ -22,7 +22,7 @@ export type ConnectedServiceAuthGroupPolicyV1 = Readonly<{
   preTurnProbeOrder: 'current_first_then_candidates' | 'candidates_first_then_current';
   recoveryMode: 'off' | 'wait_until_reset' | 'switch_then_resume' | 'switch_or_wait';
   recoveryPromptMode: 'standard';
-  resumePromptMode: 'standard' | 'off';
+  resumePromptMode: 'standard' | 'off' | 'custom';
   effectiveMeterStrategy: 'most_constrained' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'session';
   memberRuntimeStatePersistence: 'server_state_json';
 }>;
@@ -190,16 +190,29 @@ function resolveQuotaRuntimeExhaustion(
   return Number.isFinite(retryAtMs) && retryAtMs > nowMs ? retryAtMs : null;
 }
 
-function resolveRecentUsageLimitRetryAtMs(params: Readonly<{
+function resolveRecentLimiterRetry(params: Readonly<{
   state: ConnectedServiceAuthGroupMemberRuntimeState | null;
   policy: ConnectedServiceAuthGroupPolicyV1;
   nowMs: number;
-}>): number | null {
-  if (params.state?.lastFailureKind !== 'usage_limit') return null;
-  const lastObservedAtMs = numberOrNull(params.state.lastObservedAtMs);
+}>): Readonly<{ reason: 'quota_exhausted' | 'capacity_limited'; retryAtMs: number }> | null {
+  const state = params.state;
+  if (!state) return null;
+  const lastFailureKind = state.lastFailureKind;
+  if (
+    lastFailureKind !== 'usage_limit'
+    && lastFailureKind !== 'rate_limit'
+    && lastFailureKind !== 'capacity'
+  ) {
+    return null;
+  }
+  const lastObservedAtMs = numberOrNull(state.lastObservedAtMs);
   if (lastObservedAtMs === null) return null;
   const retryAtMs = lastObservedAtMs + params.policy.cooldownMs;
-  return retryAtMs > params.nowMs ? retryAtMs : null;
+  if (retryAtMs <= params.nowMs) return null;
+  return {
+    reason: lastFailureKind === 'capacity' ? 'capacity_limited' : 'quota_exhausted',
+    retryAtMs,
+  };
 }
 
 function resolveSnapshotEligibilityBlocker(
@@ -210,7 +223,7 @@ function resolveSnapshotEligibilityBlocker(
   : never {
   const meters = snapshot?.meters ?? [];
   if (meters.length === 0) return null;
-  if (meters.some((meter) => meter.limitCategory === 'quota' || meter.limitCategory === 'rate_limit' || meter.limitCategory === 'unknown')) {
+  if (meters.some((meter) => meter.limitCategory === 'usage_limit' || meter.limitCategory === 'rate_limit' || meter.limitCategory === 'unknown')) {
     return null;
   }
   const retryAtMs = meters
@@ -218,13 +231,13 @@ function resolveSnapshotEligibilityBlocker(
     .filter((value): value is number => value !== null && value > nowMs)
     .sort((left, right) => left - right)[0] ?? null;
   const categories = new Set(meters.map((meter) => meter.limitCategory));
-  if (categories.has('auth') || categories.has('account_disabled')) {
+  if (categories.has('auth_invalid') || categories.has('disabled')) {
     return { reason: 'auth_invalid', retryAtMs };
   }
-  if (categories.has('plan')) {
+  if (categories.has('plan_invalid')) {
     return { reason: 'plan_unavailable', retryAtMs };
   }
-  if (categories.has('validation')) {
+  if (categories.has('validation_failed')) {
     return { reason: 'validation_blocked', retryAtMs };
   }
   if (categories.has('capacity')) {
@@ -242,10 +255,108 @@ function isFreshQuotaSnapshot(
   return nowMs - snapshot.capturedAtMs <= quotaFreshnessMs;
 }
 
+function isSnapshotNewerThanFailure(
+  snapshot: ConnectedServiceAuthGroupQuotaSnapshot,
+  state: ConnectedServiceAuthGroupMemberRuntimeState | null,
+): boolean {
+  const lastObservedAtMs = numberOrNull(state?.lastObservedAtMs);
+  return lastObservedAtMs === null || snapshot.capturedAtMs > lastObservedAtMs;
+}
+
+function meterHasRemainingQuota(meter: ConnectedServiceAuthGroupQuotaMeterSnapshot): boolean {
+  const remaining = numberOrNull(meter.remainingPct);
+  return remaining !== null && remaining > 0;
+}
+
+function meterIsExhausted(meter: ConnectedServiceAuthGroupQuotaMeterSnapshot): boolean {
+  const remaining = numberOrNull(meter.remainingPct);
+  return remaining !== null && remaining <= 0;
+}
+
+function isQuotaMeter(meter: ConnectedServiceAuthGroupQuotaMeterSnapshot): boolean {
+  return meter.limitCategory === 'usage_limit';
+}
+
+function isRateLimitMeter(meter: ConnectedServiceAuthGroupQuotaMeterSnapshot): boolean {
+  return meter.limitCategory === 'rate_limit';
+}
+
+function snapshotProvesQuotaUsable(snapshot: ConnectedServiceAuthGroupQuotaSnapshot): boolean {
+  if (snapshot.exhausted) return false;
+  const quotaMeters = (snapshot.meters ?? []).filter(isQuotaMeter);
+  if (quotaMeters.length > 0) return quotaMeters.every(meterHasRemainingQuota);
+  const remaining = numberOrNull(snapshot.effectiveRemainingPercent);
+  return remaining !== null && remaining > 0;
+}
+
+function snapshotProvesRateLimitUsable(snapshot: ConnectedServiceAuthGroupQuotaSnapshot): boolean {
+  const rateLimitMeters = (snapshot.meters ?? []).filter(isRateLimitMeter);
+  return rateLimitMeters.length > 0 && rateLimitMeters.every(meterHasRemainingQuota);
+}
+
+export function reconcileMemberRuntimeStateWithFreshQuotaEvidence(params: Readonly<{
+  state: ConnectedServiceAuthGroupMemberRuntimeState | null;
+  quotaSnapshot: ConnectedServiceAuthGroupQuotaSnapshot | null;
+  policy: ConnectedServiceAuthGroupPolicyV1;
+  nowMs: number;
+}>): ConnectedServiceAuthGroupMemberRuntimeState | null {
+  void params.policy;
+  void params.nowMs;
+  const state = params.state;
+  const quotaSnapshot = params.quotaSnapshot;
+  if (!state || !quotaSnapshot || !isSnapshotNewerThanFailure(quotaSnapshot, state)) return state;
+
+  let changed = false;
+  const next: {
+    -readonly [Key in keyof ConnectedServiceAuthGroupMemberRuntimeState]: ConnectedServiceAuthGroupMemberRuntimeState[Key];
+  } = { ...state };
+
+  const quotaUsable = snapshotProvesQuotaUsable(quotaSnapshot);
+  if (quotaUsable && (numberOrNull(state.quotaExhaustedUntilMs) !== null || state.lastFailureKind === 'usage_limit')) {
+    delete next.quotaExhaustedUntilMs;
+    delete next.providerResetsAtMs;
+    if (state.lastFailureKind === 'usage_limit') {
+      delete next.lastFailureKind;
+    }
+    changed = true;
+  }
+
+  const rateUsable = snapshotProvesRateLimitUsable(quotaSnapshot);
+  if (rateUsable && (numberOrNull(state.rateLimitedUntilMs) !== null || state.lastFailureKind === 'rate_limit')) {
+    delete next.rateLimitedUntilMs;
+    delete next.providerResetsAtMs;
+    if (state.lastFailureKind === 'rate_limit') {
+      delete next.lastFailureKind;
+    }
+    changed = true;
+  }
+
+  return changed ? next : state;
+}
+
 function isQuotaExhausted(snapshot: ConnectedServiceAuthGroupQuotaSnapshot): boolean {
   if (snapshot.exhausted) return true;
+  if ((snapshot.meters ?? []).some((meter) => (
+    (isQuotaMeter(meter) || isRateLimitMeter(meter))
+    && meterIsExhausted(meter)
+  ))) {
+    return true;
+  }
   const remaining = numberOrNull(snapshot.effectiveRemainingPercent);
   return remaining !== null && remaining <= 0;
+}
+
+function resolveQuotaSnapshotExhaustionRetryAtMs(
+  snapshot: ConnectedServiceAuthGroupQuotaSnapshot,
+  state: ConnectedServiceAuthGroupMemberRuntimeState | null,
+  nowMs: number,
+): number | null {
+  const meterRetryAtMs = (snapshot.meters ?? [])
+    .filter((meter) => (isQuotaMeter(meter) || isRateLimitMeter(meter)) && meterIsExhausted(meter))
+    .map((meter) => numberOrNull(meter.resetAtMs))
+    .filter((value): value is number => value !== null && value > nowMs)
+    .sort((left, right) => left - right)[0] ?? null;
+  return meterRetryAtMs ?? numberOrNull(state?.providerResetsAtMs);
 }
 
 function resolveLeastLimitedScore(snapshot: ConnectedServiceAuthGroupQuotaSnapshot | null): number | null {
@@ -341,21 +452,6 @@ export function selectConnectedServiceAuthGroupCandidate(params: Readonly<{
       excluded.push({ profileId: member.profileId, reason: stateBlocker.reason, retryAtMs: stateBlocker.retryAtMs });
       continue;
     }
-    const persistedQuotaRetryAtMs = resolveQuotaRuntimeExhaustion(state, params.nowMs);
-    if (persistedQuotaRetryAtMs !== null) {
-      excluded.push({ profileId: member.profileId, reason: 'quota_exhausted', retryAtMs: persistedQuotaRetryAtMs });
-      continue;
-    }
-    const recentUsageLimitRetryAtMs = resolveRecentUsageLimitRetryAtMs({
-      state,
-      policy: params.policy,
-      nowMs: params.nowMs,
-    });
-    if (recentUsageLimitRetryAtMs !== null) {
-      excluded.push({ profileId: member.profileId, reason: 'quota_exhausted', retryAtMs: recentUsageLimitRetryAtMs });
-      continue;
-    }
-
     const quotaSnapshot = isFreshQuotaSnapshot(state?.quotaSnapshot, params.nowMs, params.quotaFreshnessMs)
       ? state?.quotaSnapshot ?? null
       : null;
@@ -372,14 +468,38 @@ export function selectConnectedServiceAuthGroupCandidate(params: Readonly<{
       excluded.push({
         profileId: member.profileId,
         reason: 'quota_exhausted',
-        retryAtMs: numberOrNull(state?.providerResetsAtMs),
+        retryAtMs: resolveQuotaSnapshotExhaustionRetryAtMs(quotaSnapshot, state, params.nowMs),
       });
+      continue;
+    }
+    const effectiveState = reconcileMemberRuntimeStateWithFreshQuotaEvidence({
+      state,
+      quotaSnapshot,
+      policy: params.policy,
+      nowMs: params.nowMs,
+    });
+    const effectiveRecentLimiterRetry = resolveRecentLimiterRetry({
+      state: effectiveState,
+      policy: params.policy,
+      nowMs: params.nowMs,
+    });
+    if (effectiveRecentLimiterRetry !== null) {
+      excluded.push({
+        profileId: member.profileId,
+        reason: effectiveRecentLimiterRetry.reason,
+        retryAtMs: effectiveRecentLimiterRetry.retryAtMs,
+      });
+      continue;
+    }
+    const persistedQuotaRetryAtMs = resolveQuotaRuntimeExhaustion(effectiveState, params.nowMs);
+    if (persistedQuotaRetryAtMs !== null) {
+      excluded.push({ profileId: member.profileId, reason: 'quota_exhausted', retryAtMs: persistedQuotaRetryAtMs });
       continue;
     }
 
     const cooldownRetryAtMs = resolveCooldownRetryAtMs({
       policy: params.policy,
-      state,
+      state: effectiveState,
       nowMs: params.nowMs,
     });
     if (cooldownRetryAtMs !== null) {

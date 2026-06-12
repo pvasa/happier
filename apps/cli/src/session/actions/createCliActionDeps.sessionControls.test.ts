@@ -525,6 +525,9 @@ describe('createCliActionDeps session controls', () => {
     });
     await deps.sessionUsageLimitCheckNow?.({ sessionId: 'sess_1' });
 
+    // No explicit per-operation resume prompt mode was requested, so none may be
+    // forwarded: downstream owners must resolve the precedence tiers themselves
+    // (stored intent > account setting > group policy > provider config > default).
     expect(mocks.callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({
       method: `sess_1:${SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE}`,
       request: {
@@ -545,6 +548,36 @@ describe('createCliActionDeps session controls', () => {
       request: { sessionId: 'sess_1' },
     }));
     expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it('forwards an explicit custom resume prompt mode unchanged for usage-limit controls', async () => {
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+    });
+
+    await deps.sessionUsageLimitWaitResumeEnable?.({
+      sessionId: 'sess_1',
+      issueFingerprint: 'usage-limit:sess_1:reset',
+      resumePromptMode: 'custom',
+    });
+    await deps.sessionUsageLimitCheckNow?.({ sessionId: 'sess_1', resumePromptMode: 'custom' });
+
+    expect(mocks.callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({
+      method: `sess_1:${SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE}`,
+      request: expect.objectContaining({ resumePromptMode: 'custom' }),
+    }));
+    expect(mocks.callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({
+      method: `sess_1:${SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW}`,
+      request: expect.objectContaining({ resumePromptMode: 'custom' }),
+    }));
   });
 
   it('routes active temporary-throttle retry-now through the daemon scheduler callback', async () => {
@@ -603,7 +636,9 @@ describe('createCliActionDeps session controls', () => {
 
   it('routes inactive local usage-limit controls without re-entering live session RPC', async () => {
     const checkNow = vi.fn(async (_params: unknown) => ({ ok: true, status: 'ready' }));
-    mocks.getSessionUsageLimitRecoveryControlAdapter.mockResolvedValueOnce({
+    // The adapter is also consulted for the provider-config resume-prompt tier,
+    // so it must resolve consistently across the whole test.
+    mocks.getSessionUsageLimitRecoveryControlAdapter.mockResolvedValue({
       checkNow,
     });
     mocks.resolveSessionTransportContext.mockResolvedValueOnce({
@@ -791,6 +826,7 @@ describe('createCliActionDeps session controls', () => {
     await expect(deps.sessionUsageLimitSwitchAccountNow?.({
       sessionId: 'sess_group',
       provider: 'codex',
+      resumePromptMode: 'custom',
     })).resolves.toEqual({
       ok: true,
       status: 'switch_applied',
@@ -808,8 +844,9 @@ describe('createCliActionDeps session controls', () => {
         groupId: 'codex-main',
         quotaScope: 'account',
         action: null,
-        limitCategory: 'quota',
+        limitCategory: 'usage_limit',
       }),
+      resumePromptMode: 'custom',
     });
   });
 
@@ -1133,6 +1170,231 @@ describe('createCliActionDeps session controls', () => {
     });
 
     expect(mocks.callSessionRpc).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicit permission response for a request already completed in session state', async () => {
+    mocks.resolveSessionTransportContext.mockResolvedValueOnce({
+      ok: true as const,
+      sessionId: 'sess_1',
+      rawSession: {
+        active: true,
+        agentState: {
+          requests: {},
+          completedRequests: {
+            perm_done_1: { kind: 'permission', tool: 'Write', status: 'approved', createdAt: 1 },
+          },
+        },
+      },
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(3),
+        encryptionVariant: 'legacy' as const,
+      },
+      mode: 'plain' as const,
+    });
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+    });
+
+    await expect(deps.sessionPermissionRespond?.({
+      sessionId: 'sess_1',
+      requestId: 'perm_done_1',
+      decision: 'allow',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'permission_request_not_found',
+      errorMessage: 'permission_request_not_found',
+      sessionId: 'sess_1',
+    });
+
+    expect(mocks.callSessionRpc).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicit user-action answer for a request already completed in session state', async () => {
+    mocks.resolveSessionTransportContext.mockResolvedValueOnce({
+      ok: true as const,
+      sessionId: 'sess_1',
+      rawSession: {
+        active: true,
+        agentState: {
+          requests: {},
+          completedRequests: {
+            ask_done_1: { kind: 'user_action', tool: 'AskUserQuestion', status: 'approved', createdAt: 1 },
+          },
+        },
+      },
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(3),
+        encryptionVariant: 'legacy' as const,
+      },
+      mode: 'plain' as const,
+    });
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+    });
+
+    await expect(deps.sessionUserActionAnswer?.({
+      sessionId: 'sess_1',
+      requestId: 'ask_done_1',
+      decision: 'approve',
+      answers: [{ question: 'Continue?', answer: 'Yes' }],
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'permission_request_not_found',
+      errorMessage: 'permission_request_not_found',
+      sessionId: 'sess_1',
+    });
+
+    expect(mocks.callSessionRpc).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicit permission response that targets a pending user-action request', async () => {
+    mocks.resolveSessionTransportContext.mockResolvedValueOnce({
+      ok: true as const,
+      sessionId: 'sess_1',
+      rawSession: {
+        active: true,
+        agentState: {
+          requests: {
+            ask_pending_1: { kind: 'user_action', tool: 'AskUserQuestion', createdAt: 1 },
+          },
+          completedRequests: {},
+        },
+      },
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(3),
+        encryptionVariant: 'legacy' as const,
+      },
+      mode: 'plain' as const,
+    });
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+    });
+
+    await expect(deps.sessionPermissionRespond?.({
+      sessionId: 'sess_1',
+      requestId: 'ask_pending_1',
+      decision: 'allow',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'permission_request_not_found',
+      errorMessage: 'permission_request_not_found',
+      sessionId: 'sess_1',
+    });
+
+    expect(mocks.callSessionRpc).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicit user-action answer that targets a pending permission request', async () => {
+    mocks.resolveSessionTransportContext.mockResolvedValueOnce({
+      ok: true as const,
+      sessionId: 'sess_1',
+      rawSession: {
+        active: true,
+        agentState: {
+          requests: {
+            perm_pending_1: { kind: 'permission', tool: 'Write', createdAt: 1 },
+          },
+          completedRequests: {},
+        },
+      },
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(3),
+        encryptionVariant: 'legacy' as const,
+      },
+      mode: 'plain' as const,
+    });
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+    });
+
+    await expect(deps.sessionUserActionAnswer?.({
+      sessionId: 'sess_1',
+      requestId: 'perm_pending_1',
+      decision: 'approve',
+      answers: [{ question: 'Continue?', answer: 'Yes' }],
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'permission_request_not_found',
+      errorMessage: 'permission_request_not_found',
+      sessionId: 'sess_1',
+    });
+
+    expect(mocks.callSessionRpc).not.toHaveBeenCalled();
+  });
+
+  it('forwards an explicit permission response for a matching pending permission request', async () => {
+    mocks.resolveSessionTransportContext.mockResolvedValueOnce({
+      ok: true as const,
+      sessionId: 'sess_1',
+      rawSession: {
+        active: true,
+        agentState: {
+          requests: {
+            perm_pending_ok_1: { kind: 'permission', tool: 'Write', createdAt: 1 },
+          },
+          completedRequests: {},
+        },
+      },
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(3),
+        encryptionVariant: 'legacy' as const,
+      },
+      mode: 'plain' as const,
+    });
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+    });
+
+    await expect(deps.sessionPermissionRespond?.({
+      sessionId: 'sess_1',
+      requestId: 'perm_pending_ok_1',
+      decision: 'allow',
+    })).resolves.toEqual({ ok: true });
+
+    expect(mocks.callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'sess_1:permission',
+      request: { id: 'perm_pending_ok_1', approved: true },
+    }));
   });
 
   it('returns schema-valid usage-limit recovery errors when the session transport cannot be resolved', async () => {

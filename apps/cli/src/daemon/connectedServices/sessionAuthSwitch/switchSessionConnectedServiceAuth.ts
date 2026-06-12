@@ -54,6 +54,7 @@ import {
   summarizeConnectedServiceSwitchApplyError,
 } from './diagnostics/buildSwitchFailureResult';
 import { resolveSwitchUxDiagnosticSource } from './diagnostics/resolveSwitchUxDiagnosticSource';
+import { evaluatePredictiveSoftSwitchSessionApplyPolicy } from '../accountGroups/switching/predictiveSoftSwitchPolicy';
 import {
   resolveSwitchAttemptEventOutcomeForFailure,
   resolveSwitchAttemptEventOutcomeForSuccess,
@@ -85,6 +86,17 @@ function spreadPostSwitchVerification(
     ? { verificationByServiceId: outcome.verificationByServiceId }
     : {};
 }
+
+/**
+ * INC-6: surface the PROVEN continuity context on success results so switch telemetry carries
+ * vendorResumeId / candidatePersistedSessionFile / targetMaterializedRoot / effectiveStateMode
+ * instead of all-null fields for spawn_next_turn/restart switches.
+ */
+function spreadContinuityProofDiagnostics(
+  diagnostics: ConnectedServiceResumeContinuityProofDiagnostics | null | undefined,
+): Readonly<{ diagnostics?: Readonly<{ continuity: ConnectedServiceResumeContinuityProofDiagnostics }> }> {
+  return diagnostics ? { diagnostics: { continuity: diagnostics } } : {};
+}
 type PublicConnectedServiceResumeContinuityDiagnostics = Pick<
   ConnectedServiceResumeContinuityDiagnostics,
   'requestedStateMode' | 'effectiveStateMode' | 'reachabilityMissReason'
@@ -100,6 +112,9 @@ export type SessionConnectedServiceAuthSwitchErrorCode =
   | 'group_generation_conflict'
   | 'provider_state_sharing_required'
   | 'provider_state_sharing_unavailable'
+  // Settings snapshot missing (daemon not bootstrapped yet) — retryable, unlike the genuine
+  // "provider cannot share state" code above (incident Jun-11 H-A).
+  | 'provider_state_sharing_settings_unavailable'
   | 'provider_session_state_unavailable_for_resume'
   | 'metadata_update_failed'
   | 'restart_failed'
@@ -109,7 +124,8 @@ export type SessionConnectedServiceAuthSwitchErrorCode =
   | 'hot_apply_succeeded_but_recovery_failed'
   | 'provider_account_adoption_mismatch'
   | 'post_switch_verification_failed'
-  | 'profile_action_required';
+  | 'profile_action_required'
+  | 'hot_apply_restart_required';
 
 export type SessionConnectedServiceAuthSwitchServiceResult = Readonly<{
   status: 'applied' | 'failed' | 'not_attempted';
@@ -149,15 +165,35 @@ export type SessionConnectedServiceAuthSwitchDiagnostics = Readonly<{
   uxDiagnostic?: ConnectedServiceUxDiagnosticV1;
 }>;
 
+/**
+ * What a PROVEN continuity resolution verified: the post-materialization target, resume id, and
+ * state mode the next spawn will read. Surfaced on successful switch results so switch telemetry
+ * (INC-6) is not all-null for spawn_next_turn/restart switches — the exact regression class of the
+ * Jun-10 incident stays visible.
+ */
+export type ConnectedServiceResumeContinuityProofDiagnostics = Omit<
+  ConnectedServiceResumeContinuityDiagnostics,
+  'reachabilityMissReason'
+>;
+
 export type SessionConnectedServiceSwitchContinuity =
-  | Readonly<{ mode: 'restart_rematerialize'; warnings?: readonly string[] }>
-  | Readonly<{ mode: 'hot_apply'; warnings?: readonly string[] }>
+  | Readonly<{
+      mode: 'restart_rematerialize';
+      warnings?: readonly string[];
+      diagnostics?: ConnectedServiceResumeContinuityProofDiagnostics;
+    }>
+  | Readonly<{
+      mode: 'hot_apply';
+      warnings?: readonly string[];
+      diagnostics?: ConnectedServiceResumeContinuityProofDiagnostics;
+    }>
   | Readonly<{
       mode: 'unsupported';
       errorCode: Extract<
         SessionConnectedServiceAuthSwitchErrorCode,
         | 'provider_state_sharing_required'
         | 'provider_state_sharing_unavailable'
+        | 'provider_state_sharing_settings_unavailable'
         | 'provider_session_state_unavailable_for_resume'
         | 'unsupported_service'
       >;
@@ -173,6 +209,8 @@ export type SessionConnectedServiceAuthSwitchResult =
       continuityByServiceId: Readonly<Record<string, SessionConnectedServiceSwitchContinuity['mode']>>;
       warnings: readonly string[];
       verificationByServiceId?: AcceptedConnectedServiceAccountVerificationByServiceId;
+      /** Proven continuity context of the switch (INC-6 telemetry); absent when nothing was proven. */
+      diagnostics?: Readonly<{ continuity: ConnectedServiceResumeContinuityProofDiagnostics }>;
     }>
   | Readonly<{
       ok: false;
@@ -256,6 +294,7 @@ type SwitchContinuationRecoveryInput = Readonly<{
   normalizedBindings: ConnectedServiceBindingsV1;
   serviceIds: ReadonlySet<ConnectedServiceId>;
   action: 'hot_applied' | 'restart_requested';
+  switchReason?: ConnectedServiceSessionAuthSwitchReason;
   runtimeAuthSelectionsByServiceId?: RuntimeAuthSelectionsByServiceId;
 }>;
 
@@ -263,6 +302,14 @@ export type SwitchSessionConnectedServiceAuthInput = Readonly<{
   core: ConnectedServiceSessionAuthSwitchCore;
   transitionLockMode?: ConnectedServiceTransitionLockMode;
   switchReason?: ConnectedServiceSessionAuthSwitchReason;
+  /**
+   * Group-switch trigger reason (e.g. `soft_threshold`) threaded from the group switch
+   * coordinator. A predictive soft-threshold switch must never disrupt a live session, so when
+   * the resolved continuity is anything but a hot apply the FSM refuses BEFORE committing
+   * bindings or requesting a restart (RD-SW-9) instead of relying on the coordinator's
+   * post-apply backstop.
+   */
+  groupSwitchTriggerReason?: string;
   postSwitchVerificationMode?: Readonly<{
     kind: 'disabled_for_test_only';
     reason: string;
@@ -863,6 +910,7 @@ const SWITCH_ATTEMPT_FAILURE_ERROR_CODES = new Set<SessionConnectedServiceAuthSw
   'group_generation_conflict',
   'provider_state_sharing_required',
   'provider_state_sharing_unavailable',
+  'provider_state_sharing_settings_unavailable',
   'provider_session_state_unavailable_for_resume',
   'profile_action_required',
   'metadata_update_failed',
@@ -1061,6 +1109,7 @@ async function runContinuationRecovery(input: SwitchContinuationRecoveryInput & 
   continueAfterRuntimeAuthSwitch: SwitchSessionConnectedServiceAuthInput['continueAfterRuntimeAuthSwitch'];
   diagnosticSource: ConnectedServiceUxDiagnosticV1['source'];
 }>): Promise<SessionConnectedServiceAuthSwitchFailure | null> {
+  if (input.switchReason === 'pre_turn_group_policy') return null;
   if (!input.continueAfterRuntimeAuthSwitch) return null;
   try {
     await input.continueAfterRuntimeAuthSwitch({
@@ -1070,6 +1119,7 @@ async function runContinuationRecovery(input: SwitchContinuationRecoveryInput & 
 	    normalizedBindings: input.normalizedBindings,
 	    serviceIds: input.serviceIds,
 	    action: input.action,
+      switchReason: input.switchReason,
 	    ...(input.runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId: input.runtimeAuthSelectionsByServiceId } : {}),
 	  });
     return null;
@@ -1135,6 +1185,7 @@ async function runPostSwitchVerificationThenContinuation(
       normalizedBindings: input.normalizedBindings,
 	      serviceIds: input.serviceIds,
 	      action: input.action,
+      switchReason: input.switchReason,
 	      diagnosticSource: input.diagnosticSource,
 	      ...(input.runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId: input.runtimeAuthSelectionsByServiceId } : {}),
 	    });
@@ -1154,6 +1205,7 @@ async function runPostSwitchVerificationThenContinuation(
     normalizedBindings: input.normalizedBindings,
     serviceIds: input.serviceIds,
     action: input.action,
+    switchReason: input.switchReason,
     diagnosticSource: input.diagnosticSource,
     ...(input.runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId: input.runtimeAuthSelectionsByServiceId } : {}),
   });
@@ -1206,6 +1258,7 @@ async function restartAfterHotApplyAdoptionMismatch(input: SwitchContinuationRec
     nextByServiceId: input.nextByServiceId,
     serviceIds: input.serviceIds,
     action: 'restart_requested',
+    switchReason: input.switchReason,
     ...(input.runtimeAuthSelectionsByServiceId
       ? { runtimeAuthSelectionsByServiceId: input.runtimeAuthSelectionsByServiceId }
       : {}),
@@ -1322,8 +1375,37 @@ function hasTrackedRuntimeAlreadyAdoptedExpectedGroupGeneration(input: Readonly<
     && selection.generation === expectedGeneration;
 }
 
+/**
+ * RD-SW-9: pre-side-effect gate for predictive soft-threshold switches. Evaluated where the
+ * prospective apply mode is first known (after continuity resolution) so a disallowed switch
+ * fails BEFORE bindings commit / restart, keeping the coordinator's post-apply backstop a true
+ * never-fires backstop.
+ */
+function gatePredictiveSoftSwitchBeforeSideEffects(input: Readonly<{
+  groupSwitchTriggerReason: string | undefined;
+  sessionId: string;
+  prospectiveMode: ConnectedServiceAccountSwitchMode;
+  attemptedAction: 'restart_requested' | 'hot_applied' | 'metadata_updated';
+  diagnosticSource: ConnectedServiceUxDiagnosticV1['source'];
+}>): SessionConnectedServiceAuthSwitchResult | null {
+  if (!input.groupSwitchTriggerReason) return null;
+  const decision = evaluatePredictiveSoftSwitchSessionApplyPolicy({
+    reason: input.groupSwitchTriggerReason as Parameters<typeof evaluatePredictiveSoftSwitchSessionApplyPolicy>[0]['reason'],
+    sessionId: input.sessionId,
+    applyMode: input.prospectiveMode,
+  });
+  if (decision.status === 'allow') return null;
+  return failureResult('hot_apply_restart_required', {
+    failurePhase: 'continuity',
+    attemptedAction: input.attemptedAction,
+    diagnosticSource: input.diagnosticSource,
+  });
+}
+
 async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
   request: SessionConnectedServiceAuthSwitchRequest;
+  switchReason?: ConnectedServiceSessionAuthSwitchReason;
+  groupSwitchTriggerReason?: string;
   tracked: TrackedSession;
   trackedAgentId: CatalogAgentId;
   previousByServiceId: ReadonlyMap<ConnectedServiceId, EffectiveBinding>;
@@ -1429,6 +1511,14 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
 	      ...(continuity.diagnostics ? { continuity: continuity.diagnostics } : {}),
 	    });
   }
+  const predictiveGate = gatePredictiveSoftSwitchBeforeSideEffects({
+    groupSwitchTriggerReason: input.groupSwitchTriggerReason,
+    sessionId: input.request.sessionId,
+    prospectiveMode: continuity.mode === 'hot_apply' ? 'hot_apply' : 'restart_resume',
+    attemptedAction: continuity.mode === 'hot_apply' ? 'hot_applied' : 'restart_requested',
+    diagnosticSource: input.diagnosticSource,
+  });
+  if (predictiveGate) return predictiveGate;
 
   const runtimeAuthSelectionsByServiceId = runtimeAuthSelection === null || runtimeAuthSelection === undefined
     ? undefined
@@ -1523,6 +1613,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
             nextByServiceId: input.nextByServiceId,
             serviceIds: restartServiceIds,
             action: 'restart_requested',
+            switchReason: input.switchReason,
             ...(runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId } : {}),
           });
 	    if (continuationOutcome.failure) return continuationOutcome.failure;
@@ -1533,6 +1624,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
             continuityByServiceId: { [serviceId]: 'restart_rematerialize' },
             warnings: continuity.warnings ?? [],
             ...spreadPostSwitchVerification(continuationOutcome),
+            ...spreadContinuityProofDiagnostics(continuity.diagnostics),
           };
         }
         input.tracked.spawnOptions = previousSpawnOptions;
@@ -1563,6 +1655,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
         nextByServiceId: input.nextByServiceId,
         serviceIds,
         action: 'hot_applied',
+        switchReason: input.switchReason,
         ...(runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId } : {}),
       });
       if (continuationOutcome.failure) {
@@ -1589,6 +1682,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
             nextByServiceId: input.nextByServiceId,
             serviceIds: restartServiceIds,
             action: 'restart_requested',
+            switchReason: input.switchReason,
             ...(runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId } : {}),
           });
 	          if (restartContinuationFailure.failure) {
@@ -1601,6 +1695,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
             continuityByServiceId: { [serviceId]: 'restart_rematerialize' },
             warnings: continuity.warnings ?? [],
             ...spreadPostSwitchVerification(restartContinuationFailure),
+            ...spreadContinuityProofDiagnostics(continuity.diagnostics),
           };
         }
         return continuationOutcome.failure;
@@ -1612,6 +1707,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
         continuityByServiceId: { [serviceId]: continuity.mode },
         warnings: continuity.warnings ?? [],
         ...spreadPostSwitchVerification(continuationOutcome),
+        ...spreadContinuityProofDiagnostics(continuity.diagnostics),
       };
     }
 
@@ -1622,6 +1718,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
         normalizedBindings: input.normalizedBindings,
         continuityByServiceId: { [serviceId]: continuity.mode },
         warnings: continuity.warnings ?? [],
+        ...spreadContinuityProofDiagnostics(continuity.diagnostics),
       };
     }
 
@@ -1640,6 +1737,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
       nextByServiceId: input.nextByServiceId,
       serviceIds,
       action: 'restart_requested',
+      switchReason: input.switchReason,
       ...(runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId } : {}),
     });
 	    if (continuationOutcome.failure) return continuationOutcome.failure;
@@ -1650,6 +1748,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
       continuityByServiceId: { [serviceId]: continuity.mode },
       warnings: continuity.warnings ?? [],
       ...spreadPostSwitchVerification(continuationOutcome),
+      ...spreadContinuityProofDiagnostics(continuity.diagnostics),
     };
   } catch (error) {
     input.tracked.spawnOptions = previousSpawnOptions;
@@ -1712,6 +1811,7 @@ export async function switchSessionConnectedServiceAuth(
 
         const continuityByServiceId: Record<string, SessionConnectedServiceSwitchContinuity['mode']> = {};
         const warnings: string[] = [];
+        let continuityProofDiagnostics: ConnectedServiceResumeContinuityProofDiagnostics | null = null;
         const connectedServiceMaterializationIdentityV1 = resolveMaterializationIdentityForAcceptedBindings({
           existingIdentity: inactive.connectedServiceMaterializationIdentityV1,
           normalizedBindings: normalized.normalized,
@@ -1753,6 +1853,8 @@ export async function switchSessionConnectedServiceAuth(
 	              ...(continuity.diagnostics ? { continuity: continuity.diagnostics } : {}),
 	            });
           }
+          // INC-6: keep the proven continuity context for success-result telemetry.
+          continuityProofDiagnostics ??= continuity.diagnostics ?? null;
         }
 
         try {
@@ -1783,6 +1885,7 @@ export async function switchSessionConnectedServiceAuth(
           normalizedBindings: normalized.normalized,
           continuityByServiceId,
           warnings,
+          ...spreadContinuityProofDiagnostics(continuityProofDiagnostics),
         };
       }
 
@@ -1812,6 +1915,11 @@ export async function switchSessionConnectedServiceAuth(
       if (changedServiceIds.length === 0) {
         const rematerialized = await rematerializeUnchangedConnectedServiceBinding({
           request: input.request,
+          // The unchanged-binding rematerialize path is the exact shape a pre-turn group member
+          // switch takes (binding stays `group`, only the generation moves). The switch reason MUST
+          // reach its continuation calls so `pre_turn_group_policy` replay suppression engages (F5).
+          switchReason: input.switchReason,
+          groupSwitchTriggerReason: input.groupSwitchTriggerReason,
           tracked,
           trackedAgentId,
           previousByServiceId,
@@ -1843,6 +1951,7 @@ export async function switchSessionConnectedServiceAuth(
       const continuityByServiceId: Record<string, SessionConnectedServiceSwitchContinuity['mode']> = {};
       const warnings: string[] = [];
       let allChangedServicesHotApply = true;
+      let continuityProofDiagnostics: ConnectedServiceResumeContinuityProofDiagnostics | null = null;
       const runtimeAuthSelectionsByServiceId = new Map<ConnectedServiceId, unknown>();
       const previousSpawnOptions = tracked.spawnOptions;
       const connectedServiceMaterializationIdentityV1 = resolveMaterializationIdentityForAcceptedBindings({
@@ -1907,6 +2016,9 @@ export async function switchSessionConnectedServiceAuth(
 	            ...(continuity.diagnostics ? { continuity: continuity.diagnostics } : {}),
 	          });
         }
+        // INC-6: keep the proven continuity context (single changed service in practice; the first
+        // proof wins for multi-service switches) for success-result telemetry.
+        continuityProofDiagnostics ??= continuity.diagnostics ?? null;
         if (continuity.mode !== 'hot_apply') {
           allChangedServicesHotApply = false;
         }
@@ -1917,6 +2029,18 @@ export async function switchSessionConnectedServiceAuth(
         : diagnosticSource === 'runtime_auth_recovery'
           ? 'metadata_updated'
           : 'restart_requested';
+      const predictiveGate = gatePredictiveSoftSwitchBeforeSideEffects({
+        groupSwitchTriggerReason: input.groupSwitchTriggerReason,
+        sessionId: input.request.sessionId,
+        prospectiveMode: action === 'hot_applied'
+          ? 'hot_apply'
+          : action === 'metadata_updated'
+            ? 'spawn_next_turn'
+            : 'restart_resume',
+        attemptedAction: action,
+        diagnosticSource,
+      });
+      if (predictiveGate) return predictiveGate;
       const changedServiceIdSet = new Set<ConnectedServiceId>(changedServiceIds);
       const continuationAttemptId = buildConnectedServiceSwitchContinuationAttemptId({
         action: action === 'metadata_updated' ? 'restart_requested' : action,
@@ -2017,6 +2141,7 @@ export async function switchSessionConnectedServiceAuth(
                 nextByServiceId,
                 serviceIds: changedServiceIdSet,
                 action,
+                switchReason: input.switchReason,
                 ...(runtimeAuthSelectionsByServiceId.size === 0 ? {} : { runtimeAuthSelectionsByServiceId }),
               });
 	              if (continuationOutcome.failure) {
@@ -2066,6 +2191,7 @@ export async function switchSessionConnectedServiceAuth(
               nextByServiceId,
               serviceIds: changedServiceIdSet,
               action: 'hot_applied',
+              switchReason: input.switchReason,
               ...(runtimeAuthSelectionsByServiceId.size === 0 ? {} : { runtimeAuthSelectionsByServiceId }),
             });
             if (continuationOutcome.failure) {
@@ -2093,6 +2219,7 @@ export async function switchSessionConnectedServiceAuth(
                   nextByServiceId,
                   serviceIds: changedServiceIdSet,
                   action,
+                  switchReason: input.switchReason,
                   ...(runtimeAuthSelectionsByServiceId.size === 0 ? {} : { runtimeAuthSelectionsByServiceId }),
                 });
 	                if (restartContinuationFailure.failure) {
@@ -2160,6 +2287,7 @@ export async function switchSessionConnectedServiceAuth(
             nextByServiceId,
             serviceIds: changedServiceIdSet,
             action: 'restart_requested',
+            switchReason: input.switchReason,
             ...(runtimeAuthSelectionsByServiceId.size === 0 ? {} : { runtimeAuthSelectionsByServiceId }),
           });
           if (continuationOutcome.failure) return continuationOutcome.failure;
@@ -2206,6 +2334,7 @@ export async function switchSessionConnectedServiceAuth(
         continuityByServiceId,
         warnings,
         ...spreadPostSwitchVerification({ verificationByServiceId: postSwitchVerificationByServiceId }),
+        ...spreadContinuityProofDiagnostics(continuityProofDiagnostics),
       };
   };
 	  const result = await runSerializedConnectedServiceTransition({

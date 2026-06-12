@@ -23,10 +23,14 @@ export function resolveSwitchAttemptEventOutcomeForSuccess(input: Readonly<{
         outcomeAction: 'hot_applied',
       };
     case 'metadata_updated':
+      // A metadata-only commit performed no restart and verified no provider adoption — under the
+      // provider-outcome-proof doctrine it must render as an observed intermediate, never as a
+      // final success the session could subsequently strand behind (INC-7). Failure projections
+      // spread this shape and override `outcome: 'failed'`, which stays correct.
       return {
         action: 'metadata_updated',
         attemptedContinuityMode: 'metadata_only',
-        outcome: 'succeeded',
+        outcome: 'observed',
         outcomeAction: 'metadata_updated',
       };
     case 'restart_requested':
