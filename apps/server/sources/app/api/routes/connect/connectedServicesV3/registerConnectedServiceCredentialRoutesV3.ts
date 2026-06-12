@@ -29,6 +29,7 @@ import {
 } from "../connectedServicesV2/credentialMetadataV2";
 import { NotFoundSchema } from "../../../schemas/notFoundSchema";
 import { deleteConnectedServiceCredentialInTx } from "./authGroupRepository";
+import { ConnectedServiceCredentialDeleteQuerySchema } from "./credentialDeleteQuerySchema";
 import { recordConnectedServiceAccountProfileChange } from "../connectedServicesAccountProfileChange";
 import {
     isConnectedServiceProviderIdentityMismatch,
@@ -284,6 +285,7 @@ export function registerConnectedServiceCredentialRoutesV3(app: Fastify): void {
                 serviceId: ConnectedServiceIdSchema,
                 profileId: ConnectedServiceProfileIdSchema,
             }),
+            querystring: ConnectedServiceCredentialDeleteQuerySchema,
             response: {
                 200: z.object({ success: z.literal(true) }),
                 404: z.union([NotFoundSchema, z.object({ error: z.literal("connect_credential_not_found") })]),
@@ -311,7 +313,8 @@ export function registerConnectedServiceCredentialRoutesV3(app: Fastify): void {
                 accountId: userId,
                 serviceId,
                 profileId,
-                allowReferencedGroupCleanup: !isServerFeatureEnabledForRequest("connectedServices.accountGroups", process.env),
+                allowReferencedGroupCleanup: request.query.cleanupGroupReferences === true
+                    || !isServerFeatureEnabledForRequest("connectedServices.accountGroups", process.env),
             });
             if (deleteResult === "deleted") {
                 await recordConnectedServiceAccountProfileChange(tx, { accountId: userId });

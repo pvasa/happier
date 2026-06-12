@@ -148,4 +148,51 @@ describe("applySessionTurnMutationToTurns", () => {
         expect(decision.materialized.latestTurnStatus).toBe("failed");
         expect(decision.materialized.lastRuntimeIssue).toEqual(usageLimitIssue);
     });
+
+    // Daemon-observed exit settlement (incident cmq7pyqkj, Lane N1): the daemon settles a dead
+    // runner's open turn with an `end_session` mutation observed at the child-exit time. The
+    // settlement must cancel a turn that was already open when the runner died, but must NEVER
+    // cancel a NEWER turn begun by the replacement runner after the observed exit.
+    it("cancels an open turn via end_session observed after the turn began", () => {
+        const decision = applySessionTurnMutationToTurns({
+            currentLatestTurnId: "turn-1",
+            turns: [failedUsageLimitTurn({ status: "in_progress", startedAt: 100, updatedAt: 100, terminalAt: undefined, lastRuntimeIssue: null })],
+            appliedAt: 501,
+            mutation: {
+                v: 1,
+                sessionId: "s1",
+                mutationId: "daemon-exit-settlement-1",
+                action: "end_session",
+                observedAt: 500,
+            },
+        });
+
+        expect(decision.apply).toBe(true);
+        expect(decision.materialized.latestTurnStatus).toBe("cancelled");
+    });
+
+    it("does not cancel a newer turn via a stale end_session observed before the turn began", () => {
+        const decision = applySessionTurnMutationToTurns({
+            currentLatestTurnId: "turn-2",
+            turns: [{
+                turnId: "turn-2",
+                status: "in_progress",
+                startedAt: 600,
+                updatedAt: 600,
+                lastRuntimeIssue: null,
+                lastMutationId: "mutation-begin-2",
+            }],
+            appliedAt: 701,
+            mutation: {
+                v: 1,
+                sessionId: "s1",
+                mutationId: "daemon-exit-settlement-stale",
+                action: "end_session",
+                observedAt: 500,
+            },
+        });
+
+        expect(decision.apply).toBe(false);
+        expect(decision.materialized.latestTurnStatus).toBe("in_progress");
+    });
 });

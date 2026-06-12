@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
     ActiveProfileBodySchema,
+    AuthGroupErrorResponseSchema,
     AuthGroupMemberInputSchema,
     DeleteAuthGroupMemberQuerySchema,
     UpdateAuthGroupMemberBodySchema,
@@ -52,11 +53,13 @@ describe("connected service auth group route schemas", () => {
         expect(ActiveProfileBodySchema.safeParse({
             profileId: "profile-a",
             expectedGeneration: 1,
+            overrideRuntimeCooldown: true,
         }).success).toBe(true);
 
         expect(UpdateAuthGroupBodySchema.safeParse({
             activeProfileId: "profile-a",
             expectedGeneration: 1,
+            overrideRuntimeCooldown: true,
         }).success).toBe(true);
 
         expect(UpdateAuthGroupBodySchema.safeParse({
@@ -66,6 +69,12 @@ describe("connected service auth group route schemas", () => {
 
         expect(UpdateAuthGroupBodySchema.safeParse({
             displayName: "Team fallback",
+        }).success).toBe(true);
+    });
+
+    it("accepts the typed unsupported-runtime fallback error response", () => {
+        expect(AuthGroupErrorResponseSchema.safeParse({
+            error: "connect_group_runtime_fallback_unsupported",
         }).success).toBe(true);
     });
 });

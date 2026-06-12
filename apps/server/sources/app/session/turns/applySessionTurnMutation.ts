@@ -217,7 +217,15 @@ export function applySessionTurnMutationToTurns(params: Readonly<{
         : null;
 
     if (mutation.action === "end_session") {
-        if (!existingTurn || existingTurn.status !== "in_progress") {
+        // A session-end settlement only cancels a turn that was already open when the end was
+        // observed. A NEWER turn (begun after the observed end, e.g. by a replacement runner
+        // while a daemon-observed exit settlement was still queued) must not be cancelled by a
+        // stale settlement.
+        if (
+            !existingTurn
+            || existingTurn.status !== "in_progress"
+            || existingTurn.startedAt > mutation.observedAt
+        ) {
             return makeNoOp({
                 reason: "stale-terminal",
                 latestTurnId: params.currentLatestTurnId,

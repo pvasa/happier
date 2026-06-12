@@ -19,6 +19,7 @@ import { db } from "@/storage/db";
 import { ConnectedServiceAuthGroupResponseV1Schema } from "@happier-dev/protocol";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { connectRoutes } from "./connectRoutes";
+import { DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1 } from "./connectedServicesV3/authGroupPolicy";
 import { createAppCloseTracker } from "../../testkit/appLifecycle";
 
 const { trackApp, closeTrackedApps } = createAppCloseTracker();
@@ -53,6 +54,37 @@ async function createConnectedProfile(accountId: string, serviceId: string, prof
             profileId,
             token: Buffer.from(`sealed:${serviceId}:${profileId}`, "utf8"),
             metadata: { kind: "oauth" },
+        },
+    });
+}
+
+async function seedAuthGroup(params: Readonly<{
+    accountId: string;
+    serviceId: string;
+    groupId: string;
+    memberProfileIds: readonly string[];
+    activeProfileId: string | null;
+}>): Promise<void> {
+    await db.connectedServiceAuthGroup.create({
+        data: {
+            accountId: params.accountId,
+            vendor: params.serviceId,
+            groupId: params.groupId,
+            displayName: null,
+            policyJson: JSON.stringify(DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1),
+            activeProfileId: params.activeProfileId,
+            stateJson: null,
+            members: {
+                create: params.memberProfileIds.map((profileId, index) => ({
+                    accountId: params.accountId,
+                    vendor: params.serviceId,
+                    groupId: params.groupId,
+                    profileId,
+                    priority: (index + 1) * 10,
+                    enabled: true,
+                    stateJson: null,
+                })),
+            },
         },
     });
 }
@@ -221,6 +253,53 @@ describe("connectRoutes connected service auth groups (integration)", () => {
 
         expect(res.statusCode).toBe(404);
         expect(res.json()).toEqual({ error: "not_found" });
+    });
+
+    it("allows gemini group configuration while rejecting same-group runtime fallback controls", async () => {
+        const user = await createAccount("pk-gemini-groups");
+        await createConnectedProfile(user.id, "gemini", "work");
+        await createConnectedProfile(user.id, "gemini", "backup");
+        const app = await createReadyApp();
+
+        const created = await app.inject({
+            method: "POST",
+            url: "/v3/connect/gemini/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "gemini-main",
+                members: [{ profileId: "work" }, { profileId: "backup" }],
+                activeProfileId: "work",
+            },
+        });
+        expect(created.statusCode).toBe(200);
+        expect(created.json()).toEqual({
+            group: expect.objectContaining({
+                serviceId: "gemini",
+                groupId: "gemini-main",
+                activeProfileId: "work",
+            }),
+        });
+
+        const autoSwitchPatch = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/gemini/groups/gemini-main",
+            headers: authHeaders(user.id),
+            payload: {
+                policy: { autoSwitch: true },
+                expectedGeneration: 0,
+            },
+        });
+        expect(autoSwitchPatch.statusCode).toBe(400);
+        expect(autoSwitchPatch.json()).toEqual({ error: "connect_group_runtime_fallback_unsupported" });
+
+        const switchActiveProfile = await app.inject({
+            method: "POST",
+            url: "/v3/connect/gemini/groups/gemini-main/active-profile",
+            headers: authHeaders(user.id),
+            payload: { profileId: "backup", expectedGeneration: 0 },
+        });
+        expect(switchActiveProfile.statusCode).toBe(400);
+        expect(switchActiveProfile.json()).toEqual({ error: "connect_group_runtime_fallback_unsupported" });
     });
 
     it("enforces account ownership and member profile existence", async () => {
@@ -569,6 +648,380 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         expect(patchBlocked.json()).toEqual({ error: "connect_group_profile_runtime_cooldown", resetAtMs: authInvalidUntilMs });
     });
 
+    it("rejects manual active profile switches to plan, validation, or reauth-blocked members", async () => {
+        const user = await createAccount("pk-groups-active-profile-new-runtime-blockers");
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        await createConnectedProfile(user.id, "openai-codex", "plan-blocked");
+        await createConnectedProfile(user.id, "openai-codex", "validation-blocked");
+        await createConnectedProfile(user.id, "openai-codex", "reauth-blocked");
+        const app = await createReadyApp();
+        const planUnavailableUntilMs = Date.now() + 60_000;
+        const validationBlockedUntilMs = planUnavailableUntilMs + 30_000;
+
+        expect((await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "codex-main",
+                members: [
+                    { profileId: "work" },
+                    { profileId: "plan-blocked" },
+                    { profileId: "validation-blocked" },
+                    { profileId: "reauth-blocked" },
+                ],
+                activeProfileId: "work",
+            },
+        })).statusCode).toBe(200);
+        expect((await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-main/runtime-state",
+            headers: authHeaders(user.id),
+            payload: {
+                expectedGeneration: 0,
+                memberStates: [
+                    {
+                        profileId: "plan-blocked",
+                        state: { planUnavailableUntilMs },
+                    },
+                    {
+                        profileId: "validation-blocked",
+                        state: { validationBlockedUntilMs },
+                    },
+                    {
+                        profileId: "reauth-blocked",
+                        state: { credentialHealthStatus: "needs_reauth" },
+                    },
+                ],
+            },
+        })).statusCode).toBe(200);
+
+        const cases = [
+            {
+                profileId: "plan-blocked",
+                response: { error: "connect_group_profile_runtime_cooldown", resetAtMs: planUnavailableUntilMs },
+            },
+            {
+                profileId: "validation-blocked",
+                response: { error: "connect_group_profile_runtime_cooldown", resetAtMs: validationBlockedUntilMs },
+            },
+            {
+                profileId: "reauth-blocked",
+                response: { error: "connect_group_profile_runtime_cooldown" },
+            },
+        ] as const;
+
+        for (const entrypoint of ["active-profile", "group-patch"] as const) {
+            for (const testCase of cases) {
+                const blocked = await app.inject({
+                    method: entrypoint === "active-profile" ? "POST" : "PATCH",
+                    url: entrypoint === "active-profile"
+                        ? "/v3/connect/openai-codex/groups/codex-main/active-profile"
+                        : "/v3/connect/openai-codex/groups/codex-main",
+                    headers: authHeaders(user.id),
+                    payload: entrypoint === "active-profile"
+                        ? { profileId: testCase.profileId, expectedGeneration: 0 }
+                        : { activeProfileId: testCase.profileId, expectedGeneration: 0 },
+                });
+
+                expect(blocked.statusCode).toBe(409);
+                expect(blocked.json()).toEqual(testCase.response);
+            }
+        }
+
+        const fetched = await app.inject({
+            method: "GET",
+            url: "/v3/connect/openai-codex/groups/codex-main",
+            headers: authHeaders(user.id),
+        });
+
+        expect(fetched.statusCode).toBe(200);
+        expect(fetched.json().group).toEqual(expect.objectContaining({
+            activeProfileId: "work",
+            generation: 0,
+        }));
+    });
+
+    it("allows explicit overrides to switch to members with plan, validation, and reauth blockers", async () => {
+        const user = await createAccount("pk-groups-active-profile-new-runtime-blockers-override");
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        await createConnectedProfile(user.id, "openai-codex", "backup");
+        const app = await createReadyApp();
+        const blockedState = {
+            planUnavailableUntilMs: Date.now() + 60_000,
+            validationBlockedUntilMs: Date.now() + 90_000,
+            credentialHealthStatus: "needs_reauth",
+        };
+
+        for (const groupId of ["codex-post", "codex-patch"] as const) {
+            expect((await app.inject({
+                method: "POST",
+                url: "/v3/connect/openai-codex/groups",
+                headers: authHeaders(user.id),
+                payload: {
+                    groupId,
+                    members: [{ profileId: "work" }, { profileId: "backup" }],
+                    activeProfileId: "work",
+                },
+            })).statusCode).toBe(200);
+            expect((await app.inject({
+                method: "PATCH",
+                url: `/v3/connect/openai-codex/groups/${groupId}/runtime-state`,
+                headers: authHeaders(user.id),
+                payload: {
+                    expectedGeneration: 0,
+                    memberStates: [{ profileId: "backup", state: blockedState }],
+                },
+            })).statusCode).toBe(200);
+        }
+
+        const postOverride = await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups/codex-post/active-profile",
+            headers: authHeaders(user.id),
+            payload: {
+                profileId: "backup",
+                expectedGeneration: 0,
+                overrideRuntimeCooldown: true,
+            },
+        });
+
+        expect(postOverride.statusCode).toBe(200);
+        expect(postOverride.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: "backup",
+                generation: 1,
+            }),
+        });
+
+        const patchOverride = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-patch",
+            headers: authHeaders(user.id),
+            payload: {
+                activeProfileId: "backup",
+                expectedGeneration: 0,
+                overrideRuntimeCooldown: true,
+            },
+        });
+
+        expect(patchOverride.statusCode).toBe(200);
+        expect(patchOverride.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: "backup",
+                generation: 1,
+            }),
+        });
+    });
+
+    it("does not treat providerResetsAtMs by itself as a manual active-profile blocker", async () => {
+        const user = await createAccount("pk-groups-active-profile-provider-reset-policy");
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        await createConnectedProfile(user.id, "openai-codex", "backup");
+        const app = await createReadyApp();
+
+        for (const groupId of ["codex-post", "codex-patch"] as const) {
+            expect((await app.inject({
+                method: "POST",
+                url: "/v3/connect/openai-codex/groups",
+                headers: authHeaders(user.id),
+                payload: {
+                    groupId,
+                    members: [{ profileId: "work" }, { profileId: "backup" }],
+                    activeProfileId: "work",
+                },
+            })).statusCode).toBe(200);
+            expect((await app.inject({
+                method: "PATCH",
+                url: `/v3/connect/openai-codex/groups/${groupId}/runtime-state`,
+                headers: authHeaders(user.id),
+                payload: {
+                    expectedGeneration: 0,
+                    memberStates: [
+                        {
+                            profileId: "backup",
+                            state: { providerResetsAtMs: Date.now() + 60_000 },
+                        },
+                    ],
+                },
+            })).statusCode).toBe(200);
+        }
+
+        const postSwitch = await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups/codex-post/active-profile",
+            headers: authHeaders(user.id),
+            payload: { profileId: "backup", expectedGeneration: 0 },
+        });
+
+        expect(postSwitch.statusCode).toBe(200);
+        expect(postSwitch.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: "backup",
+                generation: 1,
+            }),
+        });
+
+        const patchSwitch = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-patch",
+            headers: authHeaders(user.id),
+            payload: { activeProfileId: "backup", expectedGeneration: 0 },
+        });
+
+        expect(patchSwitch.statusCode).toBe(200);
+        expect(patchSwitch.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: "backup",
+                generation: 1,
+            }),
+        });
+    });
+
+    it("allows explicit manual active profile switches to override runtime cooldown", async () => {
+        const user = await createAccount("pk-groups-active-profile-runtime-cooldown-override");
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        await createConnectedProfile(user.id, "openai-codex", "backup");
+        const app = await createReadyApp();
+        const resetAtMs = Date.now() + 60_000;
+
+        expect((await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "codex-main",
+                members: [{ profileId: "work" }, { profileId: "backup" }],
+                activeProfileId: "backup",
+            },
+        })).statusCode).toBe(200);
+        expect((await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-main/runtime-state",
+            headers: authHeaders(user.id),
+            payload: {
+                expectedGeneration: 0,
+                memberStates: [
+                    {
+                        profileId: "work",
+                        state: { authInvalidUntilMs: resetAtMs },
+                    },
+                ],
+            },
+        })).statusCode).toBe(200);
+
+        const overridden = await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups/codex-main/active-profile",
+            headers: authHeaders(user.id),
+            payload: {
+                profileId: "work",
+                expectedGeneration: 0,
+                overrideRuntimeCooldown: true,
+            },
+        });
+
+        expect(overridden.statusCode).toBe(200);
+        expect(overridden.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: "work",
+                generation: 1,
+                members: expect.arrayContaining([
+                    expect.objectContaining({
+                        profileId: "work",
+                        enabled: true,
+                        state: { authInvalidUntilMs: resetAtMs },
+                    }),
+                ]),
+            }),
+        });
+
+        const staleOverride = await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups/codex-main/active-profile",
+            headers: authHeaders(user.id),
+            payload: {
+                profileId: "backup",
+                expectedGeneration: 0,
+                overrideRuntimeCooldown: true,
+            },
+        });
+        expect(staleOverride.statusCode).toBe(409);
+        expect(staleOverride.json()).toEqual({ error: "connect_group_generation_conflict", generation: 1 });
+    });
+
+    it("allows explicit group patch active profile switches to override runtime cooldown", async () => {
+        const user = await createAccount("pk-groups-patch-active-profile-runtime-cooldown-override");
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        await createConnectedProfile(user.id, "openai-codex", "backup");
+        const app = await createReadyApp();
+        const resetAtMs = Date.now() + 60_000;
+
+        expect((await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "codex-main",
+                members: [{ profileId: "work" }, { profileId: "backup" }],
+                activeProfileId: "backup",
+            },
+        })).statusCode).toBe(200);
+        expect((await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-main/runtime-state",
+            headers: authHeaders(user.id),
+            payload: {
+                expectedGeneration: 0,
+                memberStates: [
+                    {
+                        profileId: "work",
+                        state: { authInvalidUntilMs: resetAtMs },
+                    },
+                ],
+            },
+        })).statusCode).toBe(200);
+
+        const overridden = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-main",
+            headers: authHeaders(user.id),
+            payload: {
+                activeProfileId: "work",
+                expectedGeneration: 0,
+                overrideRuntimeCooldown: true,
+            },
+        });
+
+        expect(overridden.statusCode).toBe(200);
+        expect(overridden.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: "work",
+                generation: 1,
+                members: expect.arrayContaining([
+                    expect.objectContaining({
+                        profileId: "work",
+                        enabled: true,
+                        state: { authInvalidUntilMs: resetAtMs },
+                    }),
+                ]),
+            }),
+        });
+
+        const staleOverride = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-main",
+            headers: authHeaders(user.id),
+            payload: {
+                activeProfileId: "backup",
+                expectedGeneration: 0,
+                overrideRuntimeCooldown: true,
+            },
+        });
+        expect(staleOverride.statusCode).toBe(409);
+        expect(staleOverride.json()).toEqual({ error: "connect_group_generation_conflict", generation: 1 });
+    });
+
     it("applies the group patch active profile contract", async () => {
         const user = await createAccount("pk-groups-patch-active");
         await createConnectedProfile(user.id, "openai-codex", "work");
@@ -773,6 +1226,52 @@ describe("connectRoutes connected service auth groups (integration)", () => {
             select: { id: true },
         });
         expect(credential).not.toBeNull();
+    });
+
+    it("deletes an active setup-token-like member at high generation and returns a valid envelope", async () => {
+        const user = await createAccount("pk-groups-delete-setup-token-member");
+        const profileId = "leeroy_new_setuptoken";
+        await createConnectedProfile(user.id, "claude-subscription", profileId);
+        const app = await createReadyApp();
+
+        expect((await app.inject({
+            method: "POST",
+            url: "/v3/connect/claude-subscription/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "claude",
+                members: [{ profileId }],
+                activeProfileId: profileId,
+            },
+        })).statusCode).toBe(200);
+        await db.connectedServiceAuthGroup.update({
+            where: {
+                accountId_vendor_groupId: {
+                    accountId: user.id,
+                    vendor: "claude-subscription",
+                    groupId: "claude",
+                },
+            },
+            data: { generation: 51 },
+        });
+
+        const removed = await app.inject({
+            method: "DELETE",
+            url: `/v3/connect/claude-subscription/groups/claude/members/${profileId}?expectedGeneration=51`,
+            headers: { "x-test-user-id": user.id },
+        });
+
+        expect(removed.statusCode).toBe(200);
+        expect(ConnectedServiceAuthGroupResponseV1Schema.safeParse(removed.json()).success).toBe(true);
+        expect(removed.json()).toEqual({
+            group: expect.objectContaining({
+                serviceId: "claude-subscription",
+                groupId: "claude",
+                activeProfileId: null,
+                generation: 52,
+                members: [],
+            }),
+        });
     });
 
     it("requires expectedGeneration for member create, update, and delete without bumping rejected mutations", async () => {
@@ -1000,6 +1499,120 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         });
         expect(v2Res.statusCode).toBe(409);
         expect(v2Res.json()).toEqual({ error: "connect_credential_referenced_by_group" });
+    });
+
+    it("allows explicit v3 credential cleanup to remove group references and bump affected groups", async () => {
+        const user = await db.account.create({
+            data: { publicKey: null, encryptionMode: "plain" },
+            select: { id: true },
+        });
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        await createConnectedProfile(user.id, "openai-codex", "backup");
+        const app = await createReadyApp();
+
+        expect((await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "codex-main",
+                members: [{ profileId: "work" }, { profileId: "backup" }],
+                activeProfileId: "work",
+            },
+        })).statusCode).toBe(200);
+        expect((await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "codex-secondary",
+                members: [{ profileId: "work" }, { profileId: "backup" }],
+                activeProfileId: "backup",
+            },
+        })).statusCode).toBe(200);
+        const beforeCursor = await readAccountChangeCursor(user.id);
+
+        const res = await app.inject({
+            method: "DELETE",
+            url: "/v3/connect/openai-codex/profiles/work/credential?cleanupGroupReferences=true",
+            headers: { "x-test-user-id": user.id },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ success: true });
+        const afterCursor = await readAccountChangeCursor(user.id);
+        expect(afterCursor).toBeGreaterThan(beforeCursor ?? -1);
+
+        const main = await app.inject({
+            method: "GET",
+            url: "/v3/connect/openai-codex/groups/codex-main",
+            headers: { "x-test-user-id": user.id },
+        });
+        expect(main.statusCode).toBe(200);
+        expect(main.json().group).toMatchObject({
+            activeProfileId: null,
+            generation: 1,
+            members: [expect.objectContaining({ profileId: "backup" })],
+        });
+
+        const secondary = await app.inject({
+            method: "GET",
+            url: "/v3/connect/openai-codex/groups/codex-secondary",
+            headers: { "x-test-user-id": user.id },
+        });
+        expect(secondary.statusCode).toBe(200);
+        expect(secondary.json().group).toMatchObject({
+            activeProfileId: "backup",
+            generation: 1,
+            members: [expect.objectContaining({ profileId: "backup" })],
+        });
+
+        const credential = await db.serviceAccountToken.findUnique({
+            where: { accountId_vendor_profileId: { accountId: user.id, vendor: "openai-codex", profileId: "work" } },
+            select: { id: true },
+        });
+        expect(credential).toBeNull();
+    });
+
+    it("allows explicit v2 credential cleanup to remove group references", async () => {
+        const user = await db.account.create({
+            data: { publicKey: null, encryptionMode: "plain" },
+            select: { id: true },
+        });
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        const app = await createReadyApp();
+
+        expect((await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "codex-main",
+                members: [{ profileId: "work" }],
+                activeProfileId: "work",
+            },
+        })).statusCode).toBe(200);
+
+        const res = await app.inject({
+            method: "DELETE",
+            url: "/v2/connect/openai-codex/profiles/work/credential?cleanupGroupReferences=true",
+            headers: { "x-test-user-id": user.id },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ success: true });
+
+        const group = await app.inject({
+            method: "GET",
+            url: "/v3/connect/openai-codex/groups/codex-main",
+            headers: { "x-test-user-id": user.id },
+        });
+        expect(group.statusCode).toBe(200);
+        expect(group.json().group).toMatchObject({
+            activeProfileId: null,
+            generation: 1,
+            members: [],
+        });
     });
 
     it("gates active profile switching on the account-fallback feature", async () => {
@@ -1261,6 +1874,63 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         });
     });
 
+    it("fails closed when no runtime supports connected-service fallback for the service", async () => {
+        const user = await createAccount("pk-groups-runtime-fallback-unsupported-create");
+        await createConnectedProfile(user.id, "github", "work");
+        const app = await createReadyApp();
+
+        const create = await app.inject({
+            method: "POST",
+            url: "/v3/connect/github/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "github-main",
+                members: [{ profileId: "work" }],
+                activeProfileId: "work",
+            },
+        });
+
+        expect(create.statusCode).toBe(400);
+        expect(create.json()).toEqual({ error: "connect_group_runtime_fallback_unsupported" });
+    });
+
+    it("rejects active-profile and fallback-policy mutations for services without runtime fallback support", async () => {
+        const user = await createAccount("pk-groups-runtime-fallback-unsupported-mutations");
+        await createConnectedProfile(user.id, "github", "work");
+        await createConnectedProfile(user.id, "github", "backup");
+        await seedAuthGroup({
+            accountId: user.id,
+            serviceId: "github",
+            groupId: "github-main",
+            memberProfileIds: ["work", "backup"],
+            activeProfileId: "work",
+        });
+        const app = await createReadyApp();
+
+        const patch = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/github/groups/github-main",
+            headers: authHeaders(user.id),
+            payload: {
+                activeProfileId: "backup",
+                expectedGeneration: 0,
+            },
+        });
+
+        expect(patch.statusCode).toBe(400);
+        expect(patch.json()).toEqual({ error: "connect_group_runtime_fallback_unsupported" });
+
+        const post = await app.inject({
+            method: "POST",
+            url: "/v3/connect/github/groups/github-main/active-profile",
+            headers: authHeaders(user.id),
+            payload: { profileId: "backup", expectedGeneration: 0 },
+        });
+
+        expect(post.statusCode).toBe(400);
+        expect(post.json()).toEqual({ error: "connect_group_runtime_fallback_unsupported" });
+    });
+
     it("roundtrips quota-aware auth-group policy fields through PATCH", async () => {
         const user = await createAccount("pk-groups-policy-roundtrip");
         await createConnectedProfile(user.id, "openai-codex", "work");
@@ -1513,8 +2183,8 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         });
     });
 
-    it("rejects runtime state updates that omit expectedGeneration", async () => {
-        const user = await createAccount("pk-groups-runtime-state-generation-required");
+    it("rejects changed runtime state updates that omit expectedGeneration", async () => {
+        const user = await createAccount("pk-groups-runtime-state-generation-optional");
         await createConnectedProfile(user.id, "openai-codex", "work");
         const app = await createReadyApp();
 
@@ -1525,7 +2195,7 @@ describe("connectRoutes connected service auth groups (integration)", () => {
             payload: { groupId: "codex-main", members: [{ profileId: "work" }], activeProfileId: "work" },
         })).statusCode).toBe(200);
 
-        const omitted = await app.inject({
+        const updated = await app.inject({
             method: "PATCH",
             url: "/v3/connect/openai-codex/groups/codex-main/runtime-state",
             headers: authHeaders(user.id),
@@ -1543,8 +2213,8 @@ describe("connectRoutes connected service auth groups (integration)", () => {
             },
         });
 
-        expect(omitted.statusCode).toBe(400);
-        expect(omitted.json()).toEqual({ error: "connect_group_generation_required" });
+        expect(updated.statusCode).toBe(400);
+        expect(updated.json()).toEqual({ error: "connect_group_generation_required" });
 
         const fetched = await app.inject({
             method: "GET",
@@ -1552,10 +2222,117 @@ describe("connectRoutes connected service auth groups (integration)", () => {
             headers: authHeaders(user.id),
         });
         expect(fetched.statusCode).toBe(200);
+        expect(fetched.json().group.generation).toBe(0);
         expect(fetched.json().group.state).toEqual({});
         expect(fetched.json().group.members).toEqual(expect.arrayContaining([
             expect.objectContaining({ profileId: "work", state: {} }),
         ]));
+    });
+
+    it("broadcasts active member limiter clears once and treats repeat clears as idempotent", async () => {
+        const user = await createAccount("pk-groups-runtime-state-limiter-clear-broadcast");
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        const app = await createReadyApp();
+        const resetAtMs = Date.now() + 60_000;
+
+        expect((await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups",
+            headers: authHeaders(user.id),
+            payload: { groupId: "codex-main", members: [{ profileId: "work" }], activeProfileId: "work" },
+        })).statusCode).toBe(200);
+        expect((await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-main/runtime-state",
+            headers: authHeaders(user.id),
+            payload: {
+                expectedGeneration: 0,
+                memberStates: [
+                    {
+                        profileId: "work",
+                        state: {
+                            quotaExhaustedUntilMs: resetAtMs,
+                            lastFailureKind: "usage_limit",
+                            lastFailureCode: "usage_limit_reached",
+                        },
+                    },
+                ],
+            },
+        })).statusCode).toBe(200);
+        const blockerCursor = await readAccountChangeCursor(user.id);
+        expect(blockerCursor).toEqual(expect.any(Number));
+        emitUpdate.mockClear();
+
+        const clearPayload = {
+            expectedGeneration: 0,
+            memberStates: [
+                {
+                    profileId: "work",
+                    state: {
+                        quotaExhaustedUntilMs: null,
+                        rateLimitedUntilMs: null,
+                        capacityLimitedUntilMs: null,
+                        authInvalidUntilMs: null,
+                        lastFailureKind: null,
+                        lastFailureCode: null,
+                        lastObservedAtMs: resetAtMs + 1,
+                    },
+                },
+            ],
+        };
+
+        const cleared = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-main/runtime-state",
+            headers: authHeaders(user.id),
+            payload: clearPayload,
+        });
+
+        expect(cleared.statusCode).toBe(200);
+        expect(cleared.json().group).toEqual(expect.objectContaining({
+            generation: 0,
+            activeProfileId: "work",
+        }));
+        expect(cleared.json().group.members).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                profileId: "work",
+                state: expect.objectContaining({
+                    quotaExhaustedUntilMs: null,
+                    rateLimitedUntilMs: null,
+                    capacityLimitedUntilMs: null,
+                    authInvalidUntilMs: null,
+                    lastFailureKind: null,
+                    lastFailureCode: null,
+                    lastObservedAtMs: resetAtMs + 1,
+                }),
+            }),
+        ]));
+
+        const clearCursor = await readAccountChangeCursor(user.id);
+        expect(clearCursor).toBeGreaterThan(blockerCursor ?? -1);
+        expect(emitUpdate).toHaveBeenCalledTimes(1);
+        expectLastProjectedGroup({
+            accountId: user.id,
+            group: {
+                groupId: "codex-main",
+                displayName: null,
+                activeProfileId: "work",
+                generation: 0,
+                memberProfileIds: ["work"],
+            },
+        });
+
+        emitUpdate.mockClear();
+        const repeated = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-main/runtime-state",
+            headers: authHeaders(user.id),
+            payload: clearPayload,
+        });
+
+        expect(repeated.statusCode).toBe(200);
+        expect(await readAccountChangeCursor(user.id)).toBe(clearCursor);
+        expect(emitUpdate).not.toHaveBeenCalled();
     });
 
     it("rejects stale runtime state updates without overwriting group or member state", async () => {

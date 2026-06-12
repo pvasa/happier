@@ -24,6 +24,7 @@ import {
   normalizeConnectedServiceCredentialMetadataV3,
 } from "../connectedServicesV3/credentialMetadataV3";
 import { NotFoundSchema } from "../../../schemas/notFoundSchema";
+import { ConnectedServiceCredentialDeleteQuerySchema } from "../connectedServicesV3/credentialDeleteQuerySchema";
 import { deleteConnectedServiceCredentialInTx } from "../connectedServicesV3/authGroupRepository";
 import { recordConnectedServiceAccountProfileChange } from "../connectedServicesAccountProfileChange";
 import { isConnectedServiceProviderIdentityMismatch } from "../credentialHealthMetadata";
@@ -178,6 +179,7 @@ export function registerConnectedServiceCredentialRoutesV2(
         serviceId: ConnectedServiceIdSchema,
         profileId: ConnectedServiceProfileIdSchema,
       }),
+      querystring: ConnectedServiceCredentialDeleteQuerySchema,
       response: {
         200: z.object({ success: z.literal(true) }),
         404: z.union([NotFoundSchema, z.object({ error: z.literal("connect_credential_not_found") })]),
@@ -194,7 +196,8 @@ export function registerConnectedServiceCredentialRoutesV2(
         accountId: userId,
         serviceId,
         profileId,
-        allowReferencedGroupCleanup: !isServerFeatureEnabledForRequest("connectedServices.accountGroups", process.env),
+        allowReferencedGroupCleanup: request.query.cleanupGroupReferences === true
+          || !isServerFeatureEnabledForRequest("connectedServices.accountGroups", process.env),
       });
       if (deleteResult === "deleted") {
         await recordConnectedServiceAccountProfileChange(tx, { accountId: userId });
