@@ -114,10 +114,13 @@ describe('core e2e: manual connected-service auth switch', () => {
       timeoutMs: 90_000,
     });
 
-    expect(switchResult.status).toBe(404);
+    expect(switchResult.status).toBe(200);
     expect(switchResult.data).toMatchObject({
-      ok: false,
-      errorCode: 'session_not_found',
+      ok: true,
+      result: {
+        ok: false,
+        errorCode: 'session_not_found',
+      },
     });
   }, 240_000);
 });
