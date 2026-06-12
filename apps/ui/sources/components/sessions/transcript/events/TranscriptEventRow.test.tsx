@@ -135,6 +135,241 @@ describe('TranscriptEventRow', () => {
         expect(serialized).not.toContain('from null');
     });
 
+    it('renders runtime config outcomes as structured persisted event rows', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'requires_restart',
+            reason: 'unified_terminal_launch_options_changed',
+            message: 'Claude unified terminal is already running. Model changes apply when Claude restarts.',
+            changes: [
+                { key: 'model', requested: 'claude-opus-4-7', previous: 'claude-opus-4-6' },
+            ],
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        expect(screen.findByProps({ testID: 'transcript-event-runtime-config-outcome-requires_restart' })).toBeTruthy();
+        // L4: changes with values render as friendly label → value copy, not the raw CLI message.
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).toContain(t('message.runtimeConfigOutcomeKeyModel'));
+        expect(serialized).toContain('claude-opus-4-7');
+        expect(serialized).toContain(t('message.runtimeConfigOutcomeRequiresRestart'));
+    });
+
+    // L4 (incident 2026-06-11): outcome copy must carry friendly per-change labels WITH values,
+    // never the debug-grade "Applied … runtime controls: reasoningEffort, launchOption" string.
+    it('renders applied changes as friendly label → value pairs', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'applied',
+            timing: 'current_window',
+            message: 'Applied Claude Unified runtime controls: reasoningEffort, permissionMode.',
+            changes: [
+                { key: 'reasoningEffort', requested: 'medium', effective: 'medium' },
+                { key: 'permissionMode', requested: 'acceptEdits', effective: 'acceptEdits' },
+            ],
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).toContain(`${t('message.runtimeConfigOutcomeKeyReasoningEffort')} → Medium`);
+        expect(serialized).toContain(`${t('message.runtimeConfigOutcomeKeyPermissionMode')} → Accept edits`);
+        expect(serialized).not.toContain('runtime controls');
+    });
+
+    it('renders failed changes with accurate failure copy and values', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'failed',
+            message: 'Failed to apply Claude Unified runtime controls: reasoningEffort.',
+            changes: [
+                { key: 'reasoningEffort', requested: 'medium', reason: 'not_delivered' },
+            ],
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).toContain(t('message.runtimeConfigOutcomeFailed'));
+        expect(serialized).toContain(`${t('message.runtimeConfigOutcomeKeyReasoningEffort')} → Medium`);
+        expect(serialized).toContain('warning-outline');
+    });
+
+    it('renders boolean and provider-echo change values readably', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'applied',
+            timing: 'current_window',
+            message: 'Applied Claude Unified runtime controls: launchOption.',
+            changes: [
+                { key: 'launchOption', requested: true, effective: 'ultracode' },
+            ],
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).toContain(`${t('message.runtimeConfigOutcomeKeyLaunchOption')} → Ultracode`);
+    });
+
+    it('falls back to the event message when changes carry no values', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'unsupported',
+            message: 'Some runtime config changes are unsupported for Claude Unified.',
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        expect(JSON.stringify(screen.tree.toJSON())).toContain('unsupported for Claude Unified');
+    });
+
+    it('renders every public runtime-config-outcome status with a status-specific test id', async () => {
+        const statuses = ['applied', 'requires_restart', 'requires_interactive_control', 'unsupported', 'failed'] as const;
+        for (const status of statuses) {
+            const event = parseProtocolValidAgentEvent({
+                type: 'runtime-config-outcome',
+                provider: 'claude',
+                runtime: 'claude-unified-terminal',
+                status,
+                message: `runtime outcome ${status}`,
+            } as AgentEvent);
+
+            const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+            expect(screen.findByProps({ testID: `transcript-event-runtime-config-outcome-${status}` })).toBeTruthy();
+            expect(JSON.stringify(screen.tree.toJSON())).toContain(`runtime outcome ${status}`);
+        }
+    });
+
+    it('renders applied + scheduled timing as a non-alarming pending sub-state', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'applied',
+            timing: 'scheduled_for_next_prompt',
+            message: 'Model will change for your next message.',
+            changes: [{ key: 'model', requested: 'claude-sonnet-4-5' }],
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).toContain(t('message.runtimeConfigOutcomeAppliesBeforeNextMessage'));
+        // Pending timing must read as a calm time/info state, never an alarming warning.
+        expect(serialized).toContain('time-outline');
+        expect(serialized).not.toContain('warning-outline');
+        expect(screen.findByProps({ testID: 'transcript-event-runtime-config-outcome-applied-detail' })).toBeTruthy();
+    });
+
+    it('renders applied + current window as an effective success without a pending sub-state', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'applied',
+            timing: 'current_window',
+            message: 'Permission mode is now plan.',
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).toContain('checkmark-circle-outline');
+        expect(serialized).not.toContain(t('message.runtimeConfigOutcomeAppliesBeforeNextMessage'));
+        expect(serialized).not.toContain(t('message.runtimeConfigOutcomeQueuedUntilReady'));
+    });
+
+    it('renders applied + queued timing as a calm queued sub-state', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'applied',
+            timing: 'queued_until_safe_window',
+            message: 'Permission mode change is queued.',
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).toContain(t('message.runtimeConfigOutcomeQueuedUntilReady'));
+        expect(serialized).toContain('time-outline');
+        expect(serialized).not.toContain('warning-outline');
+    });
+
+    it('renders applied + skipped-already-effective as an effective success', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'applied',
+            timing: 'skipped_already_effective',
+            message: 'Effort was already high.',
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).toContain(t('message.runtimeConfigOutcomeAlreadySet'));
+        // Already-effective means it is set now, so keep the success checkmark, not a pending clock.
+        expect(serialized).toContain('checkmark-circle-outline');
+    });
+
+    it('renders the sessionMode change key with a labelled sub-state', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'applied',
+            timing: 'scheduled_for_next_prompt',
+            message: 'Plan mode will apply on your next message.',
+            changes: [{ key: 'sessionMode', requested: 'plan' }],
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).toContain(t('message.runtimeConfigOutcomeSessionMode'));
+        expect(serialized).toContain('plan');
+        expect(serialized).toContain(t('message.runtimeConfigOutcomeAppliesBeforeNextMessage'));
+        expect(screen.findByProps({ testID: 'transcript-event-runtime-config-outcome-applied-detail' })).toBeTruthy();
+    });
+
+    it('keeps runtime-config-outcome text flexible so it wraps without overlapping the icon', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'runtime-config-outcome',
+            provider: 'claude',
+            runtime: 'claude-unified-terminal',
+            status: 'applied',
+            timing: 'scheduled_for_next_prompt',
+            message: 'A deliberately long runtime configuration outcome message that must wrap on narrow mobile widths without overlapping the status icon.',
+            changes: [{ key: 'sessionMode', requested: 'plan' }],
+        } as AgentEvent);
+
+        const screen = await renderScreen(<TranscriptEventRow event={event} />);
+
+        const body = screen.findByTestId('transcript-event-runtime-config-outcome-applied-body');
+        expect(body).toBeTruthy();
+        const style = body?.props?.style as Record<string, unknown> | undefined;
+        // Layout-safe contract (not pixels): the text column shrinks below content width so the
+        // message and detail wrap instead of overflowing into the fixed-width icon column.
+        expect(style?.minWidth).toBe(0);
+        expect(style?.flex === 1 || style?.flexShrink === 1).toBe(true);
+    });
+
     it('renders structured provider quota wait and recovered events', async () => {
         const waiting = await renderScreen(
             <TranscriptEventRow

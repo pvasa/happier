@@ -156,13 +156,6 @@ describe('transcriptMountSettlePinCoordinator', () => {
         });
 
         expect(coordinator.getSnapshot().stableSettle).toBe(true);
-        expect(
-            coordinator.shouldGatePassiveDriftRepin({
-                wantsPinned: true,
-                distanceFromBottom: 120,
-                pinThresholdPx: 40,
-            }),
-        ).toBe(false);
     });
 
     it('does not settle on the same metrics sample that reports a meaningful late layout change', () => {
@@ -227,35 +220,4 @@ describe('transcriptMountSettlePinCoordinator', () => {
         });
     });
 
-    it('gates passive-drift repins during mount settle but allows post-settle auto-follow', () => {
-        const coordinator = createTranscriptMountSettlePinCoordinator({ tuning });
-        coordinator.recordFirstListPaint({ sessionId: 'session-a', nowMs: 0 });
-        coordinator.recordLayoutCommitObserved({ sessionId: 'session-a', nowMs: 0 });
-        coordinator.observeMetrics({
-            ...observeDoneAt(20),
-            distanceFromBottom: 120,
-        });
-
-        expect(
-            coordinator.shouldGatePassiveDriftRepin({
-                wantsPinned: true,
-                distanceFromBottom: 120,
-                pinThresholdPx: 40,
-            }),
-        ).toBe(true);
-
-        coordinator.observeMetrics({
-            ...observeDoneAt(120),
-            distanceFromBottom: 120,
-        });
-
-        expect(coordinator.getSnapshot().stableSettle).toBe(true);
-        expect(
-            coordinator.shouldGatePassiveDriftRepin({
-                wantsPinned: true,
-                distanceFromBottom: 120,
-                pinThresholdPx: 40,
-            }),
-        ).toBe(false);
-    });
 });

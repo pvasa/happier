@@ -214,6 +214,98 @@ describe('ChatList (FlashList v2, web) scroll pin intent without wheel events', 
     });
   });
 
+  it('unpins on sustained non-programmatic upward movement within the pin threshold (scrollbar/keyboard, plan E3)', async () => {
+    flashListChatListHarnessState.settingValues.transcriptListImplementation = 'flash_v2';
+    flashListChatListHarnessState.settingValues.transcriptScrollPinEnabled = true;
+    flashListChatListHarnessState.settingValues.transcriptScrollAutoFollowWhenPinned = true;
+    flashListChatListHarnessState.settingValues.transcriptScrollPinOffsetThresholdPx = 100;
+
+    const scrollerEl: any = {
+      scrollHeight: 2000,
+      clientHeight: 500,
+      scrollTop: 1500, // bottom (2000 - 500)
+      isConnected: true,
+    };
+
+    await withFlashListChatListWebScrollerDom(scrollerEl, async () => {
+      const { ChatList } = await import('./ChatList');
+
+      const screen = await renderFlashListChatList(
+        <ChatList session={flashListChatListHarnessState.sessionState} />
+      );
+
+      expect(screen.getCapturedFlashListProps()).toBeTruthy();
+
+      await screen.triggerInitialFill({
+        layoutHeight: 500,
+        contentHeight: 2000,
+        contentWidth: 0,
+      });
+
+      // Establish the bottom baseline.
+      await screen.triggerScroll(1500);
+
+      // Scrollbar drag / keyboard scroll: two consecutive non-trusted upward frames with
+      // NO wheel/pointer/touch handler involvement, both still within the pin threshold.
+      scrollerEl.scrollTop = 1460;
+      await screen.triggerScroll(1460);
+      scrollerEl.scrollTop = 1430;
+      await screen.triggerScroll(1430);
+
+      const scrollTopAfterSustainedUpwardMovement = scrollerEl.scrollTop;
+
+      // Content grows. Sustained upward movement mirrored the wheel unpin path, so the
+      // viewport must NOT be pulled back to the bottom.
+      scrollerEl.scrollHeight = 2400;
+      await screen.triggerContentSizeChange(0, 2400);
+
+      expect(scrollerEl.scrollTop).toBe(scrollTopAfterSustainedUpwardMovement);
+    });
+  });
+
+  it('keeps the pin through a single upward height-churn frame within the threshold (no sustain, plan E3)', async () => {
+    flashListChatListHarnessState.settingValues.transcriptListImplementation = 'flash_v2';
+    flashListChatListHarnessState.settingValues.transcriptScrollPinEnabled = true;
+    flashListChatListHarnessState.settingValues.transcriptScrollAutoFollowWhenPinned = true;
+    flashListChatListHarnessState.settingValues.transcriptScrollPinOffsetThresholdPx = 100;
+
+    const scrollerEl: any = {
+      scrollHeight: 2000,
+      clientHeight: 500,
+      scrollTop: 1500,
+      isConnected: true,
+    };
+
+    await withFlashListChatListWebScrollerDom(scrollerEl, async () => {
+      const { ChatList } = await import('./ChatList');
+
+      const screen = await renderFlashListChatList(
+        <ChatList session={flashListChatListHarnessState.sessionState} />
+      );
+
+      expect(screen.getCapturedFlashListProps()).toBeTruthy();
+
+      await screen.triggerInitialFill({
+        layoutHeight: 500,
+        contentHeight: 2000,
+        contentWidth: 0,
+      });
+      await screen.triggerScroll(1500);
+
+      // A single isolated upward frame within the threshold (virtualization noise) must not
+      // unpin: bottom-follow growth keeps pinning to the bottom.
+      scrollerEl.scrollTop = 1470;
+      await screen.triggerScroll(1470);
+
+      scrollerEl.scrollHeight = 2400;
+      await screen.triggerContentSizeChange(0, 2400);
+
+      // Still following: growth keeps the bottom-region distance (30px) instead of leaving
+      // the viewport parked at the stale offset.
+      expect(scrollerEl.scrollTop).toBe(1870);
+    });
+  });
+
   it('keeps FlashList stable while scroll distance remains below the jump-to-bottom reveal threshold', async () => {
     flashListChatListHarnessState.settingValues.transcriptListImplementation = 'flash_v2';
     flashListChatListHarnessState.settingValues.transcriptScrollPinEnabled = true;

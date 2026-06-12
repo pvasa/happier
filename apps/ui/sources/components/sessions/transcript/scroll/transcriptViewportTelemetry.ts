@@ -1,6 +1,7 @@
 import type {
     TranscriptViewportListImplementation,
     TranscriptViewportMode,
+    TranscriptViewportOwner,
     TranscriptViewportPlatform,
     TranscriptViewportScrollReason,
 } from '@/components/sessions/transcript/viewport/transcriptViewportTypes';
@@ -8,6 +9,7 @@ import type {
 export type { TranscriptViewportMode };
 export type TranscriptViewportTelemetryPlatform = TranscriptViewportPlatform;
 export type TranscriptViewportTelemetryListImplementation = TranscriptViewportListImplementation;
+export type TranscriptViewportTelemetryOwner = TranscriptViewportOwner;
 
 export type TranscriptViewportTelemetryScrollWriter =
     | 'web-dom-bottom'
@@ -29,9 +31,21 @@ export type TranscriptViewportTelemetryObservationReason =
     | 'skipped'
     | 'not-ready'
     | 'missing-anchor'
-    | 'distance-fallback'
-    | 'recycled-event'
-    | 'passive-drift';
+    | 'invalid-native-offset'
+    | 'passive-drift'
+    | 'mvcp-preserved'
+    | 'fallback-restored'
+    | 'abandoned-layout-timeout'
+    | 'abandoned-identity'
+    | 'abandoned-user-scroll'
+    | 'entry-anchor-missing'
+    | 'entry-distance-oneshot'
+    | 'forward-newer-triggered'
+    | 'forward-newer-skipped'
+    | 'forward-newer-drained'
+    | 'anchor-captured'
+    | 'anchor-capture-empty'
+    | 'anchor-capture-dropped';
 
 export type TranscriptViewportTelemetryEvent =
     | Readonly<{
@@ -51,7 +65,25 @@ export type TranscriptViewportTelemetryEvent =
         timestampMs: number;
     }>
     | Readonly<{
-        type: 'restore-decision' | 'scroll-observed' | 'content-measured' | 'layout-measured';
+        type: 'scroll-write-rejected';
+        writer: TranscriptViewportTelemetryScrollWriter;
+        reason: TranscriptViewportTelemetryScrollReason;
+        rejectedOwner: TranscriptViewportTelemetryOwner;
+        activeOwner: TranscriptViewportTelemetryOwner;
+        sessionId: string;
+        platform: TranscriptViewportTelemetryPlatform;
+        listImplementation: TranscriptViewportTelemetryListImplementation;
+        mode: TranscriptViewportMode;
+        targetOffsetY?: number;
+        previousOffsetY?: number;
+        layoutHeight?: number;
+        contentHeight?: number;
+        distanceFromBottom?: number;
+        nativeMountSettleStable?: boolean;
+        timestampMs: number;
+    }>
+    | Readonly<{
+        type: 'restore-decision' | 'scroll-observed' | 'content-measured' | 'layout-measured' | 'anchor-capture';
         sessionId: string;
         platform: TranscriptViewportTelemetryPlatform;
         listImplementation: TranscriptViewportTelemetryListImplementation;
@@ -60,6 +92,13 @@ export type TranscriptViewportTelemetryEvent =
         layoutHeight?: number;
         contentHeight?: number;
         distanceFromBottom?: number;
+        anchorIndex?: number;
+        anchorItemOffsetPx?: number;
+        anchorObservedItemOffsetPx?: number;
+        anchorDeltaPx?: number;
+        anchorCorrectionAttempt?: number;
+        anchorCorrectionTargetOffsetY?: number;
+        anchorRestoreViewOffset?: number;
         reason?: TranscriptViewportTelemetryObservationReason;
         timestampMs: number;
     }>;
@@ -118,6 +157,7 @@ const SCROLL_REASONS = new Set<TranscriptViewportTelemetryScrollReason>([
     'content-size-change',
     'layout-change',
     'entry-restore',
+    'prepend-restore',
     'jump-to-bottom',
     'jump-to-seq',
     'stream-append',
@@ -133,8 +173,28 @@ const OBSERVATION_REASONS = new Set<TranscriptViewportTelemetryObservationReason
     'skipped',
     'not-ready',
     'missing-anchor',
-    'distance-fallback',
-    'recycled-event',
+    'invalid-native-offset',
+    'mvcp-preserved',
+    'fallback-restored',
+    'abandoned-layout-timeout',
+    'abandoned-identity',
+    'abandoned-user-scroll',
+    'entry-anchor-missing',
+    'entry-distance-oneshot',
+    'forward-newer-triggered',
+    'forward-newer-skipped',
+    'forward-newer-drained',
+    'anchor-captured',
+    'anchor-capture-empty',
+    'anchor-capture-dropped',
+]);
+
+const OWNERS = new Set<TranscriptViewportTelemetryOwner>([
+    'entry',
+    'prepend',
+    'follow',
+    'explicit',
+    'idle',
 ]);
 
 const PLATFORMS = new Set<TranscriptViewportTelemetryPlatform>([
@@ -212,30 +272,39 @@ function sanitizeTelemetryEvent(
     if (!rawSessionId || !platform || !listImplementation || !mode) return null;
 
     const timestampMs = readTimestampMs(source.timestampMs, now);
-    if (type === 'scroll-write') {
+    if (type === 'scroll-write' || type === 'scroll-write-rejected') {
         const writer = readEnum(source.writer, SCROLL_WRITERS);
         const reason = readEnum(source.reason, SCROLL_REASONS);
         if (!writer || !reason) return null;
         const sessionId = redactSessionId(rawSessionId);
+        const sharedFields = {
+            writer,
+            reason,
+            sessionId,
+            platform,
+            listImplementation,
+            mode,
+            targetOffsetY: readNumber(source.targetOffsetY),
+            previousOffsetY: readNumber(source.previousOffsetY),
+            layoutHeight: readNumber(source.layoutHeight),
+            contentHeight: readNumber(source.contentHeight),
+            distanceFromBottom: readNumber(source.distanceFromBottom),
+            nativeMountSettleStable: typeof source.nativeMountSettleStable === 'boolean'
+                ? source.nativeMountSettleStable
+                : undefined,
+            timestampMs,
+        };
+        if (type === 'scroll-write-rejected') {
+            const rejectedOwner = readEnum(source.rejectedOwner, OWNERS);
+            const activeOwner = readEnum(source.activeOwner, OWNERS);
+            if (!rejectedOwner || !activeOwner) return null;
+            return {
+                event: { type, rejectedOwner, activeOwner, ...sharedFields },
+                rawSessionId,
+            };
+        }
         return {
-            event: {
-                type,
-                writer,
-                reason,
-                sessionId,
-                platform,
-                listImplementation,
-                mode,
-                targetOffsetY: readNumber(source.targetOffsetY),
-                previousOffsetY: readNumber(source.previousOffsetY),
-                layoutHeight: readNumber(source.layoutHeight),
-                contentHeight: readNumber(source.contentHeight),
-                distanceFromBottom: readNumber(source.distanceFromBottom),
-                nativeMountSettleStable: typeof source.nativeMountSettleStable === 'boolean'
-                    ? source.nativeMountSettleStable
-                    : undefined,
-                timestampMs,
-            },
+            event: { type, ...sharedFields },
             rawSessionId,
         };
     }
@@ -244,7 +313,8 @@ function sanitizeTelemetryEvent(
         type === 'restore-decision' ||
         type === 'scroll-observed' ||
         type === 'content-measured' ||
-        type === 'layout-measured'
+        type === 'layout-measured' ||
+        type === 'anchor-capture'
     ) {
         const reason = readEnum(source.reason, OBSERVATION_REASONS) ?? undefined;
         const sessionId = redactSessionId(rawSessionId);
@@ -259,6 +329,13 @@ function sanitizeTelemetryEvent(
                 layoutHeight: readNumber(source.layoutHeight),
                 contentHeight: readNumber(source.contentHeight),
                 distanceFromBottom: readNumber(source.distanceFromBottom),
+                anchorIndex: readNumber(source.anchorIndex),
+                anchorItemOffsetPx: readNumber(source.anchorItemOffsetPx),
+                anchorObservedItemOffsetPx: readNumber(source.anchorObservedItemOffsetPx),
+                anchorDeltaPx: readNumber(source.anchorDeltaPx),
+                anchorCorrectionAttempt: readNumber(source.anchorCorrectionAttempt),
+                anchorCorrectionTargetOffsetY: readNumber(source.anchorCorrectionTargetOffsetY),
+                anchorRestoreViewOffset: readNumber(source.anchorRestoreViewOffset),
                 ...(reason ? { reason } : {}),
                 timestampMs,
             },

@@ -36,6 +36,20 @@ export type NativeTranscriptViewportAnchorRestorePlanResult =
     | Readonly<{ status: 'planned'; index: number; viewOffset: number }>
     | Readonly<{ status: 'invalid_index' | 'invalid_offset' }>;
 
+export type NativeTranscriptViewportAnchorMeasuredOffsetRestorePlanResult =
+    | Readonly<{ status: 'planned'; targetOffsetY: number }>
+    | Readonly<{ status: 'invalid_input' | 'not_scrollable' | 'layout_unavailable' }>;
+
+export type NativeTranscriptViewportAnchorRestoreObservationResult =
+    | Readonly<{
+        status: 'aligned' | 'misaligned';
+        observedItemOffsetPx: number;
+        deltaPx: number;
+    }>
+    | Readonly<{
+        status: 'visible_fallback' | 'not_visible' | 'waiting_for_layout' | 'invalid_input';
+    }>;
+
 const NATIVE_FIRST_VISIBLE_FALLBACK_SCAN_AHEAD_ITEM_COUNT = 24;
 
 type NativeTranscriptAnchorSourceItem = Readonly<{
@@ -219,4 +233,110 @@ export function planNativeTranscriptViewportAnchorRestore(params: Readonly<{
         // FlashList adds viewOffset to the item layout offset; invert our row-top-to-viewport coordinate.
         viewOffset: -params.itemOffsetPx,
     };
+}
+
+export function planNativeTranscriptViewportAnchorMeasuredOffsetRestore(params: Readonly<{
+    contentHeight: number;
+    itemLayoutY: number;
+    itemOffsetPx: number;
+    layoutHeight: number;
+}>): NativeTranscriptViewportAnchorMeasuredOffsetRestorePlanResult {
+    if (
+        !Number.isFinite(params.contentHeight) ||
+        !Number.isFinite(params.itemLayoutY) ||
+        !Number.isFinite(params.itemOffsetPx) ||
+        !Number.isFinite(params.layoutHeight)
+    ) {
+        return { status: 'invalid_input' };
+    }
+    if (params.layoutHeight <= 0 || params.contentHeight <= params.layoutHeight) {
+        return { status: 'not_scrollable' };
+    }
+    if (params.itemLayoutY < 0 || params.itemLayoutY >= params.contentHeight) {
+        return { status: 'layout_unavailable' };
+    }
+
+    const maxOffsetY = Math.max(0, Math.trunc(params.contentHeight - params.layoutHeight));
+    const targetOffsetY = Math.max(
+        0,
+        Math.min(maxOffsetY, Math.trunc(params.itemLayoutY - params.itemOffsetPx)),
+    );
+    return { status: 'planned', targetOffsetY };
+}
+
+function isIndexVisibleWithFallback<T>(
+    ref: NativeTranscriptViewportFlashListRef<T>,
+    index: number,
+): boolean {
+    if (typeof ref.computeVisibleIndices === 'function') {
+        const visibleRange = ref.computeVisibleIndices();
+        if (
+            typeof visibleRange.startIndex === 'number' &&
+            Number.isFinite(visibleRange.startIndex) &&
+            typeof visibleRange.endIndex === 'number' &&
+            Number.isFinite(visibleRange.endIndex)
+        ) {
+            const startIndex = Math.min(visibleRange.startIndex, visibleRange.endIndex);
+            const endIndex = Math.max(visibleRange.startIndex, visibleRange.endIndex);
+            return index >= startIndex - 1 && index <= endIndex + 1;
+        }
+    }
+
+    if (typeof ref.getFirstVisibleIndex === 'function') {
+        const firstVisibleIndex = ref.getFirstVisibleIndex();
+        if (typeof firstVisibleIndex === 'number' && Number.isFinite(firstVisibleIndex)) {
+            return Math.abs(Math.trunc(firstVisibleIndex) - index) <= 1;
+        }
+    }
+
+    return false;
+}
+
+export function resolveNativeTranscriptViewportAnchorRestoreObservation<T>(params: Readonly<{
+    ref: NativeTranscriptViewportFlashListRef<T> | null | undefined;
+    index: number;
+    itemOffsetPx: number;
+    tolerancePx: number;
+}>): NativeTranscriptViewportAnchorRestoreObservationResult {
+    if (
+        params.ref == null ||
+        !Number.isInteger(params.index) ||
+        params.index < 0 ||
+        !Number.isFinite(params.itemOffsetPx) ||
+        !Number.isFinite(params.tolerancePx)
+    ) {
+        return { status: 'invalid_input' };
+    }
+
+    const ref = params.ref;
+    const canMeasurePixelOffset =
+        typeof ref.getLayout === 'function' &&
+        typeof ref.getAbsoluteLastScrollOffset === 'function';
+
+    if (canMeasurePixelOffset) {
+        const layout = ref.getLayout(params.index);
+        const absoluteScrollOffset = ref.getAbsoluteLastScrollOffset();
+        if (!isFiniteLayout(layout) || !Number.isFinite(absoluteScrollOffset)) {
+            return { status: 'waiting_for_layout' };
+        }
+
+        const observedItemOffsetPx = layout.y - absoluteScrollOffset;
+        const deltaPx = observedItemOffsetPx - params.itemOffsetPx;
+        if (Math.abs(deltaPx) <= Math.max(0, params.tolerancePx)) {
+            return {
+                status: 'aligned',
+                observedItemOffsetPx,
+                deltaPx,
+            };
+        }
+        return {
+            status: 'misaligned',
+            observedItemOffsetPx,
+            deltaPx,
+        };
+    }
+
+    return isIndexVisibleWithFallback(ref, params.index)
+        ? { status: 'visible_fallback' }
+        : { status: 'not_visible' };
 }

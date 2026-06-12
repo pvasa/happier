@@ -1,7 +1,7 @@
 import Color from 'color';
 
 import { AgentContentView } from '@/components/sessions/transcript/AgentContentView';
-import { AgentInput, type AgentInputAutocompleteSelectionHandler } from '@/components/sessions/agentInput';
+import { AgentInput, type AgentInputAutocompleteSelectionHandler, type AgentInputSendOptions } from '@/components/sessions/agentInput';
 import {
     computeExistingSessionComposerInputMaxHeight,
     computeExistingSessionComposerPanelMaxHeight,
@@ -67,9 +67,13 @@ import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { continueSessionWithReplay, sessionAbort, resumeSession } from '@/sync/ops';
 import { storage, useActiveServerAccountScope, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLaunchSelectionMachines, useLocalSetting, useProfile, useRealtimeStatus, useSessionConnectedServiceAccountSwitchEvents, useSessionMessages, useSessionPendingMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionUsage, useSessionVisibleReadSeq, useSetting, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
-import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
+import { canContinueSessionWithFreshSpawn, canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
 import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor, buildResumeSessionExtrasFromUiState } from '@/agents/catalog/catalog';
-import { buildSessionComposerNextMessageMetaOverridesFromUiState, supportsEditableSessionGoals } from '@/agents/registry/registryUiBehavior';
+import {
+    buildSessionComposerNextMessageMetaOverridesFromUiState,
+    getSessionComposerNonSteerablePayloadReasonFromUiState,
+    supportsEditableSessionGoals,
+} from '@/agents/registry/registryUiBehavior';
 import {
     evaluateAgentSessionCapabilitySupport,
     resolveAgentIdFromSessionMetadata,
@@ -86,6 +90,7 @@ import { Session, type Metadata } from '@/sync/domains/state/storageTypes';
 import { sync } from '@/sync/sync';
 import { computeNextAcpConfigOptionOverrideMetadata } from '@/sync/engine/overrides/acpConfigOptionOverridePublish';
 import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
+import { updateUsageLimitRecoveryRememberedMode } from '@/sync/domains/settings/usageLimitRecoverySettings';
 import {
     filterReviewCommentDraftsIncludedInPrompt,
 } from '@/sync/domains/input/reviewComments/reviewCommentPrompt';
@@ -121,6 +126,7 @@ import { nativeReadClipboardImageAttachment } from '@/utils/files/nativeClipboar
 import { ensureAgentInstallablesBackground } from '@/capabilities/ensureAgentInstallablesBackground';
 import type { ModelMode, PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import { getPermissionModeOverrideForSpawn } from '@/sync/domains/permissions/permissionModeOverride';
+import { getPermissionModeLabelForAgentType, getPermissionModeTitleForAgentType } from '@/sync/domains/permissions/permissionModeOptions';
 import { getModelOverrideForSpawn } from '@/sync/domains/models/modelOverride';
 import { readDisplayMachineTargetForSession, readMachineControlTargetForSession, readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { useSessionRecipientState } from '@/components/sessions/agentInput/routing/useSessionRecipientState';
@@ -149,6 +155,8 @@ import {
     SESSION_VIEW_DEFAULT_CONTENT_BOTTOM_GAP_PX,
 } from '@/components/sessions/shell/resolveSessionViewContentBottomSpacing';
 import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
+import { confirmNonSteerableSend } from '@/components/sessions/agentInput/confirmNonSteerableSend';
+import { canApplySteerConfigInFlight, decideSessionMessageDelivery, type MessageSendMode } from '@/sync/domains/session/control/submitMode';
 import { submitSessionUserMessage } from '@/sync/domains/session/input/submitSessionUserMessage';
 import { createSyncBackedSubmitPort } from '@/sync/domains/session/input/syncBackedSubmitPort';
 import type { SessionSubmitPort } from '@/sync/domains/session/input/types';
@@ -161,7 +169,7 @@ import { useSessionMachineReachability } from '@/components/sessions/model/useSe
 import { useCLIDetection } from '@/hooks/auth/useCLIDetection';
 import {
     computeConnectedServiceQuotaGaugeViewModel,
-    selectConnectedServiceSessionProviderUsageSnapshot,
+    selectConnectedServiceSessionProviderUsageGaugeSource,
     type ConnectedServiceQuotaGaugeLabelFormatter,
     type ConnectedServiceQuotaGaugeWindowMode,
 } from '@/sync/domains/connectedServices/connectedServiceQuotaGauge';
@@ -253,6 +261,7 @@ import {
     ConnectedServiceIdSchema,
     SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
     SessionUsageLimitRecoveryV1Schema,
+    readSessionContinuationRecoveryFromMetadata,
     type SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
 import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
@@ -335,6 +344,20 @@ function readObjectRecord(value: unknown): Record<string, unknown> | null {
         : null;
 }
 
+function readDiagnosticString(
+    diagnostics: Readonly<Record<string, string | number | boolean | null>> | undefined,
+    keys: ReadonlyArray<string>,
+): string | null {
+    if (!diagnostics) return null;
+    for (const key of keys) {
+        const value = diagnostics[key];
+        if (typeof value === 'string' && value.trim().length > 0) {
+            return value.trim();
+        }
+    }
+    return null;
+}
+
 function resolveConnectedServiceProviderDisplayName(serviceId: string): string | null {
     const parsed = ConnectedServiceIdSchema.safeParse(serviceId);
     if (!parsed.success) return null;
@@ -393,6 +416,16 @@ function readSessionUsageLimitRecovery(metadata: unknown): SessionUsageLimitReco
     const raw = (metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY];
     const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(raw);
     return parsed.success ? parsed.data : null;
+}
+
+function hasContinuationRecoveryWorkToResume(metadata: unknown): boolean {
+    const recovery = readSessionContinuationRecoveryFromMetadata(metadata);
+    if (!recovery) return false;
+    return Object.values(recovery.attemptsById).some((attempt) => {
+        if (attempt.continuationRequired === false) return false;
+        return attempt.status !== 'suppressed_no_interrupted_turn'
+            && attempt.status !== 'suppressed_newer_user_input';
+    });
 }
 
 function formatResumeSessionFailureMessage(result: Readonly<{
@@ -1440,7 +1473,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
                 paneUrlSyncRouteActive={paneUrlSyncRouteActive}
                 surfaceFocused={shouldRenderSessionSurface}
-                routeHydrationPending={routeHydrationInFlight}
+                routeHydrationPending={routeHydrationPending}
             />
         ))
         : null;
@@ -1958,6 +1991,7 @@ function SessionViewLoaded({
     const [usageLimitRecoveryOperationStatus, setUsageLimitRecoveryOperationStatus] = React.useState<Readonly<{
         issueFingerprint: string;
         status: UsageLimitRecoveryOperationStatus;
+        retryAtMs?: number | null;
     }> | null>(null);
     const [usageLimitRecoveryPendingAction, setUsageLimitRecoveryPendingAction] = React.useState<SessionUsageLimitRecoveryActionKind | null>(null);
     const usageLimitRecoveryPendingActionRef = React.useRef(false);
@@ -2168,7 +2202,9 @@ function SessionViewLoaded({
     ), [session.metadata, usageLimitRecoveryCheckNowAgentId]);
     const usageLimitRecoveryMode = usageLimitRecoverySettingsV1?.mode === 'auto_wait' ? 'auto_wait' : 'ask';
     const usageLimitRecoveryResumePromptMode =
-        usageLimitRecoverySettingsV1?.resumePromptMode === 'off' ? 'off' : 'standard';
+        usageLimitRecoverySettingsV1?.resumePromptMode === 'off' || usageLimitRecoverySettingsV1?.resumePromptMode === 'custom'
+            ? usageLimitRecoverySettingsV1.resumePromptMode
+            : 'standard';
     const formatUsageLimitRecoveryTime = React.useCallback((timeMs: number) => new Date(timeMs).toLocaleString(), []);
     const translateUsageLimitRecovery = React.useCallback<SessionUsageLimitRecoveryTranslate>((key, params) => {
         switch (key) {
@@ -2199,6 +2235,11 @@ function SessionViewLoaded({
         session,
         usageLimitRecoveryNowMs,
     ]);
+    const hasInterruptedWorkToResume = React.useMemo(() => (
+        session.active !== true
+        || pendingMessages.length > 0
+        || hasContinuationRecoveryWorkToResume(session.metadata)
+    ), [pendingMessages.length, session.active, session.metadata]);
     const baseUsageLimitRecoveryPresentation = React.useMemo(() => buildSessionUsageLimitRecoveryPresentation({
         featureEnabled: usageLimitRecoveryFeatureEnabled,
         latestTurnStatus: session.latestTurnStatus ?? null,
@@ -2207,6 +2248,7 @@ function SessionViewLoaded({
         operationStatus: null,
         runtimeWorking: usageLimitRuntimeState.runtimeActivelyWorking,
         hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        hasInterruptedWorkToResume,
         rememberedMode: usageLimitRecoveryMode,
         checkNowSupported: usageLimitRecoveryCheckNowSupported,
         nowMs: usageLimitRecoveryNowMs,
@@ -2219,6 +2261,7 @@ function SessionViewLoaded({
         session.lastRuntimeIssue,
         session.meaningfulActivityAt,
         translateUsageLimitRecovery,
+        hasInterruptedWorkToResume,
         usageLimitRecovery,
         usageLimitRecoveryCheckNowSupported,
         usageLimitRecoveryFeatureEnabled,
@@ -2235,24 +2278,29 @@ function SessionViewLoaded({
         if (baseUsageLimitRecoveryPresentation?.issueFingerprint === resolvedUsageLimitRecoveryIssueFingerprint) return;
         setResolvedUsageLimitRecoveryIssueFingerprint(null);
     }, [baseUsageLimitRecoveryPresentation?.issueFingerprint, resolvedUsageLimitRecoveryIssueFingerprint]);
-    const activeUsageLimitRecoveryOperationStatus = usageLimitRecoveryOperationStatus
+    const activeUsageLimitRecoveryOperation = usageLimitRecoveryOperationStatus
         && baseUsageLimitRecoveryPresentation?.issueFingerprint === usageLimitRecoveryOperationStatus.issueFingerprint
-        ? usageLimitRecoveryOperationStatus.status
+        ? usageLimitRecoveryOperationStatus
         : null;
+    const activeUsageLimitRecoveryOperationStatus = activeUsageLimitRecoveryOperation?.status ?? null;
+    const activeUsageLimitRecoveryOperationRetryAtMs = activeUsageLimitRecoveryOperation?.retryAtMs ?? null;
     const usageLimitRecoveryPresentation = React.useMemo(() => buildSessionUsageLimitRecoveryPresentation({
         featureEnabled: usageLimitRecoveryFeatureEnabled && !usageLimitRecoveryIssueResolved,
         latestTurnStatus: session.latestTurnStatus ?? null,
         issue: session.lastRuntimeIssue ?? null,
         recovery: usageLimitRecovery,
         operationStatus: activeUsageLimitRecoveryOperationStatus,
+        operationRetryAtMs: activeUsageLimitRecoveryOperationRetryAtMs,
         runtimeWorking: usageLimitRuntimeState.runtimeActivelyWorking,
         hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        hasInterruptedWorkToResume,
         rememberedMode: usageLimitRecoveryMode,
         checkNowSupported: usageLimitRecoveryCheckNowSupported,
         nowMs: usageLimitRecoveryNowMs,
         translate: translateUsageLimitRecovery,
         formatTime: formatUsageLimitRecoveryTime,
     }), [
+        activeUsageLimitRecoveryOperationRetryAtMs,
         activeUsageLimitRecoveryOperationStatus,
         formatUsageLimitRecoveryTime,
         session.latestTurnStatus,
@@ -2260,6 +2308,7 @@ function SessionViewLoaded({
         session.lastRuntimeIssue,
         session.meaningfulActivityAt,
         translateUsageLimitRecovery,
+        hasInterruptedWorkToResume,
         usageLimitRecovery,
         usageLimitRecoveryCheckNowSupported,
         usageLimitRecoveryFeatureEnabled,
@@ -2274,12 +2323,15 @@ function SessionViewLoaded({
         issue: session.lastRuntimeIssue ?? null,
         recovery: usageLimitRecovery,
         operationStatus: activeUsageLimitRecoveryOperationStatus,
+        operationRetryAtMs: activeUsageLimitRecoveryOperationRetryAtMs,
         runtimeWorking: usageLimitRuntimeState.runtimeActivelyWorking,
         hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        hasInterruptedWorkToResume,
         nowMs: usageLimitRecoveryNowMs,
         translate: translateUsageLimitRecovery,
         formatTime: formatUsageLimitRecoveryTime,
     }), [
+        activeUsageLimitRecoveryOperationRetryAtMs,
         activeUsageLimitRecoveryOperationStatus,
         formatUsageLimitRecoveryTime,
         session.latestTurnStatus,
@@ -2287,6 +2339,7 @@ function SessionViewLoaded({
         session.lastRuntimeIssue,
         session.meaningfulActivityAt,
         translateUsageLimitRecovery,
+        hasInterruptedWorkToResume,
         usageLimitRecovery,
         usageLimitRecoveryFeatureEnabled,
         usageLimitRecoveryIssueResolved,
@@ -2302,12 +2355,16 @@ function SessionViewLoaded({
         }
         setUsageLimitRecoveryOperationStatus(null);
     }, [baseUsageLimitRecoveryPresentation?.issueFingerprint, usageLimitRecoveryPresentation?.issueFingerprint]);
-    const markCurrentUsageLimitRecoveryOperationStatus = React.useCallback((status: UsageLimitRecoveryOperationStatus) => {
+    const markCurrentUsageLimitRecoveryOperationStatus = React.useCallback((
+        status: UsageLimitRecoveryOperationStatus,
+        options?: Readonly<{ retryAtMs?: number | null }>,
+    ) => {
         const issueFingerprint = usageLimitRecoveryPresentation?.issueFingerprint;
         if (!issueFingerprint) return;
         setUsageLimitRecoveryOperationStatus({
             issueFingerprint,
             status,
+            ...(typeof options?.retryAtMs === 'number' ? { retryAtMs: options.retryAtMs } : {}),
         });
     }, [usageLimitRecoveryPresentation?.issueFingerprint]);
     const usageLimitRecoveryOperationOptions = React.useMemo(() => ({
@@ -2323,6 +2380,21 @@ function SessionViewLoaded({
                 result,
                 accountProfile?.connectedServicesV2 ?? null,
             );
+            const latestForkSessionId = readDiagnosticString(result.uxDiagnostic?.diagnostics, [
+                'latestForkSessionId',
+                'latestForkId',
+                'forkSessionId',
+                'childSessionId',
+            ]);
+            const nativeForkSessionId = readDiagnosticString(result.uxDiagnostic?.diagnostics, [
+                'nativeForkSessionId',
+                'providerNativeForkSessionId',
+                'nativeSessionId',
+            ]);
+            const diagnosticServerId = readDiagnosticString(result.uxDiagnostic?.diagnostics, [
+                'serverId',
+                'forkServerId',
+            ]);
             const alert = buildSessionUsageLimitRecoveryOperationFailureAlert({
                 result,
                 fallbackMessage: formatUsageLimitRecoveryOperationError(result),
@@ -2331,6 +2403,10 @@ function SessionViewLoaded({
                     retry: () => {
                         void handleUsageLimitRecoveryAction(kind);
                     },
+                    startFreshUnderSelectedAccount: () => {
+                        router.push('/new');
+                    },
+                    resumeCurrentAccount: () => {},
                     openConnectedAccounts: () => {
                         router.push('/settings/connected-services');
                     },
@@ -2344,6 +2420,16 @@ function SessionViewLoaded({
                     enableStateSharing: () => {
                         router.push('/settings/connected-services/provider-state-sharing');
                     },
+                    viewLatestFork: latestForkSessionId
+                        ? () => {
+                            void navigateToSession(latestForkSessionId, diagnosticServerId ? { serverId: diagnosticServerId } : undefined);
+                        }
+                        : undefined,
+                    viewNativeFork: nativeForkSessionId
+                        ? () => {
+                            void navigateToSession(nativeForkSessionId, diagnosticServerId ? { serverId: diagnosticServerId } : undefined);
+                        }
+                        : undefined,
                     dismiss: () => {},
                 },
             });
@@ -2358,7 +2444,15 @@ function SessionViewLoaded({
                 markUsageLimitRecoveryIssueResolved();
                 return true;
             }
-            markCurrentUsageLimitRecoveryOperationStatus(status);
+            // Surface probe rate-limit retry timing ("waiting until <time>")
+            // instead of an indefinite waiting state.
+            const retryAtMs = result.status === 'rate_limited'
+                && typeof result.retryAfterMs === 'number'
+                && Number.isFinite(result.retryAfterMs)
+                && result.retryAfterMs > 0
+                ? Date.now() + result.retryAfterMs
+                : null;
+            markCurrentUsageLimitRecoveryOperationStatus(status, { retryAtMs });
             return true;
         };
         usageLimitRecoveryPendingActionRef.current = true;
@@ -2367,6 +2461,9 @@ function SessionViewLoaded({
             if (kind === 'resume_now') {
                 if (usageLimitRecoveryCheckNowSupported) {
                     markCurrentUsageLimitRecoveryOperationStatus('checking');
+                    // No per-operation resume-prompt control exists in the session UI, so no
+                    // explicit resumePromptMode is sent: the daemon resolves the precedence
+                    // (stored intent > account setting > group policy > provider config).
                     const result = await sessionUsageLimitCheckNow(sessionId, {
                         provider: session.lastRuntimeIssue?.provider ?? null,
                         ...usageLimitRecoveryOperationOptions,
@@ -2394,7 +2491,7 @@ function SessionViewLoaded({
                         });
                         return;
                     }
-                    if (result.status === 'waiting' || result.status === 'exhausted' || result.status === 'inactive') {
+                    if (result.status === 'waiting') {
                         const issueFingerprint = usageLimitRecoveryPresentation?.issueFingerprint;
                         if (issueFingerprint) {
                             setUsageLimitRecoveryOperationStatus({
@@ -2406,10 +2503,6 @@ function SessionViewLoaded({
                     }
                     if (result.status === 'cancelled') {
                         markUsageLimitRecoveryIssueResolved();
-                        return;
-                    }
-                    if (result.status === 'rate_limited') {
-                        markCurrentUsageLimitRecoveryOperationStatus('waiting');
                         return;
                     }
                 }
@@ -2430,12 +2523,10 @@ function SessionViewLoaded({
                         showUsageLimitRecoveryOperationFailure(result);
                     }
                 } else {
-                    setUsageLimitRecoverySettingsV1({
-                        v: 1,
-                        mode: 'auto_wait',
-                        promptMode: 'standard',
-                        resumePromptMode: usageLimitRecoveryResumePromptMode,
-                    });
+                    setUsageLimitRecoverySettingsV1(updateUsageLimitRecoveryRememberedMode(
+                        usageLimitRecoverySettingsV1,
+                        'auto_wait',
+                    ));
                     setUsageLimitRecoveryOperationStatus(null);
                 }
                 return;
@@ -2449,18 +2540,14 @@ function SessionViewLoaded({
                     showUsageLimitRecoveryOperationFailure(result);
                     return;
                 }
-                setUsageLimitRecoverySettingsV1({
-                    v: 1,
-                    mode: 'ask',
-                    promptMode: 'standard',
-                    resumePromptMode: usageLimitRecoveryResumePromptMode,
-                });
+                setUsageLimitRecoverySettingsV1(updateUsageLimitRecoveryRememberedMode(
+                    usageLimitRecoverySettingsV1,
+                    'ask',
+                ));
                 if (result.status === 'cancelled' || result.status === 'resumed' || result.status === 'ready') {
                     markUsageLimitRecoveryIssueResolved();
-                } else if (result.status === 'waiting' || result.status === 'exhausted' || result.status === 'inactive') {
+                } else if (result.status === 'waiting') {
                     markCurrentUsageLimitRecoveryOperationStatus(result.status);
-                } else if (result.status === 'rate_limited') {
-                    markCurrentUsageLimitRecoveryOperationStatus('waiting');
                 } else {
                     setUsageLimitRecoveryOperationStatus(null);
                 }
@@ -2501,13 +2588,6 @@ function SessionViewLoaded({
                     markUsageLimitRecoveryIssueResolved();
                     return;
                 }
-                if (result.status === 'rate_limited') {
-                    setUsageLimitRecoveryOperationStatus({
-                        issueFingerprint: usageLimitRecoveryPresentation.issueFingerprint,
-                        status: 'waiting',
-                    });
-                    return;
-                }
                 setUsageLimitRecoveryOperationStatus({
                     issueFingerprint: usageLimitRecoveryPresentation.issueFingerprint,
                     status: result.status,
@@ -2523,6 +2603,7 @@ function SessionViewLoaded({
         markCurrentUsageLimitRecoveryOperationStatus,
         markUsageLimitRecoveryIssueResolved,
         accountProfile?.connectedServicesV2,
+        navigateToSession,
         session.active,
         session.lastRuntimeIssue?.provider,
         sessionId,
@@ -2653,29 +2734,34 @@ function SessionViewLoaded({
     ]);
     const providerUsageGauge = React.useMemo(() => {
         if (!connectedServiceQuotasEnabled || sessionProviderUsageGaugeMode === 'hidden') return null;
-        const quotaSnapshot = selectConnectedServiceSessionProviderUsageSnapshot({
+        const gaugeSource = selectConnectedServiceSessionProviderUsageGaugeSource({
+            providerId: liveComposerState.agentId,
             connectedServiceSnapshot: connectedServiceQuotaSnapshot,
+            connectedServiceRefProvenance: connectedServiceQuotaProfileRef?.provenance ?? null,
+            sessionCheckNowSupported: usageLimitRecoveryCheckNowSupported,
             runtimeIssue: session.lastRuntimeIssue ?? null,
         });
+        if (!gaugeSource) return null;
         return computeConnectedServiceQuotaGaugeViewModel({
-            snapshot: quotaSnapshot,
+            snapshot: gaugeSource.snapshot,
             windowMode: sessionProviderUsageGaugeWindowMode,
             nowMs: nowServerMs(),
             formatter: connectedServiceQuotaGaugeFormatter,
-            providerDisplayName: quotaSnapshot
-                ? resolveConnectedServiceProviderDisplayName(quotaSnapshot.serviceId)
-                : null,
-            activeAccountDisplayLabel: quotaSnapshot === connectedServiceQuotaSnapshot
+            providerDisplayName: resolveConnectedServiceProviderDisplayName(gaugeSource.snapshot.serviceId),
+            activeAccountDisplayLabel: gaugeSource.snapshot === connectedServiceQuotaSnapshot
                 ? connectedServiceQuotaActiveAccountLabel
                 : null,
         });
     }, [
         connectedServiceQuotaActiveAccountLabel,
+        connectedServiceQuotaProfileRef?.provenance,
         connectedServiceQuotasEnabled,
         connectedServiceQuotaSnapshot,
+        liveComposerState.agentId,
         session.lastRuntimeIssue,
         sessionProviderUsageGaugeMode,
         sessionProviderUsageGaugeWindowMode,
+        usageLimitRecoveryCheckNowSupported,
     ]);
     const reviewScope = useWorkspaceScopeForSession(sessionId);
     const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(reviewScope);
@@ -2805,7 +2891,11 @@ function SessionViewLoaded({
         enabled: !isSessionActive || supportsLocalControl,
     });
 
-    const isResumable = canResumeSessionWithOptions(session.metadata, resumeCapabilityOptions);
+    // QA A-F5: a provider session that never started (no vendor resume id persisted)
+    // is continuable by a fresh spawn; it must not hit the "doesn't support restoring
+    // context" dead-end.
+    const isResumable = canResumeSessionWithOptions(session.metadata, resumeCapabilityOptions)
+        || canContinueSessionWithFreshSpawn(session.metadata, resumeCapabilityOptions);
     const [isResuming, setIsResuming] = React.useState(false);
     const [isPendingQueueWakeResuming, setIsPendingQueueWakeResuming] = React.useState(false);
     const persistedVoiceComposerRouting = React.useMemo(
@@ -3104,7 +3194,10 @@ function SessionViewLoaded({
             return false;
         }
 
-        if (!canResumeSessionWithOptions(session.metadata, resumeCapabilityOptions)) {
+        if (
+            !canResumeSessionWithOptions(session.metadata, resumeCapabilityOptions)
+            && !canContinueSessionWithFreshSpawn(session.metadata, resumeCapabilityOptions)
+        ) {
             if (silent) return false;
 
             const replayCfg = resolveHappierReplayConfig(settings);
@@ -3685,9 +3778,10 @@ function SessionViewLoaded({
             return;
         }
 
+        const composerMessage = sendOptions?.inputTextOverride ?? message;
         const activePendingEdit = pendingMessageEditRef.current;
         if (activePendingEdit) {
-            const nextText = message;
+            const nextText = composerMessage;
             if (nextText.trim().length === 0) {
                 return;
             }
@@ -3711,18 +3805,88 @@ function SessionViewLoaded({
         const sendComposerText = async (
             messageToSend: string,
             composerTextBeforeSend: string,
-            sendIntent?: Readonly<{
-                forceImmediate?: boolean;
-                deliveryIntent?: 'server_pending';
-                structuredInputMetaOverrides?: Record<string, unknown>;
-            }>,
+            sendIntent?: AgentInputSendOptions,
         ) => {
             const configuredMode = storage.getState().settings.sessionMessageSendMode;
             const busySteerSendPolicy = storage.getState().settings.sessionBusySteerSendPolicy;
+            const permissionModeApplyTiming = storage.getState().settings.sessionPermissionModeApplyTiming;
+            const nonSteerableSendPrompt = storage.getState().settings.sessionNonSteerableSendPrompt;
             const forceImmediateSend = sendIntent?.forceImmediate === true;
+            const providerNonSteerablePayloadReason = getSessionComposerNonSteerablePayloadReasonFromUiState({
+                agentId: liveComposerState.agentId,
+                session,
+                configOptionOverrides: optimisticAcpConfigOptionOverrides,
+                metaOverrides: sendIntent?.structuredInputMetaOverrides,
+            });
 
             const additionalMessage = messageToSend;
             const trimmedText = messageToSend.trim();
+
+            // Lane P stage 3: a busy send whose payload can't steer the active turn offers
+            // "Interrupt & send now" (existing interrupt delivery mode) vs "Queue for after turn"
+            // (the honest pending default). Explicit intents (force-immediate / explicit pending)
+            // and the non-'ask' settings skip the prompt.
+            let nonSteerableExplicitMode: MessageSendMode | undefined;
+            let nonSteerableApplyConfigAndSteer = false;
+            let nonSteerableSteerWithoutConfig = false;
+            if (
+                nonSteerableSendPrompt === 'ask'
+                && !forceImmediateSend
+                && sendIntent?.deliveryIntent !== 'server_pending'
+            ) {
+                const preflight = decideSessionMessageDelivery({
+                    configuredMode,
+                    busySteerSendPolicy,
+                    session,
+                    text: trimmedText,
+                    permissionModeApplyTiming,
+                    nonSteerableSendPrompt,
+                    providerNonSteerablePayloadReason,
+                    nowMs: Date.now(),
+                });
+                if (preflight.nonSteerablePayloadReason) {
+                    // Lane Q: offer "Apply setting & steer now" only when the backend published the
+                    // in-flight config-apply capability and the blocker is a mode change.
+                    // Lane X (X3): the apply option NAMES the setting and value, and "Steer now
+                    // without applying" (Case B) is offered whenever steering itself is safe.
+                    const isModeChangeBlocker = preflight.nonSteerablePayloadReason === 'mode_change_refused';
+                    const desiredMode = typeof session?.permissionMode === 'string' && session.permissionMode.length > 0
+                        ? session.permissionMode
+                        : null;
+                    const choice = await confirmNonSteerableSend(preflight.nonSteerablePayloadReason, {
+                        offerApplyAndSteer: canApplySteerConfigInFlight(session),
+                        offerSteerWithoutApplying: isModeChangeBlocker,
+                        ...(isModeChangeBlocker && desiredMode
+                            ? {
+                                settingLabel: getPermissionModeTitleForAgentType(agentId),
+                                valueLabel: getPermissionModeLabelForAgentType(agentId, desiredMode),
+                            }
+                            : {}),
+                    });
+                    if (choice === 'cancel') {
+                        return;
+                    }
+                    if (choice === 'interrupt_and_send') {
+                        nonSteerableExplicitMode = 'interrupt';
+                    }
+                    if (choice === 'apply_and_steer') {
+                        nonSteerableApplyConfigAndSteer = true;
+                    }
+                    if (choice === 'steer_without_applying') {
+                        nonSteerableSteerWithoutConfig = true;
+                    }
+                }
+            }
+            // Lane X (X3 Case B): steer the TEXT only — this message rides with the published
+            // current mode (no delta), while the desired mode stays local and applies on the next
+            // message via the normal path. Honest label, honest behavior.
+            const steerWithoutConfigMetaOverrides = nonSteerableSteerWithoutConfig
+                ? {
+                    permissionMode: typeof session?.metadata?.permissionMode === 'string' && session.metadata.permissionMode.length > 0
+                        ? session.metadata.permissionMode
+                        : 'default',
+                }
+                : null;
             const shouldSendReviewComments = hasIncludedReviewCommentDrafts;
             const hasAttachments = attachmentsUploadsEnabled && attachmentDrafts.length > 0;
             const participantRecipient = recipientState.recipient;
@@ -3911,12 +4075,20 @@ function SessionViewLoaded({
                             session,
                             text: outbound.text,
                             displayText: outbound.displayText,
-                            metaOverrides: outbound.metaOverrides,
+                            metaOverrides: steerWithoutConfigMetaOverrides
+                                ? { ...outbound.metaOverrides, ...steerWithoutConfigMetaOverrides }
+                                : outbound.metaOverrides,
                             configuredMode,
                             busySteerSendPolicy,
-                            explicitMode: !forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
-                                ? 'server_pending'
-                                : undefined,
+                            permissionModeApplyTiming,
+                            nonSteerableSendPrompt,
+                            providerNonSteerablePayloadReason,
+                            ...(nonSteerableApplyConfigAndSteer ? { applyConfigAndSteer: true } : {}),
+                            ...(nonSteerableSteerWithoutConfig ? { steerWithoutConfig: true } : {}),
+                            explicitMode: nonSteerableExplicitMode
+                                ?? (!forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
+                                    ? 'server_pending'
+                                    : undefined),
                             forceImmediate: forceImmediateSend,
                             profileId: liveComposerState.profileId,
                             resumeCapabilityOptions,
@@ -4110,12 +4282,20 @@ function SessionViewLoaded({
                         session,
                         text: outbound.text,
                         displayText: outbound.displayText,
-                        metaOverrides: outbound.metaOverrides,
+                        metaOverrides: steerWithoutConfigMetaOverrides
+                            ? { ...outbound.metaOverrides, ...steerWithoutConfigMetaOverrides }
+                            : outbound.metaOverrides,
                         configuredMode,
                         busySteerSendPolicy,
-                        explicitMode: !forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
-                            ? 'server_pending'
-                            : undefined,
+                        permissionModeApplyTiming,
+                        nonSteerableSendPrompt,
+                        providerNonSteerablePayloadReason,
+                        ...(nonSteerableApplyConfigAndSteer ? { applyConfigAndSteer: true } : {}),
+                        ...(nonSteerableSteerWithoutConfig ? { steerWithoutConfig: true } : {}),
+                        explicitMode: nonSteerableExplicitMode
+                            ?? (!forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
+                                ? 'server_pending'
+                                : undefined),
                         forceImmediate: forceImmediateSend,
                         profileId: liveComposerState.profileId,
                         resumeCapabilityOptions,
@@ -4163,13 +4343,13 @@ function SessionViewLoaded({
         };
 
         const promptInvocationsV1 = storage.getState().settings.promptInvocationsV1;
-        const resolved = resolveSessionComposerSend({ input: message, executionRunsEnabled, promptInvocationsV1 });
+        const resolved = resolveSessionComposerSend({ input: composerMessage, executionRunsEnabled, promptInvocationsV1 });
         if (resolved.kind === 'noop') {
             return;
         }
 
         if (resolved.kind === 'template') {
-            const composerTextBeforeSend = message;
+            const composerTextBeforeSend = composerMessage;
             fireAndForget((async () => {
                 try {
                     const expanded = await expandPromptTemplateInvocation({
@@ -4204,7 +4384,7 @@ function SessionViewLoaded({
                 )
             )
         ) {
-            const previousMessage = message;
+            const previousMessage = composerMessage;
             void executeSessionComposerResolution({
                 resolved,
                 sessionId,
@@ -4238,7 +4418,7 @@ function SessionViewLoaded({
         }
 
         if (resolved.kind !== 'send') return;
-        void sendComposerText(resolved.text, message, sendOptions);
+        void sendComposerText(resolved.text, composerMessage, sendOptions);
     });
     const composerAuxiliaryBannerHorizontalPadding = windowWidth > 700 ? 16 : 8;
     const composerAuxiliaryBannerStyle = { width: '100%' as const, maxWidth: layout.maxWidth };

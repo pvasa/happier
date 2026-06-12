@@ -179,6 +179,30 @@ describe('transcript viewport controller', () => {
         expect(controller.getMode()).toBe('restore-distance');
     });
 
+    it('resolves explicit anchor restores without first-paint semantics', () => {
+        const controller = createTranscriptViewportController();
+
+        const command = controller.resolve({
+            type: 'restore-anchor',
+            sessionId: 'session-a',
+            reason: 'prepend-restore',
+            index: 7.8,
+            viewOffset: -42.5,
+            animated: false,
+        });
+
+        expect(command).toEqual({
+            kind: 'restore-index',
+            sessionId: 'session-a',
+            reason: 'prepend-restore',
+            mode: 'restore-anchor',
+            index: 7,
+            viewOffset: -42,
+            animated: false,
+        });
+        expect(controller.getMode()).toBe('restore-anchor');
+    });
+
     it('does not repin passive drift while user unpinned', () => {
         const controller = createTranscriptViewportController();
         controller.resolve({
@@ -262,68 +286,6 @@ describe('transcript viewport controller', () => {
             mode: 'follow-bottom',
         });
         expect(controller.getMode()).toBe('follow-bottom');
-    });
-
-    it('keeps restored anchor in user unpinned after observation', () => {
-        const controller = createTranscriptViewportController();
-        controller.resolve({
-            type: 'first-paint',
-            sessionId: 'session-a',
-            shouldFollowBottom: false,
-            entrySnapshot: {
-                shouldFollowBottom: false,
-                offsetY: 80,
-                anchorIndex: 4,
-            },
-            jumpToSeq: null,
-            platform: 'ios',
-            listImplementation: 'flash_v2',
-        });
-
-        const command = controller.resolve({
-            type: 'restore-observed',
-            sessionId: 'session-a',
-            status: 'within-tolerance',
-        });
-
-        expect(command).toEqual({
-            kind: 'none',
-            sessionId: 'session-a',
-            reason: 'restore-observed',
-            mode: 'user-unpinned',
-        });
-        expect(controller.getMode()).toBe('user-unpinned');
-    });
-
-    it('keeps failed anchor restore in user unpinned', () => {
-        const controller = createTranscriptViewportController();
-        controller.resolve({
-            type: 'first-paint',
-            sessionId: 'session-a',
-            shouldFollowBottom: false,
-            entrySnapshot: {
-                shouldFollowBottom: false,
-                offsetY: 80,
-                anchorIndex: 4,
-            },
-            jumpToSeq: null,
-            platform: 'ios',
-            listImplementation: 'flash_v2',
-        });
-
-        const command = controller.resolve({
-            type: 'restore-observed',
-            sessionId: 'session-a',
-            status: 'failed',
-        });
-
-        expect(command).toEqual({
-            kind: 'none',
-            sessionId: 'session-a',
-            reason: 'restore-failed',
-            mode: 'user-unpinned',
-        });
-        expect(controller.getMode()).toBe('user-unpinned');
     });
 
     it('resets to hydrating on session identity change', () => {

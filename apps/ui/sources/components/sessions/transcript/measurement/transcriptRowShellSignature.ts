@@ -9,6 +9,7 @@ import type {
 } from './transcriptItemHeightCache';
 
 const TRANSCRIPT_ROW_TYPE_LONG_TEXT_MIN_CHARS = 512;
+const TRANSCRIPT_COLLAPSED_TOOL_GROUP_SIGNATURE_PREVIEW_COUNT = 15;
 
 export type TranscriptRowShellItem =
     | ChatListItem
@@ -117,12 +118,11 @@ export function buildTranscriptRowShellSignature(params: Readonly<{
         }));
         return {
             ...base,
-            structuralKey: buildStableJsonSignature({
+            structuralKey: buildToolGroupShellStructuralKey({
                 id: item.id,
+                getMessageById: params.getMessageById,
+                expandedToolCallsAnchorMessageIds: params.expandedToolCallsAnchorMessageIds,
                 toolMessageIds: item.toolMessageIds,
-                messageRevisions: item.toolMessageIds.map((messageId) => (
-                    buildMessageShellStructuralKey(messageId, params.getMessageById(messageId))
-                )),
             }),
             expansionKey: [
                 buildToolExpansionKey(item.toolMessageIds, params.expandedToolCallsAnchorMessageIds),
@@ -146,6 +146,7 @@ export function buildTranscriptRowShellSignature(params: Readonly<{
         return {
             ...base,
             structuralKey: buildTurnShellStructuralKey({
+                expandedToolCallsAnchorMessageIds: params.expandedToolCallsAnchorMessageIds,
                 getMessageById: params.getMessageById,
                 turn: item.turn,
             }),
@@ -256,17 +257,95 @@ function buildMessageShellStructuralKey(messageId: string, message: Message | nu
 }
 
 function buildTurnShellStructuralKey(params: Readonly<{
+    expandedToolCallsAnchorMessageIds: ReadonlySet<string>;
     getMessageById: (messageId: string) => Message | null;
     turn: TranscriptTurn;
 }>): string {
-    const messageRevisions = collectMessageIdsFromTurn(params.turn).map((messageId) => (
-        buildMessageShellStructuralKey(messageId, params.getMessageById(messageId))
-    ));
+    const messageRevisions: string[] = [];
+    if (params.turn.userMessageId) {
+        messageRevisions.push(buildMessageShellStructuralKey(params.turn.userMessageId, params.getMessageById(params.turn.userMessageId)));
+    }
     return buildStableJsonSignature({
         id: params.turn.id,
         userMessageId: params.turn.userMessageId,
-        content: params.turn.content,
+        content: params.turn.content.map((content) => {
+            if (content.kind === 'message') {
+                messageRevisions.push(buildMessageShellStructuralKey(content.messageId, params.getMessageById(content.messageId)));
+                return content;
+            }
+            return {
+                kind: 'tool_calls',
+                id: content.id,
+                signature: buildToolGroupShellSignatureValue({
+                    getMessageById: params.getMessageById,
+                    expandedToolCallsAnchorMessageIds: params.expandedToolCallsAnchorMessageIds,
+                    toolMessageIds: content.toolMessageIds,
+                }),
+            };
+        }),
         messageRevisions,
+    });
+}
+
+function readToolStatusSignature(message: Message | null): string {
+    if (message?.kind !== 'tool-call') return 'missing';
+    const indicator = resolveToolStatusIndicatorKind(message.tool);
+    if (indicator === 'running' || indicator === 'permission_pending') return 'running';
+    if (indicator === 'error') return 'error';
+    return 'completed';
+}
+
+function buildToolStatusSummary(params: Readonly<{
+    getMessageById: (messageId: string) => Message | null;
+    toolMessageIds: readonly string[];
+}>): string {
+    let sawError = false;
+    for (const messageId of params.toolMessageIds) {
+        const status = readToolStatusSignature(params.getMessageById(messageId));
+        if (status === 'running') return 'running';
+        if (status === 'error') sawError = true;
+    }
+    return sawError ? 'error' : 'completed';
+}
+
+function selectCollapsedToolGroupSignatureMessageIds(toolMessageIds: readonly string[]): readonly string[] {
+    return toolMessageIds.slice(-TRANSCRIPT_COLLAPSED_TOOL_GROUP_SIGNATURE_PREVIEW_COUNT);
+}
+
+function buildToolGroupShellSignatureValue(params: Readonly<{
+    getMessageById: (messageId: string) => Message | null;
+    expandedToolCallsAnchorMessageIds: ReadonlySet<string>;
+    toolMessageIds: readonly string[];
+}>) {
+    const expanded = params.toolMessageIds.some((id) => params.expandedToolCallsAnchorMessageIds.has(id));
+    const signatureMessageIds = expanded
+        ? params.toolMessageIds
+        : selectCollapsedToolGroupSignatureMessageIds(params.toolMessageIds);
+    return {
+        count: params.toolMessageIds.length,
+        expanded,
+        firstMessageId: params.toolMessageIds[0] ?? null,
+        lastMessageId: params.toolMessageIds[params.toolMessageIds.length - 1] ?? null,
+        status: buildToolStatusSummary({
+            getMessageById: params.getMessageById,
+            toolMessageIds: params.toolMessageIds,
+        }),
+        signatureMessageIds,
+        messageRevisions: signatureMessageIds.map((messageId) => (
+            buildMessageShellStructuralKey(messageId, params.getMessageById(messageId))
+        )),
+    };
+}
+
+function buildToolGroupShellStructuralKey(params: Readonly<{
+    id: string;
+    getMessageById: (messageId: string) => Message | null;
+    expandedToolCallsAnchorMessageIds: ReadonlySet<string>;
+    toolMessageIds: readonly string[];
+}>): string {
+    return buildStableJsonSignature({
+        id: params.id,
+        ...buildToolGroupShellSignatureValue(params),
     });
 }
 
@@ -300,7 +379,7 @@ function buildToolExpansionKey(
     if (toolMessageIds.length === 0) return 'tools:none';
     return toolMessageIds.some((id) => expandedToolCallsAnchorMessageIds.has(id))
         ? `tools:expanded:${toolMessageIds.join(',')}`
-        : `tools:collapsed:${toolMessageIds.join(',')}`;
+        : `tools:collapsed:${toolMessageIds.length}:${toolMessageIds[0] ?? ''}:${toolMessageIds[toolMessageIds.length - 1] ?? ''}`;
 }
 
 function buildThinkingExpansionKey(params: Readonly<{

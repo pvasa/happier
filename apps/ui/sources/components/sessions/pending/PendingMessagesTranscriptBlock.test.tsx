@@ -366,7 +366,6 @@ describe('PendingMessagesTranscriptBlock', () => {
             agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
         };
 
-        modalConfirm.mockResolvedValueOnce(true);
         sendPendingMessageNow.mockResolvedValueOnce({ type: 'committed' });
         deletePendingMessage.mockResolvedValueOnce(undefined);
 
@@ -383,6 +382,8 @@ describe('PendingMessagesTranscriptBlock', () => {
 
         await screen.pressByTestIdAsync('pendingMessages.steerNow:p1');
 
+        // Lane Q (Q5): the explicit "Steer now" tap executes directly — no redundant confirm.
+        expect(modalConfirm).toHaveBeenCalledTimes(0);
         expect(sessionAbort).toHaveBeenCalledTimes(0);
         expect(sendPendingMessageNow).toHaveBeenCalledTimes(1);
 	        expect(sendPendingMessageNow).toHaveBeenCalledWith('s1', expect.objectContaining({ localId: 'p1' }));
@@ -402,7 +403,6 @@ describe('PendingMessagesTranscriptBlock', () => {
 
         const sendStarted = createDeferred<void>();
         const releaseSend = createDeferred<{ type: 'retry_scheduled' }>();
-        modalConfirm.mockResolvedValueOnce(true);
         sendPendingMessageNow.mockImplementationOnce(async () => {
             sendStarted.resolve(undefined);
             return await releaseSend.promise;
@@ -475,6 +475,35 @@ describe('PendingMessagesTranscriptBlock', () => {
 	        expect(sessionAbort).toHaveBeenCalledTimes(1);
 	        expect(sendPendingMessageNow).toHaveBeenCalledWith('s1', expect.objectContaining({ localId: 'p1' }));
 	    });
+
+    it('shows the terminal-draft variant of the notice when the CLI published user_terminal_draft (lane X)', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        sessionValue = {
+            thinking: true,
+            thinkingAt: Date.now(),
+            active: true,
+            presence: 'online',
+            agentStateVersion: 1,
+            agentState: {
+                controlledByUser: false,
+                capabilities: {
+                    inFlightSteer: true,
+                    inFlightSteerSupported: true,
+                    inFlightSteerAvailable: false,
+                    inFlightSteerUnavailableReason: 'user_terminal_draft',
+                },
+            },
+        };
+
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [{ id: 'p1', text: 'hello', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} }],
+            discardedMessages: [],
+        }));
+
+        expect(screen.findByTestId('pendingMessages.nonSteerableNotice')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.steerBlockedTerminalDraftNotice')).toBeTruthy();
+    });
 
     it('does not expose steer-now or non-steerable notice for stale terminal thinking', async () => {
         const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(130_000);

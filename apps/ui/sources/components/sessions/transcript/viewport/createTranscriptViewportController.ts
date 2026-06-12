@@ -21,7 +21,7 @@ export function createTranscriptViewportController(): TranscriptViewportControll
             if (sessionId !== input.sessionId) {
                 sessionId = input.sessionId;
                 mode = 'hydrating';
-                if (input.type === 'user-scroll' || input.type === 'auto-follow' || input.type === 'restore-observed') {
+                if (input.type === 'user-scroll' || input.type === 'auto-follow') {
                     return { kind: 'none', sessionId: input.sessionId, reason: 'session-change', mode };
                 }
             }
@@ -63,6 +63,19 @@ export function createTranscriptViewportController(): TranscriptViewportControll
                         offsetY: normalizeNonNegative(input.offsetY),
                         ...(typeof input.animated === 'boolean' ? { animated: input.animated } : {}),
                     };
+                case 'restore-anchor':
+                    mode = 'restore-anchor';
+                    return {
+                        kind: 'restore-index',
+                        sessionId: input.sessionId,
+                        reason: input.reason,
+                        mode,
+                        index: Math.max(0, Math.trunc(input.index)),
+                        ...(typeof input.viewOffset === 'number' && Number.isFinite(input.viewOffset)
+                            ? { viewOffset: Math.trunc(input.viewOffset) }
+                            : {}),
+                        ...(typeof input.animated === 'boolean' ? { animated: input.animated } : {}),
+                    };
                 case 'jump-to-seq':
                     mode = 'jump-to-seq';
                     return {
@@ -74,14 +87,6 @@ export function createTranscriptViewportController(): TranscriptViewportControll
                         ...(typeof input.index === 'number' && Number.isFinite(input.index)
                             ? { index: Math.max(0, Math.trunc(input.index)) }
                             : {}),
-                    };
-                case 'restore-observed':
-                    mode = 'user-unpinned';
-                    return {
-                        kind: 'none',
-                        sessionId: input.sessionId,
-                        reason: input.status === 'within-tolerance' ? 'restore-observed' : 'restore-failed',
-                        mode,
                     };
             }
         },

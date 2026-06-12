@@ -69,9 +69,6 @@ function formatConnectedServiceSwitchAttemptSuccessText(event: Extract<AgentEven
     if (outcomeAction === 'metadata_updated' || (!outcomeAction && event.action === 'metadata_updated')) {
         return t('connectedServices.authSwitch.status.appliesOnNextResume');
     }
-    if (outcomeAction === 'credential_refreshed') {
-        return t('connectedServices.authSwitch.confirmAction');
-    }
     return t('connectedServices.authSwitch.confirmAction');
 }
 
@@ -106,6 +103,115 @@ function formatRuntimeAuthRecoveryText(event: Extract<AgentEvent, { type: 'conne
     }
 }
 
+type RuntimeConfigOutcomeEvent = Extract<AgentEvent, { type: 'runtime-config-outcome' }>;
+
+// The five public statuses are frozen. Optional `timing` carries when an already-statused change
+// takes effect, and is surfaced as a calm, secondary sub-state (never a new status or an alarm).
+function formatRuntimeConfigOutcomeTiming(timing: RuntimeConfigOutcomeEvent['timing']): string | undefined {
+    switch (timing) {
+        case 'scheduled_for_next_prompt':
+        case 'before_next_prompt':
+        case 'next_idle':
+            return t('message.runtimeConfigOutcomeAppliesBeforeNextMessage');
+        case 'queued_until_safe_window':
+            return t('message.runtimeConfigOutcomeQueuedUntilReady');
+        case 'skipped_already_effective':
+            return t('message.runtimeConfigOutcomeAlreadySet');
+        default:
+            return undefined;
+    }
+}
+
+// Pending timing means the change is not effective yet, so the row should read as a calm clock
+// rather than a success checkmark. `current_window`/`skipped_already_effective` are effective now.
+function isPendingRuntimeConfigOutcomeTiming(timing: RuntimeConfigOutcomeEvent['timing']): boolean {
+    return timing === 'scheduled_for_next_prompt'
+        || timing === 'before_next_prompt'
+        || timing === 'next_idle'
+        || timing === 'queued_until_safe_window';
+}
+
+type RuntimeConfigOutcomeChange = NonNullable<RuntimeConfigOutcomeEvent['changes']>[number];
+
+function runtimeConfigOutcomeKeyLabel(key: RuntimeConfigOutcomeChange['key']): string {
+    switch (key) {
+        case 'model':
+            return t('message.runtimeConfigOutcomeKeyModel');
+        case 'fallbackModel':
+            return t('message.runtimeConfigOutcomeKeyFallbackModel');
+        case 'permissionMode':
+            return t('message.runtimeConfigOutcomeKeyPermissionMode');
+        case 'reasoningEffort':
+            return t('message.runtimeConfigOutcomeKeyReasoningEffort');
+        case 'maxThinkingTokens':
+            return t('message.runtimeConfigOutcomeKeyMaxThinkingTokens');
+        case 'launchOption':
+            return t('message.runtimeConfigOutcomeKeyLaunchOption');
+        case 'sessionMode':
+            return t('message.runtimeConfigOutcomeSessionMode');
+    }
+}
+
+// Single lower/camelCase tokens (enum-ish values such as `acceptEdits`, `medium`, `ultracode`) read
+// better spaced and capitalized; ids with digits/separators (model ids) must stay verbatim.
+const HUMANIZABLE_VALUE = /^[a-z]+(?:[A-Z][a-z]*)*$/;
+
+function formatRuntimeConfigOutcomeValue(value: RuntimeConfigOutcomeChange['effective']): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value === 'boolean') return value ? t('common.on') : t('common.off');
+    if (typeof value === 'number') return String(value);
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return undefined;
+    if (!HUMANIZABLE_VALUE.test(trimmed)) return trimmed;
+    const spaced = trimmed.replace(/([A-Z])/g, ' $1').toLowerCase();
+    return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+function runtimeConfigOutcomeStatusPrefix(status: RuntimeConfigOutcomeEvent['status']): string | undefined {
+    switch (status) {
+        case 'applied':
+            return undefined;
+        case 'requires_restart':
+            return t('message.runtimeConfigOutcomeRequiresRestart');
+        case 'requires_interactive_control':
+            return t('message.runtimeConfigOutcomeRequiresInteractiveControl');
+        case 'unsupported':
+            return t('message.runtimeConfigOutcomeUnsupported');
+        case 'failed':
+            return t('message.runtimeConfigOutcomeFailed');
+    }
+}
+
+/**
+ * Friendly per-change copy with values (L4): "Reasoning effort → Medium". Returns undefined when
+ * no change carries a usable value, so the event message remains the fallback.
+ */
+function formatRuntimeConfigOutcomeChangesText(event: RuntimeConfigOutcomeEvent): string | undefined {
+    const changes = event.changes;
+    if (!changes || changes.length === 0) return undefined;
+    const parts = changes.map((change) => {
+        const label = runtimeConfigOutcomeKeyLabel(change.key);
+        const value = formatRuntimeConfigOutcomeValue(change.effective ?? change.requested);
+        return value !== undefined ? `${label} → ${value}` : undefined;
+    });
+    if (!parts.some((part) => part !== undefined)) return undefined;
+    const list = changes
+        .map((change, index) => parts[index] ?? runtimeConfigOutcomeKeyLabel(change.key))
+        .join(' · ');
+    const prefix = runtimeConfigOutcomeStatusPrefix(event.status);
+    return prefix ? `${prefix}: ${list}` : list;
+}
+
+function formatRuntimeConfigOutcomeSessionModeChange(changes: RuntimeConfigOutcomeEvent['changes']): string | undefined {
+    const change = changes?.find((entry) => entry.key === 'sessionMode');
+    if (!change) return undefined;
+    const label = t('message.runtimeConfigOutcomeSessionMode');
+    const value = change.requested ?? change.effective;
+    return typeof value === 'string' && value.trim().length > 0
+        ? `${label} (${value.trim()})`
+        : label;
+}
+
 export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: {
     event: AgentEvent;
 }) {
@@ -113,6 +219,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     const settings = useSettings();
     let iconName: React.ComponentProps<typeof Ionicons>['name'] = 'information-circle-outline';
     let text = formatUnknownEventDetails(props.event);
+    let detailText: string | undefined;
     let isLoading = false;
     let testID: string | undefined;
 
@@ -122,6 +229,22 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     } else if (props.event.type === 'message') {
         iconName = 'information-circle-outline';
         text = props.event.message;
+    } else if (props.event.type === 'runtime-config-outcome') {
+        testID = `transcript-event-runtime-config-outcome-${props.event.status}`;
+        const pendingTiming = isPendingRuntimeConfigOutcomeTiming(props.event.timing);
+        if (props.event.status === 'applied') {
+            iconName = pendingTiming ? 'time-outline' : 'checkmark-circle-outline';
+        } else if (props.event.status === 'requires_restart' || props.event.status === 'requires_interactive_control') {
+            iconName = 'time-outline';
+        } else {
+            iconName = 'warning-outline';
+        }
+        text = formatRuntimeConfigOutcomeChangesText(props.event) ?? props.event.message;
+        const detailParts = [
+            formatRuntimeConfigOutcomeSessionModeChange(props.event.changes),
+            formatRuntimeConfigOutcomeTiming(props.event.timing),
+        ].filter((part): part is string => Boolean(part));
+        detailText = detailParts.length > 0 ? detailParts.join(' · ') : undefined;
     } else if (props.event.type === 'context-compaction') {
         const isPaused = props.event.phase === 'completed' && props.event.continuation === 'paused';
         testID = `transcript-event-context-compaction-${isPaused ? 'paused' : props.event.phase}`;
@@ -226,9 +349,16 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
                         <Ionicons name={iconName} size={EVENT_ICON_SIZE} color={theme.colors.text.secondary} />
                     )}
                 </View>
-                <Text selectable style={styles.text}>
-                    {text}
-                </Text>
+                <View style={styles.textColumn} testID={testID ? `${testID}-body` : undefined}>
+                    <Text selectable style={styles.text}>
+                        {text}
+                    </Text>
+                    {detailText ? (
+                        <Text selectable style={styles.detailText} testID={testID ? `${testID}-detail` : undefined}>
+                            {detailText}
+                        </Text>
+                    ) : null}
+                </View>
             </View>
         </>
     );
@@ -262,10 +392,22 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
         flexShrink: 0,
     },
+    textColumn: {
+        flex: 1,
+        minWidth: 0,
+        gap: 2,
+    },
     text: {
         color: theme.colors.text.secondary,
         fontSize: 14,
         lineHeight: 20,
+        fontWeight: '500',
+        flexShrink: 1,
+    },
+    detailText: {
+        color: theme.colors.text.tertiary,
+        fontSize: 13,
+        lineHeight: 18,
         fontWeight: '500',
         flexShrink: 1,
     },

@@ -10,11 +10,14 @@ export type TranscriptViewportMode =
 export type TranscriptViewportPlatform = 'web' | 'ios' | 'android' | 'native-other';
 export type TranscriptViewportListImplementation = 'flash_v2' | 'flatlist' | 'web-fallback';
 
+export type TranscriptViewportOwner = 'entry' | 'prepend' | 'follow' | 'explicit' | 'idle';
+
 export type TranscriptViewportScrollReason =
     | 'initial-open'
     | 'content-size-change'
     | 'layout-change'
     | 'entry-restore'
+    | 'prepend-restore'
     | 'jump-to-bottom'
     | 'jump-to-seq'
     | 'stream-append'
@@ -91,13 +94,16 @@ export type TranscriptViewportControllerInput =
         animated?: boolean;
     }>
     | Readonly<{
+        type: 'restore-anchor';
+        sessionId: string;
+        reason: TranscriptViewportScrollReason;
+        index: number;
+        viewOffset?: number;
+        animated?: boolean;
+    }>
+    | Readonly<{
         type: 'jump-to-seq';
         sessionId: string;
         seq: number;
         index?: number | null;
-    }>
-    | Readonly<{
-        type: 'restore-observed';
-        sessionId: string;
-        status: 'within-tolerance' | 'failed';
     }>;

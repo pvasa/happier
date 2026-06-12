@@ -24,9 +24,21 @@ installTranscriptCommonModuleMocks({
         (await import('@/dev/testkit/harness/chatListHarness')).createFlashListChatListStorageMock(importOriginal),
 });
 
+// The FlashListCompat module mock binds the ref handle once at factory time, so the whole
+// file shares one stable handle; tests steer the reported native offset via this state.
+const nativeScrollOffsetState = { value: 0 };
+const fileFlashListRefHandle = {
+    scrollToOffset: vi.fn(),
+    scrollToIndex: vi.fn(),
+    getAbsoluteLastScrollOffset: vi.fn(() => nativeScrollOffsetState.value),
+};
+
 beforeEach(() => {
     resetTranscriptCommonModuleMockState();
-    resetFlashListChatListHarness({ platformOs: 'ios' });
+    nativeScrollOffsetState.value = 0;
+    fileFlashListRefHandle.scrollToOffset.mockClear();
+    fileFlashListRefHandle.scrollToIndex.mockClear();
+    resetFlashListChatListHarness({ platformOs: 'ios', flashListRefHandle: fileFlashListRefHandle });
     flashListChatListHarnessState.sessionMessagesState = {
         messages: [{ kind: 'user-text', id: 'm1', localId: 'u1', createdAt: 1, text: 'hi' }],
         isLoaded: true,
@@ -197,6 +209,125 @@ describe('ChatList (FlashList v2, native jump-to-bottom)', () => {
 
         await screen.triggerScroll(1000, {}, { cycles: 1, turns: 1 });
         expect(screen.findAllByTestId('transcript-jump-to-bottom').length).toBeGreaterThan(0);
+    });
+
+    it('shows jump-to-bottom when a trusted drag flings far from the bottom on untrusted momentum frames (plan B9 momentum release)', async () => {
+        vi.useFakeTimers({ now: new Date(0) });
+        nativeScrollOffsetState.value = 7500;
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderFlashListChatList(
+            <ChatList session={flashListChatListHarnessState.sessionState} />,
+        );
+
+        await screen.triggerInitialFill({
+            layoutHeight: 500,
+            contentHeight: 8000,
+            contentWidth: 0,
+            flushOptions: { cycles: 1, turns: 1 },
+        });
+
+        const flashListProps = screen.requireCapturedFlashListProps();
+
+        // Hard flick: finger travel stays inside the pin threshold (dfb 40 < 72),
+        // so the release-threshold crossing happens entirely on momentum frames.
+        await act(async () => {
+            flashListProps.onScrollBeginDrag?.({});
+        });
+        nativeScrollOffsetState.value = 7460;
+        await screen.triggerScroll(7460, { isTrusted: true }, { cycles: 1, turns: 1 });
+        await act(async () => {
+            flashListProps.onScrollEndDrag?.({});
+            flashListProps.onMomentumScrollBegin?.({});
+        });
+
+        // Untrusted momentum frames carry the viewport far from the bottom.
+        nativeScrollOffsetState.value = 7000;
+        await screen.triggerScroll(7000, {}, { cycles: 1, turns: 1 });
+        nativeScrollOffsetState.value = 5000;
+        await screen.triggerScroll(5000, {}, { cycles: 1, turns: 1 });
+        nativeScrollOffsetState.value = 500;
+        await screen.triggerScroll(500, {}, { cycles: 1, turns: 1 });
+        nativeScrollOffsetState.value = 0;
+        await screen.triggerScroll(0, {}, { cycles: 1, turns: 1 });
+        await act(async () => {
+            flashListProps.onMomentumScrollEnd?.({});
+        });
+
+        expect(screen.findAllByTestId('transcript-jump-to-bottom').length).toBeGreaterThan(0);
+    });
+
+    it('shows jump-to-bottom at momentum settle even when every momentum frame was swallowed (plan B9 settle release)', async () => {
+        vi.useFakeTimers({ now: new Date(0) });
+        nativeScrollOffsetState.value = 7500;
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderFlashListChatList(
+            <ChatList session={flashListChatListHarnessState.sessionState} />,
+        );
+
+        await screen.triggerInitialFill({
+            layoutHeight: 500,
+            contentHeight: 8000,
+            contentWidth: 0,
+            flushOptions: { cycles: 1, turns: 1 },
+        });
+
+        const flashListProps = screen.requireCapturedFlashListProps();
+
+        // Hard flick near the bottom; in the field every momentum scroll frame can be
+        // swallowed by open prepend transactions ('pending' observations), so the settle
+        // itself must surface the released state.
+        await act(async () => {
+            flashListProps.onScrollBeginDrag?.({});
+        });
+        nativeScrollOffsetState.value = 7460;
+        await screen.triggerScroll(7460, { isTrusted: true }, { cycles: 1, turns: 1 });
+        await act(async () => {
+            flashListProps.onScrollEndDrag?.({});
+            flashListProps.onMomentumScrollBegin?.({});
+        });
+
+        nativeScrollOffsetState.value = 0;
+        await act(async () => {
+            flashListProps.onMomentumScrollEnd?.({});
+        });
+        await screen.settle({ cycles: 1, turns: 1 });
+
+        expect(screen.findAllByTestId('transcript-jump-to-bottom').length).toBeGreaterThan(0);
+    });
+
+    it('keeps jump-to-bottom hidden for momentum without a drag (plan B9 B6-safety)', async () => {
+        vi.useFakeTimers({ now: new Date(0) });
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderFlashListChatList(
+            <ChatList session={flashListChatListHarnessState.sessionState} />,
+        );
+
+        await screen.triggerInitialFill({
+            layoutHeight: 500,
+            contentHeight: 2000,
+            contentWidth: 0,
+            flushOptions: { cycles: 1, turns: 1 },
+        });
+
+        const flashListProps = screen.requireCapturedFlashListProps();
+
+        // An animated programmatic scroll fires momentum events without any drag session.
+        // Untrusted moved-away frames (height churn) inside that window must never release
+        // follow or reveal the button.
+        await act(async () => {
+            flashListProps.onMomentumScrollBegin?.({});
+        });
+        await screen.triggerScroll(1000, {}, { cycles: 1, turns: 1 });
+        await screen.triggerScroll(800, {}, { cycles: 1, turns: 1 });
+        await act(async () => {
+            flashListProps.onMomentumScrollEnd?.({});
+        });
+        await screen.settle({ cycles: 1, turns: 1 });
+
+        expect(screen.findAllByTestId('transcript-jump-to-bottom')).toHaveLength(0);
     });
 
     it('uses native event dimensions to hide jump-to-bottom when cached content height is stale', async () => {

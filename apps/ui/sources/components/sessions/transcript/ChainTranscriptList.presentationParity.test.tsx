@@ -34,6 +34,7 @@ vi.mock('@/sync/sync', () => ({
     sync: {
         getSyncTuning: () => ({
             transcriptFlashListEstimatedItemSize: 120,
+            transcriptMaxTurnEntriesPerListItem: 8,
         }),
     },
 }));
@@ -223,6 +224,51 @@ describe('ChainTranscriptList presentation parity', () => {
             }),
         );
         expect(messageViewSpy).not.toHaveBeenCalled();
+    });
+
+    it('keeps a long turn-level tool run as one semantic group in turn layout', async () => {
+        settings.transcriptGroupingMode = 'turns';
+        settings.transcriptTurnToolCallsGroupStrategy = 'all_tools_in_turn';
+
+        const { ChainTranscriptList } = await import('./ChainTranscriptList');
+
+        const userMessage: Message = {
+            kind: 'user-text',
+            id: 'user-1',
+            localId: null,
+            createdAt: 1,
+            text: 'Run the audit',
+        };
+        const toolMessages: Message[] = Array.from({ length: 200 }, (_, index) => ({
+            kind: 'tool-call',
+            id: `tool-msg-${index + 1}`,
+            localId: null,
+            createdAt: index + 2,
+            tool: makeToolCall({
+                id: `tool-${index + 1}`,
+                name: 'Read',
+                input: { file: `file-${index + 1}.ts` },
+                createdAt: index + 2,
+            }),
+            children: [],
+        }));
+
+        await renderScreen(React.createElement(ChainTranscriptList, {
+                    sessionId: 's1',
+                    messages: [userMessage, ...toolMessages],
+                    metadata: null,
+                    interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+                }));
+
+        expect(toolCallsGroupRowWithCommonSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                toolMessageIds: toolMessages.map((message) => message.id),
+            }),
+        );
+        const groupSizes = toolCallsGroupRowWithCommonSpy.mock.calls
+            .map(([props]) => Array.isArray(props?.toolMessageIds) ? props.toolMessageIds.length : 0);
+        expect(groupSizes).not.toContain(8);
+        expect(groupSizes.every((size) => size === 200)).toBe(true);
     });
 
     it('uses turn layout in tool transcripts when transcript layout is set to turns', async () => {

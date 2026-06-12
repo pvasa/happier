@@ -153,7 +153,11 @@ describe('ChatList (auto-follow while pinned)', () => {
     };
 
     await act(async () => {
-      await screen.update(<ChatList session={{ ...legacyChatListHarnessState.sessionState }} />);
+      // New committed messages bump the session seq in production; the ChatList memo
+      // gate (buildSessionTranscriptRenderSignature) relies on it to pass updates through.
+      await screen.update(
+        <ChatList session={{ ...legacyChatListHarnessState.sessionState, seq: 1 }} />,
+      );
     });
 
     expect(scrollToOffsetSpy).toHaveBeenCalled();
@@ -194,7 +198,10 @@ describe('ChatList (auto-follow while pinned)', () => {
     };
 
     await act(async () => {
-      await screen.update(<ChatList session={{ ...legacyChatListHarnessState.sessionState }} />);
+      // See above: bump seq so the memo gate passes the committed-message update through.
+      await screen.update(
+        <ChatList session={{ ...legacyChatListHarnessState.sessionState, seq: 1 }} />,
+      );
     });
 
     const event = syncPerformanceTelemetry

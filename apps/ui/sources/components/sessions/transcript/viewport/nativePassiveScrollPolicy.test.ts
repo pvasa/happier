@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
     resolveNativePassiveBottomDriftNoiseFloorPx,
+    shouldIgnoreNativeInvalidScrollObservation,
     shouldIgnoreNativePassiveViewportScroll,
-    shouldIgnoreNativeRecycledTopJump,
     shouldRecordNativePassiveUnpinnedMovement,
 } from './nativePassiveScrollPolicy';
 
@@ -23,59 +23,37 @@ describe('native passive scroll policy', () => {
         })).toBe(0);
     });
 
-    it('detects recycled native top jumps only for large unpinned passive jumps', () => {
-        expect(shouldIgnoreNativeRecycledTopJump({
-            distanceFromBottom: 900,
-            hasNativeInitialViewportApplied: true,
+    it('ignores impossible native negative offsets without suppressing ordinary top bounce', () => {
+        expect(shouldIgnoreNativeInvalidScrollObservation({
+            contentHeight: 24578,
+            distanceFromBottom: 996655,
             isWeb: false,
-            pinThresholdPx: 20,
-            previousDistanceFromBottom: 100,
-            requireNativeInitialViewportApplied: false,
-            thresholdMultiplier: 8,
-            viewportHeight: 100,
-            viewportMultiplier: 4,
-            wantsPinned: false,
+            layoutHeight: 682,
+            offsetY: -972759,
         })).toBe(true);
 
-        expect(shouldIgnoreNativeRecycledTopJump({
-            distanceFromBottom: 160,
-            hasNativeInitialViewportApplied: true,
+        expect(shouldIgnoreNativeInvalidScrollObservation({
+            contentHeight: 24578,
+            distanceFromBottom: -972759,
             isWeb: false,
-            pinThresholdPx: 20,
-            previousDistanceFromBottom: 100,
-            requireNativeInitialViewportApplied: false,
-            thresholdMultiplier: 8,
-            viewportHeight: 100,
-            viewportMultiplier: 4,
-            wantsPinned: false,
+            layoutHeight: 682,
+            offsetY: -972759,
+        })).toBe(true);
+
+        expect(shouldIgnoreNativeInvalidScrollObservation({
+            contentHeight: 24578,
+            distanceFromBottom: 23928,
+            isWeb: false,
+            layoutHeight: 682,
+            offsetY: -32,
         })).toBe(false);
 
-        expect(shouldIgnoreNativeRecycledTopJump({
-            distanceFromBottom: 900,
-            hasNativeInitialViewportApplied: true,
-            isWeb: false,
-            pinThresholdPx: 20,
-            previousDistanceFromBottom: 100,
-            requireNativeInitialViewportApplied: false,
-            thresholdMultiplier: 8,
-            viewportHeight: 100,
-            viewportMultiplier: 4,
-            wantsPinned: true,
-        })).toBe(false);
-    });
-
-    it('can require the native initial viewport to be applied before filtering recycled top jumps', () => {
-        expect(shouldIgnoreNativeRecycledTopJump({
-            distanceFromBottom: 900,
-            hasNativeInitialViewportApplied: false,
-            isWeb: false,
-            pinThresholdPx: 20,
-            previousDistanceFromBottom: 100,
-            requireNativeInitialViewportApplied: true,
-            thresholdMultiplier: 8,
-            viewportHeight: 100,
-            viewportMultiplier: 4,
-            wantsPinned: false,
+        expect(shouldIgnoreNativeInvalidScrollObservation({
+            contentHeight: 24578,
+            distanceFromBottom: 996655,
+            isWeb: true,
+            layoutHeight: 682,
+            offsetY: -972759,
         })).toBe(false);
     });
 
@@ -125,7 +103,6 @@ describe('native passive scroll policy', () => {
             nowMs: 1000,
             lastUserScrollIntentAtMs: Number.NEGATIVE_INFINITY,
             pinThresholdPx: 16,
-            shouldIgnoreRecycledTopJump: false,
             shouldRecordPassiveUnpinnedMovement: false,
             userIntentRecentMs: 500,
             wantsPinned: false,
@@ -144,7 +121,6 @@ describe('native passive scroll policy', () => {
             nowMs: 1000,
             lastUserScrollIntentAtMs: Number.NEGATIVE_INFINITY,
             pinThresholdPx: 16,
-            shouldIgnoreRecycledTopJump: false,
             shouldRecordPassiveUnpinnedMovement: false,
             userIntentRecentMs: 500,
             wantsPinned: false,
@@ -163,7 +139,6 @@ describe('native passive scroll policy', () => {
             nowMs: 1000,
             lastUserScrollIntentAtMs: Number.NEGATIVE_INFINITY,
             pinThresholdPx: 16,
-            shouldIgnoreRecycledTopJump: false,
             shouldRecordPassiveUnpinnedMovement: false,
             userIntentRecentMs: 500,
             wantsPinned: false,
@@ -182,7 +157,6 @@ describe('native passive scroll policy', () => {
             isWeb: false,
             nowMs: 1000,
             pinThresholdPx: 16,
-            shouldIgnoreRecycledTopJump: false,
             shouldRecordPassiveUnpinnedMovement: false,
             userIntentRecentMs: 500,
             wantsPinned: false,

@@ -30,11 +30,6 @@ export type TranscriptMountSettlePinCoordinator = Readonly<{
     observeMetrics(metrics: TranscriptMountSettleMetrics): void;
     sample(event: Readonly<{ sessionId: string; nowMs: number }>): void;
     reset(event?: Readonly<{ reason?: 'session-change' | 'unmount' }>): void;
-    shouldGatePassiveDriftRepin(params: Readonly<{
-        wantsPinned: boolean;
-        distanceFromBottom: number;
-        pinThresholdPx: number;
-    }>): boolean;
 }>;
 
 export function createTranscriptMountSettlePinCoordinator(
@@ -92,13 +87,6 @@ export function createTranscriptMountSettlePinCoordinator(
         },
         reset() {
             resetState(null);
-        },
-        shouldGatePassiveDriftRepin(params) {
-            if (stableSettle) return false;
-            if (!params.wantsPinned) return false;
-            const distanceFromBottom = normalizeNumber(params.distanceFromBottom);
-            const pinThresholdPx = Math.max(0, normalizeNumber(params.pinThresholdPx));
-            return distanceFromBottom > pinThresholdPx;
         },
     };
 

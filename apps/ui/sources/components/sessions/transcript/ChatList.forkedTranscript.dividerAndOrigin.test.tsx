@@ -455,22 +455,19 @@ describe('ChatList (forked transcript)', () => {
         await screen.unmount();
     });
 
-    it('loads older messages via fork-aware paging when reaching the start of the list', async () => {
+    it('loads older messages via fork-aware paging when the transcript needs older pages', async () => {
         const syncMod = await import('@/sync/sync');
         const loadOlderForkAware = (syncMod as any).sync.loadOlderMessagesForkAware as ReturnType<typeof vi.fn>;
-        loadOlderForkAware.mockResolvedValueOnce({ loaded: 0, hasMore: true, status: 'loaded' });
+        loadOlderForkAware.mockResolvedValueOnce({ loaded: 0, hasMore: false, status: 'no_more' });
 
         const screen = await renderChatList();
 
+        // An under-filled viewport drives the initial-fill loop through ChatList.loadOlder,
+        // which must route through the fork-aware sync paging entrypoint.
         await act(async () => {
             flashListRuntime.mock.state.props?.onLayout?.({ nativeEvent: { layout: { height: 200 } } });
-            flashListRuntime.mock.state.props?.onContentSizeChange?.(0, 400);
-            await flushHookEffects({ cycles: 1, turns: 2 });
-        });
-
-        await act(async () => {
-            flashListRuntime.mock.state.props?.onStartReached?.();
-            await flushHookEffects({ cycles: 1, turns: 1 });
+            flashListRuntime.mock.state.props?.onContentSizeChange?.(0, 100);
+            await flushHookEffects({ cycles: 2, turns: 3 });
         });
 
         expect(loadOlderForkAware).toHaveBeenCalledWith('child-1');

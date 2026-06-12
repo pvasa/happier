@@ -2,6 +2,7 @@ import type { WebTranscriptScrollMetrics } from '@/components/sessions/transcrip
 
 export const TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX = 'transcript-item-';
 export const TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX = 'transcript-anchor-message-';
+export const TRANSCRIPT_WEB_TOOL_CALL_PREPEND_ANCHOR_TEST_ID_PREFIX = 'transcript-anchor-tool-call-';
 export const TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX = 'transcript-anchor-tool-group-';
 
 export type WebTranscriptPrependAnchor = Readonly<{
@@ -31,7 +32,13 @@ export type WebTranscriptViewportAnchor = Readonly<{
 
 export type WebTranscriptViewportAnchorRestoreResult = Readonly<{
     didAdjustScroll: boolean;
-    status: 'restored' | 'already_aligned' | 'not_found';
+    status: 'restored' | 'already_aligned' | 'not_found' | 'not_applied';
+}>;
+
+export type WebTranscriptScrollTopWriter = (targetScrollTop: number) => boolean;
+
+export type WebTranscriptScrollTopWriteOptions = Readonly<{
+    writeScrollTop: WebTranscriptScrollTopWriter;
 }>;
 
 function resolveElementByTestId(params: Readonly<{
@@ -72,6 +79,9 @@ function resolveTrackedAnchorPrefix(testId: string | null): string | null {
     if (testId.startsWith(TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX)) {
         return TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX;
     }
+    if (testId.startsWith(TRANSCRIPT_WEB_TOOL_CALL_PREPEND_ANCHOR_TEST_ID_PREFIX)) {
+        return TRANSCRIPT_WEB_TOOL_CALL_PREPEND_ANCHOR_TEST_ID_PREFIX;
+    }
     if (testId.startsWith(TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX)) {
         return TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX;
     }
@@ -92,6 +102,12 @@ function resolveViewportAnchorKindAndMessageId(testId: string): Readonly<{
         return {
             kind: 'toolGroup',
             messageId: testId.slice(TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX.length),
+        };
+    }
+    if (testId.startsWith(TRANSCRIPT_WEB_TOOL_CALL_PREPEND_ANCHOR_TEST_ID_PREFIX)) {
+        return {
+            kind: 'toolGroup',
+            messageId: testId.slice(TRANSCRIPT_WEB_TOOL_CALL_PREPEND_ANCHOR_TEST_ID_PREFIX.length),
         };
     }
     if (testId.startsWith(TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX)) {
@@ -129,6 +145,7 @@ type TrackedAnchorScan = Readonly<{
 
 function isStableTranscriptAnchorTestId(testId: string): boolean {
     return testId.startsWith(TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX) ||
+        testId.startsWith(TRANSCRIPT_WEB_TOOL_CALL_PREPEND_ANCHOR_TEST_ID_PREFIX) ||
         testId.startsWith(TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX);
 }
 
@@ -174,8 +191,11 @@ function createTrackedAnchorScan(container: HTMLElement): TrackedAnchorScan | nu
         const overlapBottom = Math.min(rect.bottom, containerRect.bottom);
         if (overlapBottom - overlapTop <= 0) continue;
 
+        const isOversizedCoarseToolGroup =
+            testId.startsWith(TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX) &&
+            height > containerRect.height;
         const distance =
-            top <= focusOffset && bottom >= focusOffset
+            !isOversizedCoarseToolGroup && top <= focusOffset && bottom >= focusOffset
                 ? 0
                 : Math.min(Math.abs(focusOffset - top), Math.abs(focusOffset - bottom));
         const rankedCandidate = { ...candidate, distance };
@@ -216,7 +236,7 @@ function resolveViewportRestoreItemAnchorTestId(
         anchor.kind === 'message' && anchor.messageId
             ? `${TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX}${anchor.messageId}`
             : anchor.kind === 'toolGroup' && anchor.messageId
-                ? `${TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX}${anchor.messageId}`
+                ? `${TRANSCRIPT_WEB_TOOL_CALL_PREPEND_ANCHOR_TEST_ID_PREFIX}${anchor.messageId}`
                 : null;
     if (stableAnchorTestId) {
         const currentItemTestId = resolveContainingItemAnchorTestId(container, stableAnchorTestId);
@@ -295,10 +315,36 @@ export function captureWebTranscriptViewportAnchor(params: Readonly<{
     };
 }
 
+/**
+ * Read-only alignment check for a saved viewport anchor: same DOM resolution as
+ * `restoreWebTranscriptViewportAnchor`, but never mutates scroll. Used by the entry-restore
+ * transaction wiring to classify conclusive aligned|misaligned observations before spending
+ * the single correction write.
+ */
+export function resolveWebTranscriptViewportAnchorAlignment(params: Readonly<{
+    container: HTMLElement;
+    anchor: WebTranscriptViewportAnchor;
+    tolerancePx?: number;
+}>): Readonly<{ status: 'aligned' | 'misaligned'; deltaPx: number }> | Readonly<{ status: 'not_found' }> {
+    const itemTop = resolveVisibleAnchorTop({
+        container: params.container,
+        anchorTestId: resolveViewportRestoreItemAnchorTestId(params.container, params.anchor),
+    });
+    if (typeof itemTop !== 'number' || !Number.isFinite(itemTop)) {
+        return { status: 'not_found' };
+    }
+    const deltaPx = Math.trunc(itemTop - params.anchor.itemOffsetPx);
+    const tolerancePx = Math.max(0, Math.trunc(params.tolerancePx ?? 0));
+    return {
+        status: Math.abs(deltaPx) <= tolerancePx ? 'aligned' : 'misaligned',
+        deltaPx,
+    };
+}
+
 export function restoreWebTranscriptViewportAnchor(params: Readonly<{
     container: HTMLElement;
     anchor: WebTranscriptViewportAnchor;
-}>): WebTranscriptViewportAnchorRestoreResult {
+}>, options: WebTranscriptScrollTopWriteOptions): WebTranscriptViewportAnchorRestoreResult {
     const itemTop = resolveVisibleAnchorTop({
         container: params.container,
         anchorTestId: resolveViewportRestoreItemAnchorTestId(params.container, params.anchor),
@@ -313,8 +359,13 @@ export function restoreWebTranscriptViewportAnchor(params: Readonly<{
     }
 
     try {
-        params.container.scrollTop += delta;
-        return { didAdjustScroll: true, status: 'restored' };
+        const targetScrollTop = params.container.scrollTop + delta;
+        if (!Number.isFinite(targetScrollTop)) {
+            return { didAdjustScroll: false, status: 'not_found' };
+        }
+        return options.writeScrollTop(targetScrollTop)
+            ? { didAdjustScroll: true, status: 'restored' }
+            : { didAdjustScroll: false, status: 'not_applied' };
     } catch {
         return { didAdjustScroll: false, status: 'not_found' };
     }
@@ -339,8 +390,28 @@ export function captureWebTranscriptPrependAnchor(params: Readonly<{
     };
 }
 
-export function restoreWebTranscriptPrependAnchor(anchor: WebTranscriptPrependAnchor): WebTranscriptPrependRestoreResult {
+export function restoreWebTranscriptPrependAnchor(
+    anchor: WebTranscriptPrependAnchor,
+    options: WebTranscriptScrollTopWriteOptions,
+): WebTranscriptPrependRestoreResult {
     const { element } = anchor.metrics;
+
+    const restoreFromScrollHeightGrowth = (): WebTranscriptPrependRestoreResult | null => {
+        const nextScrollHeight = element.scrollHeight;
+        const growth = Math.max(0, nextScrollHeight - anchor.metrics.scrollHeight);
+        if (growth <= 0) return null;
+        const targetScrollTop = anchor.metrics.scrollTop + growth;
+        if (!Number.isFinite(targetScrollTop)) return null;
+        const remainingGrowthPx = Math.trunc(targetScrollTop - element.scrollTop);
+        if (remainingGrowthPx <= 1) return null;
+        try {
+            return options.writeScrollTop(targetScrollTop)
+                ? { didAdjustScroll: true, strategy: 'growth' }
+                : { didAdjustScroll: false, strategy: 'none' };
+        } catch {
+            return { didAdjustScroll: false, strategy: 'none' };
+        }
+    };
 
     if (anchor.anchorTestId != null && anchor.anchorTop != null) {
         const nextTop = resolveVisibleAnchorTop({ container: element, anchorTestId: anchor.anchorTestId });
@@ -348,12 +419,19 @@ export function restoreWebTranscriptPrependAnchor(anchor: WebTranscriptPrependAn
             const delta = Math.trunc(nextTop - anchor.anchorTop);
             if (delta !== 0) {
                 try {
-                    element.scrollTop += delta;
-                    return { didAdjustScroll: true, strategy: 'anchor' };
+                    const targetScrollTop = element.scrollTop + delta;
+                    if (!Number.isFinite(targetScrollTop)) {
+                        return { didAdjustScroll: false, strategy: 'none' };
+                    }
+                    return options.writeScrollTop(targetScrollTop)
+                        ? { didAdjustScroll: true, strategy: 'anchor' }
+                        : { didAdjustScroll: false, strategy: 'none' };
                 } catch {
                     return { didAdjustScroll: false, strategy: 'none' };
                 }
             }
+            const growthResult = restoreFromScrollHeightGrowth();
+            if (growthResult) return growthResult;
             return { didAdjustScroll: false, strategy: 'anchor' };
         }
     }
@@ -364,25 +442,24 @@ export function restoreWebTranscriptPrependAnchor(anchor: WebTranscriptPrependAn
             const delta = Math.trunc(nextItemTop - anchor.itemTop);
             if (delta !== 0) {
                 try {
-                    element.scrollTop += delta;
-                    return { didAdjustScroll: true, strategy: 'item' };
+                    const targetScrollTop = element.scrollTop + delta;
+                    if (!Number.isFinite(targetScrollTop)) {
+                        return { didAdjustScroll: false, strategy: 'none' };
+                    }
+                    return options.writeScrollTop(targetScrollTop)
+                        ? { didAdjustScroll: true, strategy: 'item' }
+                        : { didAdjustScroll: false, strategy: 'none' };
                 } catch {
                     return { didAdjustScroll: false, strategy: 'none' };
                 }
             }
+            const growthResult = restoreFromScrollHeightGrowth();
+            if (growthResult) return growthResult;
             return { didAdjustScroll: false, strategy: 'item' };
         }
     }
 
-    const nextScrollHeight = element.scrollHeight;
-    const growth = Math.max(0, nextScrollHeight - anchor.metrics.scrollHeight);
-    if (growth <= 0) return { didAdjustScroll: false, strategy: 'none' };
-    try {
-        element.scrollTop = anchor.metrics.scrollTop + growth;
-        return { didAdjustScroll: true, strategy: 'growth' };
-    } catch {
-        return { didAdjustScroll: false, strategy: 'none' };
-    }
+    return restoreFromScrollHeightGrowth() ?? { didAdjustScroll: false, strategy: 'none' };
 }
 
 export function refreshWebTranscriptPrependAnchor(

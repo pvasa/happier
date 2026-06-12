@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-    nativeEntryRestoreObservationExceedsJumpThreshold,
-    nativeEntryRestoreObservationMatches,
-    resolveNativeEntryRestoreJumpThresholdPx,
-} from './nativeEntryRestoreObservationPolicy';
+import { nativeEntryRestoreObservationMatches } from './nativeEntryRestoreObservationPolicy';
 
 const baseTarget = {
     kind: 'distance' as const,
@@ -73,33 +69,4 @@ describe('native entry restore observation policy', () => {
         })).toBe(false);
     });
 
-    it('uses the larger viewport-scaled or threshold-scaled jump threshold', () => {
-        expect(resolveNativeEntryRestoreJumpThresholdPx({
-            layoutHeight: 700,
-            pinThresholdPx: 24,
-            thresholdMultiplier: 8,
-            viewportMultiplier: 4,
-        })).toBe(2800);
-
-        expect(resolveNativeEntryRestoreJumpThresholdPx({
-            layoutHeight: 20,
-            pinThresholdPx: 24,
-            thresholdMultiplier: 8,
-            viewportMultiplier: 4,
-        })).toBe(192);
-    });
-
-    it('detects pending restore observations that are far beyond the stored distance', () => {
-        expect(nativeEntryRestoreObservationExceedsJumpThreshold(baseTarget, {
-            distanceFromBottom: 3000,
-            jumpThresholdPx: 2000,
-            sessionId: 'session-a',
-        })).toBe(true);
-
-        expect(nativeEntryRestoreObservationExceedsJumpThreshold(baseTarget, {
-            distanceFromBottom: 2300,
-            jumpThresholdPx: 2000,
-            sessionId: 'session-a',
-        })).toBe(false);
-    });
 });

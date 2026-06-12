@@ -110,6 +110,11 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         && supportsInFlightSteer
         && !canSteerNow
     );
+    // Lane X (incident cmq8y3nlx): the CLI publishes `user_terminal_draft` when steering is
+    // starved by a draft sitting in the terminal composer — the notice must say so honestly
+    // instead of the generic mode-change wording.
+    const steerBlockedByTerminalDraft =
+        session?.agentState?.capabilities?.inFlightSteerUnavailableReason === 'user_terminal_draft';
 
     const maxHeightSetting = useSetting('transcriptPendingQueueMaxHeightPx');
     const maxHeightPx =
@@ -248,14 +253,10 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         });
     }, []);
 
+    // Lane Q (Q5): tapping "Steer now" is already an explicit user action on a specific message —
+    // it executes directly. The not-steerable decision modal (composer affordance) is a separate
+    // mechanism and is unaffected.
     const handleSteerNow = React.useCallback(async (message: PendingMessage) => {
-        const confirmed = await Modal.confirm(
-            t('session.pendingMessages.steerConfirm.title'),
-            t('session.pendingMessages.steerConfirm.body'),
-            { confirmText: t('session.pendingMessages.actions.steerNow') },
-        );
-        if (!confirmed) return;
-
         try {
             setPendingMaterializing(message, true);
             const result = await sync.sendPendingMessageNow(props.sessionId, {
@@ -327,14 +328,8 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         }
     }, [props.sessionId]);
 
+    // Lane Q (Q5): same direct execution for discarded-message "Steer now".
     const handleSteerDiscardedNow = React.useCallback(async (message: DiscardedPendingMessage) => {
-        const confirmed = await Modal.confirm(
-            t('session.pendingMessages.steerConfirm.title'),
-            t('session.pendingMessages.steerConfirm.body'),
-            { confirmText: t('session.pendingMessages.actions.steerNow') },
-        );
-        if (!confirmed) return;
-
         try {
             const result = await sync.sendPendingMessageNow(props.sessionId, {
                 localId: message.id,
@@ -792,8 +787,13 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                 ]}
                             >
                                 <Ionicons name="pause-circle-outline" size={13} color={theme.colors.text.secondary} />
-                                <Text style={[styles.nonSteerableNoticeText, { color: theme.colors.text.secondary }]}>
-                                    {t('session.pendingMessages.nonSteerableNotice')}
+                                <Text
+                                    testID={steerBlockedByTerminalDraft ? 'pendingMessages.steerBlockedTerminalDraftNotice' : undefined}
+                                    style={[styles.nonSteerableNoticeText, { color: theme.colors.text.secondary }]}
+                                >
+                                    {steerBlockedByTerminalDraft
+                                        ? t('session.pendingMessages.steerBlockedTerminalDraftNotice')
+                                        : t('session.pendingMessages.nonSteerableNotice')}
                                 </Text>
                             </View>
                         ) : null}

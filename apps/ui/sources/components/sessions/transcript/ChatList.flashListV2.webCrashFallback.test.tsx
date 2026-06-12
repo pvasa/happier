@@ -174,6 +174,83 @@ describe('ChatList (FlashList v2 web crash fallback)', () => {
     }
   });
 
+  it('preserves the viewport across the crash-fallback implementation flip (plan E1)', async () => {
+    flashListChatListHarnessState.settingValues.transcriptListImplementation = 'flash_v2';
+    flashListChatListHarnessState.settingValues.transcriptScrollPinEnabled = true;
+    flashListChatListHarnessState.settingValues.transcriptScrollPinOffsetThresholdPx = 100;
+
+    const listeners = new Map<string, EventListenerOrEventListenerObject[]>();
+    const scrollerEl: any = {
+      scrollHeight: 2000,
+      clientHeight: 500,
+      scrollTop: 1500, // bottom
+      isConnected: true,
+      querySelectorAll: () => [],
+    };
+
+    const { withFlashListChatListWebScrollerDom } = await import('@/dev/testkit');
+    await withFlashListChatListWebScrollerDom(
+      scrollerEl,
+      async () => {
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderFlashListChatList(
+          <ChatList session={flashListChatListHarnessState.sessionState} />
+        );
+
+        expect(screen.requireCapturedFlashListProps()).toBeTruthy();
+        expect(listeners.get('error')?.length ?? 0).toBeGreaterThan(0);
+
+        await screen.triggerInitialFill({
+          layoutHeight: 500,
+          contentHeight: 2000,
+          contentWidth: 0,
+        });
+
+        // The user reads mid-transcript (unpinned, 800px from the bottom).
+        await screen.triggerPointerDown();
+        scrollerEl.scrollTop = 700;
+        await screen.triggerScroll(700, { isTrusted: true });
+
+        const errorMessage = 'index out of bounds, not enough layouts';
+        const handler = (listeners.get('error') ?? [])[0];
+        const fakeEvent = {
+          message: errorMessage,
+          error: new Error(errorMessage),
+          preventDefault: vi.fn(),
+          stopImmediatePropagation: vi.fn(),
+        } as unknown as ErrorEvent;
+
+        await act(async () => {
+          (handler as EventListener)(fakeEvent);
+        });
+
+        // The fallback FlatList mounted and the captured viewport was restored through the
+        // command seam as a fresh entry restore on the new implementation (owner='entry'):
+        // distance-from-bottom 800 restored in inverted legacy coordinates (scrollTop = dfb).
+        // A rejected or skipped write would leave the scroller at the pre-crash scrollTop (700).
+        expect(screen.findAllByType('FlatList' as any).length).toBeGreaterThan(0);
+        expect(scrollerEl.scrollTop).toBe(800);
+      },
+      {
+        window: {
+          getComputedStyle: vi.fn(() => ({ overflowY: 'auto' })),
+          addEventListener: (type: string, fn: EventListenerOrEventListenerObject) => {
+            const entries = listeners.get(type) ?? [];
+            entries.push(fn);
+            listeners.set(type, entries);
+          },
+          removeEventListener: (type: string, fn: EventListenerOrEventListenerObject) => {
+            const entries = listeners.get(type) ?? [];
+            listeners.set(
+              type,
+              entries.filter((entry) => entry !== fn),
+            );
+          },
+        },
+      },
+    );
+  });
+
   it('does not fall back for unrelated "index out of bounds" errors', async () => {
     flashListChatListHarnessState.settingValues.transcriptListImplementation = 'flash_v2';
 

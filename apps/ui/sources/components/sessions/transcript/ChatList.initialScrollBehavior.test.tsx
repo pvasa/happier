@@ -79,6 +79,7 @@ vi.mock('@/sync/sync', () => ({
       transcriptFlashListEstimatedItemSize: 120,
       transcriptWebInitialPinStabilizeMs: 3000,
       transcriptWebInitialPinRetryIntervalMs: 250,
+      transcriptMaxTurnEntriesPerListItem: 8,
     }),
   },
 }));
@@ -395,6 +396,47 @@ describe('ChatList (initial scroll/pagination behavior)', () => {
     await screen.unmount();
   });
 
+  it('does not auto-expand a huge tool calls group into one giant rendered row when the transcript cannot scroll', async () => {
+    legacyChatListHarnessState.sessionState = { ...legacyChatListHarnessState.sessionState, seq: 25 };
+    legacyChatListHarnessState.sessionMessagesState = {
+      isLoaded: true,
+      messages: [{ id: 'm1', seq: 100 }],
+    };
+
+    buildChatListItemsMock.mockReturnValue([
+      {
+        id: 'turn-1',
+        kind: 'turn',
+        createdAt: 123,
+        turn: {
+          userMessageId: null,
+          content: [
+            {
+              kind: 'tool_calls',
+              id: 'tool-group-1',
+              toolMessageIds: Array.from({ length: 200 }, (_, i) => `tool-${i}`),
+            },
+          ],
+        },
+      },
+    ]);
+
+    loadOlderMessagesMock.mockResolvedValue({ loaded: 0, hasMore: false, status: 'no_more' });
+
+    const screen = await renderLegacyChatList({ flushOptions: { cycles: 0 } });
+
+    requireCapturedFlatListProps();
+    await triggerLegacyChatListInitialFill({
+      flushOptions: { cycles: 4 },
+    });
+
+    expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+    expect(capturedTurnViewProps).toBeTruthy();
+    expect(capturedTurnViewProps.expandedToolCallsAnchorMessageIds?.size ?? 0).toBe(0);
+
+    await screen.unmount();
+  });
+
   it('auto-expands a tool calls group even if the group only appears after the initial fill completes', async () => {
     legacyChatListHarnessState.sessionState = { ...legacyChatListHarnessState.sessionState, seq: 25 };
     legacyChatListHarnessState.sessionMessagesState = {
@@ -439,7 +481,7 @@ describe('ChatList (initial scroll/pagination behavior)', () => {
       messages: [...legacyChatListHarnessState.sessionMessagesState.messages, { id: 'm2', seq: 101 }],
     };
     buildChatListItemsMock.mockReturnValue([toolGroupTurnItem] as any);
-    await screen.update(<ChatList session={{ ...legacyChatListHarnessState.sessionState }} />);
+    await screen.update(<ChatList session={{ ...legacyChatListHarnessState.sessionState }} followBottomIntentKey="tool-group-visible" />);
     await flushLegacyChatListEffects({ cycles: 4 });
 
     expect(capturedTurnViewProps).toBeTruthy();

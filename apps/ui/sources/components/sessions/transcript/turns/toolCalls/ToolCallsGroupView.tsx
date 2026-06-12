@@ -30,6 +30,7 @@ import {
     type TranscriptToolChromeCommon,
     type TranscriptToolRouteCommon,
 } from '@/components/sessions/transcript/transcriptSessionCommon';
+import { TRANSCRIPT_WEB_TOOL_CALL_PREPEND_ANCHOR_TEST_ID_PREFIX } from '@/components/sessions/transcript/webTranscriptPrependAnchor';
 
 function shouldRenderGroupedToolCallWithMessageView(
     message: ToolCallMessage,
@@ -342,44 +343,16 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
                                 return (
                                 <View
                                     key={getMappingKey(`preview:${m.id}`, index)}
-                                    testID="transcript-tool-calls-preview-row"
-                                    style={[styles.previewRow, normalizedChromeMode === 'activity_feed' ? styles.previewRowFeed : styles.previewRowCards]}
+                                    testID={`${TRANSCRIPT_WEB_TOOL_CALL_PREPEND_ANCHOR_TEST_ID_PREFIX}${m.id}`}
                                 >
-                                    {renderGroupedToolCallRowContent({
-                                        message: m,
-                                        chromeMode: normalizedChromeMode,
-                                        groupExpanded: false,
-                                        metadata: props.metadata,
-                                        sessionId: props.sessionId,
-                                        nestedMessageId,
-                                        forcePermissionPromptsInTranscript: props.forcePermissionPromptsInTranscript,
-                                        approvalRequests: props.approvalRequests,
-                                        interaction: props.interaction,
-                                        forkCommon: props.forkCommon,
-                                        messageDisplayCommon: props.messageDisplayCommon,
-                                        toolChromeCommon: props.toolChromeCommon,
-                                        toolRouteCommon: props.toolRouteCommon,
-                                    })}
-                                </View>
-                                );
-                            }) : null}
-                        </View>
-                    ) : null}
-
-                    <TranscriptCollapsible id={collapsibleId} createdAt={createdAt} expanded={expanded}>
-                        <View style={[styles.body, normalizedChromeMode === 'activity_feed' ? styles.bodyFeed : styles.bodyCards]}>
-                            {props.toolMessages.map((m, index) => {
-                                const nestedMessageId = resolveToolRouteMessageId(m);
-                                return (
-                                <TranscriptEnterWrapper key={getMappingKey(m.id, index)} id={m.id} createdAt={m.createdAt}>
                                     <View
-                                        testID="transcript-tool-calls-tool-row"
-                                        style={[styles.toolRow, normalizedChromeMode === 'activity_feed' ? styles.toolRowFeed : styles.toolRowCards]}
+                                        testID="transcript-tool-calls-preview-row"
+                                        style={[styles.previewRow, normalizedChromeMode === 'activity_feed' ? styles.previewRowFeed : styles.previewRowCards]}
                                     >
                                         {renderGroupedToolCallRowContent({
                                             message: m,
                                             chromeMode: normalizedChromeMode,
-                                            groupExpanded: expanded,
+                                            groupExpanded: false,
                                             metadata: props.metadata,
                                             sessionId: props.sessionId,
                                             nestedMessageId,
@@ -392,11 +365,49 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
                                             toolRouteCommon: props.toolRouteCommon,
                                         })}
                                     </View>
-                                </TranscriptEnterWrapper>
+                                </View>
                                 );
-                            })}
+                            }) : null}
                         </View>
-                    </TranscriptCollapsible>
+                    ) : null}
+
+                    {expanded ? (
+                        <TranscriptCollapsible id={collapsibleId} createdAt={createdAt} expanded={expanded}>
+                            <View style={[styles.body, normalizedChromeMode === 'activity_feed' ? styles.bodyFeed : styles.bodyCards]}>
+                                {props.toolMessages.map((m, index) => {
+                                    const nestedMessageId = resolveToolRouteMessageId(m);
+                                    return (
+                                    <TranscriptEnterWrapper key={getMappingKey(m.id, index)} id={m.id} createdAt={m.createdAt}>
+                                        <View
+                                            testID={`${TRANSCRIPT_WEB_TOOL_CALL_PREPEND_ANCHOR_TEST_ID_PREFIX}${m.id}`}
+                                        >
+                                            <View
+                                                testID="transcript-tool-calls-tool-row"
+                                                style={[styles.toolRow, normalizedChromeMode === 'activity_feed' ? styles.toolRowFeed : styles.toolRowCards]}
+                                            >
+                                                {renderGroupedToolCallRowContent({
+                                                    message: m,
+                                                    chromeMode: normalizedChromeMode,
+                                                    groupExpanded: expanded,
+                                                    metadata: props.metadata,
+                                                    sessionId: props.sessionId,
+                                                    nestedMessageId,
+                                                    forcePermissionPromptsInTranscript: props.forcePermissionPromptsInTranscript,
+                                                    approvalRequests: props.approvalRequests,
+                                                    interaction: props.interaction,
+                                                    forkCommon: props.forkCommon,
+                                                    messageDisplayCommon: props.messageDisplayCommon,
+                                                    toolChromeCommon: props.toolChromeCommon,
+                                                    toolRouteCommon: props.toolRouteCommon,
+                                                })}
+                                            </View>
+                                        </View>
+                                    </TranscriptEnterWrapper>
+                                    );
+                                })}
+                            </View>
+                        </TranscriptCollapsible>
+                    ) : null}
                 </View>
             </View>
         </View>

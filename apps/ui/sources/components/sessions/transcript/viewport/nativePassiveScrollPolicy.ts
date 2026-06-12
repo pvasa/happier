@@ -3,17 +3,12 @@ export type NativePassiveBottomDriftNoiseFloorRequest = Readonly<{
     pinThresholdPx: number;
 }>;
 
-export type NativeRecycledTopJumpRequest = Readonly<{
+export type NativeInvalidScrollObservationRequest = Readonly<{
+    contentHeight: number;
     distanceFromBottom: number;
-    hasNativeInitialViewportApplied: boolean;
     isWeb: boolean;
-    pinThresholdPx: number;
-    previousDistanceFromBottom: number | null | undefined;
-    requireNativeInitialViewportApplied: boolean;
-    thresholdMultiplier: number;
-    viewportHeight: number;
-    viewportMultiplier: number;
-    wantsPinned: boolean;
+    layoutHeight: number;
+    offsetY: number;
 }>;
 
 export type NativePassiveUnpinnedMovementRequest = Readonly<{
@@ -39,7 +34,6 @@ export type NativePassiveViewportScrollRequest = Readonly<{
     lastUserScrollIntentAtMs: number;
     nowMs: number;
     pinThresholdPx: number;
-    shouldIgnoreRecycledTopJump: boolean;
     shouldRecordPassiveUnpinnedMovement: boolean;
     userIntentRecentMs: number;
     wantsPinned: boolean;
@@ -58,25 +52,24 @@ export function resolveNativePassiveBottomDriftNoiseFloorPx(
     return Math.min(normalizedThreshold, normalizedConfigured);
 }
 
-export function shouldIgnoreNativeRecycledTopJump(request: NativeRecycledTopJumpRequest): boolean {
+export function shouldIgnoreNativeInvalidScrollObservation(request: NativeInvalidScrollObservationRequest): boolean {
     if (request.isWeb) return false;
-    if (request.wantsPinned) return false;
-    if (request.requireNativeInitialViewportApplied && !request.hasNativeInitialViewportApplied) return false;
-    if (!Number.isFinite(request.distanceFromBottom)) return false;
-    const previousDistanceFromBottom = request.previousDistanceFromBottom;
-    if (typeof previousDistanceFromBottom !== 'number' || !Number.isFinite(previousDistanceFromBottom)) return false;
-    if (request.distanceFromBottom <= previousDistanceFromBottom) return false;
+    if (!Number.isFinite(request.offsetY)) return true;
+    if (!Number.isFinite(request.distanceFromBottom)) return true;
+    if (request.offsetY >= 0) return false;
 
-    const viewportJumpThreshold =
-        typeof request.viewportHeight === 'number' && Number.isFinite(request.viewportHeight) && request.viewportHeight > 0
-            ? request.viewportHeight * normalizeMultiplier(request.viewportMultiplier)
-            : 0;
-    const pinnedThresholdJumpThreshold =
-        typeof request.pinThresholdPx === 'number' && Number.isFinite(request.pinThresholdPx) && request.pinThresholdPx > 0
-            ? request.pinThresholdPx * normalizeMultiplier(request.thresholdMultiplier)
-            : 0;
-    const jumpThreshold = Math.max(viewportJumpThreshold, pinnedThresholdJumpThreshold);
-    return jumpThreshold > 0 && request.distanceFromBottom - previousDistanceFromBottom > jumpThreshold;
+    const layoutHeight = typeof request.layoutHeight === 'number' && Number.isFinite(request.layoutHeight)
+        ? Math.max(0, request.layoutHeight)
+        : 0;
+    const contentHeight = typeof request.contentHeight === 'number' && Number.isFinite(request.contentHeight)
+        ? Math.max(0, request.contentHeight)
+        : 0;
+    const ordinaryBounceLimitPx = Math.max(1024, layoutHeight * 2);
+    if (Math.abs(request.offsetY) <= ordinaryBounceLimitPx) return false;
+    if (request.distanceFromBottom < 0) return true;
+
+    const maximumPlausibleDistanceFromBottom = contentHeight + Math.max(layoutHeight * 2, ordinaryBounceLimitPx);
+    return request.distanceFromBottom > maximumPlausibleDistanceFromBottom;
 }
 
 export function shouldRecordNativePassiveUnpinnedMovement(request: NativePassiveUnpinnedMovementRequest): boolean {
@@ -112,14 +105,7 @@ export function shouldIgnoreNativePassiveViewportScroll(request: NativePassiveVi
         ) {
             return true;
         }
-        if (request.shouldIgnoreRecycledTopJump) {
-            return true;
-        }
         return !request.shouldRecordPassiveUnpinnedMovement;
     }
     return false;
-}
-
-function normalizeMultiplier(value: number): number {
-    return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
 }

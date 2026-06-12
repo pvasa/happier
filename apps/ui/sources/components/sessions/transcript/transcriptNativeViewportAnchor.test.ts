@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
     captureNativeTranscriptViewportAnchor,
+    planNativeTranscriptViewportAnchorMeasuredOffsetRestore,
     planNativeTranscriptViewportAnchorRestore,
+    resolveNativeTranscriptViewportAnchorRestoreObservation,
     type NativeTranscriptViewportFlashListRef,
 } from '@/components/sessions/transcript/transcriptNativeViewportAnchor';
 
@@ -133,5 +135,100 @@ describe('transcriptNativeViewportAnchor', () => {
         });
 
         expect(result).toEqual({ status: 'planned', index: 4, viewOffset: -36 });
+    });
+
+    it('plans a direct native offset restore from a measured materialized anchor layout', () => {
+        const result = planNativeTranscriptViewportAnchorMeasuredOffsetRestore({
+            contentHeight: 2_200,
+            itemLayoutY: 380,
+            itemOffsetPx: 40,
+            layoutHeight: 100,
+        });
+
+        expect(result).toEqual({
+            status: 'planned',
+            targetOffsetY: 340,
+        });
+    });
+
+    it('does not plan a direct native offset restore from a stale anchor layout outside measured content', () => {
+        expect(planNativeTranscriptViewportAnchorMeasuredOffsetRestore({
+            contentHeight: 300,
+            itemLayoutY: 380,
+            itemOffsetPx: 40,
+            layoutHeight: 100,
+        })).toEqual({ status: 'layout_unavailable' });
+    });
+
+    it('confirms a native restore only when the anchor returns to its captured pixel offset', () => {
+        const result = resolveNativeTranscriptViewportAnchorRestoreObservation({
+            ref: createRef({
+                scrollOffset: 200,
+                visibleRange: { startIndex: 1, endIndex: 2 },
+                layouts: {
+                    2: { x: 0, y: 240, width: 320, height: 100 },
+                },
+            }),
+            index: 2,
+            itemOffsetPx: 40,
+            tolerancePx: 2,
+        });
+
+        expect(result).toEqual({
+            status: 'aligned',
+            deltaPx: 0,
+            observedItemOffsetPx: 40,
+        });
+    });
+
+    it('does not confirm a native restore when the anchor is visible at the wrong pixel offset', () => {
+        const result = resolveNativeTranscriptViewportAnchorRestoreObservation({
+            ref: createRef({
+                scrollOffset: 200,
+                visibleRange: { startIndex: 1, endIndex: 2 },
+                layouts: {
+                    2: { x: 0, y: 270, width: 320, height: 100 },
+                },
+            }),
+            index: 2,
+            itemOffsetPx: 40,
+            tolerancePx: 2,
+        });
+
+        expect(result).toEqual({
+            status: 'misaligned',
+            deltaPx: 30,
+            observedItemOffsetPx: 70,
+        });
+    });
+
+    it('waits for layout when measurement APIs exist but the anchor layout is not materialized yet', () => {
+        const result = resolveNativeTranscriptViewportAnchorRestoreObservation({
+            ref: createRef({
+                scrollOffset: 200,
+                visibleRange: { startIndex: 1, endIndex: 2 },
+                layouts: {},
+            }),
+            index: 2,
+            itemOffsetPx: 40,
+            tolerancePx: 2,
+        });
+
+        expect(result).toEqual({ status: 'waiting_for_layout' });
+    });
+
+    it('falls back to visible-index confirmation only when pixel measurement APIs are unavailable', () => {
+        const result = resolveNativeTranscriptViewportAnchorRestoreObservation({
+            ref: {
+                scrollToIndex: () => undefined,
+                scrollToOffset: () => undefined,
+                computeVisibleIndices: () => ({ startIndex: 1, endIndex: 2 }),
+            },
+            index: 2,
+            itemOffsetPx: 40,
+            tolerancePx: 2,
+        });
+
+        expect(result).toEqual({ status: 'visible_fallback' });
     });
 });

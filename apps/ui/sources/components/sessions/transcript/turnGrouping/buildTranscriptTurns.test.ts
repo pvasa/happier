@@ -206,6 +206,41 @@ describe('buildTranscriptTurns', () => {
         }
     });
 
+    it('keeps one consecutive Activity section when a long tool run is appended in small batches', () => {
+        const user = userMessage('u1', 1);
+        const allTools = Array.from({ length: 200 }, (_, index) => (
+            toolMessage({ id: `tool-${index + 1}`, createdAt: index + 2, state: 'completed' })
+        ));
+
+        let cache = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['u1'],
+            messagesById: { u1: user },
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        for (let end = 8; end <= allTools.length; end += 8) {
+            const visible = allTools.slice(0, end);
+            const chronological: Message[] = [user, ...visible];
+            const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+            cache = buildTranscriptTurnsCached({
+                cache,
+                messageIdsOldestFirst: chronological.map((m) => m.id),
+                messagesById,
+                groupToolCalls: true,
+                toolCallsGroupStrategy: 'consecutive_tools',
+            });
+        }
+
+        expect(cache.turns).toHaveLength(1);
+        const toolGroups = cache.turns[0]!.content.filter((content) => content.kind === 'tool_calls');
+        expect(toolGroups).toHaveLength(1);
+        expect(toolGroups[0]?.kind === 'tool_calls' && toolGroups[0].toolMessageIds).toEqual(
+            allTools.map((tool) => tool.id),
+        );
+    });
+
     it('flushes consecutive tool ids into an Activity section in consecutive_tools mode', () => {
         const chronological: Message[] = [
             userMessage('u1', 1),
@@ -646,6 +681,213 @@ describe('buildTranscriptTurnsCached', () => {
         if (cache2.turns[0]!.content[1]?.kind === 'message') {
             expect(cache2.turns[0]!.content[1].messageId).toBe('diff-1');
         }
+    });
+
+    it('keeps previously-built turn ids stable when prepended older messages end at a turn boundary', () => {
+        // MVCP key-anchoring precondition (plan C3): ids of already-rendered turn items must
+        // survive an older-page prepend so FlashList's key-based offset correction can hold position.
+        const chronological: Message[] = [
+            userMessage('u1', 1),
+            agentMessage('a1', 2),
+            userMessage('u2', 3),
+            agentMessage('a2', 4),
+            userMessage('u3', 5),
+            agentMessage('a3', 6),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+
+        const windowCache = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['u2', 'a2', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        const prependedCache = buildTranscriptTurnsCached({
+            cache: windowCache,
+            messageIdsOldestFirst: ['u1', 'a1', 'u2', 'a2', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        const windowTurnIds = windowCache.turns.map((turn) => turn.id);
+        const prependedTurnIds = prependedCache.turns.map((turn) => turn.id);
+        expect(windowTurnIds).toEqual(['turn:u2', 'turn:u3']);
+        for (const previousTurnId of windowTurnIds) {
+            expect(prependedTurnIds).toContain(previousTurnId);
+        }
+        expect(prependedCache.turns.find((turn) => turn.id === 'turn:u2')?.content)
+            .toEqual(windowCache.turns.find((turn) => turn.id === 'turn:u2')?.content);
+    });
+
+    it('keeps the previously-built headless turn id sticky when prepended older messages join it (plan C3)', () => {
+        // Page boundary fell mid-turn: the loaded window starts with a non-user message, so the
+        // first turn is headless (`turn:a2`). Prepending the rest of that logical turn absorbs the
+        // headless turn into the older turn — the merged turn must KEEP the previously-assigned id
+        // (`turn:a2`), and embedded tool-group child ids keyed off the turn id must follow
+        // (`toolCalls:turn:a2:t2`), so FlashList MVCP key anchoring holds at the prepend boundary.
+        const chronological: Message[] = [
+            userMessage('u1', 1),
+            agentMessage('a1', 2),
+            agentMessage('a2', 3),
+            toolMessage({ id: 't2', createdAt: 4, state: 'completed' }),
+            userMessage('u3', 5),
+            agentMessage('a3', 6),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+
+        const windowCache = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['a2', 't2', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        const prependedCache = buildTranscriptTurnsCached({
+            cache: windowCache,
+            messageIdsOldestFirst: ['u1', 'a1', 'a2', 't2', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        expect(windowCache.turns.map((turn) => turn.id)).toEqual(['turn:a2', 'turn:u3']);
+        // The previously-rendered headless turn id survives the prepend; the merged turn gains the
+        // prepended messages while keeping the on-screen key.
+        expect(prependedCache.turns.map((turn) => turn.id)).toEqual(['turn:a2', 'turn:u3']);
+        const mergedTurn = prependedCache.turns[0]!;
+        expect(mergedTurn.userMessageId).toBe('u1');
+        expect(mergedTurn.content.flatMap((content) => content.kind === 'message' ? [content.messageId] : []))
+            .toEqual(['a1', 'a2']);
+        expect(mergedTurn.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : []))
+            .toEqual(['toolCalls:turn:a2:t2']);
+        // Turns whose boundary was not crossed by the prepend stay stable.
+        expect(prependedCache.turns.find((turn) => turn.id === 'turn:u3')?.content)
+            .toEqual(windowCache.turns.find((turn) => turn.id === 'turn:u3')?.content);
+        // A cache-less build of the same window still derives fresh ids from the first message —
+        // sticky continuity is scoped to the per-session build cache, never global.
+        const cacheFreeTurns = buildTranscriptTurns({
+            messageIdsOldestFirst: ['u1', 'a1', 'a2', 't2', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        expect(cacheFreeTurns.map((turn) => turn.id)).toEqual(['turn:u1', 'turn:u3']);
+    });
+
+    it('keeps the sticky headless turn id across multiple successive prepends', () => {
+        const chronological: Message[] = [
+            userMessage('u1', 1),
+            agentMessage('a1', 2),
+            agentMessage('a2', 3),
+            toolMessage({ id: 't2', createdAt: 4, state: 'completed' }),
+            userMessage('u3', 5),
+            agentMessage('a3', 6),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+
+        const cache1 = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['a2', 't2', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        const cache2 = buildTranscriptTurnsCached({
+            cache: cache1,
+            messageIdsOldestFirst: ['a1', 'a2', 't2', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        const cache3 = buildTranscriptTurnsCached({
+            cache: cache2,
+            messageIdsOldestFirst: ['u1', 'a1', 'a2', 't2', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        expect(cache1.turns.map((turn) => turn.id)).toEqual(['turn:a2', 'turn:u3']);
+        expect(cache2.turns.map((turn) => turn.id)).toEqual(['turn:a2', 'turn:u3']);
+        expect(cache3.turns.map((turn) => turn.id)).toEqual(['turn:a2', 'turn:u3']);
+        expect(cache3.turns[0]?.userMessageId).toBe('u1');
+        expect(cache3.turns[0]?.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : []))
+            .toEqual(['toolCalls:turn:a2:t2']);
+    });
+
+    it('resolves sticky-id collisions to the previously-rendered bottom-most turn id', () => {
+        // Two previously-emitted turns can merge into ONE rebuilt turn (e.g. a fork boundary that
+        // separated them disappears). Both old ids are candidates; the bottom-most previously
+        // rendered id wins — that is the key FlashList has on screen at the pagination anchor.
+        const chronological: Message[] = [
+            userMessage('u1', 1),
+            agentMessage('a1', 2),
+            agentMessage('a2', 3),
+            toolMessage({ id: 't2', createdAt: 4, state: 'completed' }),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+
+        const boundaryCache = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['u1', 'a1', 'a2', 't2'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+            forkBoundaryBeforeMessageIds: new Set(['a2']),
+            forkBoundarySignature: 'fork-a2',
+        });
+        expect(boundaryCache.turns.map((turn) => turn.id)).toEqual(['turn:u1', 'turn:a2']);
+
+        const mergedCache = buildTranscriptTurnsCached({
+            cache: boundaryCache,
+            messageIdsOldestFirst: ['u1', 'a1', 'a2', 't2'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        expect(mergedCache.turns).toHaveLength(1);
+        const mergedTurn = mergedCache.turns[0]!;
+        expect(mergedTurn.id).toBe('turn:a2');
+        expect(mergedTurn.userMessageId).toBe('u1');
+        expect(mergedTurn.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : []))
+            .toEqual(['toolCalls:turn:a2:t2']);
+        // Ids stay unique after remapping.
+        expect(new Set(mergedCache.turns.map((turn) => turn.id)).size).toBe(mergedCache.turns.length);
+    });
+
+    it('does not apply a sticky id when the rebuilt turn no longer contains all of the previous turn messages', () => {
+        // Containment is the sticky precondition: if the window dropped part of the old turn
+        // (rollback/fork switch), the on-screen row genuinely changed — derive a fresh id.
+        const chronological: Message[] = [
+            userMessage('u1', 1),
+            agentMessage('a1', 2),
+            agentMessage('a2', 3),
+            toolMessage({ id: 't2', createdAt: 4, state: 'completed' }),
+            userMessage('u3', 5),
+            agentMessage('a3', 6),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+
+        const windowCache = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['a2', 't2', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        const rebuiltWithoutT2 = buildTranscriptTurnsCached({
+            cache: windowCache,
+            messageIdsOldestFirst: ['u1', 'a1', 'a2', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        expect(windowCache.turns.map((turn) => turn.id)).toEqual(['turn:a2', 'turn:u3']);
+        expect(rebuiltWithoutT2.turns.map((turn) => turn.id)).toEqual(['turn:u1', 'turn:u3']);
     });
 
     it('rebuilds cached turns when an appended terminal compaction event supersedes a pending row', () => {

@@ -34,6 +34,7 @@ const gestureHandlerState = vi.hoisted(() => ({
 const settingMutators = vi.hoisted(() => ({
     setMobileWorkspaceExperience: vi.fn(),
 }));
+const chatListPropsSpy = vi.hoisted(() => vi.fn());
 const deviceTypeState = vi.hoisted(() => ({
     value: 'tablet' as 'phone' | 'tablet' | 'desktop',
 }));
@@ -175,6 +176,7 @@ installSessionShellCommonModuleMocks({
                 ) => {
                     const snapshot = {
                         sessions: sessionState ? { s1: sessionState } : {},
+                        sessionMessages: {},
                         settings: {},
                         sessionListViewDataByServerId: {},
                     };
@@ -183,11 +185,13 @@ installSessionShellCommonModuleMocks({
                 {
                     getState: () => ({
                         sessions: sessionState ? { s1: sessionState } : {},
+                        sessionMessages: {},
                         settings: {},
                         sessionListViewDataByServerId: {},
                     }),
                     getInitialState: () => ({
                         sessions: sessionState ? { s1: sessionState } : {},
+                        sessionMessages: {},
                         settings: {},
                         sessionListViewDataByServerId: {},
                     }),
@@ -276,7 +280,10 @@ vi.mock('@/components/sessions/actions/SessionHeaderActionMenu', () => ({
     SessionHeaderActionMenu: () => React.createElement('View', { testID: 'session-header-action-menu-trigger' }),
 }));
 vi.mock('@/components/sessions/transcript/ChatList', () => ({
-    ChatList: () => null,
+    ChatList: (props: any) => {
+        chatListPropsSpy(props);
+        return React.createElement('ChatList', props);
+    },
 }));
 vi.mock('@/components/sessions/pending/PendingMessagesDragReorderList', () => ({
     PendingMessagesDragReorderList: () => null,
@@ -390,6 +397,7 @@ describe('SessionView (data ready gating)', () => {
         deviceTypeState.value = 'tablet';
         safeAreaState.bottom = 0;
         standardCleanup();
+        chatListPropsSpy.mockReset();
     });
 
     it('renders the session shell when the session exists even if global data readiness is false', async () => {
@@ -403,6 +411,30 @@ describe('SessionView (data ready gating)', () => {
 
         expect(screen.findAllByTestId('session-composer-input')).toHaveLength(1);
         expect(screen.findAllByTestId('session-header-action-menu-trigger')).toHaveLength(1);
+    });
+
+    it('does not pass route hydration blocking state into an already loaded same-server session', async () => {
+        isDataReadyState = true;
+        sessionState = {
+            ...sessionState,
+            serverId: 'server-target',
+        };
+        const { SessionView } = await sessionViewModulePromise;
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView
+                    id="s1"
+                    routeServerId="server-target"
+                    routeHydrationState={{ kind: 'loading', sessionId: 's1', serverId: 'server-target', reason: 'store-miss' }}
+                />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.findAllByTestId('session-route-loading')).toHaveLength(0);
+        expect(screen.findAllByTestId('session-composer-input')).toHaveLength(1);
+        const latestChatListProps = chatListPropsSpy.mock.calls.at(-1)?.[0];
+        expect(latestChatListProps?.routeHydrationPending).not.toBe(true);
     });
 
     it('renders loading instead of deleted copy when route hydration is still pending after global data readiness', async () => {
@@ -570,6 +602,10 @@ describe('SessionView (data ready gating)', () => {
     });
 
     it('ignores auth sync errors that belong to a different scoped server', async () => {
+        sessionState = {
+            ...sessionState,
+            serverId: 'server-a',
+        };
         syncErrorState = {
             message: 'Authentication required',
             retryable: false,

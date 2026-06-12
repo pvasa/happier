@@ -45,6 +45,19 @@ function buildScrollWriteEvent(overrides: Record<string, unknown> = {}) {
     };
 }
 
+function buildScrollWriteRejectedEvent(overrides: Record<string, unknown> = {}) {
+    return {
+        ...buildScrollWriteEvent({
+            type: 'scroll-write-rejected',
+            writer: 'native-scroll-to-offset',
+            reason: 'prepend-restore',
+        }),
+        rejectedOwner: 'prepend',
+        activeOwner: 'entry',
+        ...overrides,
+    };
+}
+
 describe('transcript viewport telemetry', () => {
     afterEach(() => {
         delete (globalThis as Record<string, unknown>)[GLOBAL_KEY];
@@ -378,6 +391,278 @@ describe('transcript viewport telemetry', () => {
         });
         expect(telemetry.snapshot().events[0]).not.toHaveProperty('reason');
         expect(telemetry.snapshot().events[0]?.sessionId).not.toBe('session-raw');
+    });
+
+    it('preserves numeric native anchor restore diagnostics without accepting free-form payloads', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        telemetry.record({
+            type: 'restore-decision',
+            sessionId: 'session-raw',
+            platform: 'ios',
+            listImplementation: 'flash_v2',
+            mode: 'restore-anchor',
+            reason: 'pending',
+            anchorIndex: 42,
+            anchorItemOffsetPx: 64,
+            anchorObservedItemOffsetPx: 128,
+            anchorDeltaPx: 64,
+            anchorCorrectionAttempt: 1,
+            anchorCorrectionTargetOffsetY: 2048,
+            anchorRestoreViewOffset: -64,
+            anchorMessageId: 'must-not-leak',
+            timestampMs: 222,
+        });
+
+        expect(telemetry.snapshot().events[0]).toMatchObject({
+            type: 'restore-decision',
+            platform: 'ios',
+            mode: 'restore-anchor',
+            reason: 'pending',
+            anchorIndex: 42,
+            anchorItemOffsetPx: 64,
+            anchorObservedItemOffsetPx: 128,
+            anchorDeltaPx: 64,
+            anchorCorrectionAttempt: 1,
+            anchorCorrectionTargetOffsetY: 2048,
+            anchorRestoreViewOffset: -64,
+        });
+        expect(telemetry.snapshot().events[0]).not.toHaveProperty('anchorMessageId');
+        expect(telemetry.snapshot().events[0]?.sessionId).not.toBe('session-raw');
+    });
+
+    it('accepts transaction-outcome observation reasons', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        const reasons = [
+            'mvcp-preserved',
+            'fallback-restored',
+            'abandoned-layout-timeout',
+            'abandoned-identity',
+            'abandoned-user-scroll',
+            'entry-anchor-missing',
+            'entry-distance-oneshot',
+        ];
+        for (const reason of reasons) {
+            telemetry.record({
+                type: 'restore-decision',
+                sessionId: 'session-raw',
+                platform: 'ios',
+                listImplementation: 'flash_v2',
+                mode: 'restore-anchor',
+                reason,
+                timestampMs: 222,
+            });
+        }
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events.map((event) => event.reason)).toEqual(reasons);
+        expect(snapshot.droppedCount).toBe(0);
+    });
+
+    it('accepts forward-newer drain observation reasons (plan D6)', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        const reasons = [
+            'forward-newer-triggered',
+            'forward-newer-skipped',
+            'forward-newer-drained',
+        ];
+        for (const reason of reasons) {
+            telemetry.record({
+                type: 'restore-decision',
+                sessionId: 'session-raw',
+                platform: 'android',
+                listImplementation: 'flash_v2',
+                mode: 'user-unpinned',
+                reason,
+                timestampMs: 333,
+            });
+        }
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events.map((event) => event.reason)).toEqual(reasons);
+        expect(snapshot.droppedCount).toBe(0);
+    });
+
+    it('accepts anchor-capture events with capture-outcome reasons (plan P2)', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        const reasons = [
+            'anchor-captured',
+            'anchor-capture-empty',
+            'anchor-capture-dropped',
+        ];
+        for (const reason of reasons) {
+            telemetry.record({
+                type: 'anchor-capture',
+                sessionId: 'session-raw',
+                platform: 'ios',
+                listImplementation: 'flash_v2',
+                mode: 'user-unpinned',
+                reason,
+                anchorItemOffsetPx: 42,
+                distanceFromBottom: 1234,
+                timestampMs: 444,
+            });
+        }
+        // Free-form reasons must still be dropped from the new event type.
+        telemetry.record({
+            type: 'anchor-capture',
+            sessionId: 'session-raw',
+            platform: 'ios',
+            listImplementation: 'flash_v2',
+            mode: 'user-unpinned',
+            reason: 'smuggled free-form text',
+            timestampMs: 445,
+        });
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events.map((event) => event.type)).toEqual([
+            'anchor-capture', 'anchor-capture', 'anchor-capture', 'anchor-capture',
+        ]);
+        expect(snapshot.events.map((event) => event.reason)).toEqual([...reasons, undefined]);
+        expect(snapshot.events[0]).toMatchObject({ anchorItemOffsetPx: 42, distanceFromBottom: 1234 });
+        expect(snapshot.droppedCount).toBe(0);
+    });
+
+    it('drops unknown transaction-outcome lookalike reasons', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        telemetry.record({
+            type: 'restore-decision',
+            sessionId: 'session-raw',
+            platform: 'ios',
+            listImplementation: 'flash_v2',
+            mode: 'restore-anchor',
+            reason: 'abandoned-unknown',
+            timestampMs: 222,
+        });
+
+        expect(telemetry.snapshot().events[0]).toMatchObject({ type: 'restore-decision' });
+        expect(telemetry.snapshot().events[0]).not.toHaveProperty('reason');
+    });
+
+    it('records scroll-write-rejected events with owner attribution', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        telemetry.record(buildScrollWriteRejectedEvent({
+            text: 'transcript text must not leak',
+        }));
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events).toHaveLength(1);
+        expect(snapshot.events[0]).toMatchObject({
+            type: 'scroll-write-rejected',
+            writer: 'native-scroll-to-offset',
+            reason: 'prepend-restore',
+            rejectedOwner: 'prepend',
+            activeOwner: 'entry',
+            targetOffsetY: 120,
+            contentHeight: 900,
+        });
+        expect(snapshot.events[0]?.sessionId).not.toBe('session-1');
+        expect(snapshot.events[0]).not.toHaveProperty('text');
+    });
+
+    it('drops scroll-write-rejected events with unknown owner values', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        telemetry.record(buildScrollWriteRejectedEvent({
+            rejectedOwner: '/Users/example/private.txt',
+        }));
+        telemetry.record(buildScrollWriteRejectedEvent({
+            activeOwner: 'someone-else',
+        }));
+        telemetry.record(buildScrollWriteRejectedEvent({
+            rejectedOwner: undefined,
+        }));
+        telemetry.record(buildScrollWriteRejectedEvent({
+            activeOwner: undefined,
+        }));
+
+        expect(telemetry.snapshot()).toEqual({ events: [], droppedCount: 0 });
+    });
+
+    it('drops scroll-write-rejected events with unknown writer or reason', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        telemetry.record(buildScrollWriteRejectedEvent({ writer: 'free-form-writer' }));
+        telemetry.record(buildScrollWriteRejectedEvent({ reason: 'experiment' }));
+
+        expect(telemetry.snapshot()).toEqual({ events: [], droppedCount: 0 });
     });
 
     it('does not expose the dev getter in production or while disabled', async () => {

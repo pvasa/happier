@@ -74,7 +74,10 @@ function buildToolCallsGroupItem(params: Readonly<{
 }
 
 function countTurnEntries(turn: TranscriptTurn): number {
-    return (turn.userMessageId ? 1 : 0) + turn.content.length;
+    return (turn.userMessageId ? 1 : 0) + turn.content.reduce((count, content) => {
+        if (content.kind === 'message') return count + 1;
+        return count + Math.max(1, content.toolMessageIds.length);
+    }, 0);
 }
 
 function splitTurn(params: Readonly<{

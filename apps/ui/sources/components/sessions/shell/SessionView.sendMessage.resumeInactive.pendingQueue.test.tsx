@@ -504,6 +504,7 @@ vi.mock('@/agents/hooks/useResumeCapabilityOptions', () => ({
 vi.mock('@/agents/runtime/resumeCapabilities', () => ({
     canResumeSessionWithOptions: (metadata: unknown, options: { machineId?: string | null } | null | undefined) =>
         canResumeSessionWithOptionsSpy(metadata, options),
+    canContinueSessionWithFreshSpawn: () => false,
     getAgentVendorResumeId: () => null,
 }));
 vi.mock('@/sync/domains/input/slashCommands/resolveSessionComposerSend', () => ({

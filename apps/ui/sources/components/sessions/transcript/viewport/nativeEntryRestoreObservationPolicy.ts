@@ -24,33 +24,6 @@ export function nativeEntryRestoreObservationMatches(
     return nativeEntryRestoreTargetOffsetMatches(target, params);
 }
 
-export function nativeEntryRestoreObservationExceedsJumpThreshold(
-    target: NativeEntryRestoreObservationTarget | null | undefined,
-    params: Readonly<{
-        distanceFromBottom: number;
-        jumpThresholdPx: number;
-        sessionId: string;
-    }>,
-): boolean {
-    return (
-        target?.sessionId === params.sessionId &&
-        params.jumpThresholdPx > 0 &&
-        params.distanceFromBottom > target.offsetY + params.jumpThresholdPx
-    );
-}
-
-export function resolveNativeEntryRestoreJumpThresholdPx(params: Readonly<{
-    layoutHeight: number;
-    pinThresholdPx: number;
-    thresholdMultiplier: number;
-    viewportMultiplier: number;
-}>): number {
-    return Math.max(
-        params.layoutHeight > 0 ? params.layoutHeight * params.viewportMultiplier : 0,
-        params.pinThresholdPx * params.thresholdMultiplier,
-    );
-}
-
 function nativeEntryRestoreTargetOffsetMatches(
     target: NativeEntryRestoreObservationTarget,
     params: Readonly<{
