@@ -60,6 +60,17 @@ Details: `../../docs/agents-catalog.md`.
 - For settings list screens, keep existing-object lists separate from creation/attachment action groups.
 - Worktrees must remain usable without first creating a workspace.
 
+## Performance and UX continuity
+
+Performance is a core UX requirement.
+
+- Preserve last-known-good UI during refresh; do not flash empty/loading states for already-hydrated lists, transcripts, detail panels, or cached snapshots.
+- Maintain referential stability for unchanged rows, items, maps, and arrays so lists and memoized components do not rerender unnecessarily.
+- Avoid rebuilding expensive derived state unless the structural input changed; patch minimal affected state when non-structural data updates.
+- For transcript/session list work, validate scroll anchoring, pagination, viewport restoration, virtualization behavior, and large-session responsiveness.
+- Performance fixes must preserve accessibility, responsive layout, i18n, and expected platform behavior.
+- Prefer measurable validation for performance-sensitive UI changes: render counts, viewport/scroll tests, profiler output, or documented before/after observations.
+
 ## Testing
 
 - Prefer UI-local testkit imports from `@/dev/testkit` and helpers under `sources/dev/testkit/**`.

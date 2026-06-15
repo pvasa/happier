@@ -28,6 +28,16 @@ This file is the canonical cross-tool constitution for this repository. Re-read 
 - Prefer parallel tool calls for independent retrieval/lookup steps; do not parallelize dependent or speculative work.
 - Protect context: load the minimum relevant snippets, avoid dumping logs/build artifacts, and summarize large artifacts by path.
 
+## Product priorities
+
+Performance and long-term maintainability are paramount product requirements, not afterthoughts.
+
+- Treat responsiveness, scalability, and resource usage as acceptance criteria for user-facing, sync, transcript, terminal, provider, server, and daemon flows.
+- Do not trade away correctness, accessibility, state continuity, privacy, or user trust for micro-optimizations.
+- Prefer measured evidence for performance-sensitive work: before/after timings, render counts, profiler output, targeted performance tests, or a clear explanation of why measurement was not feasible.
+- Long-term maintainability matters more than preserving a small diff. If the correct fix requires a coherent refactor, do it and validate it.
+- Favor fixes that simplify the durable architecture: fewer competing paths, clearer ownership, stronger invariants, and less future drift.
+
 ## Evidence-first work
 
 Base fixes and refactors on observed facts, not assumptions.
@@ -40,6 +50,16 @@ Base fixes and refactors on observed facts, not assumptions.
 - If evidence is missing, say what is missing and what would verify it.
 - Do not claim a test, typecheck, build, or manual QA passed unless it actually ran.
 - If blocked, name the blocker and the next concrete action.
+
+## Root-cause discipline
+
+Fix the cause, not the symptom.
+
+- Do not implement workarounds, band-aids, duplicate paths, or similar-but-different logic when the owning cause can be fixed.
+- If a temporary mitigation is genuinely necessary, keep it narrow, label why it exists, test it, and state the follow-up root-cause fix.
+- When fixing a bug, search for the same pattern in nearby owners and shared abstractions.
+- Centralize or reuse the canonical path when the same issue exists elsewhere; do not leave parallel implementations to drift.
+- If the root cause crosses package boundaries, identify the owning boundary first, then make the smallest coherent cross-package change.
 
 ## Execution loop
 
@@ -129,9 +149,10 @@ This repo is often edited by multiple agents at once.
 - Optimize for readability over cleverness.
 - Prefer one obvious path over multiple parallel mechanisms.
 - Do not invent abstractions until repeated real use justifies them.
+- Do add or extract an abstraction when it removes real duplication, prevents competing logic, or makes an illegal state unrepresentable.
 - Make illegal states unrepresentable where practical.
 - Delete obsolete code when your change makes it obsolete.
-- “Simple” means lower long-term system complexity, not necessarily fewer changed lines.
+- “Simple” means lower long-term system complexity, not necessarily fewer changed lines or the smallest immediate patch.
 - Keep changes coherent and reviewable; avoid unrelated drive-by edits.
 - If a refactor is necessary to solve the problem well, do it as part of the same coherent change and explain why.
 - If you notice a valuable but unrelated refactor, mention it or ask before doing it.
@@ -140,8 +161,11 @@ This repo is often edited by multiple agents at once.
 
 - Read first: inspect existing owners, helpers, harnesses, builders, and patterns before implementing.
 - Reuse or extend canonical implementations instead of adding similar-but-different logic.
+- Before adding new logic, search by symbol, route/command, config key, feature id, store key, error code, provider id, and test helper to find the existing owner.
+- If similar logic already exists, extend or extract the canonical owner instead of creating a second path.
 - Keep code with its natural owner: shared primitives in shared packages, package-specific logic in the owning package.
 - Prefer focused modules and cohesive folders over god files or grab-bag folders.
+- Before handoff, search for stale alternate paths, duplicate registries, leftover compatibility layers, and direct callers that bypass the canonical abstraction.
 
 ## Files, folders, and ownership
 
@@ -255,6 +279,7 @@ Details: `docs/binary-runtime.md` and `docs/cli-architecture.md`.
 ### UI (`apps/ui`)
 
 - Use themed colors/tokens, app text primitives, translated strings, layout width constraints, and the app modal/popover systems.
+- Treat UI responsiveness, state continuity, scroll stability, and render efficiency as core UX requirements.
 - Do not introduce provider branching in generic UI/sync code; consume provider behavior through the UI registry.
 - Follow `apps/ui/AGENTS.md` for UI structure, i18n, typography, settings, modal/popover, and workspace/worktree UX rules.
 
