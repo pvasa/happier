@@ -26,6 +26,7 @@ function readCommandNamePromptText(content: string): string | null {
 
 function readUserPromptTexts(message: RawJSONLines): readonly string[] {
   if (message.type !== 'user') return [];
+  if ((message as Record<string, unknown>).isMeta === true) return [];
   const content = message.message?.content;
   if (typeof content !== 'string' || content.length === 0) return [];
   const commandName = readCommandNamePromptText(content);

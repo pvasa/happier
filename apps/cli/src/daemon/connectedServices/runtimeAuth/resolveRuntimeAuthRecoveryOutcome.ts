@@ -7,8 +7,8 @@
 // while the provider session was still broken.
 //
 // This helper accepts only DETERMINISTIC evidence at this stage of the work:
-//   - account-adoption verified (the switch already runs post-switch account
-//     adoption verification and surfaces it as `verificationByServiceId`); or
+//   - accepted post-switch verification (exact `verified` account proof or
+//     `weakly_verified` auth-surface/provenance proof surfaced as `verificationByServiceId`); or
 //   - a genuinely fresh candidate was selected (the adopted profile differs from
 //     the exhausted/failed profile).
 //
@@ -30,7 +30,7 @@
 // This resolver MAPS the runtime-auth switch result onto the shared, provider-agnostic
 // `ProviderOutcomeProofKind` contract. The mapping is thin and behavior-preserving:
 // the deterministic evidence it can establish is `account_adoption_verified` and
-// `fresh_candidate_selected`. Only account-adoption is a recovered proof today;
+// `fresh_candidate_selected`. Only accepted post-switch verification is a recovered proof today;
 // fresh-candidate selection intentionally stays intermediate until later provider
 // activity/native resume/quota proof arrives. All other local completions
 // (credential_refreshed, generic ok:true, unverified switch/observed_generation)
@@ -63,7 +63,7 @@ export function readRuntimeAuthRecoverySwitchResult(
   return result;
 }
 
-function hasVerifiedAccountAdoption(switchResult: Readonly<Record<string, unknown>>): boolean {
+function hasAcceptedPostSwitchVerification(switchResult: Readonly<Record<string, unknown>>): boolean {
   const verificationByServiceId = switchResult.verificationByServiceId;
   if (!isRecord(verificationByServiceId)) return false;
   return Object.values(verificationByServiceId).some((verification) => (
@@ -82,8 +82,8 @@ function hasFreshCandidateSelected(switchResult: Readonly<Record<string, unknown
   return fromProfileId !== activeProfileId;
 }
 
-// Runtime-auth recovery can derive account-adoption and fresh-candidate evidence
-// from switch results. Provider/runtime owners may also pass through an explicit
+// Runtime-auth recovery can derive accepted post-switch verification and fresh-candidate
+// evidence from switch results. Provider/runtime owners may also pass through an explicit
 // `proofKind` from the shared provider-outcome contract when they own stronger
 // evidence such as native resume, quota probe, provider activity, or terminal proof.
 export type RuntimeAuthRecoveryProofKind = ProviderOutcomeProofKind;
@@ -97,7 +97,7 @@ export function resolveRuntimeAuthRecoveryProof(result: unknown): RuntimeAuthRec
   const switchResult = readRuntimeAuthRecoverySwitchResult(result);
   if (!switchResult) return null;
   if (isProviderOutcomeProofKind(switchResult.proofKind)) return switchResult.proofKind;
-  if (hasVerifiedAccountAdoption(switchResult)) return 'account_adoption_verified';
+  if (hasAcceptedPostSwitchVerification(switchResult)) return 'account_adoption_verified';
   if (hasFreshCandidateSelected(switchResult)) return 'fresh_candidate_selected';
   return null;
 }

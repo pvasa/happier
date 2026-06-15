@@ -75,6 +75,25 @@ function hasLeftoverSlashDraft(state: ClaudeScreenState): boolean {
 }
 
 /**
+ * The FINITE vocabulary of slash commands this controller types (`/model …`, `/effort …`),
+ * including the concatenated re-type residue form (`/effort medium/effort medium`, U1 class).
+ *
+ * RESUME2 respawn gap (A2-HIGH-1): controller-typed commands are echo-suppressed out of the
+ * persisted transcript, so a RESPAWNED runner's seeded own-composer-text registry can never
+ * exact-match them. The own-draft guard uses this predicate as the vocabulary-based fallback so
+ * a typed-but-never-submitted control command remains clearable instead of deadlocking idle
+ * injection behind a `foreign_draft` classification. A model argument containing `/` falls back
+ * to foreign (fail-safe: defer, never clear).
+ */
+const CONTROLLER_SLASH_COMMAND_RESIDUE_PATTERN = /^(?:\/(?:model|effort)(?:[ \t][^/\n]*)?)+$/;
+
+export function isControllerTypedSlashCommandResidue(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('/')) return false;
+  return CONTROLLER_SLASH_COMMAND_RESIDUE_PATTERN.test(trimmed);
+}
+
+/**
  * Fail-closed reason for a confirmation dialog the controller does not recognize (P-B): typing
  * would answer it and Escape would decline it (the incident cmq8y3nlx default-resolution class),
  * so the only safe outcome is `requires_interactive_control` with ZERO bytes sent.

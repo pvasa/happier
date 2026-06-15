@@ -25,6 +25,7 @@ describe('createClaudeUnifiedPendingQueuePump', () => {
       message: 'from queue',
       mode: { permissionMode: 'default' },
       origin: { kind: 'ui_pending' },
+      maxUserMessageSeq: null,
     });
     expect(drainWhenSafe).toHaveBeenCalledTimes(1);
     expect(drainPending).not.toHaveBeenCalled();

@@ -16,6 +16,11 @@ type SessionTurnMutationSocket = {
 export type SessionTurnMutationDeliveryResult =
     | Readonly<{ status: 'delivered'; path: 'socket' | 'http' }>
     | Readonly<{
+        status: 'ignored_lossy';
+        reason: 'touch_active_incompatible_session_turn_mutation_http';
+        httpStatus: 400 | 422;
+    }>
+    | Readonly<{
         status: 'unsupported_capability';
         reason: 'session_turn_mutation_unsupported';
         diagnostic: UnsupportedSessionTurnMutationDiagnostic;
@@ -208,6 +213,13 @@ export async function deliverSessionTurnMutation(params: Readonly<{
     }
 
     if (httpResult.status === 'incompatible') {
+        if (params.mutation.action === 'touch_active') {
+            return {
+                status: 'ignored_lossy',
+                reason: 'touch_active_incompatible_session_turn_mutation_http',
+                httpStatus: httpResult.statusCode,
+            };
+        }
         return {
             status: 'retryable',
             reason: 'incompatible_session_turn_mutation_http',

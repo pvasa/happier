@@ -39,6 +39,88 @@ describe('createClaudeUnifiedPromptInjector', () => {
     });
   });
 
+  it('normalizes CR and CRLF prompt line endings before injection', async () => {
+    const injectUserPrompt = vi.fn().mockResolvedValue({
+      status: 'injected',
+      at: 123,
+      bytesWritten: 17,
+    });
+    const injector = createClaudeUnifiedPromptInjector({
+      inputInjection: {
+        hostKind: 'tmux',
+        injectUserPrompt,
+      },
+      createNonce: () => 'nonce-1',
+    });
+
+    await expect(
+      injector.injectPrompt({
+        message: 'alpha\r\nbeta\rgamma',
+        origin: { kind: 'ui_pending', clientId: 'client-1' },
+      }),
+    ).resolves.toMatchObject({ status: 'injected' });
+
+    expect(injectUserPrompt).toHaveBeenCalledWith({
+      text: 'alpha\nbeta\ngamma',
+      multiline: true,
+      origin: {
+        kind: 'ui_pending',
+        clientId: 'client-1',
+        nonce: 'nonce-1',
+      },
+      scheduling: {
+        deferredUntilQuietMs: 800,
+        timeoutMs: 15_000,
+      },
+    });
+  });
+
+  it('rejects terminal control bytes before prompt text reaches the terminal injector', async () => {
+    const unsafePrompts = [
+      ['nul', 'alpha\x00beta'],
+      ['ctrl-c', 'alpha\x03beta'],
+      ['ctrl-d', 'alpha\x04beta'],
+      ['escape', 'alpha\x1bbeta'],
+      ['csi', 'alpha\x1b[31mbeta'],
+      ['osc', 'alpha\x1b]0;title\x07beta'],
+      ['bracketed-paste-start', 'alpha\x1b[200~beta'],
+      ['bracketed-paste-end', 'alpha\x1b[201~beta'],
+    ] as const;
+
+    for (const [caseName, message] of unsafePrompts) {
+      const injectUserPrompt = vi.fn().mockResolvedValue({
+        status: 'injected',
+        at: 123,
+        bytesWritten: 17,
+      });
+      const onInjected = vi.fn();
+      const injector = createClaudeUnifiedPromptInjector({
+        inputInjection: {
+          hostKind: 'zellij',
+          injectUserPrompt,
+        },
+        createNonce: () => `nonce-${caseName}`,
+        onInjected,
+      });
+
+      await expect(
+        injector.injectPrompt({
+          message,
+          origin: { kind: 'ui_pending', clientId: 'client-1' },
+        }),
+      ).resolves.toEqual({
+        status: 'failed',
+        reason: 'invalid_prompt_text',
+        phase: 'before_write',
+        duplicateRisk: 'none',
+        recoverable: false,
+      });
+
+      expect(injectUserPrompt, caseName).not.toHaveBeenCalled();
+      expect(onInjected, caseName).not.toHaveBeenCalled();
+    }
+  });
+
   it('skips quiet-screen deferral for in-flight steer injections', async () => {
     const injectUserPrompt = vi.fn().mockResolvedValue({
       status: 'injected',

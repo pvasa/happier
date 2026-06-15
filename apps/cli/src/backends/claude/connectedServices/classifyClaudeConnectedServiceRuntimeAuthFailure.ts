@@ -107,11 +107,15 @@ export function classifyClaudeConnectedServiceRuntimeAuthFailure(params: Readonl
     const limitCategory =
         params.details.limitCategory !== undefined && params.details.limitCategory !== 'unknown'
             ? params.details.limitCategory
+            : params.details.providerLimitId === 'transient'
+                ? 'rate_limit'
             : params.details.utilization !== null && params.details.utilization < 100
                 ? 'rate_limit'
                 : 'usage_limit';
     const kind =
-        limitCategory === 'capacity'
+        params.details.providerLimitId === 'transient'
+            ? 'temporary_throttle'
+            : limitCategory === 'capacity'
             ? 'capacity'
             : limitCategory === 'rate_limit'
                 ? 'rate_limit'

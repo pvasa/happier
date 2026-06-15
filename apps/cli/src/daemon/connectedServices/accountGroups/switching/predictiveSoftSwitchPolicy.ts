@@ -1,6 +1,7 @@
 type PredictiveSoftSwitchReason =
   | 'usage_limit'
   | 'soft_threshold'
+  | 'same_provider_account_exhausted'
   | 'auth_expired'
   | 'account_changed'
   | 'refresh_failed';
@@ -63,7 +64,7 @@ export function evaluatePredictiveSoftSwitchSessionApplyPolicy(input: Readonly<{
   sessionId?: string | null;
   applyMode?: PredictiveSoftSwitchSessionApplyMode | null;
 }>): PredictiveSoftSwitchSessionApplyDecision {
-  if (input.reason !== 'soft_threshold') return { status: 'allow' };
+  if (input.reason !== 'soft_threshold' && input.reason !== 'same_provider_account_exhausted') return { status: 'allow' };
   if (typeof input.sessionId !== 'string' || input.sessionId.trim().length === 0) return { status: 'allow' };
   if (input.applyMode === undefined || input.applyMode === null || input.applyMode === 'hot_apply') {
     return { status: 'allow' };

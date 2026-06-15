@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
-import type { TerminalInputInjectionV1 } from '@/agent/runtime/terminal/TerminalInputInjectionV1';
+import type {
+  TerminalInputInjectionResult,
+  TerminalInputInjectionV1,
+} from '@/agent/runtime/terminal/TerminalInputInjectionV1';
 import { hasMultilinePayload } from '@/agent/runtime/terminal/injection/bracketedPaste';
+import { prepareTerminalPromptTextForInjection } from '@/agent/runtime/terminal/injection/promptTextSafety';
 import {
   TERMINAL_INPUT_MAX_WAIT_MS,
   TERMINAL_INPUT_QUIET_PERIOD_MS,
@@ -75,9 +79,31 @@ export function createClaudeUnifiedPromptInjector<Mode = unknown>(opts: Readonly
       batch: ClaudeUnifiedPromptBatch<Mode>,
       options?: ClaudeUnifiedPromptInjectionOptions | undefined,
     ) {
-      const multiline = hasMultilinePayload(batch.message);
-      const text = batch.message;
+      const preparedPrompt = prepareTerminalPromptTextForInjection(batch.message);
+      const multiline = preparedPrompt.ok ? preparedPrompt.multiline : hasMultilinePayload(batch.message);
       const inFlightSteer = options?.inFlightSteer === true;
+
+      if (!preparedPrompt.ok) {
+        const result: TerminalInputInjectionResult = {
+          status: 'failed',
+          reason: 'invalid_prompt_text',
+          phase: 'before_write',
+          duplicateRisk: 'none',
+          recoverable: false,
+        };
+        if (opts.telemetry) {
+          emitClaudeUnifiedInjectionOutcome(opts.telemetry, {
+            result,
+            hostKind: opts.inputInjection.hostKind,
+            multiline,
+            originKind: batch.origin.kind,
+            ...(inFlightSteer ? { inFlightSteer: true } : {}),
+          });
+        }
+        return result;
+      }
+
+      const text = preparedPrompt.text;
 
       if (opts.composerDraftGuard && !inFlightSteer) {
         const guard = await opts.composerDraftGuard();

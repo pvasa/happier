@@ -858,10 +858,18 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.env.CLAUDE_CONFIG_DIR).toBe(
-      join(activeServerDir, 'daemon', 'connected-services', 'homes', 'claude-subscription', 'work', 'claude', 'claude-config'),
+    const expectedClaudeConfigDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      'work',
+      'claude',
+      'claude-config',
     );
-    expect(result!.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]).toBe(result!.env.CLAUDE_CONFIG_DIR);
+    expect(result!.env.CLAUDE_CONFIG_DIR).toBe(expectedClaudeConfigDir);
+    expect(result!.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]).toBe(expectedClaudeConfigDir);
     expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
       ['CLAUDE_CONFIG_DIR'],
     );
@@ -931,10 +939,18 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.env.CLAUDE_CONFIG_DIR).toBe(
-      join(activeServerDir, 'daemon', 'connected-services', 'homes', 'claude-subscription', 'work', 'claude', 'claude-config'),
+    const expectedClaudeConfigDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      'work',
+      'claude',
+      'claude-config',
     );
-    expect(result!.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]).toBe(result!.env.CLAUDE_CONFIG_DIR);
+    expect(result!.env.CLAUDE_CONFIG_DIR).toBe(expectedClaudeConfigDir);
+    expect(result!.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]).toBe(expectedClaudeConfigDir);
     expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
       ['CLAUDE_CONFIG_DIR'],
     );
@@ -993,7 +1009,9 @@ describe('materializeConnectedServicesForSpawn', () => {
       ['ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR'],
     );
     await expect(readFile(join(result!.env.CLAUDE_CONFIG_DIR!, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"dark"}\n');
-    await expect(lstat(join(result!.env.CLAUDE_CONFIG_DIR!, '.claude.json'))).rejects.toThrow();
+    const targetRootConfig = JSON.parse(await readFile(join(result!.env.CLAUDE_CONFIG_DIR!, '.claude.json'), 'utf8'));
+    expect(JSON.stringify(targetRootConfig)).not.toContain('do-not-copy');
+    expect(targetRootConfig.projects?.[process.cwd()]?.hasTrustDialogAccepted).toBe(true);
     expect('CLAUDE_CODE_SETUP_TOKEN' in result!.env).toBe(false);
     expect('CLAUDE_CODE_OAUTH_TOKEN' in result!.env).toBe(false);
   });

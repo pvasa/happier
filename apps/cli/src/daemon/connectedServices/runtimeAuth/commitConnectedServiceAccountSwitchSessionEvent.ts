@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  ConnectedServiceIdSchema,
   ConnectedServiceUxDiagnosticV1Schema,
   ConnectedServiceSwitchAttemptedContinuityModeV1Schema,
   ConnectedServiceSwitchAttemptOutcomeActionV1Schema,
@@ -33,8 +34,9 @@ import {
 
 type ConnectedServiceRuntimeSwitchSessionEvent = Readonly<{
   type: 'connected_service_account_switch' | 'connected_service_auth_group_switch';
-  serviceId: string;
+  serviceId: ConnectedServiceId;
   groupId: string | null;
+  groupLabel?: string | null;
   fromProfileId: string | null;
   toProfileId: string | null;
   reason: string;
@@ -134,11 +136,13 @@ function parseRuntimeSwitchEvent(value: unknown): ConnectedServiceRuntimeSwitchS
     )
   ) return null;
   const serviceId = typeof record.serviceId === 'string' ? record.serviceId.trim() : '';
+  const parsedServiceId = ConnectedServiceIdSchema.safeParse(serviceId);
   const rawGroupId = typeof record.groupId === 'string' ? record.groupId.trim() : '';
+  const rawGroupLabel = typeof record.groupLabel === 'string' ? record.groupLabel.trim() : '';
   const rawFromProfileId = typeof record.fromProfileId === 'string' ? record.fromProfileId.trim() : '';
   const rawToProfileId = typeof record.toProfileId === 'string' ? record.toProfileId.trim() : '';
   const reason = typeof record.reason === 'string' ? record.reason.trim() : '';
-  if (!serviceId || (!rawFromProfileId && !rawToProfileId) || !reason) return null;
+  if (!parsedServiceId.success || (!rawFromProfileId && !rawToProfileId) || !reason) return null;
   const rawGeneration = record.type === 'connected_service_auth_group_switch'
     ? record.toGeneration
     : record.generation;
@@ -147,8 +151,9 @@ function parseRuntimeSwitchEvent(value: unknown): ConnectedServiceRuntimeSwitchS
     : undefined;
   return {
     type: record.type,
-    serviceId,
+    serviceId: parsedServiceId.data,
     groupId: rawGroupId || null,
+    ...(rawGroupLabel ? { groupLabel: rawGroupLabel } : {}),
     fromProfileId: rawFromProfileId || null,
     toProfileId: rawToProfileId || null,
     reason,
@@ -300,6 +305,7 @@ function mapSwitchReason(reason: string): TranscriptSwitchReason | null {
     case 'usage_limit':
     case 'rate_limit':
     case 'capacity':
+    case 'same_provider_account_exhausted':
       return 'usage_limit';
     case 'soft_threshold':
       return 'soft_threshold';
@@ -318,6 +324,12 @@ function mapSwitchReason(reason: string): TranscriptSwitchReason | null {
     default:
       return null;
   }
+}
+
+function readDisplayLabel(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > 0 ? normalized : null;
 }
 
 function buildStoredContent(params: Readonly<{
@@ -344,6 +356,10 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
     serviceId: ConnectedServiceId;
     profiles: ReadonlyArray<ConnectedServiceNotificationProfileSummary>;
   }>>;
+  getConnectedServiceAuthGroup?: (input: Readonly<{ serviceId: ConnectedServiceId; groupId: string }>) => Promise<Readonly<{
+    groupId: string;
+    displayName?: string | null;
+  }> | null>;
 }>): Promise<void> {
   const deferral = parseRuntimeSwitchDeferralEvent(params.event);
   if (deferral) {
@@ -573,6 +589,14 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
     : new Map<string, ConnectedServiceNotificationProfileSummary>();
   const fromProfileLabel = resolveConnectedServiceNotificationProfileLabel(profilesById, parsed.fromProfileId);
   const toProfileLabel = resolveConnectedServiceNotificationProfileLabel(profilesById, parsed.toProfileId);
+  const groupLabel = readDisplayLabel(parsed.groupLabel)
+    ?? (parsed.groupId && params.getConnectedServiceAuthGroup
+      ? readDisplayLabel((await params.getConnectedServiceAuthGroup({
+        serviceId: parsed.serviceId,
+        groupId: parsed.groupId,
+      }).catch(() => null))?.displayName)
+      : null)
+    ?? readDisplayLabel(parsed.groupId);
   const payload = {
     role: 'agent',
     content: {
@@ -582,6 +606,7 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
         type: 'connected-service-account-switch',
         serviceId: parsed.serviceId,
         groupId: parsed.groupId,
+        ...(groupLabel ? { groupLabel } : {}),
         fromProfileId: parsed.fromProfileId,
         toProfileId: parsed.toProfileId,
         ...(fromProfileLabel ? { fromProfileLabel } : {}),

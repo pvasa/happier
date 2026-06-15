@@ -142,6 +142,19 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
           },
         ],
       }),
+      getConnectedServiceAuthGroup: async () => ({
+        v: 1,
+        serviceId: 'claude-subscription',
+        groupId: 'claude',
+        displayName: 'Claude pool',
+        policy: { v: 1 },
+        activeProfileId: 'batiplus',
+        generation: 1,
+        state: { v: 1, failureCount: 0 },
+        createdAt: 1,
+        updatedAt: 1,
+        members: [],
+      }),
       event: {
         type: 'connected_service_account_switch',
         serviceId: 'claude-subscription',
@@ -162,6 +175,7 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
               data: expect.objectContaining({
                 fromProfileId: 'batiplus',
                 toProfileId: 'batiplus',
+                groupLabel: 'Claude pool',
                 fromProfileLabel: 'leeroy',
                 toProfileLabel: 'leeroy',
               }),
@@ -171,6 +185,92 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it('does not persist provider account ids as public profile labels on transcript events', async () => {
+    process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+    vi.resetModules();
+    const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
+
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess-private-provider-account',
+          seq: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          active: true,
+          activeAt: 1,
+          encryptionMode: 'plain',
+          metadata: '{}',
+          metadataVersion: 1,
+          agentState: null,
+          agentStateVersion: 1,
+          dataEncryptionKey: null,
+        },
+      },
+    });
+    const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        didWrite: true,
+        message: { id: 'msg-private-provider-account', seq: 2, localId: 'local-private-provider-account', createdAt: 2 },
+      },
+    });
+
+    await commitConnectedServiceAccountSwitchSessionEvent({
+      credentials: {
+        token: 'token-1',
+        encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
+      },
+      sessionId: 'sess-private-provider-account',
+      listConnectedServiceProfiles: async () => ({
+        serviceId: 'openai-codex',
+        profiles: [
+          {
+            profileId: 'primary',
+            status: 'connected',
+            providerEmail: null,
+            providerAccountId: 'acct-provider-primary-secret',
+          },
+          {
+            profileId: 'backup',
+            status: 'connected',
+            providerEmail: null,
+            providerAccountId: 'acct-provider-backup-secret',
+          },
+        ],
+      }),
+      event: {
+        type: 'connected_service_account_switch',
+        serviceId: 'openai-codex',
+        groupId: 'codex-main',
+        fromProfileId: 'primary',
+        toProfileId: 'backup',
+        reason: 'usage_limit',
+        generation: 9,
+      },
+    });
+
+    const [, postedBody] = postSpy.mock.calls[0]!;
+    expect(JSON.stringify(postedBody)).not.toContain('acct-provider-primary-secret');
+    expect(JSON.stringify(postedBody)).not.toContain('acct-provider-backup-secret');
+    expect(postedBody).toEqual(expect.objectContaining({
+      content: expect.objectContaining({
+        t: 'plain',
+        v: expect.objectContaining({
+          content: expect.objectContaining({
+            data: expect.objectContaining({
+              fromProfileId: 'primary',
+              toProfileId: 'backup',
+              fromProfileLabel: 'primary',
+              toProfileLabel: 'backup',
+            }),
+          }),
+        }),
+      }),
+    }));
   });
 
   it('commits connected-service account switch attempt diagnostics', async () => {

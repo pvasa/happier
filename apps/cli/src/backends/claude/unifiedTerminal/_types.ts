@@ -17,6 +17,12 @@ export type ClaudeUnifiedPromptBatch<Mode = unknown> = Readonly<{
   message: string;
   mode?: Mode | undefined;
   origin: ClaudeUnifiedPromptOrigin;
+  /**
+   * Owed-delivery watermark attribution (A3-HIGH-1): max server user-row seq among the queue
+   * items batched into this prompt (null/absent when unattributed). Persisted as the delivered
+   * watermark only at provider acceptance.
+   */
+  maxUserMessageSeq?: number | null;
 }>;
 
 export type ClaudeUnifiedPromptAcceptance = Readonly<{

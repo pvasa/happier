@@ -223,4 +223,37 @@ describe('ConnectedServiceUxDiagnosticV1', () => {
 
     expect(diagnostic.success).toBe(true);
   });
+
+  it.each([
+    ['runtime_auth_recovery_superseded', 'runtime_auth_recovery', 'runtime_auth_recovery'],
+    ['runtime_auth_generation_stale', 'runtime_auth_recovery', 'runtime_auth_recovery'],
+    ['hot_apply_unavailable', 'hot_apply', 'manual_auth_switch'],
+    ['app_server_unavailable', 'post_switch_verification', 'transcript_switch_attempt'],
+    ['provider_account_identity_unverified', 'post_switch_verification', 'usage_limit_recovery'],
+    ['quota_snapshot_stale', 'runtime_auth_recovery', 'usage_limit_recovery'],
+    ['quota_fetch_disabled', 'runtime_auth_recovery', 'usage_limit_recovery'],
+    ['quota_fetch_backoff', 'runtime_auth_recovery', 'usage_limit_recovery'],
+    ['auth_surface_weakly_verified', 'post_switch_verification', 'runtime_auth_recovery'],
+  ] as const)('accepts recovery diagnostic code %s as a first-class UX diagnostic', (code, failurePhase, source) => {
+    const diagnostic = ConnectedServiceUxDiagnosticV1Schema.safeParse({
+      code,
+      failurePhase,
+      source,
+      serviceId: 'openai-codex',
+      providerId: 'codex',
+      agentId: 'codex',
+      profileId: 'backup',
+      groupId: 'codex-main',
+      retryable: code !== 'auth_surface_weakly_verified',
+      suggestedActions: [
+        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.retry,
+        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.openConnectedAccounts,
+      ],
+      diagnostics: {
+        reason: code,
+      },
+    });
+
+    expect(diagnostic.success).toBe(true);
+  });
 });

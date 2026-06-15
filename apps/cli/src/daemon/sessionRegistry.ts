@@ -29,6 +29,11 @@ const DaemonSessionMarkerSchema = z.object({
   metadata: z.any().optional(),
   // Safe daemon respawn inputs (no secrets). Used to reconstruct SpawnSessionOptions after reattach.
   respawn: SessionRunnerRespawnDescriptorV1Schema.optional(),
+  // Durable marker that a connected-service auth switch has entered the gated restart primitive.
+  connectedServiceRestartIntent: z.object({
+    v: z.literal(1),
+    requestedAtMs: z.number().int().nonnegative(),
+  }).optional(),
 });
 
 export type DaemonSessionMarker = z.infer<typeof DaemonSessionMarkerSchema>;
@@ -169,6 +174,85 @@ export async function refreshSessionMarkerRespawn(params: Readonly<{
     ...rest,
     respawn,
   });
+}
+
+async function readSessionMarkerForPid(pid: number): Promise<DaemonSessionMarker | null> {
+  for (const candidatePath of markerPathsForPid(pid)) {
+    try {
+      const raw = await readFile(candidatePath, 'utf-8');
+      const parsed = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
+      if (parsed.success) return parsed.data;
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err?.code !== 'ENOENT') {
+        logger.debug(`[sessionRegistry] Could not read session marker pid-${pid}.json`, e);
+      }
+    }
+  }
+  return null;
+}
+
+export async function markSessionMarkerConnectedServiceRestartIntent(params: Readonly<{
+  pid: number;
+  requestedAtMs?: number;
+}>): Promise<boolean> {
+  const existing = await readSessionMarkerForPid(params.pid);
+  if (!existing) return false;
+
+  const requestedAtMs = typeof params.requestedAtMs === 'number' && Number.isFinite(params.requestedAtMs)
+    ? Math.max(0, Math.trunc(params.requestedAtMs))
+    : Date.now();
+  const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, ...rest } = existing;
+  await writeSessionMarker({
+    ...rest,
+    connectedServiceRestartIntent: {
+      v: 1,
+      requestedAtMs,
+    },
+  });
+  return true;
+}
+
+export async function clearSessionMarkerConnectedServiceRestartIntent(pid: number): Promise<void> {
+  const existing = await readSessionMarkerForPid(pid);
+  if (!existing?.connectedServiceRestartIntent) return;
+
+  const {
+    happyHomeDir: _happyHomeDir,
+    updatedAt: _updatedAt,
+    connectedServiceRestartIntent: _connectedServiceRestartIntent,
+    ...rest
+  } = existing;
+  await writeSessionMarker(rest);
+}
+
+export async function promoteSessionMarkerConnectedServiceRestartIntent(params: Readonly<{
+  fromPid: number;
+  toPid: number;
+}>): Promise<boolean> {
+  if (params.fromPid === params.toPid) return false;
+  const source = await readSessionMarkerForPid(params.fromPid);
+  const sourceIntent = source?.connectedServiceRestartIntent;
+  if (!sourceIntent) return false;
+
+  const target = await readSessionMarkerForPid(params.toPid);
+  if (target) {
+    if (target.connectedServiceRestartIntent) return true;
+    const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, ...rest } = target;
+    await writeSessionMarker({
+      ...rest,
+      connectedServiceRestartIntent: sourceIntent,
+    });
+    return true;
+  }
+
+  const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, pid: _pid, ...rest } = source;
+  await writeSessionMarker({
+    ...rest,
+    pid: params.toPid,
+    connectedServiceRestartIntent: sourceIntent,
+  });
+  return true;
 }
 
 export async function removeSessionMarker(pid: number): Promise<void> {

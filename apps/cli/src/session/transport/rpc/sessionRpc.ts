@@ -18,47 +18,71 @@ export async function callSessionRpc(params: Readonly<{
   const socket = createSessionScopedSocket({ token: params.token, sessionId: params.sessionId });
   const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : 20_000;
   const connectTimeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? timeoutMs : resolveSessionControlSocketConnectTimeoutMs();
+  let cleanedUp = false;
 
-  const connectPromise = waitForSocketConnect(socket as unknown as import('socket.io-client').Socket, connectTimeoutMs);
-  socket.connect();
-  await connectPromise;
-
-  const mode: SessionStoredContentEncryptionMode = params.mode ?? 'e2ee';
-  const rpcParams = mode === 'plain'
-    ? params.request
-    : encodeBase64(encrypt(params.ctx.encryptionKey, params.ctx.encryptionVariant, params.request), 'base64');
-
-  const response = await new Promise<{ ok: boolean; result?: unknown; error?: string; errorCode?: string }>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('RPC call timeout')), timeoutMs);
-    socket.emit(
-      SOCKET_RPC_EVENTS.CALL,
-      { method: params.method, params: rpcParams },
-      (payload: { ok: boolean; result?: unknown; error?: string; errorCode?: string }) => {
-        clearTimeout(timer);
-        resolve(payload);
-      },
-    );
-  });
+  const cleanupSocket = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    try {
+      socket.disconnect();
+    } catch {
+      // ignore cleanup failures; preserve the original RPC/connect outcome
+    }
+    try {
+      socket.close();
+    } catch {
+      // ignore cleanup failures; preserve the original RPC/connect outcome
+    }
+  };
 
   try {
-    socket.disconnect();
-    socket.close();
-  } catch {
-    // ignore
-  }
+    const connectPromise = waitForSocketConnect(socket as unknown as import('socket.io-client').Socket, connectTimeoutMs);
+    socket.connect();
+    await connectPromise;
 
-  if (!response.ok) {
-    throw createRpcCallError({
-      error: response.error || 'RPC call failed',
-      errorCode: response.errorCode,
+    const mode: SessionStoredContentEncryptionMode = params.mode ?? 'e2ee';
+    const rpcParams = mode === 'plain'
+      ? params.request
+      : encodeBase64(encrypt(params.ctx.encryptionKey, params.ctx.encryptionVariant, params.request), 'base64');
+
+    const response = await new Promise<{ ok: boolean; result?: unknown; error?: string; errorCode?: string }>((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout>;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      };
+      timer = setTimeout(() => finish(() => reject(new Error('RPC call timeout'))), timeoutMs);
+      try {
+        socket.emit(
+          SOCKET_RPC_EVENTS.CALL,
+          { method: params.method, params: rpcParams },
+          (payload: { ok: boolean; result?: unknown; error?: string; errorCode?: string }) => {
+            finish(() => resolve(payload));
+          },
+        );
+      } catch (error) {
+        finish(() => reject(error));
+      }
     });
-  }
 
-  if (mode === 'plain') {
-    return response.result ?? null;
-  }
+    if (!response.ok) {
+      throw createRpcCallError({
+        error: response.error || 'RPC call failed',
+        errorCode: response.errorCode,
+      });
+    }
 
-  const encryptedResult = typeof response.result === 'string' ? response.result.trim() : '';
-  if (!encryptedResult) return null;
-  return decrypt(params.ctx.encryptionKey, params.ctx.encryptionVariant, decodeBase64(encryptedResult, 'base64'));
+    if (mode === 'plain') {
+      return response.result ?? null;
+    }
+
+    const encryptedResult = typeof response.result === 'string' ? response.result.trim() : '';
+    if (!encryptedResult) return null;
+    return decrypt(params.ctx.encryptionKey, params.ctx.encryptionVariant, decodeBase64(encryptedResult, 'base64'));
+  } finally {
+    cleanupSocket();
+  }
 }

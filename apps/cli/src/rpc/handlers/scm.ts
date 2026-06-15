@@ -82,6 +82,13 @@ export function registerScmHandlers(
         connectedAccounts: deps?.connectedAccounts,
     };
     const statusSnapshotInFlight = new Map<string, Promise<ScmStatusSnapshotResponse>>();
+    const statusSnapshotCache = new Map<string, { value: ScmStatusSnapshotResponse; expiresAtMs: number }>();
+    const statusSnapshotCacheTtlMs = (() => {
+        const raw = (process.env.HAPPIER_SCM_STATUS_SNAPSHOT_CACHE_TTL_MS ?? '').trim();
+        if (!raw) return 1_000;
+        const parsed = Number.parseInt(raw, 10);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1_000;
+    })();
     const statusSnapshotKey = (request: ScmStatusSnapshotRequest): string => JSON.stringify({
         cwd: request.cwd ?? null,
         backendPreference: request.backendPreference ?? null,
@@ -89,6 +96,10 @@ export function registerScmHandlers(
     });
     const runStatusSnapshot = (request: ScmStatusSnapshotRequest): Promise<ScmStatusSnapshotResponse> => {
         const key = statusSnapshotKey(request);
+        const cached = statusSnapshotCache.get(key);
+        if (cached && cached.expiresAtMs > Date.now()) {
+            return Promise.resolve(cached.value);
+        }
         const existing = statusSnapshotInFlight.get(key);
         if (existing) return existing;
         const promise = runScmRoute<ScmStatusSnapshotRequest, ScmStatusSnapshotResponse>({
@@ -101,6 +112,11 @@ export function registerScmHandlers(
                 }),
             runWithBackend: ({ context, selection }) =>
                 selection.backend.statusSnapshot({ context, request }),
+        }).then((value) => {
+            if (statusSnapshotCacheTtlMs > 0) {
+                statusSnapshotCache.set(key, { value, expiresAtMs: Date.now() + statusSnapshotCacheTtlMs });
+            }
+            return value;
         });
         statusSnapshotInFlight.set(key, promise);
         void promise.finally(() => {

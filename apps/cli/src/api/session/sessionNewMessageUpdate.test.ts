@@ -486,7 +486,10 @@ describe('handleSessionNewMessageUpdate', () => {
       expect(delivered).toEqual([]);
     });
 
-    it('reports the seq for an agent-queue echo of a locally delivered prompt (daemon initial prompt / RPC send)', () => {
+    it('routes an agent-queue echo of a locally delivered prompt to the echo-proof hook, NOT the queue-handoff hook', () => {
+      // A3-HIGH-1: the queue-handoff hook means "row entered volatile memory"; an echo of a
+      // locally handed prompt is a different custody chain (the loop already has it) and must
+      // use its own hook so the watermark policies can diverge.
       const update = {
         id: 'u-echo',
         createdAt: Date.now(),
@@ -503,10 +506,30 @@ describe('handleSessionNewMessageUpdate', () => {
           },
         },
       } as unknown as Update;
+      const echoProven: number[] = [];
       const delivered = runWithDeliveredHook(update, {
         hasAgentQueueEchoSuppressedLocalId: () => true,
+        onUserMessageDeliveryProvenByLocalEcho: (seq: number) => echoProven.push(seq),
       });
-      expect(delivered).toEqual([11]);
+      expect(delivered).toEqual([]);
+      expect(echoProven).toEqual([11]);
+    });
+
+    it('passes the row seq to the pending message callback so it can travel with the queued message', () => {
+      const seqs: Array<number | null> = [];
+      runWithDeliveredHook(
+        buildUserMessageUpdate({ role: 'user', content: { type: 'text', text: 'hi' } }, 7),
+        { pendingMessageCallback: (_message, info) => seqs.push(info?.seq ?? null) },
+      );
+      runWithDeliveredHook(
+        buildUserMessageUpdate({ role: 'user', content: 'hello legacy coerced' }, 9),
+        { pendingMessageCallback: (_message, info) => seqs.push(info?.seq ?? null) },
+      );
+      runWithDeliveredHook(
+        buildUserMessageUpdate({ role: 'user', content: { type: 'text', text: 'no seq' } }, null),
+        { pendingMessageCallback: (_message, info) => seqs.push(info?.seq ?? null) },
+      );
+      expect(seqs).toEqual([7, 9, null]);
     });
 
     it('does not report for a self-echo CLI transcript write (never handed to the agent loop)', () => {

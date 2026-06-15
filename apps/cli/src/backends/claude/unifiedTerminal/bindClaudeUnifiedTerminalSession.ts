@@ -21,7 +21,7 @@ type ClaudeUnifiedSessionBindingClient = Pick<
 > & Readonly<{
   sessionTurnLifecycle?: Pick<
     NonNullable<SessionClientPort['sessionTurnLifecycle']>,
-    'beginTurn' | 'cancelTurn' | 'completeTurn' | 'failTurn'
+    'beginTurn' | 'cancelTurn' | 'completeTurn' | 'failTurn' | 'touchActiveTurn'
   > | undefined;
 }>;
 
@@ -59,6 +59,7 @@ export type ClaudeUnifiedTerminalSessionBinding<Mode extends EnhancedMode = Enha
   shouldSuppressTranscriptMessage(message: RawJSONLines): boolean;
   beginReadyNotificationTurn(): void;
   recordPromptTurnStarted(): Promise<void>;
+  recordPromptTurnProgress(): Promise<void>;
   recordPromptTurnCompleted(): Promise<void>;
   recordPromptTurnCancelled(): Promise<void>;
   recordPromptTurnFailed(): Promise<void>;
@@ -139,6 +140,16 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
       });
     canonicalTurnStartPromise = startPromise;
     await startPromise;
+  }
+
+  async function recordPromptTurnProgress(): Promise<void> {
+    await canonicalTurnStartPromise;
+    if (!canonicalTurnOpen) return;
+    try {
+      await opts.session.sessionTurnLifecycle?.touchActiveTurn?.({ provider: 'claude' });
+    } catch (error) {
+      logger.debug(`${opts.logPrefix}: Failed to record Claude unified turn progress (non-fatal)`, error);
+    }
   }
 
   async function recordPromptTurnCompleted(): Promise<void> {
@@ -222,6 +233,7 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
       onMessage: (message) => {
         if (shouldSuppressTranscriptMessage(message)) return;
         opts.onMessage(message);
+        void recordPromptTurnProgress();
       },
       onReady: async () => {
         // The steered turn is over: its queued prompt is being submitted now, so the matching JSONL
@@ -233,6 +245,7 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
       onProviderPromptStarted: async () => {
         beginReadyNotificationTurn();
         await recordPromptTurnStarted();
+        await recordPromptTurnProgress();
       },
       setTurnInterrupt: (handler) => {
         opts.onTurnInterruptChanged?.(handler);
@@ -243,6 +256,7 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
           if (suppressEcho) {
             pendingSteerEchoes.push({ text: acceptedPrompt.message, expiresAtMs: null });
           }
+          await recordPromptTurnProgress();
           return;
         }
         if (suppressEcho) {
@@ -250,6 +264,7 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
         }
         beginReadyNotificationTurn();
         await recordPromptTurnStarted();
+        await recordPromptTurnProgress();
         await opts.onPromptTurnStarted?.();
       },
     },
@@ -260,6 +275,7 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
     shouldSuppressTranscriptMessage,
     beginReadyNotificationTurn,
     recordPromptTurnStarted,
+    recordPromptTurnProgress,
     recordPromptTurnCompleted,
     recordPromptTurnCancelled,
     recordPromptTurnFailed,

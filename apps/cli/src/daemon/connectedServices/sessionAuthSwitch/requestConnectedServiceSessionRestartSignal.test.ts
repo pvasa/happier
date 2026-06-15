@@ -58,12 +58,14 @@ describe('requestConnectedServiceSessionRestartSignal', () => {
       throw error;
     });
     const onSignalFailure = vi.fn();
+    const onProcessAlreadyMissing = vi.fn();
     const records: unknown[] = [];
 
     await expect(requestConnectedServiceSessionRestartSignal({
       pid: 123,
       delayMs: 0,
       onSignalFailure,
+      onProcessAlreadyMissing,
       nowMs: () => 10_000,
       recordRestartDiagnostic: (record: unknown) => records.push(record),
       restartDiagnostic: {
@@ -76,10 +78,11 @@ describe('requestConnectedServiceSessionRestartSignal', () => {
         generation: 70,
         reason: 'usage_limit',
       },
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual({ status: 'process_already_missing' });
 
     expect(kill).toHaveBeenCalledWith(123, 'SIGTERM');
     expect(onSignalFailure).not.toHaveBeenCalled();
+    expect(onProcessAlreadyMissing).toHaveBeenCalledOnce();
     expect(records).toEqual([
       expect.objectContaining({
         status: 'requested',
@@ -124,7 +127,7 @@ describe('requestConnectedServiceSessionRestartSignal', () => {
         generation: null,
         reason: 'manual',
       },
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual({ status: 'requested' });
 
     expect(kill).toHaveBeenCalledWith(-456, 'SIGTERM');
     expect(records).toEqual([{
@@ -196,7 +199,7 @@ describe('requestConnectedServiceSessionRestartSignal', () => {
       processGroupPid: 456,
       delayMs: 0,
       onSignalFailure: () => {},
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual({ status: 'requested' });
 
     expect(kill).toHaveBeenCalledTimes(1);
     expect(kill).toHaveBeenCalledWith(-456, 'SIGTERM');
@@ -215,7 +218,7 @@ describe('requestConnectedServiceSessionRestartSignal', () => {
       processGroupPid: 456,
       delayMs: 0,
       onSignalFailure,
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual({ status: 'requested' });
 
     expect(kill).toHaveBeenNthCalledWith(1, -456, 'SIGTERM');
     expect(kill).toHaveBeenNthCalledWith(2, 123, 'SIGTERM');
@@ -235,7 +238,7 @@ describe('requestConnectedServiceSessionRestartSignal', () => {
     });
 
     await vi.advanceTimersByTimeAsync(50);
-    await promise;
+    await expect(promise).resolves.toEqual({ status: 'skipped_stale_owner' });
 
     expect(shouldSignal).toHaveBeenCalledOnce();
     expect(kill).not.toHaveBeenCalled();

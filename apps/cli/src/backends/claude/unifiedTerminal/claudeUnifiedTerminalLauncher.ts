@@ -12,6 +12,7 @@ import {
 } from '../connectedServices/surfaceClaudeRuntimeIssues';
 import { createClaudeInFlightSteerCapabilityPublisher } from './createClaudeInFlightSteerCapabilityPublisher';
 import { runClaudeUnifiedTerminalSession } from './runClaudeUnifiedTerminalSession';
+import { isClaudeUnifiedTerminalManagedSettingsOptionError } from './buildClaudeUnifiedTerminalSpawn';
 import { CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL_FEATURE_ID } from './tuiControls';
 import type { ClaudeUnifiedRuntimeConfigOutcomeEvent } from './runtimeControlIntegration';
 import { buildClaudeUnifiedRuntimeConfigOutcomeSessionEvent } from './runtimeControlIntegration';
@@ -24,7 +25,11 @@ import {
   isClaudeUnifiedTerminalRuntimeIssueError,
   surfaceClaudeUnifiedTerminalRuntimeIssue,
 } from './surfaceClaudeUnifiedTerminalRuntimeIssue';
+import {
+  isClaudeUnifiedTerminalAmbiguousInjectionFailureError,
+} from './terminalInjectionFailureError';
 import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
+import { isTerminalHostStartupError } from '@/integrations/terminalHost/errors';
 import { runTmuxAttach } from '@/terminal/attachment/tmuxAttach';
 import { runZellijAttach } from '@/terminal/attachment/zellijAttach';
 import type { TerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
@@ -38,6 +43,28 @@ function shouldForegroundAttachTerminal(): boolean {
 }
 
 const CLAUDE_UNIFIED_TERMINAL_AUTH_FAILURE_HOST_DEATH_WINDOW_MS = 5_000;
+
+type ParkedUnifiedTerminalMessage = Readonly<{
+  message: string;
+  mode: EnhancedMode;
+  maxUserMessageSeq: number | null;
+}>;
+
+type InFlightStartupMessage = Readonly<{
+  source: 'initial' | 'parked' | 'queue';
+  batch: ParkedUnifiedTerminalMessage;
+}>;
+
+function isInvalidPromptTextInjectionFailure(error: unknown): boolean {
+  return Boolean(error)
+    && typeof error === 'object'
+    && (error as { code?: unknown }).code === 'claude_unified_terminal_injection_failed'
+    && (error as { failureState?: unknown }).failureState === 'failed_terminal'
+    && (error as { reason?: unknown }).reason === 'invalid_prompt_text'
+    && (error as { phase?: unknown }).phase === 'before_write'
+    && (error as { duplicateRisk?: unknown }).duplicateRisk === 'none'
+    && (error as { recoverable?: unknown }).recoverable === false;
+}
 
 function startForegroundAttach(params: Readonly<{
   sessionId: string;
@@ -214,8 +241,12 @@ export async function claudeUnifiedTerminalLauncher(
     }
   };
   const surfaceTerminalRuntimeIssue = async (error: unknown): Promise<void> => {
+    if (isClaudeUnifiedTerminalAmbiguousInjectionFailureError(error)) {
+      logger.debug('[unified]: Claude unified terminal prompt delivery is ambiguous; waiting for confirmation or retry');
+      return;
+    }
     session.onThinkingChange(false);
-    await surfaceClaudeUnifiedTerminalRuntimeIssue({
+    const surfaced = await surfaceClaudeUnifiedTerminalRuntimeIssue({
       error,
       session: session.client,
       onSurfaceError: (surfaceError) => {
@@ -225,7 +256,9 @@ export async function claudeUnifiedTerminalLauncher(
       logger.debug('[unified]: failed to surface Claude unified terminal runtime issue (non-fatal)', surfaceError);
       return null;
     });
-    binding.notePromptTurnTerminal();
+    if (surfaced) {
+      binding.notePromptTurnTerminal();
+    }
   };
 
   session.client.rpcHandlerManager.registerHandler('abort', async () => {
@@ -261,9 +294,14 @@ export async function claudeUnifiedTerminalLauncher(
   // wakes. A raw `session.queue` wait only ever sees UI-RPC-delivered messages and strands queued
   // pending rows until a manual "Send now".
   const sessionInputConsumer = createClaudePendingAwareInputConsumer(session);
-  const waitForNextSessionInputBatch = async (): Promise<{ message: string; mode: EnhancedMode } | null> => {
+  // A3-HIGH-1: this launcher confirms provider acceptance (runner onPromptAcceptedByProvider),
+  // so the delivered-watermark must NOT advance at queue handoff anymore.
+  session.client.deferDeliveredUserMessageWatermarkToProviderAcceptance?.();
+  const waitForNextSessionInputBatch = async (): Promise<{ message: string; mode: EnhancedMode; maxUserMessageSeq: number | null } | null> => {
     try {
-      return await sessionInputConsumer.waitForNextInput({ abortSignal: abortController.signal });
+      const batch = await sessionInputConsumer.waitForNextInput({ abortSignal: abortController.signal });
+      if (!batch) return null;
+      return { message: batch.message, mode: batch.mode, maxUserMessageSeq: batch.maxUserMessageSeq ?? null };
     } catch (error) {
       if (error instanceof PendingQueueMaterializationAuthError) {
         // Classified terminal-auth stop: end the wait gracefully instead of escaping
@@ -281,7 +319,22 @@ export async function claudeUnifiedTerminalLauncher(
   // out of this launcher, and loop.ts has no retry loop around it — the runner exited and the
   // session went dead). Instead the launcher parks: it surfaces the structured runtime issue,
   // waits for the next queued message, and relaunches the unified host with that message.
-  let parkedMessage: Readonly<{ message: string; mode: EnhancedMode }> | null = null;
+  let parkedMessage: ParkedUnifiedTerminalMessage | null = null;
+  let inFlightStartupMessage: InFlightStartupMessage | null = null;
+  // A4-MED-3: bounded park/relaunch budget. The undeliverable-batch handback (F-1) re-pends a
+  // terminally failed message, so a deterministically dying host would otherwise relaunch with
+  // the SAME message forever. Any provider acceptance proves real progress and resets the budget.
+  const MAX_CONSECUTIVE_PARK_RELAUNCHES = 3;
+  let consecutiveParkRelaunches = 0;
+  const consumeParkRelaunchBudget = (): boolean => {
+    consecutiveParkRelaunches += 1;
+    if (consecutiveParkRelaunches <= MAX_CONSECUTIVE_PARK_RELAUNCHES) return true;
+    session.client.sendSessionEvent({
+      type: 'message',
+      message: `Claude unified terminal failed ${MAX_CONSECUTIVE_PARK_RELAUNCHES + 1} times in a row. Not retrying automatically — your queued message stays on the server and will be redelivered when the session restarts.`,
+    });
+    return false;
+  };
   const parkForNextMessageAfterRuntimeIssue = async (reason: string): Promise<boolean> => {
     session.client.sendSessionEvent({
       type: 'message',
@@ -290,8 +343,33 @@ export async function claudeUnifiedTerminalLauncher(
     await flushUnifiedStartupFailureSurface(session, reason);
     const batch = await waitForNextSessionInputBatch();
     if (!batch) return false;
-    parkedMessage = { message: batch.message, mode: batch.mode };
+    parkedMessage = { message: batch.message, mode: batch.mode, maxUserMessageSeq: batch.maxUserMessageSeq };
     return true;
+  };
+  const isInFlightStartupMessage = (input: Readonly<{
+    message: string;
+    maxUserMessageSeq?: number | null | undefined;
+  }>): boolean => {
+    return inFlightStartupMessage !== null
+      && inFlightStartupMessage.batch.message === input.message
+      && inFlightStartupMessage.batch.maxUserMessageSeq === (input.maxUserMessageSeq ?? null);
+  };
+  const restoreInFlightStartupMessageAfterHostStartupFailure = (): boolean => {
+    if (!inFlightStartupMessage) return false;
+    const inFlight = inFlightStartupMessage;
+    inFlightStartupMessage = null;
+    if (inFlight.source === 'initial') {
+      initialPromptPending = true;
+      return true;
+    }
+    try {
+      session.queue.unshift(inFlight.batch.message, inFlight.batch.mode, {
+        userMessageSeq: inFlight.batch.maxUserMessageSeq,
+      });
+    } catch (error) {
+      logger.debug('[unified]: failed to requeue in-flight unified terminal startup message after startup failure', error);
+    }
+    return false;
   };
 
   const runUnifiedTerminalSessionOnce = async (): Promise<void> => {
@@ -317,17 +395,35 @@ export async function claudeUnifiedTerminalLauncher(
       // A message pulled by the runner's input pump during a death/dispose unwind
       // must come back to the session queue instead of being dropped into the
       // dead host (silent queue-swallow, incident cmq8y3nlx).
-      returnUnconsumedMessage: ({ message, mode }) => {
+      returnUnconsumedMessage: ({ message, mode, maxUserMessageSeq }) => {
         try {
-          session.queue.unshift(message, mode);
+          if (isInFlightStartupMessage({ message, maxUserMessageSeq })) {
+            inFlightStartupMessage = null;
+          }
+          // Preserve watermark attribution: a re-pended batch must stay confirmable at its
+          // eventual provider acceptance (A3-HIGH-1).
+          session.queue.unshift(message, mode, { userMessageSeq: maxUserMessageSeq ?? null });
         } catch (error) {
           logger.debug('[unified]: failed to requeue undeliverable unified terminal message', error);
         }
+      },
+      // A3-HIGH-1 root fix: the delivered-user-message watermark persists HERE — when the
+      // provider provably accepted the batch — not when the row entered volatile memory.
+      onPromptAcceptedByProvider: ({ maxUserMessageSeq }) => {
+        consecutiveParkRelaunches = 0;
+        inFlightStartupMessage = null;
+        session.client.confirmUserMessageDeliveredToProvider?.(maxUserMessageSeq);
+      },
+      onPromptTerminallyRejectedBeforeProvider: ({ maxUserMessageSeq }) => {
+        consecutiveParkRelaunches = 0;
+        inFlightStartupMessage = null;
+        session.client.confirmUserMessageDeliveredToProvider?.(maxUserMessageSeq);
       },
       nextMessage: async () => {
         if (parkedMessage) {
           const parked = parkedMessage;
           parkedMessage = null;
+          inFlightStartupMessage = { source: 'parked', batch: parked };
           binding.noteNextInjectedPromptShouldSuppressEcho();
           observeOutgoingBatchMode(parked.mode);
           return parked;
@@ -339,6 +435,14 @@ export async function claudeUnifiedTerminalLauncher(
             permissionMode: session.lastPermissionMode ?? 'default',
             claudeUnifiedTerminalEnabled: true,
           };
+          inFlightStartupMessage = {
+            source: 'initial',
+            batch: {
+              message: initialPrompt.prompt,
+              mode: initialBatchMode,
+              maxUserMessageSeq: null,
+            },
+          };
           observeOutgoingBatchMode(initialBatchMode);
           return {
             message: initialPrompt.prompt,
@@ -348,11 +452,20 @@ export async function claudeUnifiedTerminalLauncher(
         initialPromptPending = false;
         const batch = await waitForNextSessionInputBatch();
         if (!batch) return null;
+        inFlightStartupMessage = {
+          source: 'queue',
+          batch: {
+            message: batch.message,
+            mode: batch.mode,
+            maxUserMessageSeq: batch.maxUserMessageSeq,
+          },
+        };
         binding.noteNextInjectedPromptShouldSuppressEcho();
         observeOutgoingBatchMode(batch.mode);
         return {
           message: batch.message,
           mode: batch.mode,
+          maxUserMessageSeq: batch.maxUserMessageSeq,
         };
       },
       subscribeClaudeSessionHooks: (callback) => {
@@ -462,6 +575,7 @@ export async function claudeUnifiedTerminalLauncher(
           sendUnifiedTerminalHostDeadMessage(session);
           await flushUnifiedStartupFailureSurface(session, 'host_dead');
           binding.notePromptTurnTerminal();
+          if (!consumeParkRelaunchBudget()) return { type: 'exit', code: 1 };
           if (await parkForNextMessageAfterRuntimeIssue('host_dead')) continue;
           return { type: 'exit', code: 1 };
         }
@@ -473,10 +587,27 @@ export async function claudeUnifiedTerminalLauncher(
           await flushUnifiedStartupFailureSurface(session, 'readiness_timeout');
           return { type: 'exit', code: 1 };
         }
+        if (
+          isInvalidPromptTextInjectionFailure(error)
+          || isClaudeUnifiedTerminalManagedSettingsOptionError(error)
+        ) {
+          await surfaceTerminalRuntimeIssue(error);
+          await flushUnifiedStartupFailureSurface(
+            session,
+            isInvalidPromptTextInjectionFailure(error)
+              ? 'invalid_prompt_text'
+              : 'managed_settings_option',
+          );
+          return { type: 'exit', code: 1 };
+        }
         if (isClaudeUnifiedTerminalRuntimeIssueError(error)) {
           // Classified injection failure: surface structured, park for the next message, relaunch.
           // Never rethrow into `[claude] Fatal command error` (incident cmq7pyqkj).
+          const shouldRetryRestoredStartupMessage = isTerminalHostStartupError(error)
+            && restoreInFlightStartupMessageAfterHostStartupFailure();
           await surfaceTerminalRuntimeIssue(error);
+          if (!consumeParkRelaunchBudget()) return { type: 'exit', code: 1 };
+          if (shouldRetryRestoredStartupMessage) continue;
           if (await parkForNextMessageAfterRuntimeIssue('injection_failure')) continue;
           return { type: 'exit', code: 1 };
         }

@@ -1,7 +1,11 @@
 import { rmdir, unlink } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import type { ClaudeUnifiedTerminalHost, TerminalInputInjectionV1 } from '@happier-dev/agents';
+import type {
+  ClaudeUnifiedTerminalHost,
+  TerminalInputInjectionResult,
+  TerminalInputInjectionV1,
+} from '@happier-dev/agents';
 
 import {
   ClaudeUnifiedTerminalHostDeadError,
@@ -14,6 +18,7 @@ import {
   type ClaudeUnifiedSessionEndEvent,
   type ClaudeUnifiedSessionHookSubscription,
 } from './createClaudeUnifiedHookLifecycleBridge';
+import { createReplayableHookSubscription } from './createReplayableHookSubscription';
 import { createClaudeUnifiedTranscriptBridge } from './createClaudeUnifiedTranscriptBridge';
 import { createClaudeUnifiedTerminalReadinessBridge } from './createClaudeUnifiedTerminalReadinessBridge';
 import { createClaudeUnifiedHostLivenessBridge } from './createClaudeUnifiedHostLivenessBridge';
@@ -86,6 +91,8 @@ import { logger } from '@/ui/logger';
 type ClaudeUnifiedTerminalQueuedInput<Mode> = Readonly<{
   message: string;
   mode: Mode;
+  /** Owed-delivery watermark attribution (A3-HIGH-1); see ClaudeUnifiedPromptBatch. */
+  maxUserMessageSeq?: number | null;
 }>;
 
 type ClaudeUnifiedTerminalAcceptedInput<Mode> =
@@ -128,6 +135,25 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
    * requeue it instead of the message being silently dropped into a dead session.
    */
   returnUnconsumedMessage?: ((input: ClaudeUnifiedTerminalQueuedInput<Mode>) => void) | undefined;
+  /**
+   * Provider-acceptance seam for the owed-delivery watermark (A3-HIGH-1): fired once per prompt
+   * batch the provider ACCEPTED (arbiter acceptance, i.e. transcript/hook-confirmed). Launchers
+   * persist the delivered-user-message watermark here instead of at queue handoff.
+   */
+  onPromptAcceptedByProvider?: ((input: Readonly<{
+    message: string;
+    maxUserMessageSeq: number | null;
+  }>) => void) | undefined;
+  /**
+   * Deterministic pre-provider rejections consume the local batch but can never reach provider
+   * custody. Launchers must terminalize the attributed pending seq so restart replay cannot
+   * rematerialize the same invalid prompt.
+   */
+  onPromptTerminallyRejectedBeforeProvider?: ((input: Readonly<{
+    message: string;
+    maxUserMessageSeq: number | null;
+    reason: 'invalid_prompt_text';
+  }>) => void) | undefined;
   resolveHostAdapter?: ((preference: ClaudeUnifiedTerminalHostPreference) => Promise<TerminalHostResolution>) | undefined;
   buildSpawn?: ((params: Readonly<{
     first: ClaudeUnifiedTerminalQueuedInput<Mode>;
@@ -422,6 +448,7 @@ function normalizeMessageBatch<Mode>(input: ClaudeUnifiedTerminalQueuedInput<Mod
     mode: input.mode,
     isolate: false,
     hash: 'claude-unified-terminal',
+    maxUserMessageSeq: input.maxUserMessageSeq ?? null,
   };
 }
 
@@ -432,6 +459,19 @@ function isCompactBoundaryTranscriptMessage(message: RawJSONLines): boolean {
 function isCompactSlashCommandPrompt(message: string): boolean {
   const trimmed = message.trim();
   return trimmed === '/compact' || trimmed.startsWith('/compact ');
+}
+
+function isDeterministicInvalidPromptTextFailure(
+  failure: Readonly<{
+    failureState: string;
+    result: Extract<TerminalInputInjectionResult, { status: 'failed' }>;
+  }>,
+): boolean {
+  return failure.failureState === 'failed_terminal'
+    && failure.result.reason === 'invalid_prompt_text'
+    && failure.result.phase === 'before_write'
+    && failure.result.duplicateRisk === 'none'
+    && failure.result.recoverable === false;
 }
 
 function createCompositeBridge(
@@ -456,45 +496,6 @@ function createCompositeBridge(
       if (firstError) {
         throw firstError;
       }
-    },
-  };
-}
-
-function createReplayableHookSubscription(
-  subscribe: ClaudeUnifiedSessionHookSubscription | undefined,
-): Readonly<{
-  subscribe: ClaudeUnifiedSessionHookSubscription | undefined;
-  dispose: () => void;
-}> {
-  if (!subscribe) {
-    return {
-      subscribe: undefined,
-      dispose: () => {},
-    };
-  }
-
-  const bufferedEvents: SessionHookData[] = [];
-  const subscribers = new Set<(data: SessionHookData) => void>();
-  const unsubscribeUpstream = subscribe((data) => {
-    bufferedEvents.push(data);
-    for (const subscriber of [...subscribers]) {
-      subscriber(data);
-    }
-  });
-
-  return {
-    subscribe: (callback) => {
-      subscribers.add(callback);
-      for (const event of bufferedEvents) {
-        callback(event);
-      }
-      return () => {
-        subscribers.delete(callback);
-      };
-    },
-    dispose: () => {
-      subscribers.clear();
-      unsubscribeUpstream?.();
     },
   };
 }
@@ -902,6 +903,17 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
         onInjectionFailure: (failure) => {
           const error = new ClaudeUnifiedTerminalInjectionFailureError(failure);
           if (failure.failureState === 'failed_terminal') {
+            if (isDeterministicInvalidPromptTextFailure(failure)) {
+              opts.onPromptTerminallyRejectedBeforeProvider?.({
+                message: failure.batch.message,
+                maxUserMessageSeq: failure.batch.maxUserMessageSeq ?? null,
+                reason: 'invalid_prompt_text',
+              });
+              void Promise.resolve().then(() => opts.onTerminalInjectionFailure?.(error)).catch((notifyError) => {
+                logger.debug('[unified]: failed to surface Claude unified terminal invalid prompt text (non-fatal)', notifyError);
+              });
+              return;
+            }
             fatalRuntimeError ??= error;
             runtimeAbortController.abort(error);
             return;
@@ -921,7 +933,29 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             turnStateAtInjection: acceptance.turnStateAtInjection,
           });
         },
-        onPromptAccepted: () => undefined,
+        onPromptAccepted: (batch) => {
+          opts.onPromptAcceptedByProvider?.({
+            message: batch.message,
+            maxUserMessageSeq: batch.maxUserMessageSeq ?? null,
+          });
+        },
+        // F-1: a batch still inside the arbiter when it is disposed (failed_terminal park,
+        // host-death unwind, graceful teardown) must return to the session queue, mirroring
+        // the pump-level handback below — never silently dropped into a dead session.
+        onUndeliverableBatches: (batches) => {
+          // returnUnconsumedMessage unshifts to the queue head; reverse so FIFO order survives.
+          for (const batch of [...batches].reverse()) {
+            if (batch.mode === undefined) {
+              logger.debug('[unified]: cannot requeue undeliverable arbiter batch without a mode');
+              continue;
+            }
+            opts.returnUnconsumedMessage?.({
+              message: batch.message,
+              mode: batch.mode,
+              maxUserMessageSeq: batch.maxUserMessageSeq ?? null,
+            });
+          }
+        },
       });
       const confirmPromptAcceptedFromTranscript = (messages: readonly RawJSONLines[]): boolean => {
         if (!acceptedPromptTranscriptDiscovery.consumeMatchingTranscript(messages)) return false;
@@ -940,7 +974,11 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
         // A batch pulled during the death/dispose unwind must be returned to the
         // owner's queue, never silently dropped into a dead session.
         onUndeliverableBatch: (batch) => {
-          opts.returnUnconsumedMessage?.({ message: batch.message, mode: batch.mode });
+          opts.returnUnconsumedMessage?.({
+            message: batch.message,
+            mode: batch.mode,
+            maxUserMessageSeq: batch.maxUserMessageSeq ?? null,
+          });
         },
       });
       const lifecycleBridge = hookSubscription.subscribe

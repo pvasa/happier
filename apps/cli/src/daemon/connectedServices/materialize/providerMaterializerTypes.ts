@@ -32,6 +32,11 @@ export function collectBlockingConnectedServicesMaterializationDiagnostics(
 export type ConnectedServicesMaterializeResult = Readonly<{
   env: Record<string, string>;
   targetMaterializedRoot?: string | null;
+  afterPromote?: (input: Readonly<{
+    env: Record<string, string>;
+    targetMaterializedRoot: string | null;
+    finalRootDir: string;
+  }>) => Promise<void> | void;
   cleanupOnFailure: (() => void) | null;
   cleanupOnExit: (() => void) | null;
   diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];

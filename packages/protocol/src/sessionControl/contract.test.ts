@@ -126,6 +126,16 @@ describe('sessionControl contract exports', () => {
       },
     }).success).toBe(true);
     expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      v: 1,
+      sessionId: 'sess_123',
+      mutationId: 'mutation_touch_1',
+      action: 'touch_active',
+      turnId: 'turn_2',
+      provider: 'codex',
+      providerTurnId: 'provider_turn_2',
+      observedAt: 125,
+    }).success).toBe(true);
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
       ...mutation,
       source: 'session_turn_lifecycle',
     }).success).toBe(false);

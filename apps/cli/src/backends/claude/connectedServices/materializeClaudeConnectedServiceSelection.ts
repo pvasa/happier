@@ -96,7 +96,7 @@ async function resolveClaudeAuthoritativeSourceEnv(params: Readonly<{
   return params.processEnv;
 }
 
-function buildClaudeSubscriptionNativeAuthSelectionDescriptor(params: Readonly<{
+export function buildClaudeSubscriptionNativeAuthSelectionDescriptor(params: Readonly<{
   fallbackProfileId: string;
   selection: ConnectedServiceResolvedSelection | null | undefined;
 }>): ClaudeSubscriptionNativeAuthSelectionDescriptor {
@@ -115,6 +115,32 @@ function buildClaudeSubscriptionNativeAuthSelectionDescriptor(params: Readonly<{
     serviceId: 'claude-subscription',
     profileId: params.selection?.kind === 'profile' ? params.selection.profileId : params.fallbackProfileId,
   };
+}
+
+function hasBlockingDiagnostics(diagnostics: readonly ConnectedServicesMaterializationDiagnostic[]): boolean {
+  return diagnostics.some((diagnostic) => diagnostic.severity === 'blocking');
+}
+
+function dedupeDiagnostics<T extends Readonly<{
+  code: string;
+  serviceId?: string;
+  reason?: string;
+  entryName?: string;
+}>>(diagnostics: readonly T[]): T[] {
+  const seen = new Set<string>();
+  const deduped: T[] = [];
+  for (const diagnostic of diagnostics) {
+    const key = [
+      diagnostic.code,
+      diagnostic.serviceId ?? '',
+      diagnostic.reason ?? '',
+      diagnostic.entryName ?? '',
+    ].join('\0');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(diagnostic);
+  }
+  return deduped;
 }
 
 export async function materializeClaudeConnectedServiceSelection(params: Readonly<{
@@ -142,6 +168,8 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
       fallbackProfileId: params.fallbackProfileId,
       selection: params.selection ?? null,
     });
+    let groupSourceEnv: NodeJS.ProcessEnv | null = null;
+    let groupSourceDiagnostics: readonly ConnectedServicesMaterializationDiagnostic[] = [];
     if (selectionDescriptor.kind === 'group') {
       const profileClaudeConfigDir = resolveClaudeConnectedServiceStableConfigDir({
         activeServerDir: params.activeServerDir,
@@ -176,32 +204,35 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
           candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
           selectionDescriptor: canonicalProfileSelectionDescriptor,
         });
-        if (canonicalProfileMaterialized.status === 'diagnostic') {
+        groupSourceDiagnostics = canonicalProfileMaterialized.diagnostics;
+        if (
+          canonicalProfileMaterialized.status === 'diagnostic'
+          || hasBlockingDiagnostics(canonicalProfileMaterialized.diagnostics)
+        ) {
           return {
-            env: canonicalProfileMaterialized.env,
-            targetMaterializedRoot: profileClaudeConfigDir,
+            env: { CLAUDE_CONFIG_DIR: claudeConfigDir },
+            targetMaterializedRoot: claudeConfigDir,
             diagnostics: canonicalProfileMaterialized.diagnostics,
             identityDiagnostic: canonicalProfileMaterialized.identityDiagnostic,
           };
         }
-        return {
-          env: canonicalProfileMaterialized.env,
-          targetMaterializedRoot: profileClaudeConfigDir,
-          diagnostics: canonicalProfileMaterialized.diagnostics,
-          identityDiagnostic: canonicalProfileMaterialized.identityDiagnostic,
+        groupSourceEnv = {
+          ...params.processEnv,
+          ...canonicalProfileMaterialized.env,
         };
       }
     }
+    const sourceEnv = groupSourceEnv ?? await resolveClaudeAuthoritativeSourceEnv({
+      activeServerDir: params.activeServerDir,
+      processEnv: params.processEnv,
+      targetClaudeConfigDir: claudeConfigDir,
+      record: params.record,
+      selectionDescriptor,
+    });
     const materialized = await materializeClaudeSubscriptionNativeAuthHome({
       record: params.record,
       targetClaudeConfigDir: claudeConfigDir,
-      sourceEnv: await resolveClaudeAuthoritativeSourceEnv({
-        activeServerDir: params.activeServerDir,
-        processEnv: params.processEnv,
-        targetClaudeConfigDir: claudeConfigDir,
-        record: params.record,
-        selectionDescriptor,
-      }),
+      sourceEnv,
       accountSettings: params.accountSettings ?? null,
       sessionDirectory: params.sessionDirectory ?? null,
       vendorResumeId: params.vendorResumeId ?? null,
@@ -211,7 +242,7 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
     return {
       env: materialized.env,
       targetMaterializedRoot: claudeConfigDir,
-      diagnostics: materialized.diagnostics,
+      diagnostics: dedupeDiagnostics([...groupSourceDiagnostics, ...materialized.diagnostics]),
       identityDiagnostic: materialized.identityDiagnostic,
     };
   }

@@ -40,15 +40,24 @@ export function handleSessionNewMessageUpdate(params: {
     markAgentQueueEchoSuppressedLocalId: (localId: string) => void;
     hasPendingQueueMaterializedLocalId: (localId: string) => boolean;
     deleteMaterializedLocalId: (localId: string) => void;
-    pendingMessageCallback: ((message: UserMessage) => void) | null;
+    pendingMessageCallback: ((message: UserMessage, info?: Readonly<{ seq: number | null }>) => void) | null;
     pendingMessages: UserMessage[];
     shouldDeliverUserMessageToAgentQueue?: (message: UserMessage, update: Update) => boolean;
     /**
-     * Owed-delivery watermark hook (A-F2/D15b): fired with the message seq whenever a user message
-     * is actually handed to the runner's agent loop, so the watermark can be persisted and resume
-     * catch-up cursors clamped to it.
+     * Owed-delivery watermark hook (A-F2/D15b, narrowed by A3-HIGH-1): fired with the message seq
+     * when a user message is handed to the runner's agent QUEUE (volatile memory). Whether this
+     * advances the persisted watermark is the owner's policy — launchers wired for
+     * provider-acceptance confirmation defer persistence until the provider actually accepted
+     * the batch (the seq travels with the queued message via `pendingMessageCallback`'s info).
      */
     onUserMessageDeliveredToAgentQueue?: (seq: number) => void;
+    /**
+     * Fired when an agent-queue echo PROVES a locally handed prompt (daemon initial prompt, RPC
+     * send, pending materialization) was committed server-side. Separate custody chain from the
+     * queue-handoff hook: these rows never carried a seq into the queue, so their watermark
+     * policy is persist-at-echo (legacy semantics).
+     */
+    onUserMessageDeliveryProvenByLocalEcho?: (seq: number) => void;
     onObservedMessage?: (message: {
         body: unknown;
         seq: number | null;
@@ -197,16 +206,17 @@ export function handleSessionNewMessageUpdate(params: {
             && !isSelfEchoSuppressedCliWrite
             && (params.shouldDeliverUserMessageToAgentQueue?.(userResult.data, params.update) ?? true);
         if (shouldDeliverToAgentQueue) {
+            const deliverableSeq = typeof msgSeq === 'number' && Number.isFinite(msgSeq) ? msgSeq : null;
             if (params.pendingMessageCallback) {
-                params.pendingMessageCallback(userResult.data);
+                params.pendingMessageCallback(userResult.data, { seq: deliverableSeq });
             } else {
                 params.pendingMessages.push(userResult.data);
             }
             if (agentQueueLocalId) {
                 params.markAgentQueueEchoSuppressedLocalId(agentQueueLocalId);
             }
-            if (typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
-                params.onUserMessageDeliveredToAgentQueue?.(msgSeq);
+            if (deliverableSeq !== null) {
+                params.onUserMessageDeliveredToAgentQueue?.(deliverableSeq);
             }
         } else {
             // An agent-queue echo of a prompt we already handed to the loop locally (daemon initial
@@ -214,7 +224,7 @@ export function handleSessionNewMessageUpdate(params: {
             const isDeliveredLocalPromptEcho =
                 isEffectivelyAgentQueueEchoSuppressedLocalId || isAlreadyPendingAgentQueueMessage;
             if (isDeliveredLocalPromptEcho && typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
-                params.onUserMessageDeliveredToAgentQueue?.(msgSeq);
+                params.onUserMessageDeliveryProvenByLocalEcho?.(msgSeq);
             }
             params.debug('[SOCKET] [UPDATE] Skipped user-message delivery to agent queue', {
                 source: source ?? null,
@@ -262,22 +272,23 @@ export function handleSessionNewMessageUpdate(params: {
                     && !isAgentQueueEchoSuppressedForDelivery
                     && (params.shouldDeliverUserMessageToAgentQueue?.(parsedCandidate.data, params.update) ?? true);
                 if (shouldDeliverToAgentQueue) {
+                    const deliverableSeq = typeof msgSeq === 'number' && Number.isFinite(msgSeq) ? msgSeq : null;
                     if (params.pendingMessageCallback) {
-                        params.pendingMessageCallback(parsedCandidate.data);
+                        params.pendingMessageCallback(parsedCandidate.data, { seq: deliverableSeq });
                     } else {
                         params.pendingMessages.push(parsedCandidate.data);
                     }
                     if (agentQueueLocalId) {
                         params.markAgentQueueEchoSuppressedLocalId(agentQueueLocalId);
                     }
-                    if (typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
-                        params.onUserMessageDeliveredToAgentQueue?.(msgSeq);
+                    if (deliverableSeq !== null) {
+                        params.onUserMessageDeliveredToAgentQueue?.(deliverableSeq);
                     }
                 } else {
                     const isDeliveredLocalPromptEcho =
                         isAgentQueueEchoSuppressedForDelivery || isAlreadyPendingAgentQueueMessage;
                     if (isDeliveredLocalPromptEcho && typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
-                        params.onUserMessageDeliveredToAgentQueue?.(msgSeq);
+                        params.onUserMessageDeliveryProvenByLocalEcho?.(msgSeq);
                     }
                     params.debug('[SOCKET] [UPDATE] Skipped coerced user-message delivery to agent queue', {
                         localId,

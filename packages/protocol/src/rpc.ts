@@ -161,6 +161,7 @@ export const RPC_ERROR_MESSAGES = {
 // Session-scoped RPC method names (used with `${sessionId}:${method}` over socket RPC).
 export const SESSION_RPC_METHODS = {
   SESSION_USER_MESSAGE_SEND: 'session.userMessage.send',
+  SESSION_PENDING_QUEUE_MATERIALIZE_NEXT: 'session.pendingQueue.materializeNext',
   SESSION_WORK_STATE_GET: 'session.workState.get',
   SESSION_GOAL_GET: 'session.goal.get',
   SESSION_GOAL_SET: 'session.goal.set',

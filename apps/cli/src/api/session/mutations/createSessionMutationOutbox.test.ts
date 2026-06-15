@@ -110,6 +110,76 @@ describe('createSessionMutationOutbox', () => {
         }
     });
 
+    it('drops old-server touch_active schema rejections without blocking a later terminal turn mutation', async () => {
+        const deliveredActions: string[] = [];
+        vi.mocked(axios.post).mockImplementation(async (_url, body) => {
+            const action = (body as { action?: unknown }).action;
+            const normalizedAction = typeof action === 'string' ? action : 'unknown';
+            deliveredActions.push(normalizedAction);
+            if (normalizedAction === 'touch_active') {
+                throw { response: { status: 400 } };
+            }
+            return { status: 200, data: { ok: true } } as never;
+        });
+        const socket = createApiSessionSocketStub({
+            connected: false,
+            emitWithAck: async () => {
+                throw new Error('socket emit should not be reached while disconnected');
+            },
+        });
+        const { createSessionMutationOutbox } = await import('./createSessionMutationOutbox');
+        const { createSessionTurnMutation } = await import('./sessionMutationTypes');
+        const { saveSessionMutationOutbox } = await import('./sessionMutationPersistence');
+        const touchActive = createSessionTurnMutation({
+            sessionId: 's1',
+            action: 'touch_active',
+            turnId: 'turn-compat',
+            provider: 'codex',
+            mutationId: 'mutation-touch-active',
+            observedAt: 1_000,
+        });
+        const complete = createSessionTurnMutation({
+            sessionId: 's1',
+            action: 'complete',
+            turnId: 'turn-compat',
+            provider: 'codex',
+            mutationId: 'mutation-complete',
+            observedAt: 1_100,
+        });
+        await saveSessionMutationOutbox('s1', [
+            {
+                kind: 'session_turn',
+                mutationId: touchActive.mutationId,
+                payload: touchActive,
+                createdAt: 1_000,
+                attempts: 0,
+                nextAttemptAt: 0,
+            },
+            {
+                kind: 'session_turn',
+                mutationId: complete.mutationId,
+                payload: complete,
+                createdAt: 1_100,
+                attempts: 0,
+                nextAttemptAt: 0,
+            },
+        ]);
+
+        const outbox = createSessionMutationOutbox({
+            token: 'tok',
+            sessionId: 's1',
+            getSocket: () => socket,
+            requestReconnect: () => {},
+        });
+
+        await outbox.flush('flush');
+
+        expect(deliveredActions).toEqual(['touch_active', 'complete']);
+        await expect(readPersistedOutboxMutations('s1')).resolves.toEqual([]);
+        await expect(readDeadLetterEntries('s1')).resolves.toEqual([]);
+        await outbox.close();
+    });
+
     it.each([400, 422] as const)('dead-letters exhausted HTTP %s turn rejections and advances independent turns', async (status) => {
         const deliveredTurnIds: string[] = [];
         vi.mocked(axios.post).mockImplementation(async (_url, body) => {

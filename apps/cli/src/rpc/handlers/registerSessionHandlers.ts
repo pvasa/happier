@@ -30,11 +30,14 @@ import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createT
 import { registerRipgrepHandler } from './ripgrep';
 import { registerDifftasticHandler } from './difftastic';
 import { registerSessionUserMessageSendHandler } from './sessionUserMessageSend';
+import { registerSessionPendingQueueMaterializeNextHandler } from './sessionPendingQueueMaterializeNext';
 import { registerSessionControlHandlers, type SessionRuntimeControls } from './sessionControls';
 import {
     type FilesystemAccessPolicy,
     resolveFilesystemPolicyDefaultDirectory,
 } from './fileSystem/accessPolicy/filesystemAccessPolicy';
+import type { MaterializeNextPendingResult } from '@/api/session/sessionClientPort';
+import type { PendingQueueReconcileWhenEmpty } from '@/api/session/pendingQueueReadPolicy';
 
 /*
  * Spawn Session Options and Result
@@ -228,6 +231,9 @@ export function registerSessionHandlers(
             localId?: string;
             meta: Record<string, unknown>;
         }) => Promise<void> | void) | null;
+        materializeNextPendingMessageSafely?: ((opts?: {
+            reconcileWhenEmpty?: PendingQueueReconcileWhenEmpty;
+        }) => Promise<MaterializeNextPendingResult>) | null;
         setAdditionalAllowedReadDirs?: (dirs: string[]) => void;
         setAdditionalAllowedWriteDirs?: (dirs: string[]) => void;
         accessPolicy?: FilesystemAccessPolicy;
@@ -274,6 +280,9 @@ export function registerSessionHandlers(
         workingDirectory: effectiveWorkingDirectory,
         enqueueSessionUserMessage: opts?.enqueueSessionUserMessage ?? null,
         sessionRuntimeControls: opts?.sessionRuntimeControls ?? null,
+    });
+    registerSessionPendingQueueMaterializeNextHandler(rpcHandlerManager, {
+        materializeNextPendingMessageSafely: opts?.materializeNextPendingMessageSafely ?? null,
     });
     registerSessionControlHandlers(rpcHandlerManager, {
         getSessionMetadata: opts?.getSessionMetadata ?? null,

@@ -340,6 +340,34 @@ describe('mapClaudeRateLimitEventToUsageDetails', () => {
     });
   });
 
+  it('marks StopFailure usage details sourced from a sidechain agent hook (agent_id attribution)', () => {
+    // A subagent usage-limit StopFailure must not fail the PARENT turn: the surfaced details
+    // carry the shared sidechain attribution so surfaceClaudeRateLimitRuntimeIssue keeps the
+    // canonical turn untouched while per-account usage accounting still ingests the evidence.
+    expect(mapClaudeStopFailureHookToUsageDetails({
+      hook_event_name: 'StopFailure',
+      error: 'rate_limit',
+      agent_id: 'agent-123',
+    })).toMatchObject({
+      v: 1,
+      providerLimitId: 'rate_limit',
+      sourcedFromSidechain: true,
+    });
+
+    expect(mapClaudeStopFailureHookToUsageDetails({
+      hook_event_name: 'StopFailure',
+      error: 'rate_limit',
+      agentId: 'agent-123',
+    })).toMatchObject({ sourcedFromSidechain: true });
+
+    // Blank/absent agent ids stay main-chain.
+    expect(mapClaudeStopFailureHookToUsageDetails({
+      hook_event_name: 'StopFailure',
+      error: 'rate_limit',
+      agent_id: '  ',
+    })?.sourcedFromSidechain).toBeUndefined();
+  });
+
   it('falls back to the direct Claude StopFailure rate_limit classification when no assistant timing exists', () => {
     expect(mapClaudeStopFailureHookToUsageDetails({
       hook_event_name: 'StopFailure',

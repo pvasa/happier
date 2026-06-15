@@ -129,6 +129,53 @@ describe('clearOwnLeftoverComposerDraft (C11: idle pre-injection own-leftover gu
     expect(clears).toBe(1);
   });
 
+  it('clears controller-vocabulary slash residue even when the registry cannot match it (RESUME2 respawn gap)', async () => {
+    // Controller-typed slash commands are echo-suppressed out of the persisted transcript, so a
+    // RESPAWNED runner's seeded registry can never contain them. The residue is still OUR OWN
+    // (finite controller vocabulary: /model, /effort) and must clear instead of deadlocking idle
+    // injection behind a foreign_draft classification forever.
+    const captures = [idleScreen('/effort medium'), idleScreen('')];
+    let clears = 0;
+    const result = await clearOwnLeftoverComposerDraft({
+      captureInputState: async () => ({ currentInput: captures.shift() ?? idleScreen('') }),
+      sendClearKey: async () => {
+        clears += 1;
+      },
+      // Respawn-seeded registry: only persisted user prompts, no controller command texts.
+      ownComposerTexts: ownLog('some earlier real prompt'),
+      wait: async () => undefined,
+    });
+    expect(result).toMatchObject({ status: 'cleared', attempts: 1 });
+    expect(clears).toBe(1);
+  });
+
+  it('clears concatenated controller slash residue (/effort medium/effort medium, U1 class) after respawn', async () => {
+    const captures = [idleScreen('/effort medium/effort medium'), idleScreen('')];
+    let clears = 0;
+    const result = await clearOwnLeftoverComposerDraft({
+      captureInputState: async () => ({ currentInput: captures.shift() ?? idleScreen('') }),
+      sendClearKey: async () => {
+        clears += 1;
+      },
+      ownComposerTexts: ownLog('some earlier real prompt'),
+      wait: async () => undefined,
+    });
+    expect(result).toMatchObject({ status: 'cleared', attempts: 1 });
+    expect(clears).toBe(1);
+  });
+
+  it('still treats non-controller slash drafts as foreign (user-typed /compact must never be cleared)', async () => {
+    const result = await clearOwnLeftoverComposerDraft({
+      captureInputState: async () => ({ currentInput: idleScreen('/compact focus on the tests') }),
+      sendClearKey: async () => {
+        throw new Error('must not clear a user-typed slash draft outside the controller vocabulary');
+      },
+      ownComposerTexts: ownLog('some earlier real prompt'),
+      wait: async () => undefined,
+    });
+    expect(result.status).toBe('foreign_draft');
+  });
+
   it('reports capture_failed when the screen capture throws', async () => {
     const result = await clearOwnLeftoverComposerDraft({
       captureInputState: async () => {

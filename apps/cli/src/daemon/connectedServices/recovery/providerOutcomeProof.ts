@@ -42,15 +42,17 @@
  *   contract exists to kill.
  * - `quota_probe_fresh`: a provider quota probe proves the selected profile is
  *   not exhausted for the same service/fingerprint.
- *   RESERVED (RD-REC-14): no producer exists yet. The quotas coordinator /
- *   provider quota fetchers own this evidence and must emit it through the same
- *   `proofKind` pass-through (or `markProviderOutcomeProofByKey`) under P7.
+ *   The quotas coordinator / provider quota fetchers own this evidence. It is
+ *   produced only from normalized, fresh quota snapshots after service/profile,
+ *   group-generation, and material-fingerprint checks. It is not account
+ *   adoption proof and must not be upgraded into exact runtime-account identity.
  * - `fresh_candidate_selected`: the adopted connected-service profile/account is
  *   genuinely DIFFERENT from the exhausted/failed one (and not known-exhausted
  *   for the same fingerprint). This is useful evidence, but it is still
  *   INTERMEDIATE: the provider has not yet accepted work under the new account.
- * - `account_adoption_verified`: a post-switch account-adoption verification
- *   confirmed the adopted account (verified / weakly_verified).
+ * - `account_adoption_verified`: a post-switch verification accepted the new auth surface.
+ *   `verified` may carry exact account proof; `weakly_verified` is provenance/auth-surface
+ *   proof only and must not be treated as exact runtime-account identity.
  * - `terminal_action_required`: no automatic path is valid; a visible user action
  *   state is emitted.
  * - `terminal_exhausted`: retry/dead-letter budget reached and visible.

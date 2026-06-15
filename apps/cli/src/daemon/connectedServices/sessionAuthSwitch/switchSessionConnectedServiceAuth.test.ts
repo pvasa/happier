@@ -2635,6 +2635,83 @@ describe('switchSessionConnectedServiceAuth', () => {
     }));
   });
 
+  it('falls back to restart when hot-apply verification cannot prove the active Codex account id yet', async () => {
+    const tracked = trackedSession({
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        connectedServices: codexBindings('codex3'),
+      },
+    });
+    const emitSessionEvent = vi.fn();
+    const restartSession = vi.fn(async () => {});
+    const recoverAfterRuntimeAuthSwitch = vi.fn(async () => ({ ok: true as const }));
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
+    const verifyProviderAccountAdoption = vi.fn(async () => ({
+      status: 'unavailable' as const,
+      retryable: true,
+      reason: 'active_account_probe_missing_account_id',
+    }));
+
+    await expect(switchSessionConnectedServiceAuth({
+      core: createCore(),
+      postSwitchVerificationMode: {
+        kind: 'disabled_for_test_only',
+        reason: 'existing switch fixture does not exercise provider adoption verification',
+      },
+      getChildren: () => [tracked],
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'openai-codex',
+          profiles: [{ profileId: 'bot', status: 'connected' }],
+        }),
+        getConnectedServiceAuthGroup: async () => null,
+      },
+      resolveContinuity: async () => ({ mode: 'hot_apply' }),
+      restartSession,
+      hotApply: async () => ({ ok: true }),
+      persistSessionBindings: vi.fn(),
+      registerHotApplyTargets: vi.fn(),
+      recoverAfterRuntimeAuthSwitch,
+      continueAfterRuntimeAuthSwitch,
+      verifyProviderAccountAdoption,
+      emitSessionEvent,
+      request: {
+        sessionId: 'sess_1',
+        agentId: 'codex',
+        bindings: codexBindings('bot'),
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      action: 'restart_requested',
+      continuityByServiceId: { 'openai-codex': 'restart_rematerialize' },
+    });
+
+    expect(verifyProviderAccountAdoption).toHaveBeenCalledWith(expect.objectContaining({
+      serviceId: 'openai-codex',
+      target: expect.objectContaining({ profileId: 'bot' }),
+      action: 'hot_applied',
+    }));
+    expect(verifyProviderAccountAdoption).toHaveBeenCalledOnce();
+    expect(restartSession).toHaveBeenCalledOnce();
+    expect(recoverAfterRuntimeAuthSwitch).not.toHaveBeenCalled();
+    expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledOnce();
+    const switchEvents = emitSessionEvent.mock.calls.filter(([, event]) => (
+      event as { type?: unknown }
+    ).type === 'connected_service_account_switch_attempt');
+    expect(switchEvents).toHaveLength(1);
+    expect(switchEvents.some(([, event]) => (event as { ok?: unknown }).ok === false)).toBe(false);
+    expect(switchEvents[0]).toEqual(['sess_1', expect.objectContaining({
+      type: 'connected_service_account_switch_attempt',
+      ok: true,
+      action: 'restart_requested',
+      attemptedContinuityMode: 'restart',
+      outcome: 'succeeded',
+      outcomeAction: 'restarted',
+      errorCode: null,
+    })]);
+  });
+
   it('escalates successful hot apply adoption mismatch to restart before reporting the restart request', async () => {
     const tracked = trackedSession({
       spawnOptions: {

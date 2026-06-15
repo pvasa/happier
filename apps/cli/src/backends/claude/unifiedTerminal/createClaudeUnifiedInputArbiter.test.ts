@@ -312,6 +312,92 @@ describe('createClaudeUnifiedInputArbiter', () => {
     }));
   });
 
+  it('terminalizes deterministic invalid prompt text without handing it back as undeliverable', async () => {
+    let nowMs = 10_000;
+    const onInjectionFailure = vi.fn();
+    const onUndeliverableBatches = vi.fn();
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      injectPrompt: async () => ({
+        status: 'failed',
+        reason: 'invalid_prompt_text',
+        phase: 'before_write',
+        duplicateRisk: 'none',
+        recoverable: false,
+      }),
+      onInjectionFailure,
+      onUndeliverableBatches,
+    });
+
+    await arbiter.enqueueUiMessage({
+      message: 'bad\u0000prompt',
+      mode: { permissionMode: 'default' },
+      origin: { kind: 'ui_pending' },
+    });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 0,
+      lastFailureReason: 'invalid_prompt_text',
+      headInputState: null,
+    });
+    expect(onInjectionFailure).toHaveBeenCalledTimes(1);
+    expect(onInjectionFailure).toHaveBeenCalledWith(expect.objectContaining({
+      failureState: 'failed_terminal',
+      batch: expect.objectContaining({ message: 'bad\u0000prompt' }),
+      result: expect.objectContaining({
+        reason: 'invalid_prompt_text',
+        phase: 'before_write',
+        duplicateRisk: 'none',
+        recoverable: false,
+      }),
+    }));
+
+    arbiter.dispose();
+
+    expect(onUndeliverableBatches).not.toHaveBeenCalled();
+  });
+
+  it('drains a later valid prompt after an invalid prompt text rejection', async () => {
+    let nowMs = 10_000;
+    const injected: string[] = [];
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      injectPrompt: async (batch) => {
+        if (batch.message.includes('\u0000')) {
+          return {
+            status: 'failed',
+            reason: 'invalid_prompt_text',
+            phase: 'before_write',
+            duplicateRisk: 'none',
+            recoverable: false,
+          };
+        }
+        injected.push(batch.message);
+        return { status: 'injected', at: nowMs, bytesWritten: batch.message.length };
+      },
+    });
+
+    await arbiter.enqueueUiMessage({ message: 'bad\u0000prompt', origin: { kind: 'ui_pending' } });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    await arbiter.enqueueUiMessage({ message: 'valid prompt', origin: { kind: 'ui_pending' } });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(injected).toEqual(['valid prompt']);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      lastFailureReason: null,
+      headInputState: 'awaiting_provider_acceptance',
+    });
+  });
+
   it('accepts the current queued prompt when Claude later confirms a recoverable terminal write', async () => {
     let nowMs = 10_000;
     const accepted: string[] = [];
@@ -1362,6 +1448,34 @@ describe('createClaudeUnifiedInputArbiter', () => {
       arbiter.dispose();
     });
 
+    it('does not steer into a stale running turn when the canonical lifecycle has no active turn', async () => {
+      let nowMs = 10_000;
+      const injectPrompt = vi.fn(async () => ({ status: 'injected' as const, at: nowMs, bytesWritten: 4 }));
+      const evaluateInFlightSteer = vi.fn(async () => ({ steer: true as const }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        staleTurnRecoveryMs: 30_000,
+        injectPrompt,
+        evaluateInFlightSteer,
+        isCanonicalTurnActive: () => false,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'do not steer stale turn', origin: { kind: 'ui_pending' } });
+      nowMs += 31_000;
+      await arbiter.drainWhenSafe();
+
+      expect(evaluateInFlightSteer).toHaveBeenCalledTimes(1);
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+      expect(injectPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'do not steer stale turn' }),
+        undefined,
+      );
+
+      arbiter.dispose();
+    });
+
     it('keeps deferring without screen evidence while the canonical lifecycle still has an active turn', async () => {
       let nowMs = 10_000;
       const injectPrompt = vi.fn(async () => ({ status: 'injected' as const, at: nowMs, bytesWritten: 4 }));
@@ -1451,5 +1565,75 @@ describe('createClaudeUnifiedInputArbiter', () => {
 
     expect(accepted).toEqual(['first']);
     expect(arbiter.snapshot()).toMatchObject({ queuedCount: 1 });
+  });
+
+  describe('undeliverable batch handback (F-1 / A3-MED-1)', () => {
+    it('hands back ALL still-queued batches in FIFO order on dispose instead of dropping them', async () => {
+      let nowMs = 10_000;
+      const handedBack: string[] = [];
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        injectPrompt: async (batch) => ({ status: 'injected', at: nowMs, bytesWritten: batch.message.length }),
+        onUndeliverableBatches: (batches) => {
+          handedBack.push(...batches.map((batch) => batch.message));
+        },
+      });
+
+      await arbiter.enqueueUiMessage({ message: 'first', origin: { kind: 'ui_pending' } });
+      await arbiter.enqueueUiMessage({ message: 'second', origin: { kind: 'ui_pending' } });
+
+      arbiter.dispose();
+
+      expect(handedBack).toEqual(['first', 'second']);
+      expect(arbiter.snapshot()).toMatchObject({ queuedCount: 0, disposed: true });
+
+      // A second dispose must not double-hand-back.
+      arbiter.dispose();
+      expect(handedBack).toEqual(['first', 'second']);
+    });
+
+    it('hands back the failed_terminal head batch on dispose (failed_terminal park drop, F-1)', async () => {
+      let nowMs = 10_000;
+      const handedBack: string[] = [];
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        injectPrompt: async () => ({
+          status: 'failed' as const,
+          reason: 'no_target' as const,
+          phase: 'before_write' as const,
+          duplicateRisk: 'none' as const,
+          recoverable: false,
+        }),
+        injectionRetryLimit: 0,
+        onUndeliverableBatches: (batches) => {
+          handedBack.push(...batches.map((batch) => batch.message));
+        },
+      });
+
+      await arbiter.enqueueUiMessage({ message: 'doomed', origin: { kind: 'ui_pending' } });
+      arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+      expect(arbiter.snapshot()).toMatchObject({ headInputState: 'failed_terminal', queuedCount: 1 });
+
+      arbiter.dispose();
+
+      expect(handedBack).toEqual(['doomed']);
+    });
+
+    it('hands back a batch enqueued after dispose instead of silently dropping it', async () => {
+      const handedBack: string[] = [];
+      const arbiter = createClaudeUnifiedInputArbiter({
+        injectPrompt: async () => ({ status: 'injected', at: 1, bytesWritten: 1 }),
+        onUndeliverableBatches: (batches) => {
+          handedBack.push(...batches.map((batch) => batch.message));
+        },
+      });
+
+      arbiter.dispose();
+      await arbiter.enqueueUiMessage({ message: 'late', origin: { kind: 'ui_pending' } });
+
+      expect(handedBack).toEqual(['late']);
+    });
   });
 });

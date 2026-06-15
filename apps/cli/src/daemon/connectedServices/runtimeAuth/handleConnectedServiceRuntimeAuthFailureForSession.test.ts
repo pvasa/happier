@@ -35,7 +35,7 @@ function createTemporaryThrottleClassification(
 }
 
 describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
-  it('emits a session transcript event when runtime recovery switches a group account', async () => {
+  it('leaves group-switch transcript event emission to the switch coordinator', async () => {
     const emitSessionEvent = vi.fn();
     const switchAfterClassifiedFailure = vi.fn(async () => ({
       status: 'switched' as const,
@@ -84,18 +84,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       result: { status: 'switched', activeProfileId: 'backup', generation: 2 },
     });
 
-    expect(emitSessionEvent).toHaveBeenCalledWith('sess_1', expect.objectContaining({
-      type: 'connected_service_auth_group_switch',
-      serviceId: 'openai-codex',
-      groupId: 'main',
-      fromProfileId: 'primary',
-      toProfileId: 'backup',
-      reason: 'usage_limit',
-      mode: 'hot_apply',
-      toGeneration: 2,
-      resultStatus: 'switched',
-      success: true,
-    }));
+    expect(emitSessionEvent).not.toHaveBeenCalled();
   });
 
   it('commits a classified group fallback switch for inactive sessions without tracked children', async () => {
@@ -179,18 +168,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       switchesThisTurn: 0,
       sessionSwitchesThisHour: 0,
     });
-    expect(emitSessionEvent).toHaveBeenCalledWith('sess_1', expect.objectContaining({
-      type: 'connected_service_auth_group_switch',
-      serviceId: 'openai-codex',
-      groupId: 'main',
-      fromProfileId: 'primary',
-      toProfileId: 'backup',
-      reason: 'usage_limit',
-      mode: 'restart_resume',
-      toGeneration: 2,
-      resultStatus: 'switched',
-      success: true,
-    }));
+    expect(emitSessionEvent).not.toHaveBeenCalled();
     expect(switchAttemptTracker.recordSwitchResult).toHaveBeenCalledWith({
       sessionId: 'sess_1',
       serviceId: 'openai-codex',
@@ -1700,17 +1678,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       planType: null,
       switchesThisTurn: 0,
     });
-    expect(emitSessionEvent).toHaveBeenCalledWith('sess_1', expect.objectContaining({
-      type: 'connected_service_auth_group_switch',
-      serviceId: 'openai-codex',
-      groupId: 'main',
-      fromProfileId: 'primary',
-      toProfileId: 'backup',
-      reason: 'usage_limit',
-      toGeneration: 2,
-      resultStatus: 'switched',
-      success: true,
-    }));
+    expect(emitSessionEvent).not.toHaveBeenCalled();
   });
 
   it('uses durable session metadata binding when runtime report and tracked spawn options lost group identity', async () => {
@@ -1917,17 +1885,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
       observedProfileId: 'backup',
     }));
-    expect(emitSessionEvent).toHaveBeenCalledWith('sess_1', expect.objectContaining({
-      type: 'connected_service_auth_group_switch',
-      serviceId: 'openai-codex',
-      groupId: 'main',
-      fromProfileId: 'backup',
-      toProfileId: 'tertiary',
-      reason: 'usage_limit',
-      toGeneration: 3,
-      resultStatus: 'switched',
-      success: true,
-    }));
+    expect(emitSessionEvent).not.toHaveBeenCalled();
   });
 
   it('force-refreshes a classified group profile when tracked spawn options lost connected services', async () => {
@@ -3159,9 +3117,6 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
       observedProfileId: 'backup',
     }));
-    expect(emitSessionEvent).toHaveBeenCalledWith('sess_1', expect.objectContaining({
-      fromProfileId: 'backup',
-      toProfileId: 'tertiary',
-    }));
+    expect(emitSessionEvent).not.toHaveBeenCalled();
   });
 });

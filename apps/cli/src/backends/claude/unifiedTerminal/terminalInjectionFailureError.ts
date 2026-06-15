@@ -30,3 +30,17 @@ export function isClaudeUnifiedTerminalInjectionFailureError(
     && typeof error === 'object'
     && (error as { code?: unknown }).code === 'claude_unified_terminal_injection_failed';
 }
+
+export function isClaudeUnifiedTerminalAmbiguousInjectionFailureError(
+  error: unknown,
+): error is ClaudeUnifiedTerminalInjectionFailureError {
+  return isClaudeUnifiedTerminalInjectionFailureError(error)
+    && (error as { failureState?: unknown }).failureState === 'failed_ambiguous';
+}
+
+export function isClaudeUnifiedTerminalTerminalInjectionFailureError(
+  error: unknown,
+): error is ClaudeUnifiedTerminalInjectionFailureError {
+  return isClaudeUnifiedTerminalInjectionFailureError(error)
+    && (error as { failureState?: unknown }).failureState !== 'failed_ambiguous';
+}

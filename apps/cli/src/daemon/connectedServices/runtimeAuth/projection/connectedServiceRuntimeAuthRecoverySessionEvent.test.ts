@@ -52,8 +52,9 @@ describe('projectConnectedServiceRuntimeAuthRecoveryReport', () => {
     });
   });
 
-  it('does not emit the generic fallback when a typed transcript event is committed', () => {
+  it('does not re-emit a daemon-handled typed transcript event from provider projection', () => {
     const sendGenericStatusMessage = vi.fn();
+    const addStatusMessage = vi.fn(() => true);
     const commitTypedProjection = vi.fn(() => true);
     const transcriptEvent = {
       type: 'connected-service-runtime-auth-recovery',
@@ -82,13 +83,29 @@ describe('projectConnectedServiceRuntimeAuthRecoveryReport', () => {
 
     const result = projectConnectedServiceRuntimeAuthRecoveryReport({
       report,
+      classification: {
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'team-pool',
+        resetsAtMs: null,
+        retryAfterMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+      addStatusMessage,
       sendGenericStatusMessage,
       commitTypedProjection,
     });
 
+    expect(addStatusMessage).toHaveBeenCalledWith(report.statusMessage);
+    expect(commitTypedProjection).not.toHaveBeenCalled();
     expect(sendGenericStatusMessage).not.toHaveBeenCalled();
     expect(result).toMatchObject({
-      typedProjectionCommitted: true,
+      statusMessageAdded: true,
+      typedProjectionCommitted: false,
+      usageLimitMetadataCommitted: false,
       genericMessageEmitted: false,
       requiresFallback: false,
       emitted: true,

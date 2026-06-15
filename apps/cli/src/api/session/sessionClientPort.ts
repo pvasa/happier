@@ -37,6 +37,13 @@ export interface SessionClientPort {
   keepAlive(thinking: boolean, mode: 'local' | 'remote'): void;
 
   getMetadataSnapshot(): Metadata | null;
+  /**
+   * A3-HIGH-1 owed-delivery watermark: launchers whose consumption path confirms provider
+   * acceptance opt in so the watermark stops persisting at queue handoff…
+   */
+  deferDeliveredUserMessageWatermarkToProviderAcceptance?(): void;
+  /** …and persist it here once the provider actually accepted the batch (null seq = no-op). */
+  confirmUserMessageDeliveredToProvider?(seq: number | null | undefined): void;
   getLastObservedMessageSeq?(): number;
   getCommittedUserMessageSeq?(localId: string): number | null;
   waitForCommittedUserMessageSeq?(

@@ -31,6 +31,7 @@ function createBinding(overrides: Partial<Parameters<typeof bindClaudeUnifiedTer
   }>> => []);
   const sessionTurnLifecycle = {
     beginTurn: vi.fn(async () => ({ turnId: 'turn-1' })),
+    touchActiveTurn: vi.fn(async () => undefined),
     completeTurn: vi.fn(async () => undefined),
     cancelTurn: vi.fn(async () => undefined),
     failTurn: vi.fn(async () => undefined),
@@ -144,6 +145,38 @@ describe('bindClaudeUnifiedTerminalSession', () => {
     expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
     expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledWith({ provider: 'claude' });
     expect(readyContexts).toEqual([{ turnToken: 'ready-turn-1', startSeqExclusive: 41 }]);
+  });
+
+  it('touches the canonical turn on trusted provider and transcript progress without duplicate begin', async () => {
+    const { binding, sessionTurnLifecycle } = createBinding();
+
+    await binding.sessionOptions.onProviderPromptStarted?.();
+    expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
+    expect(sessionTurnLifecycle.touchActiveTurn).toHaveBeenCalledWith({ provider: 'claude' });
+
+    sessionTurnLifecycle.touchActiveTurn.mockClear();
+    binding.sessionOptions.onMessage?.(assistantMessage('still working'));
+
+    await vi.waitFor(() => {
+      expect(sessionTurnLifecycle.touchActiveTurn).toHaveBeenCalledWith({ provider: 'claude' });
+    });
+    expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('touches but does not start a new canonical turn for steered prompt injection', async () => {
+    const { binding, sessionTurnLifecycle } = createBinding();
+
+    await binding.sessionOptions.onProviderPromptStarted?.();
+    sessionTurnLifecycle.touchActiveTurn.mockClear();
+    await binding.sessionOptions.onTerminalPromptInjected?.({
+      message: 'steer progress',
+      mode: { permissionMode: 'default', claudeUnifiedTerminalEnabled: true },
+      acceptedAs: 'in_flight_steer',
+      turnStateAtInjection: 'running',
+    });
+
+    expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
+    expect(sessionTurnLifecycle.touchActiveTurn).toHaveBeenCalledWith({ provider: 'claude' });
   });
 
   it('suppresses a steered prompt echo that arrives at turn end, beyond the fixed echo window', async () => {

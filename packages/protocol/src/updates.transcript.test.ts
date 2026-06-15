@@ -165,6 +165,7 @@ describe('updates transcript vNext payloads', () => {
           },
         },
       ],
+      fromCursor: 'cursor-1',
       nextCursor: 'cursor-2',
       truncated: false,
     });
@@ -173,6 +174,19 @@ describe('updates transcript vNext payloads', () => {
     if (!parsed.success) return;
     expect(parsed.data.type).toBe('direct-session-transcript-delta');
     expect(parsed.data.items).toHaveLength(1);
+    expect(parsed.data.fromCursor).toBe('cursor-1');
+  });
+
+  it('rejects non-truncated direct-session cursor advancement without fromCursor', () => {
+    const parsed = EphemeralUpdateSchema.safeParse({
+      type: 'direct-session-transcript-delta',
+      sessionId: 'sess_1',
+      items: [],
+      nextCursor: 'cursor-2',
+      truncated: false,
+    });
+
+    expect(parsed.success).toBe(false);
   });
 
   it('parses message ack responses with didUpdate', () => {

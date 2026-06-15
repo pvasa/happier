@@ -6,7 +6,7 @@ import {
 } from './resolveRuntimeAuthRecoveryOutcome';
 
 describe('resolveRuntimeAuthRecoveryProof', () => {
-  it('accepts a switch with verified account adoption as deterministic proof', () => {
+  it('accepts a switch with exact verified account adoption as deterministic proof', () => {
     const result = {
       status: 'switch_attempted',
       result: {
@@ -22,7 +22,7 @@ describe('resolveRuntimeAuthRecoveryProof', () => {
     expect(isProvenRuntimeAuthRecoverySuccess(result)).toBe(true);
   });
 
-  it('accepts a weakly_verified account adoption as deterministic proof', () => {
+  it('accepts weakly_verified auth-surface proof without claiming exact account identity', () => {
     const result = {
       status: 'observed_generation',
       activeProfileId: 'backup',

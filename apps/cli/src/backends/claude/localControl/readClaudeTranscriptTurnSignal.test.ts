@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { RawJSONLines } from '../types';
 import { readClaudeTranscriptTurnSignal } from './readClaudeTranscriptTurnSignal';
 
 describe('readClaudeTranscriptTurnSignal', () => {
@@ -22,6 +23,21 @@ describe('readClaudeTranscriptTurnSignal', () => {
         message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] },
       } as any),
     ).toEqual({ type: 'completion_candidate', providerTurnId: null, source: 'claude_transcript_assistant_end_turn' });
+  });
+
+  it('ignores Claude synthetic no-response closures as provider activity', () => {
+    expect(
+      readClaudeTranscriptTurnSignal({
+        type: 'assistant',
+        uuid: 'synthetic-no-response',
+        model: '<synthetic>',
+        message: {
+          role: 'assistant',
+          stop_reason: 'end_turn',
+          content: [{ type: 'text', text: 'No response requested.' }],
+        },
+      } satisfies RawJSONLines),
+    ).toBeNull();
   });
 
   it('detects compact boundaries as completion candidates', () => {

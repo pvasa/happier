@@ -2874,7 +2874,7 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
     expect(auth.access_token).toBe('primary-access');
   });
 
-  it('allows spawn-time soft-threshold group switching for restart-only Claude sessions (RD-QUO-10: no live runtime needs a hot apply pre-spawn)', async () => {
+  it('allows spawn-time soft-threshold group switching for Claude sessions before any live runtime exists (RD-QUO-10)', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
     const processEnv = await createIsolatedClaudeSourceEnv();

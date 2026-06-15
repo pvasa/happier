@@ -80,7 +80,18 @@ describe('createClaudeConnectedServicesMaterializer', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.env.CLAUDE_CONFIG_DIR).toContain(join('claude-subscription', 'oauth-profile', 'claude', 'claude-config'));
+    const expectedProfileClaudeConfigDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      'oauth-profile',
+      'claude',
+      'claude-config',
+    );
+    expect(result!.env.CLAUDE_CONFIG_DIR).toBe(expectedProfileClaudeConfigDir);
+    expect(result!.targetMaterializedRoot).toBe(expectedProfileClaudeConfigDir);
     expect(result!.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(result!.env.CLAUDE_CODE_SETUP_TOKEN).toBeUndefined();
     expect(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]).toBeUndefined();
@@ -172,7 +183,7 @@ describe('createClaudeConnectedServicesMaterializer', () => {
     });
   });
 
-  it('materializes a Claude subscription group selection into the active profile home instead of a shared group home', async () => {
+  it('materializes a Claude subscription group selection into the shared group home', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-server-'));
     const rootDir = await mkdtemp(join(tmpdir(), 'happier-claude-materializer-root-'));
     const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-source-config-'));
@@ -218,9 +229,21 @@ describe('createClaudeConnectedServicesMaterializer', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.env.CLAUDE_CONFIG_DIR).toContain(join('claude-subscription', 'oauth-profile', 'claude', 'claude-config'));
-    expect(result!.env.CLAUDE_CONFIG_DIR).not.toContain(join('claude-subscription', '__groups'));
-    expect(result!.targetMaterializedRoot).toBe(result!.env.CLAUDE_CONFIG_DIR);
+    const expectedGroupClaudeConfigDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      '__groups',
+      'claude-team',
+      'claude',
+      'claude-config',
+    );
+    expect(result!.env.CLAUDE_CONFIG_DIR).toBe(expectedGroupClaudeConfigDir);
+    expect(result!.targetMaterializedRoot).toBe(expectedGroupClaudeConfigDir);
+    const credential = JSON.parse(await readFile(join(expectedGroupClaudeConfigDir, '.credentials.json'), 'utf8'));
+    expect(credential.claudeAiOauth.accessToken).toBe('selected-access-placeholder');
   });
 
   it('preserves the previous stable native credential file when rematerialization fails closed', async () => {

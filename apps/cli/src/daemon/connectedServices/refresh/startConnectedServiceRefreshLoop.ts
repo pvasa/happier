@@ -18,6 +18,8 @@ export function startConnectedServiceRefreshLoop(params: Readonly<{
 
     const loop: SingleFlightIntervalLoopHandle = startSingleFlightIntervalLoop({
         intervalMs: params.tickMs,
+        failureBackoffMs: Math.max(params.tickMs, 5_000),
+        maxFailureBackoffMs: 60_000,
         task: async () => {
             await params.coordinator.tickOnce();
         },

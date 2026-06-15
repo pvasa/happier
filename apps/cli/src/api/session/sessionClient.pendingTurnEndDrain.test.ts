@@ -108,6 +108,67 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
     expect(client.shouldAttemptPendingMaterialization()).toBe(false);
   });
 
+  it.each([
+    {
+      name: 'canonical active turn',
+      sessionOverrides: {
+        latestTurnStatus: 'completed',
+        pendingCount: 1,
+        pendingVersion: 1,
+      },
+      prepare: async (client: Awaited<ReturnType<typeof createClient>>) => {
+        await client.sessionTurnLifecycle.beginTurn({ provider: 'claude' });
+      },
+    },
+    {
+      name: 'durable active latest turn',
+      sessionOverrides: {
+        latestTurnStatus: 'in_progress',
+        pendingCount: 1,
+        pendingVersion: 1,
+      },
+      prepare: async () => {},
+    },
+    {
+      name: 'continuation recovery',
+      sessionOverrides: {
+        latestTurnStatus: 'completed',
+        pendingCount: 1,
+        pendingVersion: 1,
+        metadata: {
+          sessionContinuationRecoveryV1: {
+            v: 1,
+            attemptsById: {
+              'generation-1:restart-1': {
+                v: 1,
+                attemptId: 'generation-1:restart-1',
+                status: 'pending_provider_context',
+                failureAtMs: 100,
+                updatedAtMs: 110,
+                resumePromptMode: 'standard',
+              },
+            },
+          },
+        },
+      },
+      prepare: async () => {},
+    },
+  ])('pending materialization RPC respects the $name drain guard', async ({ sessionOverrides, prepare }) => {
+    const client = await createClient(sessionOverrides);
+    await prepare(client);
+
+    const result = await client.rpcHandlerManager.invokeLocal('session.pendingQueue.materializeNext', {
+      reconcileWhenEmpty: 'force',
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      didMaterialize: false,
+      result: { type: 'no_pending' },
+    });
+    expect(materializeNextMock).not.toHaveBeenCalled();
+  });
+
   it('canonical turn completion clears a stale in-progress snapshot status and unblocks materialization', async () => {
     const client = await createClient({
       latestTurnStatus: 'in_progress',

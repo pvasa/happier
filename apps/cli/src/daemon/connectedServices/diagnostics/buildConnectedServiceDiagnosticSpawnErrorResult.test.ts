@@ -66,6 +66,30 @@ describe('buildConnectedServiceDiagnosticSpawnValidationErrorResult', () => {
     });
   });
 
+  it('maps runtime-auth supersession diagnostics to retry and account actions', () => {
+    const diagnostic = buildConnectedServiceUxDiagnostic({
+      code: CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.runtimeAuthRecoverySuperseded,
+      failurePhase: 'runtime_auth_recovery',
+      source: 'runtime_auth_recovery',
+      serviceId: 'openai-codex',
+      providerId: 'codex',
+      agentId: 'codex',
+      profileId: 'codex-profile',
+      retryable: true,
+      diagnostics: {
+        reason: 'failing_profile_inactive',
+      },
+    });
+
+    expect(diagnostic).toMatchObject({
+      code: 'runtime_auth_recovery_superseded',
+      suggestedActions: [
+        'retry',
+        'open_connected_accounts',
+      ],
+    });
+  });
+
   it('preserves first-class Claude materialization diagnostic codes on spawn failure', () => {
     const result = buildConnectedServiceMaterializationSpawnErrorResult({
       agentId: 'claude',

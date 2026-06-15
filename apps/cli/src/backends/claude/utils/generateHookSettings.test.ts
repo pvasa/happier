@@ -167,6 +167,30 @@ describe('generateHookPluginDir', () => {
     expect(statSync(secretPath!).mode & 0o777).toBe(0o600);
   });
 
+  it('adds the same private secret file to ALL session lifecycle hook commands (A5-MED-2)', () => {
+    const secret = 'test-secret-456';
+    const pluginDir = generateHookPluginDir(43124, {
+      enableLocalPermissionBridge: false,
+      permissionHookSecret: secret,
+    });
+    expect(pluginDir).toBeTruthy();
+    createdPluginDirs.push(pluginDir!);
+
+    const hooksPath = join(pluginDir!, 'hooks', 'hooks.json');
+    const parsed = JSON.parse(readFileSync(hooksPath, 'utf8')) as any;
+    for (const hookName of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse']) {
+      const command = parsed.hooks?.[hookName]?.[0]?.hooks?.[0]?.command as string;
+      expect(command).toContain('session_hook_forwarder.cjs');
+      expect(command).toContain('--secret-file');
+      expect(command).not.toContain(secret);
+    }
+    const command = parsed.hooks?.SessionStart?.[0]?.hooks?.[0]?.command as string;
+    const secretPath = command.match(/--secret-file\s+"([^"]+)"/)?.[1];
+    expect(secretPath).toBeTruthy();
+    expect(readFileSync(secretPath!, 'utf8')).toBe(secret);
+    expect(statSync(secretPath!).mode & 0o777).toBe(0o600);
+  });
+
   it('restricts the secret-bearing plugin dirs and files to the owner even with permissive umask', () => {
     if (process.platform === 'win32') return;
     const originalUmask = process.umask(0);

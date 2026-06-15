@@ -378,7 +378,7 @@ export function createSessionMutationOutbox(params: CreateSessionMutationOutboxP
                 }
                 try {
                     const outcome = await withSessionMutationDeliverySlot(() => deliver(mutation));
-                    if (outcome.status === 'delivered') {
+                    if (outcome.status === 'delivered' || outcome.status === 'ignored_lossy') {
                         didChange = true;
                         refreshInFlightMutations(index + 1);
                         continue;

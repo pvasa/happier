@@ -196,6 +196,77 @@ describe('createConnectedServiceProviderActivityProofRecorder', () => {
     // No identity => no scoped scheduler clears (identity-matching is the guard).
     expect(markProviderOutcomeProofForSession).not.toHaveBeenCalled();
   });
+
+  it('uses a single pending runtime-auth recovery intent as durable identity when live bindings are unavailable', async () => {
+    const scheduler = createSeededRuntimeAuthScheduler();
+    await scheduler.beginClassifiedFailure({
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification,
+    });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'main',
+    });
+    expect(scheduler.readByKey(recoveryKey)).toMatchObject({ status: 'waiting' });
+
+    const recorder = createConnectedServiceProviderActivityProofRecorder({
+      nowMs: () => 2_000,
+      providerActivityTimeoutMs: 60_000,
+      continuationStore: createInMemoryContinuationStore(),
+      runtimeAuthRecovery: scheduler,
+    });
+
+    await recorder({ sessionId: 'sess_1' });
+
+    expect(scheduler.readByKey(recoveryKey)).toBeNull();
+  });
+
+  it('does not infer a runtime-auth recovery identity when multiple pending identities are possible', async () => {
+    const scheduler = createSeededRuntimeAuthScheduler();
+    await scheduler.beginClassifiedFailure({
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification,
+    });
+    const otherClassification = {
+      ...classification,
+      serviceId: 'claude-subscription',
+      profileId: 'claude-primary',
+      groupId: 'claude',
+    } as const;
+    await scheduler.beginClassifiedFailure({
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: otherClassification,
+    });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'main',
+    });
+    const otherRecoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'sess_1',
+      serviceId: 'claude-subscription',
+      profileId: 'claude-primary',
+      groupId: 'claude',
+    });
+
+    const recorder = createConnectedServiceProviderActivityProofRecorder({
+      nowMs: () => 2_000,
+      providerActivityTimeoutMs: 60_000,
+      continuationStore: createInMemoryContinuationStore(),
+      runtimeAuthRecovery: scheduler,
+    });
+
+    await recorder({ sessionId: 'sess_1' });
+
+    expect(scheduler.readByKey(recoveryKey)).toMatchObject({ status: 'waiting' });
+    expect(scheduler.readByKey(otherRecoveryKey)).toMatchObject({ status: 'waiting' });
+  });
 });
 
 describe('isProviderActivityTurnLifecycleEvent', () => {

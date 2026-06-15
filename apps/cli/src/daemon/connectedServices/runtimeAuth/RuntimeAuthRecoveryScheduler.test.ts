@@ -1737,6 +1737,45 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     });
   });
 
+  it('does not dead-letter repeated local completions while provider outcome proof is pending', async () => {
+    let nowMs = 1_000;
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => nowMs,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      maxAttempts: 2,
+      providerOutcomePendingWaitMs: 250,
+      recover: async () => ({ status: 'credential_refreshed', restartRequested: true }),
+    });
+
+    await scheduler.enqueueApplyFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classification(),
+      result: {
+        status: 'generation_apply_failed',
+        errorCode: 'hot_apply_failed',
+        diagnostics: {
+          underlyingError: 'timeout of 5000ms exceeded',
+        },
+      },
+    });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+        .resolves.toEqual({ status: 'waiting' });
+      const intent = scheduler.read('session-1');
+      expect(intent).toMatchObject({
+        status: 'resumed_awaiting_proof',
+        lastError: 'recovery_unproven_awaiting_provider_outcome',
+        attemptCount: 1,
+      });
+      expect(intent?.status).not.toBe('exhausted');
+      nowMs += 250;
+    }
+  });
+
   it('clears a durable resumed_awaiting_proof intent on matching provider activity proof', async () => {
     const diagnostics: string[] = [];
     const scheduler = new RuntimeAuthRecoveryScheduler({
@@ -2131,6 +2170,90 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       classification: classification(),
     })).resolves.toMatchObject({ status: 'scheduled', retryable: true });
     expect(scheduler.readByKey(recoveryKey)).toMatchObject({ status: 'waiting' });
+  });
+
+  it('supersedes (never terminalizes) an intent whose wake hands ownership to the temporary-throttle scheduler (A1-MED-1)', async () => {
+    // A transient capacity failure (e.g. 529) durably enqueues a runtime-auth intent; on wake
+    // the handler arms the TemporaryThrottleRecoveryScheduler and returns temporary_retry_armed.
+    // Treating that unrecognized status as TERMINAL persisted an unclearable `cancelled` record
+    // for 7 days, silently blocking durable retry for a subsequent REAL usage-limit on the key.
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({
+        status: 'temporary_retry_armed',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'team',
+        retryAfterMs: 30_000,
+        resetAtMs: null,
+      }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+
+    await scheduler.beginClassifiedFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 0,
+      classification: classification(),
+    });
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'superseded' });
+
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team',
+    });
+    expect(scheduler.readByKey(recoveryKey)).toBeNull();
+    expect(diagnostics.map((event) => event.event)).toContain('runtime_auth_recovery_superseded');
+    expect(diagnostics.map((event) => event.event)).not.toContain('runtime_auth_recovery_terminal');
+
+    // The key can re-arm immediately on a genuine future failure (e.g. a real usage limit).
+    await expect(scheduler.beginClassifiedFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 0,
+      classification: classification(),
+    })).resolves.toMatchObject({ status: 'scheduled', retryable: true });
+    expect(scheduler.readByKey(recoveryKey)).toMatchObject({ status: 'waiting' });
+  });
+
+  it('supersedes an intent when the temporary retry could not be armed instead of dead-lettering the key (A1-MED-1)', async () => {
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({
+        status: 'temporary_retry_unavailable',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'team',
+        retryAfterMs: 30_000,
+        resetAtMs: null,
+        reason: 'scheduler_unavailable',
+      }),
+    });
+
+    await scheduler.beginClassifiedFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 0,
+      classification: classification(),
+    });
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'superseded' });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team',
+    });
+    expect(scheduler.readByKey(recoveryKey)).toBeNull();
   });
 
   it('does not consume retry attempts when stale-profile replays reproduce the same target profile across churned generations', async () => {

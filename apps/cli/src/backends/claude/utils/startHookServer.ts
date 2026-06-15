@@ -226,6 +226,21 @@ export async function startHookServer(options: HookServerOptions): Promise<HookS
         const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
             // Only handle POST to /hook/session-start
             if (req.method === 'POST' && req.url === '/hook/session-start') {
+                // A5-MED-2: same secret gate as the permission/statusline endpoints — a hostile
+                // local process must not be able to spoof session_id/transcript_path (transcript
+                // ingestion follows transcript_path). Absent secret keeps legacy-open behavior.
+                const expectedSessionSecret = typeof permissionHookSecret === 'string' && permissionHookSecret.length > 0
+                    ? permissionHookSecret
+                    : null;
+                if (expectedSessionSecret) {
+                    const providedSecret = req.headers['x-happier-hook-secret'];
+                    const providedSecretValue = Array.isArray(providedSecret) ? providedSecret[0] : providedSecret;
+                    if (providedSecretValue !== expectedSessionSecret) {
+                        logger.debug('[hookServer] Forbidden session hook request (secret mismatch)');
+                        res.writeHead(403).end('forbidden');
+                        return;
+                    }
+                }
                 // Set timeout to prevent hanging if Claude doesn't close stdin
                 const timeout = setTimeout(() => {
                     if (!res.headersSent) {

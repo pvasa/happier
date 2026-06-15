@@ -198,6 +198,7 @@ function isReasonEnabled(policy: ConnectedServiceAuthGroupPolicyV1, reason: stri
     case 'usage_limit':
     case 'rate_limit':
     case 'soft_threshold':
+    case 'same_provider_account_exhausted':
     case 'capacity':
       return policy.switchOn.usageLimit;
     case 'auth_expired':
@@ -873,7 +874,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
     sessionId?: string;
     serviceId: string;
     groupId: string;
-    reason: 'usage_limit' | 'soft_threshold' | 'auth_expired' | 'account_changed' | 'refresh_failed';
+    reason: 'usage_limit' | 'soft_threshold' | 'same_provider_account_exhausted' | 'auth_expired' | 'account_changed' | 'refresh_failed';
     observedProfileId?: string | null;
     switchesThisTurn?: number;
     sessionSwitchesThisHour?: number;

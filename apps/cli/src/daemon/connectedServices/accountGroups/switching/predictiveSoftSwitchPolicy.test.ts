@@ -80,4 +80,20 @@ describe('evaluatePredictiveSoftSwitchSessionApplyPolicy', () => {
       applyMode: 'restart_resume',
     })).toEqual({ status: 'allow' });
   });
+
+  it('also requires hot apply for live same-provider-account exhaustion fanout', () => {
+    expect(evaluatePredictiveSoftSwitchSessionApplyPolicy({
+      reason: 'same_provider_account_exhausted',
+      sessionId: 'session-1',
+      applyMode: 'restart_resume',
+    })).toEqual({
+      status: 'suppress',
+      reason: 'predictive_soft_switch_hot_apply_required',
+    });
+    expect(evaluatePredictiveSoftSwitchSessionApplyPolicy({
+      reason: 'same_provider_account_exhausted',
+      sessionId: 'session-1',
+      applyMode: 'hot_apply',
+    })).toEqual({ status: 'allow' });
+  });
 });

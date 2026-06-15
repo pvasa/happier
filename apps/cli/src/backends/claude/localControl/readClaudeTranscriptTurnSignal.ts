@@ -6,6 +6,7 @@ import { isClaudeTranscriptTaskNotification } from './readClaudeTranscriptProvid
 
 const STOP_HOOK_FEEDBACK_PREFIX = 'Stop hook feedback:\n';
 const REQUEST_INTERRUPTED_TEXT = '[Request interrupted by user]';
+const SYNTHETIC_NO_RESPONSE_TEXT = 'No response requested.';
 
 function firstTextContent(value: unknown): string | null {
   if (typeof value === 'string') return value;
@@ -24,6 +25,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function readBooleanFlag(value: unknown, key: string): boolean {
   return asRecord(value)?.[key] === true;
+}
+
+function readStringFlag(value: unknown, key: string): string {
+  const raw = asRecord(value)?.[key];
+  return typeof raw === 'string' ? raw : '';
 }
 
 function readMessageRecord(value: unknown): Record<string, unknown> | null {
@@ -51,6 +57,12 @@ function containsRateLimitEvidence(value: unknown): boolean {
     record.description,
     record.content,
   ].some(containsRateLimitEvidence);
+}
+
+function isSyntheticNoResponseClosure(message: RawJSONLines, content: unknown): boolean {
+  if (readStringFlag(message, 'model') !== '<synthetic>') return false;
+  const text = firstTextContent(content);
+  return typeof text === 'string' && text.trim() === SYNTHETIC_NO_RESPONSE_TEXT;
 }
 
 export function readClaudeTranscriptTurnSignal(message: RawJSONLines): LocalTurnLifecycleEvent | null {
@@ -98,9 +110,10 @@ export function readClaudeTranscriptTurnSignal(message: RawJSONLines): LocalTurn
         source: 'claude_transcript_api_error',
       };
     }
-    const rawStopReason = readMessageRecord(message)?.stop_reason;
+    const messageRecord = readMessageRecord(message);
+    const rawStopReason = messageRecord?.stop_reason;
     const stopReason = typeof rawStopReason === 'string' ? rawStopReason : '';
-    if (stopReason === 'end_turn') {
+    if (stopReason === 'end_turn' && !isSyntheticNoResponseClosure(message, messageRecord?.content)) {
       return {
         type: 'completion_candidate',
         providerTurnId: null,

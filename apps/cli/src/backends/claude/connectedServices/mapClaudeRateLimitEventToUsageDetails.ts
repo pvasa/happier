@@ -2,6 +2,8 @@ import type { ConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol';
 
 import { parseProviderResetAt, parseProviderTimestampMs } from '@/daemon/connectedServices/quotas/normalization';
 
+import { readSessionHookSidechainAgentId } from '../utils/sessionHookAttribution';
+
 export type NormalizedProviderUsageLimitDetailsV1 = Readonly<{
   v: 1;
   resetAtMs: number | null;
@@ -387,6 +389,21 @@ export function mapClaudeStopFailureErrorToUsageDetails(
 export function mapClaudeStopFailureHookToUsageDetails(hook: unknown): NormalizedProviderUsageLimitDetailsV1 | null {
   const record = isRecord(hook) ? hook : null;
   if (!record) return null;
+  // Hook payloads attribute subagent activity via `agent_id` (not the transcript-row
+  // `isSidechain` flag): a sidechain usage-limit StopFailure must carry the sidechain
+  // marker so it never fails the PARENT turn (shared predicate, sessionHookAttribution).
+  return markHookSidechainSourcedUsageDetails(record, mapStopFailureHookRecordToUsageDetails(record));
+}
+
+function markHookSidechainSourcedUsageDetails(
+  record: Record<string, unknown>,
+  details: NormalizedProviderUsageLimitDetailsV1 | null,
+): NormalizedProviderUsageLimitDetailsV1 | null {
+  if (!details || readSessionHookSidechainAgentId(record) === null) return details;
+  return { ...details, sourcedFromSidechain: true };
+}
+
+function mapStopFailureHookRecordToUsageDetails(record: Record<string, unknown>): NormalizedProviderUsageLimitDetailsV1 | null {
   const hookEventName = readString(record.hook_event_name ?? record.hookEventName);
   if (hookEventName !== 'StopFailure') return null;
   const direct = mapClaudeStopFailureErrorToUsageDetails(readString(record.error) ?? readString(record.error_type));

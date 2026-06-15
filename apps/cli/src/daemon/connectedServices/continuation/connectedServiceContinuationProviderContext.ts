@@ -7,6 +7,7 @@ import { CATALOG_AGENT_IDS, type CatalogAgentId } from '@/backends/types';
 import { configuration } from '@/configuration';
 import { resolveTrackedConnectedServiceSwitchContinuityContext } from '../sessionAuthSwitch/resolveTrackedConnectedServiceSwitchContinuityContext';
 import { canResumeFromMaterializedState } from '../stateSharing/canResumeFromMaterializedState';
+import { resolveTrackedConnectedServiceBindingsRaw } from '../trackedSessionConnectedServiceBindings';
 
 type ContinuationContextTrackedSession = Pick<
   TrackedSession,
@@ -49,12 +50,6 @@ function readConnectedServiceBindingServiceId(rawBindings: unknown): string | nu
     if (binding.source === 'connected') return serviceId;
   }
   return null;
-}
-
-function resolveTrackedConnectedServiceBindingsRaw(
-  tracked: Pick<ContinuationContextTrackedSession, 'happySessionMetadataFromLocalWebhook' | 'spawnOptions'>,
-): unknown {
-  return tracked.spawnOptions?.connectedServices ?? tracked.happySessionMetadataFromLocalWebhook?.connectedServices;
 }
 
 async function hasExactReachableResumeContext(input: Readonly<{

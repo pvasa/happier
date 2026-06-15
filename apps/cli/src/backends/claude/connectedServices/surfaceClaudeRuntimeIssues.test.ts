@@ -235,7 +235,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     }
   });
 
-  it('commits daemon typed runtime-auth recovery projection for Claude auth failures', async () => {
+  it('does not re-emit daemon typed runtime-auth recovery projection for Claude auth failures', async () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
     const sendSessionEvent = vi.fn();
@@ -258,21 +258,13 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
           sanitizedPreview: expect.any(String),
         }),
       });
-      expect(sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'connected-service-runtime-auth-recovery',
-        status: 'retry_scheduled',
-        serviceId: 'claude-subscription',
-        diagnostic: expect.objectContaining({
-          source: 'runtime_auth_recovery',
-          failurePhase: 'runtime_auth_recovery',
-        }),
-      }));
+      expect(sendSessionEvent).not.toHaveBeenCalled();
     } finally {
       restoreClaudeSelectionEnv(previousSelectionEnv);
     }
   });
 
-  it('commits daemon typed runtime-auth recovery projection for Claude usage-limit issues', async () => {
+  it('does not re-emit daemon typed runtime-auth recovery projection for Claude usage-limit issues', async () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
     const sendSessionEvent = vi.fn();
@@ -297,15 +289,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
         connectedService: null,
       }, '[claude-test]');
 
-      expect(sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'connected-service-runtime-auth-recovery',
-        status: 'retry_scheduled',
-        serviceId: 'claude-subscription',
-        diagnostic: expect.objectContaining({
-          source: 'runtime_auth_recovery',
-          failurePhase: 'runtime_auth_recovery',
-        }),
-      }));
+      expect(sendSessionEvent).not.toHaveBeenCalled();
     } finally {
       restoreClaudeSelectionEnv(previousSelectionEnv);
     }
@@ -512,7 +496,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     }
   });
 
-  it('suppresses duplicate identical group-recovery transcript projections for repeated Claude rate-limit evidence', async () => {
+  it('leaves repeated daemon-handled group-recovery transcript projections to the daemon', async () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure
       .mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport())
@@ -551,13 +535,13 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
 
       expect(sendSessionEvent.mock.calls.filter(
         ([event]) => event?.type === 'connected-service-runtime-auth-recovery',
-      )).toHaveLength(1);
+      )).toHaveLength(0);
     } finally {
       restoreClaudeSelectionEnv(previousSelectionEnv);
     }
   });
 
-  it('suppresses duplicate identical group-recovery transcript projections for concurrent Claude rate-limit evidence', async () => {
+  it('leaves concurrent daemon-handled group-recovery transcript projections to the daemon', async () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure
       .mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport())
@@ -598,7 +582,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
 
       expect(sendSessionEvent.mock.calls.filter(
         ([event]) => event?.type === 'connected-service-runtime-auth-recovery',
-      )).toHaveLength(1);
+      )).toHaveLength(0);
     } finally {
       restoreClaudeSelectionEnv(previousSelectionEnv);
     }

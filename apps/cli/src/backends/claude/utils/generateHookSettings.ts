@@ -208,9 +208,19 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
     writePrivateFileSync(join(manifestDir, 'plugin.json'), JSON.stringify(manifest, null, 2));
 
     const nodeExecutable = resolveNodeExecutable();
+    // The secret never rides on the command line (argv is world-visible via `ps`); it is written
+    // to an owner-only file inside the 0700 plugin dir and forwarders read it via
+    // `--secret-file <path>`. Shared by the session AND permission forwarders (A5-MED-2: the
+    // session-start endpoint requires the same secret as the permission endpoint).
+    let secretPart = '';
+    if (typeof options.permissionHookSecret === 'string' && options.permissionHookSecret.length > 0) {
+        const secretFile = join(pluginDir, 'permission-hook-secret');
+        writePrivateFileSync(secretFile, options.permissionHookSecret);
+        secretPart = ` --secret-file ${JSON.stringify(secretFile)}`;
+    }
     const sessionForwarderScript = resolveCliRuntimeAssetPath('scripts', 'session_hook_forwarder.cjs');
     const buildSessionHookCommand = (hookEventName: string): string =>
-        `${JSON.stringify(nodeExecutable)} ${JSON.stringify(sessionForwarderScript)} ${port} ${JSON.stringify(hookEventName)}`;
+        `${JSON.stringify(nodeExecutable)} ${JSON.stringify(sessionForwarderScript)} ${port} ${JSON.stringify(hookEventName)}${secretPart}`;
 
     const buildSessionHook = (hookEventName: string): unknown[] => [
         {
@@ -235,15 +245,6 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
 
     if (options.enableLocalPermissionBridge) {
         const permissionForwarderScript = resolveCliRuntimeAssetPath('scripts', 'permission_hook_forwarder.cjs');
-        // The secret never rides on the command line (argv is world-visible via `ps`); it is written
-        // to an owner-only file inside the 0700 plugin dir and the forwarder reads it via
-        // `--secret-file <path>`.
-        let secretPart = '';
-        if (typeof options.permissionHookSecret === 'string' && options.permissionHookSecret.length > 0) {
-            const secretFile = join(pluginDir, 'permission-hook-secret');
-            writePrivateFileSync(secretFile, options.permissionHookSecret);
-            secretPart = ` --secret-file ${JSON.stringify(secretFile)}`;
-        }
         const buildPermissionCommand = (hookEventName: 'PermissionRequest' | 'PreToolUse'): string =>
             `${JSON.stringify(nodeExecutable)} ${JSON.stringify(permissionForwarderScript)} ${port} ${JSON.stringify(hookEventName)}${secretPart}`;
 

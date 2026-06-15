@@ -275,20 +275,7 @@ function resolveClaudeProjectDir(session: Session): string {
 
 export { createClaudeReadyHandler as createClaudeRemoteReadyHandler };
 
-// Canonical comparator + notice constants now live in the shared unified-terminal owner so the
-// standalone launcher's gate-off notice path (QA-B B6) and this daemon path cannot drift.
-function buildUnifiedTerminalRuntimeConfigRestartChangesForHashChange(
-    currentMode: EnhancedMode | null,
-    nextMode: EnhancedMode,
-): ClaudeRuntimeConfigOutcomeChange[] {
-    const changes = buildUnifiedTerminalRuntimeConfigRestartChangesForHashChange(currentMode, nextMode);
-    // This is only called when the launch-options HASH changed, so an empty classified delta still
-    // means something changed (e.g. a hash input not modeled above).
-    if (changes.length === 0) {
-        return [{ key: 'launchOption', reason: 'unclassified_launch_option_hash_change' }];
-    }
-    return changes;
-}
+const MAX_CONSECUTIVE_REMOTE_UNIFIED_PARK_RELAUNCHES = 3;
 
 export async function claudeRemoteLauncher(session: Session): Promise<'switch' | 'exit'> {
     logger.debug('[claudeRemoteLauncher] Starting remote launcher');
@@ -881,7 +868,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 }
             }
 
-            if (activeUnifiedTranscriptBinding?.shouldSuppressTranscriptMessage(logMessage)) {
+            if (
+                activeUnifiedTranscriptBinding?.isActive() === true
+                && activeUnifiedTranscriptBinding.shouldSuppressTranscriptMessage(logMessage)
+            ) {
                 return;
             }
 
@@ -927,6 +917,23 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
         let previousSessionId: string | null | undefined = undefined;
         let forceNewSession = false;
         let waitForMessageBeforeNextLaunch = false;
+        let consecutiveUnifiedParkRelaunches = 0;
+        const resetUnifiedParkRelaunchBudget = (): void => {
+            consecutiveUnifiedParkRelaunches = 0;
+        };
+        const consumeUnifiedParkRelaunchBudget = (): boolean => {
+            consecutiveUnifiedParkRelaunches += 1;
+            if (consecutiveUnifiedParkRelaunches <= MAX_CONSECUTIVE_REMOTE_UNIFIED_PARK_RELAUNCHES) {
+                return true;
+            }
+            const message = `Claude unified terminal failed ${MAX_CONSECUTIVE_REMOTE_UNIFIED_PARK_RELAUNCHES + 1} times in a row. Not retrying automatically; your queued message remains redeliverable when the session restarts.`;
+            messageBuffer.addMessage(message, 'status');
+            session.client.sendSessionEvent({
+                type: 'message',
+                message,
+            });
+            return false;
+        };
         while (!exitReason) {
             logger.debug('[remote]: launch');
             messageBuffer.addMessage('═'.repeat(40), 'status');
@@ -1054,6 +1061,24 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     return await inputConsumer.waitForNextInput({ abortSignal: controller.signal });
                 };
 
+                // A3-HIGH-1: this launcher confirms provider handoff/acceptance for every consumed
+                // batch (below + the unified runner's onPromptAcceptedByProvider), so the
+                // delivered-watermark must not advance at queue handoff anymore.
+                session.client.deferDeliveredUserMessageWatermarkToProviderAcceptance?.();
+                const takeBatchSeqForProvider = (batch: MessageBatch<EnhancedMode, string>): number | null => {
+                    const maxUserMessageSeq = batch.maxUserMessageSeq ?? null;
+                    if (batch.mode.claudeUnifiedTerminalEnabled === true) {
+                        // The unified runner owns acceptance; the seq travels with the batch and is
+                        // confirmed by onPromptAcceptedByProvider once the provider accepted it.
+                        return maxUserMessageSeq;
+                    }
+                    // SDK/legacy custody is synchronous from here: handing the batch to the provider
+                    // loop is the acceptance seam for this runner family.
+                    session.client.confirmUserMessageDeliveredToProvider?.(maxUserMessageSeq);
+                    resetUnifiedParkRelaunchBudget();
+                    return null;
+                };
+
                 if (waitForMessageBeforeNextLaunch) {
                     waitForMessageBeforeNextLaunch = false;
                     messageBuffer.addMessage('Claude Code exited unexpectedly. Waiting for the next message to retry...', 'status');
@@ -1152,9 +1177,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     // A message pulled by the unified runner's input pump during a death/dispose
                     // unwind must come back to the session queue instead of being dropped into
                     // the dead host (silent queue-swallow, incident cmq8y3nlx).
-                    returnUnconsumedMessage: ({ message, mode: unconsumedMode }: { message: string; mode: EnhancedMode }) => {
+                    returnUnconsumedMessage: ({ message, mode: unconsumedMode, maxUserMessageSeq }: { message: string; mode: EnhancedMode; maxUserMessageSeq?: number | null }) => {
                         try {
-                            session.queue.unshift(message, unconsumedMode);
+                            // Preserve watermark attribution across the handback (A3-HIGH-1).
+                            session.queue.unshift(message, unconsumedMode, { userMessageSeq: maxUserMessageSeq ?? null });
                         } catch (error) {
                             logger.debug('[remote]: failed to requeue undeliverable unified terminal message', error);
                         }
@@ -1174,7 +1200,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             } else {
                                 unifiedBinding.noteNextInjectedPromptShouldSuppressEcho();
                             }
-                            return { message: p.message, mode: p.mode };
+                            return { message: p.message, mode: p.mode, maxUserMessageSeq: takeBatchSeqForProvider(p) };
                         }
 
                         const msg = await waitForNextBatch();
@@ -1220,6 +1246,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         return {
                             message: typeof replaySeedResolution.message === 'string' ? replaySeedResolution.message : '',
                             mode: msg.mode,
+                            maxUserMessageSeq: takeBatchSeqForProvider(msg),
                         };
                     },
                     onSessionFound: (sessionId: string, data: unknown) => {
@@ -1387,6 +1414,12 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                                 });
                             },
                             onInFlightSteerAvailabilitySnapshot: inFlightSteerCapabilityPublisher.publish,
+                            // A3-HIGH-1 root fix: the delivered-user-message watermark persists at
+                            // provider acceptance, not when the row entered volatile memory.
+                            onPromptAcceptedByProvider: ({ maxUserMessageSeq }: { maxUserMessageSeq: number | null }) => {
+                                session.client.confirmUserMessageDeliveredToProvider?.(maxUserMessageSeq);
+                                resetUnifiedParkRelaunchBudget();
+                            },
                             // C11 (incident cmq8y3nlx): binding-owned registry, seeded from the
                             // persisted prompt store above, so a respawned runner recognizes its
                             // predecessor's leftover composer injection as our own text.
@@ -1474,6 +1507,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     continue;
                 } else {
                     if (await surfaceUnifiedTerminalRuntimeIssue(e)) {
+                        if (!consumeUnifiedParkRelaunchBudget()) {
+                            exitReason = 'exit';
+                            continue;
+                        }
                         waitForMessageBeforeNextLaunch = true;
                         continue;
                     }

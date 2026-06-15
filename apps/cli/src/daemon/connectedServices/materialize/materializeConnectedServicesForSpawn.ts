@@ -131,7 +131,6 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
     cleanupRoot();
     return null;
   }
-  await replaceDirectoryAtomically({ stagedDir: attemptRoot, targetDir: rootDir });
   const materializedEnv = rewriteEnvRoot(materialized.env, attemptRoot, rootDir);
   const explicitTargetMaterializedRoot = typeof materialized.targetMaterializedRoot === 'string'
     && materialized.targetMaterializedRoot.trim().length > 0
@@ -143,6 +142,21 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
     agentId: params.agentId,
     targetMaterializedEnv: materializedEnv,
   }) ?? (materialized.cleanupOnFailure ? rootDir : null);
+  await replaceDirectoryAtomically({
+    stagedDir: attemptRoot,
+    targetDir: rootDir,
+    ...(materialized.afterPromote
+      ? {
+          afterPromote: async () => {
+            await materialized.afterPromote?.({
+              env: materializedEnv,
+              targetMaterializedRoot,
+              finalRootDir: rootDir,
+            });
+          },
+        }
+      : {}),
+  });
   const cleanupFinalRoot = bestEffortCleanupDirectory(rootDir);
   const cleanupOnFailure = materialized.cleanupOnFailure ? cleanupFinalRoot : materialized.cleanupOnFailure;
   const cleanupOnExit = materialized.cleanupOnExit ? cleanupFinalRoot : materialized.cleanupOnExit;

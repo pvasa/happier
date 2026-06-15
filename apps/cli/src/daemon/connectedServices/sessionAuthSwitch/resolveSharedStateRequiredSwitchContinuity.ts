@@ -82,17 +82,6 @@ export async function resolveSharedStateRequiredSwitchContinuity(input: Readonly
       || !materializationIdentity
       || !input.targetMaterializedEnv
     ) {
-      // TEMP qaC instrumentation — REMOVE before lane closeout
-      // eslint-disable-next-line no-console
-      const { logger: qaCLogger } = await import('@/ui/logger');
-      qaCLogger.debug('[qaC TEMP] shared-state continuity missing inputs', {
-        serviceId,
-        targetMaterializedRoot,
-        vendorResumeId,
-        cwd,
-        hasMaterializationIdentity: Boolean(materializationIdentity),
-        hasTargetMaterializedEnv: Boolean(input.targetMaterializedEnv),
-      });
       return {
         mode: 'unsupported',
         errorCode: 'provider_session_state_unavailable_for_resume',
@@ -113,16 +102,6 @@ export async function resolveSharedStateRequiredSwitchContinuity(input: Readonly
       candidatePersistedSessionFile: input.candidatePersistedSessionFile ?? null,
     });
     if (!reachability.ok) {
-      // TEMP qaC instrumentation — REMOVE before lane closeout
-      const { logger: qaCLogger } = await import('@/ui/logger');
-      qaCLogger.debug('[qaC TEMP] shared-state continuity reachability failed', {
-        reason: reachability.reason,
-        vendorResumeId,
-        targetMaterializedRoot,
-        cwd,
-        candidatePersistedSessionFile: input.candidatePersistedSessionFile ?? null,
-        continuityDiagnostics: reachability.continuityDiagnostics,
-      });
       return {
         mode: 'unsupported',
         errorCode: 'provider_session_state_unavailable_for_resume',

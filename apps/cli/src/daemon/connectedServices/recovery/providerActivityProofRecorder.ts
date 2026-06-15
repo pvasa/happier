@@ -33,6 +33,11 @@ type UsageLimitRecoveryForProviderActivityProof = Readonly<{
   }>) => Promise<unknown>;
 }>;
 
+type ScopedProviderActivityRecoveryIdentity = Readonly<{
+  recoveryIdentity: SessionContinuationRecoveryIdentityV1;
+  source: 'explicit' | 'runtime_auth_intent';
+}>;
+
 export type ConnectedServiceProviderActivityProofRecorder = (input: Readonly<{
   sessionId: string;
   recoveryIdentities?: readonly SessionContinuationRecoveryIdentityV1[];
@@ -51,6 +56,62 @@ export function isProviderActivityTurnLifecycleEvent(
 ): boolean {
   if (event === 'task_started') return true;
   return event === 'assistant_message_end' && terminalStatus !== 'failed';
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isPendingRuntimeAuthRecoveryIntent(intent: RuntimeAuthRecoveryIntent): boolean {
+  return intent.status === 'waiting'
+    || intent.status === 'checking'
+    || intent.status === 'resumed_awaiting_proof';
+}
+
+function toRuntimeAuthIntentRecoveryIdentity(
+  intent: RuntimeAuthRecoveryIntent,
+): SessionContinuationRecoveryIdentityV1 | null {
+  if (!isPendingRuntimeAuthRecoveryIntent(intent)) return null;
+  const serviceId = normalizeOptionalString(intent.serviceId);
+  if (!serviceId) return null;
+  const profileId = normalizeOptionalString(intent.profileId);
+  const groupId = normalizeOptionalString(intent.groupId);
+  if (groupId) {
+    return {
+      serviceId,
+      selectionKind: 'group',
+      groupId,
+      ...(profileId ? { profileId } : {}),
+    };
+  }
+  if (!profileId) return null;
+  return {
+    serviceId,
+    selectionKind: 'profile',
+    profileId,
+  };
+}
+
+function runtimeAuthIdentityDedupeKey(identity: SessionContinuationRecoveryIdentityV1): string {
+  return JSON.stringify({
+    serviceId: identity.serviceId,
+    groupId: identity.groupId ?? null,
+    profileId: identity.profileId ?? null,
+  });
+}
+
+function resolveSinglePendingRuntimeAuthRecoveryIdentity(
+  intents: ReadonlyArray<RuntimeAuthRecoveryIntent>,
+): SessionContinuationRecoveryIdentityV1 | null {
+  const identitiesByKey = new Map<string, SessionContinuationRecoveryIdentityV1>();
+  for (const intent of intents) {
+    const identity = toRuntimeAuthIntentRecoveryIdentity(intent);
+    if (!identity) continue;
+    identitiesByKey.set(runtimeAuthIdentityDedupeKey(identity), identity);
+  }
+  return identitiesByKey.size === 1 ? [...identitiesByKey.values()][0] ?? null : null;
 }
 
 /**
@@ -107,39 +168,81 @@ export function createConnectedServiceProviderActivityProofRecorder(params: Read
     }));
   };
 
-  return async (input) => {
-    const identities = input.recoveryIdentities ?? [];
-    if (identities.length === 0) {
-      await controller.recordProviderActivity({ sessionId: input.sessionId });
+  const recordScopedProviderActivity = async (input: Readonly<{
+    sessionId: string;
+    scopedIdentity: ScopedProviderActivityRecoveryIdentity;
+  }>): Promise<void> => {
+    const recoveryIdentity = input.scopedIdentity.recoveryIdentity;
+    if (input.scopedIdentity.source === 'explicit') {
+      await controller.recordProviderActivity({ sessionId: input.sessionId, recoveryIdentity });
+    }
+    const serviceId = ConnectedServiceIdSchema.safeParse(recoveryIdentity.serviceId);
+    if (!serviceId.success) {
+      params.logDebug?.(
+        '[DAEMON RUN] Skipping connected-service provider-activity proof for invalid service id (non-fatal)',
+        serviceId.error,
+      );
       return;
     }
-    for (const recoveryIdentity of identities) {
-      // Settle any continuation attempt awaiting this identity's activity. This
-      // result deliberately does NOT gate the scheduler clears below.
-      await controller.recordProviderActivity({ sessionId: input.sessionId, recoveryIdentity });
-      const serviceId = ConnectedServiceIdSchema.safeParse(recoveryIdentity.serviceId);
-      if (!serviceId.success) {
-        params.logDebug?.(
-          '[DAEMON RUN] Skipping connected-service provider-activity proof for invalid service id (non-fatal)',
-          serviceId.error,
-        );
-        continue;
+    await clearMatchingRuntimeAuthIntents({
+      sessionId: input.sessionId,
+      recoveryIdentity,
+      serviceId: serviceId.data,
+    }).catch((error) => {
+      params.logDebug?.('[DAEMON RUN] Failed to clear runtime-auth recovery after connected-service provider activity (non-fatal)', error);
+    });
+    if (input.scopedIdentity.source !== 'explicit') return;
+    await params.usageLimitRecovery?.markProviderOutcomeProofForSession({
+      sessionId: input.sessionId,
+      proofKind: 'provider_activity',
+      serviceId: serviceId.data,
+      profileId: recoveryIdentity.profileId ?? null,
+      groupId: recoveryIdentity.groupId ?? null,
+    }).catch((error) => {
+      params.logDebug?.('[DAEMON RUN] Failed to clear usage-limit recovery after connected-service provider activity (non-fatal)', error);
+    });
+  };
+
+  return async (input) => {
+    const explicitIdentities = input.recoveryIdentities ?? [];
+    if (explicitIdentities.length === 0) {
+      await controller.recordProviderActivity({ sessionId: input.sessionId });
+      // Daemon respawn/reattach can lose the live connected-service binding while
+      // the runtime-auth recovery intent remains durable. When there is exactly
+      // one pending durable identity, that intent is the scoped recovery owner.
+      // Multiple possible identities stay fail-closed because a generic provider
+      // lifecycle event cannot prove which service/account recovered.
+      const runtimeAuthIntents = params.runtimeAuthRecovery?.readForSession(input.sessionId) ?? [];
+      const runtimeAuthRecoveryIdentity = resolveSinglePendingRuntimeAuthRecoveryIdentity(runtimeAuthIntents);
+      if (!runtimeAuthRecoveryIdentity) {
+        const possibleIdentityCount = runtimeAuthIntents
+          .map(toRuntimeAuthIntentRecoveryIdentity)
+          .filter((identity): identity is SessionContinuationRecoveryIdentityV1 => identity !== null)
+          .length;
+        if (possibleIdentityCount > 1) {
+          params.logDebug?.(
+            '[DAEMON RUN] Skipping unscoped provider-activity runtime-auth proof because multiple recovery identities are possible',
+            { sessionId: input.sessionId, possibleIdentityCount },
+          );
+        }
+        return;
       }
-      await clearMatchingRuntimeAuthIntents({
+      await recordScopedProviderActivity({
         sessionId: input.sessionId,
-        recoveryIdentity,
-        serviceId: serviceId.data,
-      }).catch((error) => {
-        params.logDebug?.('[DAEMON RUN] Failed to clear runtime-auth recovery after connected-service provider activity (non-fatal)', error);
+        scopedIdentity: {
+          recoveryIdentity: runtimeAuthRecoveryIdentity,
+          source: 'runtime_auth_intent',
+        },
       });
-      await params.usageLimitRecovery?.markProviderOutcomeProofForSession({
+      return;
+    }
+    for (const recoveryIdentity of explicitIdentities) {
+      await recordScopedProviderActivity({
         sessionId: input.sessionId,
-        proofKind: 'provider_activity',
-        serviceId: serviceId.data,
-        profileId: recoveryIdentity.profileId ?? null,
-        groupId: recoveryIdentity.groupId ?? null,
-      }).catch((error) => {
-        params.logDebug?.('[DAEMON RUN] Failed to clear usage-limit recovery after connected-service provider activity (non-fatal)', error);
+        scopedIdentity: {
+          recoveryIdentity,
+          source: 'explicit',
+        },
       });
     }
   };

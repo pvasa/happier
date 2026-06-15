@@ -7,8 +7,10 @@ import { getReleaseRingCatalogEntry } from '@happier-dev/release-runtime/release
 
 import { ApiClient, isMachineContentPublicKeyMismatchError } from '@/api/api';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
-import { materializeNextPendingQueueV2MessageViaHttp } from '@/api/session/pendingQueueV2Transport';
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
+import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import type { ApiMachineClient } from '@/api/apiMachine';
 import { applyInitialTranscriptAfterSeqToAttachPayload } from '@/daemon/sessionEncryption/applyInitialTranscriptAfterSeqToAttachPayload';
 import { TrackedSession } from './types';
@@ -70,6 +72,7 @@ import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
 
 import { forceStopKnownDaemonPid, isDaemonRunningCurrentlyInstalledHappyVersion, resolveDaemonSpawnSessionByNonce, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
+import { resolveTrackedSessionCatalogAgentId } from './sessions/resolveTrackedSessionCatalogAgentId';
 import {
   createDirectPeerTransferRegistry,
   requestDirectPeerTransferToFile,
@@ -125,7 +128,11 @@ import {
   resolveWindowsTerminalWindowName,
 } from './platform/windows/windowsHostedSessionRuntime';
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
-import { refreshSessionMarkerRespawn } from './sessionRegistry';
+import {
+  clearSessionMarkerConnectedServiceRestartIntent,
+  markSessionMarkerConnectedServiceRestartIntent,
+  refreshSessionMarkerRespawn,
+} from './sessionRegistry';
 import { buildHappySessionControlArgs } from './sessionSpawnArgs';
 import { serializeDaemonInitialGoalForEnv, HAPPIER_DAEMON_INITIAL_GOAL_ENV_KEY } from '@/agent/runtime/sessionInitialGoal';
 import { resolveExistingSessionAttachContext } from './sessionEncryption/resolveExistingSessionAttachContext';
@@ -201,6 +208,7 @@ import {
 } from './connectedServices/sessionAuthSwitch/switchSessionConnectedServiceAuth';
 import { resolveManualSwitchPreviousGroupMembers } from './connectedServices/sessionAuthSwitch/resolveManualSwitchPreviousGroupMembers';
 import {
+  isConnectedServiceRestartSignalStaleProcessError,
   requestConnectedServiceSessionRestartSignal,
   type ConnectedServiceDaemonRestartDiagnosticInput,
   type ConnectedServiceDaemonRestartDiagnosticRecord,
@@ -299,6 +307,7 @@ import {
   replayPendingConnectedServiceContinuationsForTrackedSessions,
   resolveConnectedServiceContinuationProviderContextAvailability,
 } from './connectedServices/continuation/connectedServiceContinuationProviderContext';
+import { resolveTrackedConnectedServiceBindingsRaw } from './connectedServices/trackedSessionConnectedServiceBindings';
 import { materializeSessionConnectedServiceRuntimeAuthSelection } from './connectedServices/sessionAuthSwitch/materializeSessionConnectedServiceRuntimeAuthSelection';
 import { resolveTrackedConnectedServiceSwitchContinuityContext } from './connectedServices/sessionAuthSwitch/resolveTrackedConnectedServiceSwitchContinuityContext';
 import {
@@ -359,7 +368,7 @@ async function recoverTrackedSessionConnectedServiceRuntimeAuthSwitch(input: Rea
 }>): Promise<Readonly<{ ok: true } | { ok: false; errorCode?: string }>> {
   const selections = input.runtimeAuthSelectionsByServiceId;
   if (!selections || selections.size === 0) return { ok: true };
-  const agentId = resolveCatalogAgentIdFromBackendTarget(input.tracked.spawnOptions?.backendTarget);
+  const agentId = resolveTrackedSessionCatalogAgentId(input.tracked);
   const adapter = await getConnectedServiceRuntimeAuthAdapter(agentId);
   if (!adapter) return { ok: true };
   for (const selection of selections.values()) {
@@ -684,6 +693,8 @@ function createSessionContinuationRecoveryMetadataStore(params: Readonly<{
 
 function createConnectedServiceContinuationHandler(params: Readonly<{
   credentials: Credentials;
+  shutdownPromise: Promise<unknown>;
+  isShutdownRequested: () => boolean;
   failureAtMs: number;
   resumePromptMode: SessionContinuationResumePromptModeV1;
   resolveReplayPlan: (input: Readonly<{
@@ -713,7 +724,9 @@ function createConnectedServiceContinuationHandler(params: Readonly<{
     nudgePendingQueue: ({ sessionId }) => {
       startPendingQueueBackgroundNudgeLoop({
         sessionId,
-        daemonToken: params.credentials.token,
+        credentials: params.credentials,
+        shutdownPromise: params.shutdownPromise,
+        isShutdownRequested: params.isShutdownRequested,
         logLabel: 'connected-service continuation',
       });
     },
@@ -793,6 +806,8 @@ function createConnectedServiceContinuationHandler(params: Readonly<{
 
 function createConnectedServicePendingContinuationResolver(params: Readonly<{
   credentials: Credentials;
+  shutdownPromise: Promise<unknown>;
+  isShutdownRequested: () => boolean;
   providerActivityTimeoutMs: number;
   logDebug: (message: string, error: unknown) => void;
 }>) {
@@ -816,7 +831,9 @@ function createConnectedServicePendingContinuationResolver(params: Readonly<{
     nudgePendingQueue: ({ sessionId }) => {
       startPendingQueueBackgroundNudgeLoop({
         sessionId,
-        daemonToken: params.credentials.token,
+        credentials: params.credentials,
+        shutdownPromise: params.shutdownPromise,
+        isShutdownRequested: params.isShutdownRequested,
         logLabel: 'connected-service pending continuation',
       });
     },
@@ -928,7 +945,7 @@ function resolveTrackedContinuationRecoveryIdentities(input: Readonly<{
   const tracked = input.getChildren().find((child) => child.happySessionId === input.sessionId) ?? null;
   if (!tracked) return [];
   return listContinuationRecoveryIdentitiesFromBindings(
-    readConnectedServiceBindingsOrEmpty(tracked.spawnOptions?.connectedServices),
+    readConnectedServiceBindingsOrEmpty(resolveTrackedConnectedServiceBindingsRaw(tracked)),
   );
 }
 
@@ -1085,19 +1102,54 @@ async function applyAlreadyRunningExistingSessionRuntimeSnapshot(params: Readonl
   }
 }
 
+function readGuardedPendingMaterializationDidMaterialize(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as { ok?: unknown; didMaterialize?: unknown; result?: unknown };
+  if (record.ok !== true) return false;
+  if (record.didMaterialize === true) return true;
+  const result = record.result;
+  return Boolean(result && typeof result === 'object' && !Array.isArray(result) && (result as { type?: unknown }).type === 'materialized');
+}
+
 async function nudgeAlreadyRunningExistingSessionPendingQueue(params: Readonly<{
   sessionId: string;
-  daemonToken: string;
+  credentials: Credentials;
+  isShutdownRequested?: () => boolean;
 }>): Promise<boolean> {
-  const token = params.daemonToken.trim();
+  if (params.isShutdownRequested?.() === true) return false;
+  const token = params.credentials.token.trim();
   if (!token) return false;
 
   try {
-    const materialized = await materializeNextPendingQueueV2MessageViaHttp({
+    const transport = await resolveSessionTransportContext({
+      credentials: params.credentials,
+      idOrPrefix: params.sessionId,
+    });
+    if (!transport.ok) {
+      logger.debug('[DAEMON RUN] Failed to resolve session transport for pending queue nudge', {
+        sessionId: params.sessionId,
+        code: transport.code,
+      });
+      return false;
+    }
+    if (transport.sessionId !== params.sessionId) {
+      logger.debug('[DAEMON RUN] Skipping pending queue nudge because resolved transport session id does not match requested session id', {
+        requestedSessionId: params.sessionId,
+        resolvedSessionId: transport.sessionId,
+      });
+      return false;
+    }
+    if (params.isShutdownRequested?.() === true) return false;
+
+    const result = await callSessionRpc({
       token,
       sessionId: params.sessionId,
+      mode: transport.mode,
+      ctx: transport.ctx,
+      method: `${params.sessionId}:${SESSION_RPC_METHODS.SESSION_PENDING_QUEUE_MATERIALIZE_NEXT}`,
+      request: { reconcileWhenEmpty: 'force' },
     });
-    return materialized.didMaterialize === true;
+    return readGuardedPendingMaterializationDidMaterialize(result);
   } catch (error) {
     logger.debug('[DAEMON RUN] Failed to nudge pending queue for already-running session resume', {
       sessionId: params.sessionId,
@@ -1109,20 +1161,25 @@ async function nudgeAlreadyRunningExistingSessionPendingQueue(params: Readonly<{
 
 function startPendingQueueBackgroundNudgeLoop(params: Readonly<{
   sessionId: string;
-  daemonToken: string;
+  credentials: Credentials;
+  shutdownPromise: Promise<unknown>;
+  isShutdownRequested: () => boolean;
   logLabel: string;
 }>): void {
   const maxAttempts = readAttachPendingQueueNudgeRetryAttempts();
   const retryDelayMs = readAttachPendingQueueNudgeRetryDelayMs();
   void (async () => {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (params.isShutdownRequested()) return;
       const didMaterialize = await nudgeAlreadyRunningExistingSessionPendingQueue({
         sessionId: params.sessionId,
-        daemonToken: params.daemonToken,
+        credentials: params.credentials,
+        isShutdownRequested: params.isShutdownRequested,
       });
       if (didMaterialize) return;
       if (attempt >= maxAttempts) return;
-      await sleepMs(retryDelayMs);
+      const sleepResult = await sleepMsOrShutdown(retryDelayMs, params.shutdownPromise);
+      if (sleepResult === 'shutdown') return;
     }
   })().catch((error) => {
     logger.debug(`[DAEMON RUN] ${params.logLabel} pending queue background nudge loop failed`, {
@@ -1148,11 +1205,6 @@ function readAttachPendingQueueNudgeRetryDelayMs(): number {
   );
 }
 
-async function sleepMs(delayMs: number): Promise<void> {
-  if (delayMs <= 0) return;
-  await new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
 async function sleepMsOrShutdown(delayMs: number, shutdownPromise: Promise<unknown>): Promise<'elapsed' | 'shutdown'> {
   if (delayMs <= 0) return 'elapsed';
   return await new Promise<'elapsed' | 'shutdown'>((resolveSleep) => {
@@ -1175,7 +1227,9 @@ async function sleepMsOrShutdown(delayMs: number, shutdownPromise: Promise<unkno
 function nudgeAttachedExistingSessionPendingQueue(params: Readonly<{
   requestedExistingSessionId: string;
   resolved: SpawnSessionResult;
-  daemonToken: string;
+  credentials: Credentials;
+  shutdownPromise: Promise<unknown>;
+  isShutdownRequested: () => boolean;
 }>): SpawnSessionResult {
   const requestedSessionId = params.requestedExistingSessionId.trim();
   if (!requestedSessionId || params.resolved.type !== 'success') {
@@ -1199,7 +1253,9 @@ function nudgeAttachedExistingSessionPendingQueue(params: Readonly<{
 
   startPendingQueueBackgroundNudgeLoop({
     sessionId: resolvedSessionId,
-    daemonToken: params.daemonToken,
+    credentials: params.credentials,
+    shutdownPromise: params.shutdownPromise,
+    isShutdownRequested: params.isShutdownRequested,
     logLabel: 'attach',
   });
   return params.resolved;
@@ -1567,7 +1623,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       const connectedServiceGroupHomeCleanupScheduler = new ConnectedServiceGroupHomeCleanupScheduler({
         activeServerDir: configuration.activeServerDir,
         hasLiveTarget: ({ serviceId, groupId, agentId }) => getCurrentChildren().some((tracked) => {
-          const trackedAgentId = resolveCatalogAgentIdFromBackendTarget(tracked.spawnOptions?.backendTarget);
+          const trackedAgentId = resolveTrackedSessionCatalogAgentId(tracked);
           if (trackedAgentId !== agentId) return false;
           return parseConnectedServiceBindingSelections(tracked.spawnOptions?.connectedServices)
             .some((selection) => selection.kind === 'group' && selection.serviceId === serviceId && selection.groupId === groupId);
@@ -1588,7 +1644,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           { min: 60_000, max: 7 * 24 * 60 * 60_000 },
         ),
         hasLiveTarget: ({ materializationIdentityId, agentId }) => getCurrentChildren().some((tracked) => {
-          const trackedAgentId = resolveCatalogAgentIdFromBackendTarget(tracked.spawnOptions?.backendTarget);
+          const trackedAgentId = resolveTrackedSessionCatalogAgentId(tracked);
           if (trackedAgentId !== agentId) return false;
           return readTrackedConnectedServiceMaterializationIdentityId(tracked) === materializationIdentityId;
         }),
@@ -1817,6 +1873,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         const resolvePendingConnectedServiceContinuation =
           createConnectedServicePendingContinuationResolver({
             credentials,
+            shutdownPromise: resolvesWhenShutdownRequested,
+            isShutdownRequested: () => shutdownInitiated,
             providerActivityTimeoutMs: connectedServiceContinuationProviderActivityTimeoutMs,
             logDebug: (message, error) => logger.debug(message, error),
           });
@@ -1930,7 +1988,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   });
                   await nudgeAlreadyRunningExistingSessionPendingQueue({
                     sessionId: normalizedExistingSessionId,
-                    daemonToken: credentials.token,
+                    credentials,
+                    isShutdownRequested: () => shutdownInitiated,
                   });
                   return { type: 'success', sessionId: normalizedExistingSessionId };
                 }
@@ -2214,6 +2273,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                             sessionId: connectedServiceAuthSessionId ?? materializationKey,
                             event,
                             listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
+                            getConnectedServiceAuthGroup: api.getConnectedServiceAuthGroup.bind(api),
                           }).catch((error) => {
                             logger.debug('[DAEMON RUN] Failed to commit pre-turn connected-service account switch session event (non-fatal)', error);
                           });
@@ -2609,7 +2669,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             }).then(async (result) =>
               await nudgeAttachedExistingSessionPendingQueue({
                 requestedExistingSessionId: normalizedExistingSessionId,
-                daemonToken: credentials.token,
+                credentials,
+                shutdownPromise: resolvesWhenShutdownRequested,
+                isShutdownRequested: () => shutdownInitiated,
                 resolved: resolveSpawnWebhookResult({
                 pid: tmuxPid,
                 result,
@@ -3049,7 +3111,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           }).then(async (result) =>
             await nudgeAttachedExistingSessionPendingQueue({
               requestedExistingSessionId: normalizedExistingSessionId,
-              daemonToken: credentials.token,
+              credentials,
+              shutdownPromise: resolvesWhenShutdownRequested,
+              isShutdownRequested: () => shutdownInitiated,
               resolved: resolveSpawnWebhookResult({
               pid: happyProcess.pid!,
               result,
@@ -3213,6 +3277,12 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 const isSessionAlreadyRunning = async (sessionId: string): Promise<boolean> => {
               return await isSessionRunnerActive(sessionId);
                 };
+        const connectedServicesRestartRequestedPids = new Set<number>();
+        const clearConnectedServiceRestartIntentForPid = (pid: number, logMessage: string): void => {
+          void clearSessionMarkerConnectedServiceRestartIntent(pid).catch((error) => {
+            logger.debug(logMessage, error);
+          });
+        };
         const sessionRespawnMaxRestarts = sessionRespawnMaxAttempts === 0 ? null : sessionRespawnMaxAttempts;
             const sessionRunnerRespawnManager = createSessionRunnerRespawnManager({
           enabled: sessionRespawnEnabled,
@@ -3227,12 +3297,54 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             credentials,
             readCredentials,
           }),
+          onRespawnSuccess: ({ previousPid }) => {
+            connectedServicesRestartRequestedPids.delete(previousPid);
+            clearConnectedServiceRestartIntentForPid(
+              previousPid,
+              '[DAEMON RUN] Failed to clear connected-service restart intent after respawn success',
+            );
+          },
+          onRespawnTerminal: ({ previousPid }) => {
+            connectedServicesRestartRequestedPids.delete(previousPid);
+            clearConnectedServiceRestartIntentForPid(
+              previousPid,
+              '[DAEMON RUN] Failed to clear connected-service restart intent after terminal respawn suppression',
+            );
+          },
           random: () => Math.random(),
           logDebug: (message, payload) => logger.debug(message, payload),
           logWarn: (message) => logger.warn(message),
         });
 
-        const connectedServicesRestartRequestedPids = new Set<number>();
+        const startupLiveConnectedServiceRestartIntents: Array<Readonly<{
+          kind: 'live';
+          sessionId: string;
+          pid: number;
+          requestedAtMs: number;
+        }>> = [];
+        let observeConnectedServiceRestartProcessMissing: ((tracked: TrackedSession) => void) | null = null;
+
+        for (const intent of startupReattachResult.connectedServiceRestartIntents ?? []) {
+          if (intent.kind === 'dead') {
+            connectedServicesRestartRequestedPids.add(intent.pid);
+            sessionRunnerRespawnManager.handleUnexpectedExit(
+              {
+                startedBy: 'daemon',
+                happySessionId: intent.sessionId,
+                pid: intent.pid,
+                vendorResumeId: intent.vendorResumeId,
+                spawnOptions: intent.spawnOptions,
+                reattachedFromDiskMarker: true,
+              },
+              { reason: 'process-missing', code: null, signal: null },
+              { forceRestart: true },
+            );
+            continue;
+          }
+
+          startupLiveConnectedServiceRestartIntents.push(intent);
+        }
+
         const connectedServiceTurnDeferralQueue = createConnectedServiceSwitchDeferralQueue({
           timeoutMs: resolvePositiveIntEnv(
             process.env.HAPPIER_CONNECTED_SERVICES_TURN_DEFERRAL_TIMEOUT_MS,
@@ -3246,6 +3358,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               sessionId,
               event,
               listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
+              getConnectedServiceAuthGroup: api.getConnectedServiceAuthGroup.bind(api),
             }).catch((error) => {
               logger.debug('[DAEMON RUN] Failed to commit connected-service switch deferral session event (non-fatal)', error);
             });
@@ -3287,25 +3400,74 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               policy: input.policy,
               target: input.target,
               runSwitch: async () => {
+                const didPersistRestartIntent = await markSessionMarkerConnectedServiceRestartIntent({
+                  pid: input.tracked.pid,
+                  requestedAtMs: Date.now(),
+                }).catch((error) => {
+                  logger.debug('[DAEMON RUN] Failed to persist connected-service restart intent before signalling', error);
+                  return false;
+                });
+                if (!didPersistRestartIntent) {
+                  logger.warn('[DAEMON RUN] Suppressed connected-service restart signal because durable restart intent could not be persisted', {
+                    sessionId: input.sessionId,
+                    pid: input.tracked.pid,
+                    source: input.source,
+                    serviceId: input.target.serviceId,
+                    groupId: input.target.groupId,
+                    generation: input.target.generation,
+                  });
+                  return;
+                }
                 connectedServicesRestartRequestedPids.add(input.tracked.pid);
-                // K5:gated_restart this raw SIGTERM IS the gated restart primitive's signal — it
-                // only fires inside the turn-deferral queue's runSwitch (deferred to the turn
-                // boundary), and the respawn re-verifies resume reachability (K1).
-                await requestConnectedServiceSessionRestartSignal({
+                let ownerStillCurrent = true;
+                let missingProcessObserved = false;
+                // K5:gated_restart this raw SIGTERM IS the gated restart primitive's signal; it
+                // only fires inside the turn-deferral queue's runSwitch, and respawn re-verifies reachability.
+                const signalResult = await requestConnectedServiceSessionRestartSignal({
                   pid: input.tracked.pid,
                   processGroupPid: resolveConnectedServiceRestartProcessGroupPid(input.tracked),
                   delayMs: input.restartSignalDelayMs,
-                  shouldSignal: () => pidToTrackedSession.get(input.tracked.pid) === input.tracked,
+                  shouldSignal: () => {
+                    ownerStillCurrent = pidToTrackedSession.get(input.tracked.pid) === input.tracked;
+                    return ownerStillCurrent;
+                  },
                   restartDiagnostic: input.restartDiagnostic,
                   recordRestartDiagnostic: recordConnectedServiceRestartDiagnostic,
                   onSignalFailure: (error) => {
                     connectedServicesRestartRequestedPids.delete(input.tracked.pid);
+                    clearConnectedServiceRestartIntentForPid(
+                      input.tracked.pid,
+                      '[DAEMON RUN] Failed to clear connected-service restart intent after signal failure',
+                    );
                     logger.warn(input.onSignalFailureLogMessage, error);
                   },
+                  onProcessAlreadyMissing: () => {
+                    missingProcessObserved = true;
+                    if (observeConnectedServiceRestartProcessMissing) {
+                      observeConnectedServiceRestartProcessMissing(input.tracked);
+                    } else {
+                      logger.warn('[DAEMON RUN] Connected-service restart process was already missing before exit observer was ready');
+                    }
+                  },
                 });
-                // Reached only when the signal was emitted without throwing (a signal failure
-                // re-throws out of here and leaves `signaled` false so the reservation is not
-                // claimed by the caller).
+                if (!ownerStillCurrent || signalResult.status === 'skipped_stale_owner') {
+                  connectedServicesRestartRequestedPids.delete(input.tracked.pid);
+                  clearConnectedServiceRestartIntentForPid(
+                    input.tracked.pid,
+                    '[DAEMON RUN] Failed to clear stale connected-service restart intent after skipped signal',
+                  );
+                  return;
+                }
+                if (signalResult.status === 'process_already_missing' && !missingProcessObserved) {
+                  if (observeConnectedServiceRestartProcessMissing) {
+                    observeConnectedServiceRestartProcessMissing(input.tracked);
+                  } else {
+                    logger.warn('[DAEMON RUN] Connected-service restart process was already missing before exit observer was ready');
+                  }
+                }
+                // Reached only when a restart was accepted: either SIGTERM was emitted or the
+                // process was already missing and the forced-respawn path was scheduled.
+                // A signal failure re-throws and leaves `signaled` false.
                 signaled = true;
               },
             });
@@ -3373,7 +3535,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           if (!tracked) {
             return { ok: false, errorCode: 'session_not_found' };
           }
-          const agentId = resolveCatalogAgentIdFromBackendTarget(tracked.spawnOptions?.backendTarget);
+          const agentId = resolveTrackedSessionCatalogAgentId(tracked);
           const serviceId = ConnectedServiceIdSchema.parse(generationInput.serviceId);
           // K5:fsm_switch reactive + proactive-quota auth-generation apply routes through the FSM
           // (hot-apply-in-place when eligible, else gated restart-resume with reachability + deferral).
@@ -3490,6 +3652,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             recoverAfterRuntimeAuthSwitch: recoverTrackedSessionConnectedServiceRuntimeAuthSwitch,
             continueAfterRuntimeAuthSwitch: createConnectedServiceContinuationHandler({
               credentials,
+              shutdownPromise: resolvesWhenShutdownRequested,
+              isShutdownRequested: () => shutdownInitiated,
               failureAtMs: applyParams.failureAtMs,
               resumePromptMode: resolveContinuationResumePromptMode(
                 getActiveAccountSettingsSnapshot()?.settings ?? null,
@@ -3562,6 +3726,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 sessionId,
                 event,
                 listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
+                getConnectedServiceAuthGroup: api.getConnectedServiceAuthGroup.bind(api),
               }).catch((error) => {
                 logger.debug('[DAEMON RUN] Failed to commit automatic connected-service account switch session event (non-fatal)', error);
               });
@@ -3657,6 +3822,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               connectedServicesRestartRequestedPids.add(toPid);
             }
           },
+          shouldPreserveSessionMarkerOnExit: ({ pid }) => connectedServicesRestartRequestedPids.has(pid),
             });
         const onChildExited = (pid: number, exit: { reason: string; code: number | null; signal: string | null }) => {
           const trackedBeforeExit = pidToTrackedSession.get(pid) ?? null;
@@ -3665,9 +3831,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           if (!pidToTrackedSession.has(pid)) {
             connectedServiceRefreshCoordinator?.unregisterPid(pid);
             connectedServiceQuotasCoordinator?.unregisterPid(pid);
-          }
-          if (wasConnectedServicesRestartRequested) {
-            connectedServicesRestartRequestedPids.delete(pid);
           }
           if (trackedBeforeExit?.happySessionId) {
             const stillLive = getCurrentChildren().some((child) => child.happySessionId === trackedBeforeExit.happySessionId);
@@ -3691,6 +3854,159 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             logger.debug('[DAEMON RUN] Connected-service materialized home cleanup tick failed (non-fatal)', error);
           });
         };
+
+        observeConnectedServiceRestartProcessMissing = (tracked) => {
+          const exit = { reason: 'process-missing', code: null, signal: null };
+          try {
+            onChildExited(tracked.pid, exit);
+            return;
+          } catch (error) {
+            logger.warn('[DAEMON RUN] Failed to observe connected-service restart process exit through child-exit path', error);
+          }
+          const spawnCleanup = spawnResourceCleanupByPid.get(tracked.pid);
+          if (spawnCleanup) {
+            spawnResourceCleanupByPid.delete(tracked.pid);
+            try {
+              spawnCleanup();
+            } catch (error) {
+              logger.debug('[DAEMON RUN] Failed to run spawn cleanup after connected-service restart process disappeared', error);
+            }
+          }
+          const attachCleanup = sessionAttachCleanupByPid.get(tracked.pid);
+          if (attachCleanup) {
+            sessionAttachCleanupByPid.delete(tracked.pid);
+            void attachCleanup().catch((error) => {
+              logger.debug('[DAEMON RUN] Failed to run attach cleanup after connected-service restart process disappeared', error);
+            });
+          }
+          pidToTrackedSession.delete(tracked.pid);
+          connectedServiceRefreshCoordinator?.unregisterPid(tracked.pid);
+          connectedServiceQuotasCoordinator?.unregisterPid(tracked.pid);
+          sessionRunnerRespawnManager.handleUnexpectedExit(tracked, exit, { forceRestart: true });
+        };
+
+        const sleepUnref = (delayMs: number): Promise<void> =>
+          new Promise((resolve) => {
+            const timer = setTimeout(resolve, Math.max(0, Math.trunc(delayMs))) as unknown as { unref?: () => void };
+            timer.unref?.();
+          });
+
+        const connectedServiceRestartIntentExitWaitMs = resolvePositiveIntEnv(
+          process.env.HAPPIER_CONNECTED_SERVICES_RESTART_INTENT_EXIT_WAIT_MS,
+          60_000,
+          { min: 1_000, max: 10 * 60_000 },
+        );
+        const connectedServiceRestartIntentExitPollMs = resolvePositiveIntEnv(
+          process.env.HAPPIER_CONNECTED_SERVICES_RESTART_INTENT_EXIT_POLL_MS,
+          250,
+          { min: 25, max: 10_000 },
+        );
+        const waitForConnectedServiceRestartIntentProcessExit = async (intent: Readonly<{
+          sessionId: string;
+          pid: number;
+        }>): Promise<void> => {
+          const startedAtMs = Date.now();
+          while (Date.now() - startedAtMs <= connectedServiceRestartIntentExitWaitMs) {
+            const tracked = pidToTrackedSession.get(intent.pid);
+            if (!tracked || tracked.happySessionId !== intent.sessionId) return;
+            if (!(await isSessionRunnerActive(intent.sessionId))) {
+              observeConnectedServiceRestartProcessMissing?.(tracked);
+              return;
+            }
+            await sleepUnref(connectedServiceRestartIntentExitPollMs);
+          }
+          logger.warn('[DAEMON RUN] Timed out waiting for hydrated connected-service restart process to exit', {
+            sessionId: intent.sessionId,
+            pid: intent.pid,
+            timeoutMs: connectedServiceRestartIntentExitWaitMs,
+          });
+        };
+        const resolveHydratedRestartSignalStatus = (
+          signalResult: Awaited<ReturnType<typeof requestConnectedServiceSessionRestartSignal>> | undefined,
+          pid: number,
+        ): 'requested' | 'process_already_missing' | 'skipped_stale_owner' => {
+          if (signalResult?.status) return signalResult.status;
+          try {
+            process.kill(pid, 0);
+            return 'requested';
+          } catch (error) {
+            return isConnectedServiceRestartSignalStaleProcessError(error) ? 'process_already_missing' : 'requested';
+          }
+        };
+
+        for (const intent of startupLiveConnectedServiceRestartIntents) {
+          const tracked = pidToTrackedSession.get(intent.pid);
+          if (!tracked || tracked.happySessionId !== intent.sessionId) {
+            clearConnectedServiceRestartIntentForPid(
+              intent.pid,
+              '[DAEMON RUN] Failed to clear stale connected-service restart intent during startup hydration',
+            );
+            continue;
+          }
+          connectedServicesRestartRequestedPids.add(intent.pid);
+          let ownerStillCurrent = true;
+          let missingProcessObserved = false;
+          // K5:gated_restart durable restart-intent hydration re-enters the existing gated
+          // restart primitive after daemon startup; ownership is rechecked before signalling.
+          void requestConnectedServiceSessionRestartSignal({
+            pid: tracked.pid,
+            processGroupPid: resolveConnectedServiceRestartProcessGroupPid(tracked),
+            delayMs: 0,
+            shouldSignal: () => {
+              ownerStillCurrent = pidToTrackedSession.get(tracked.pid) === tracked;
+              return ownerStillCurrent;
+            },
+            restartDiagnostic: {
+              trigger: 'reconnect_propagation',
+              sessionId: intent.sessionId,
+              agentId: resolveTrackedSessionCatalogAgentId(tracked),
+              reason: 'durable_restart_intent',
+            },
+            recordRestartDiagnostic: recordConnectedServiceRestartDiagnostic,
+            onSignalFailure: (error) => {
+              connectedServicesRestartRequestedPids.delete(intent.pid);
+              clearConnectedServiceRestartIntentForPid(
+                intent.pid,
+                '[DAEMON RUN] Failed to clear connected-service restart intent after hydrated signal failure',
+              );
+              logger.warn('[DAEMON RUN] Failed to hydrate connected-service restart intent with a restart signal', error);
+            },
+            onProcessAlreadyMissing: () => {
+              missingProcessObserved = true;
+              observeConnectedServiceRestartProcessMissing?.(tracked);
+            },
+          }).then((signalResult) => {
+            const signalStatus = resolveHydratedRestartSignalStatus(signalResult, intent.pid);
+            if (signalStatus === 'process_already_missing') {
+              if (missingProcessObserved) return;
+              observeConnectedServiceRestartProcessMissing?.(tracked);
+              return;
+            }
+            const stillOwnsPidForIntent = pidToTrackedSession.get(intent.pid)?.happySessionId === intent.sessionId;
+            if (stillOwnsPidForIntent && signalStatus === 'requested') {
+              try {
+                process.kill(intent.pid, 0);
+              } catch (error) {
+                if (isConnectedServiceRestartSignalStaleProcessError(error)) {
+                  observeConnectedServiceRestartProcessMissing?.(tracked);
+                  return;
+                }
+              }
+              void waitForConnectedServiceRestartIntentProcessExit(intent).catch((error) => {
+                logger.warn('[DAEMON RUN] Failed while waiting for hydrated connected-service restart process exit', error);
+              });
+              return;
+            }
+            connectedServicesRestartRequestedPids.delete(intent.pid);
+            clearConnectedServiceRestartIntentForPid(
+              intent.pid,
+              '[DAEMON RUN] Failed to clear stale connected-service restart intent after skipped hydrated signal',
+            );
+          }).catch((error) => {
+            connectedServicesRestartRequestedPids.delete(intent.pid);
+            logger.warn('[DAEMON RUN] Connected-service restart intent hydration failed', error);
+          });
+        }
 
         const stopSession = async (sessionId: string): Promise<boolean> => {
           await clearConnectedServiceRecoveryAfterSupersession({
@@ -3858,7 +4174,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 restartDiagnostic: {
                   trigger: 'automatic_group_switch',
                   sessionId: input.sessionId,
-                  agentId: resolveCatalogAgentIdFromBackendTarget(tracked.spawnOptions?.backendTarget),
+                  agentId: resolveTrackedSessionCatalogAgentId(tracked),
                   serviceId: restartInput.serviceId,
                   profileId: restartInput.activeProfileId,
                   groupId: restartInput.groupId,
@@ -3888,38 +4204,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                   activeProfileId: event.toProfileId,
                 });
               }
-              if (!event.success || event.resultStatus !== 'switched') return;
-              const trackedForNotification = getCurrentChildren().find((child) => child.happySessionId === input.sessionId) ?? null;
-              const settingsSnapshot = getActiveAccountSettingsSnapshot();
-              void dispatchConnectedServiceAccountSwitchNotificationAsync({
-                settings: settingsSnapshot?.settings ?? null,
-                settingsSecretsReadKeys: settingsSnapshot?.settingsSecretsReadKeys ?? [],
-                expoPushSender: api.push(),
-                runtimeQuotaSnapshots: connectedServiceRuntimeQuotaSnapshots,
-                listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
-                source: {
-                  sessionId: input.sessionId,
-                  sessionTitle: resolveTrackedSessionNotificationTitle(trackedForNotification),
-                  serviceId: event.serviceId,
-                  groupId: event.groupId,
-                  fromProfileId: event.fromProfileId,
-                  toProfileId: event.toProfileId,
-                  reason: event.reason,
-                  limitCategory: event.limitCategory ?? null,
-                  retryAfterMs: event.retryAfterMs ?? null,
-                  quotaScope: event.quotaScope ?? null,
-                  providerLimitId: event.providerLimitId ?? null,
-                  action: event.action ?? null,
-                },
-                nowMs: () => Date.now(),
-                dedupeWindowMs: resolvePositiveIntEnv(
-                  process.env.HAPPIER_CONNECTED_SERVICES_ACCOUNT_SWITCH_NOTIFICATION_DEDUPE_MS,
-                  60_000,
-                  { min: 0, max: 24 * 60 * 60_000 },
-                ),
-              }).catch((error) => {
-                logger.debug('[DAEMON RUN] Connected-service account switch notification failed (non-fatal)', error);
-              });
             },
           });
           const result = await handleConnectedServiceRuntimeAuthFailureForSession({
@@ -3962,7 +4246,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 restartDiagnostic: {
                   trigger: 'runtime_auth_recovery_restart',
                   sessionId: input.sessionId,
-                  agentId: resolveCatalogAgentIdFromBackendTarget(tracked.spawnOptions?.backendTarget),
+                  agentId: resolveTrackedSessionCatalogAgentId(tracked),
                   serviceId: input.classification?.serviceId ?? null,
                   profileId: input.classification?.profileId ?? null,
                   groupId: input.classification?.groupId ?? null,
@@ -3973,6 +4257,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             },
             continueAfterRuntimeAuthSwitch: createConnectedServiceContinuationHandler({
               credentials,
+              shutdownPromise: resolvesWhenShutdownRequested,
+              isShutdownRequested: () => shutdownInitiated,
               failureAtMs: runtimeFailureAtMs,
               resumePromptMode: resolveContinuationResumePromptMode(
                 getActiveAccountSettingsSnapshot()?.settings ?? null,
@@ -3993,8 +4279,44 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 sessionId,
                 event,
                 listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
+                getConnectedServiceAuthGroup: api.getConnectedServiceAuthGroup.bind(api),
               }).catch((error) => {
                 logger.debug('[DAEMON RUN] Failed to commit connected-service account switch session event (non-fatal)', error);
+              });
+              const record = event && typeof event === 'object' ? event as Record<string, unknown> : null;
+              if (!record || record.type !== 'connected_service_account_switch') return;
+              const serviceIdParsed = ConnectedServiceIdSchema.safeParse(record.serviceId);
+              if (!serviceIdParsed.success) return;
+              const trackedForNotification = getCurrentChildren().find((child) => child.happySessionId === sessionId) ?? null;
+              const settingsSnapshot = getActiveAccountSettingsSnapshot();
+              void dispatchConnectedServiceAccountSwitchNotificationAsync({
+                settings: settingsSnapshot?.settings ?? null,
+                settingsSecretsReadKeys: settingsSnapshot?.settingsSecretsReadKeys ?? [],
+                expoPushSender: api.push(),
+                runtimeQuotaSnapshots: connectedServiceRuntimeQuotaSnapshots,
+                listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
+                source: {
+                  sessionId,
+                  sessionTitle: resolveTrackedSessionNotificationTitle(trackedForNotification),
+                  serviceId: serviceIdParsed.data,
+                  groupId: typeof record.groupId === 'string' ? record.groupId.trim() : '',
+                  fromProfileId: typeof record.fromProfileId === 'string' && record.fromProfileId.trim() ? record.fromProfileId.trim() : null,
+                  toProfileId: typeof record.toProfileId === 'string' && record.toProfileId.trim() ? record.toProfileId.trim() : null,
+                  reason: typeof record.reason === 'string' && record.reason.trim() ? record.reason.trim() : 'manual',
+                  limitCategory: null,
+                  retryAfterMs: null,
+                  quotaScope: null,
+                  providerLimitId: null,
+                  action: null,
+                },
+                nowMs: () => Date.now(),
+                dedupeWindowMs: resolvePositiveIntEnv(
+                  process.env.HAPPIER_CONNECTED_SERVICES_ACCOUNT_SWITCH_NOTIFICATION_DEDUPE_MS,
+                  60_000,
+                  { min: 0, max: 24 * 60 * 60_000 },
+                ),
+              }).catch((error) => {
+                logger.debug('[DAEMON RUN] Connected-service account switch notification failed (non-fatal)', error);
               });
             },
             onRuntimeAuthRecoverySuccess: async (recoverySuccess) => {
@@ -4441,7 +4763,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 logger.debug('[DAEMON RUN] Failed to refresh session marker after hot-applied auth switch', error);
               });
             }
-            const catalogAgentId = resolveCatalogAgentIdFromBackendTarget(tracked.spawnOptions?.backendTarget);
+            const catalogAgentId = resolveTrackedSessionCatalogAgentId(tracked);
             const materializationIdentity = readConnectedServiceMaterializationIdentityV1(
               tracked.spawnOptions?.connectedServiceMaterializationIdentityV1,
             );
@@ -4475,6 +4797,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               sessionId,
               event,
               listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
+              getConnectedServiceAuthGroup: api.getConnectedServiceAuthGroup.bind(api),
             }).catch((error) => {
               logger.debug('[DAEMON RUN] Failed to commit manual connected-service account switch session event (non-fatal)', error);
             });
@@ -4891,7 +5214,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               softSwitchPolicyGuard: async (input) => {
                 const tracked = getCurrentChildren().find((child) => child.happySessionId === input.sessionId) ?? null;
                 if (!tracked) return { status: 'allow' as const };
-                const agentId = resolveCatalogAgentIdFromBackendTarget(tracked.spawnOptions?.backendTarget);
+                const agentId = resolveTrackedSessionCatalogAgentId(tracked);
                 const lifecycleDescriptor = await resolveConnectedServiceCredentialLifecycleDescriptor(agentId);
                 return evaluatePredictiveSoftSwitchPolicy({
                   context: 'live_session',
@@ -4990,7 +5313,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                         restartDiagnostic: {
                           trigger: 'automatic_group_switch',
                           sessionId,
-                          agentId: resolveCatalogAgentIdFromBackendTarget(current.spawnOptions?.backendTarget),
+                          agentId: resolveTrackedSessionCatalogAgentId(current),
                           serviceId: restartInput.serviceId,
                           profileId: restartInput.activeProfileId,
                           groupId: restartInput.groupId,
@@ -5007,6 +5330,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                         sessionId,
                         event,
                         listConnectedServiceProfiles: api.listConnectedServiceProfiles.bind(api),
+                        getConnectedServiceAuthGroup: api.getConnectedServiceAuthGroup.bind(api),
                       }).catch((error) => {
                         logger.debug('[DAEMON RUN] Failed to commit quota-driven connected-service account switch session event (non-fatal)', error);
                       });

@@ -5,7 +5,6 @@ import type { AcceptedConnectedServiceAccountVerificationByServiceId } from '../
 
 import {
   SESSION_SWITCH_LIMIT_WINDOW_MS,
-  type ConnectedServiceAuthGroupSwitchEvent,
   type ConnectedServiceAuthGroupSwitchResult,
 } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
 import { handleConnectedServiceRuntimeAuthFailure } from './handleConnectedServiceRuntimeAuthFailure';
@@ -258,35 +257,6 @@ function shouldSwitchAwayAfterRepeatedCredentialRefreshFailure(
   return true;
 }
 
-function emitRuntimeGroupSwitchSessionEvent(input: Readonly<{
-  emitSessionEvent?: (sessionId: string, event: unknown) => void;
-  sessionId: string;
-  selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
-  classification: ConnectedServiceRuntimeFailureClassification;
-  result: ConnectedServiceAuthGroupSwitchResult;
-}>): void {
-  if (input.result.status !== 'switched') return;
-  const fromProfileId = normalizeNullableProfileId(resolveAuthoritativeRecoveryProfileId({
-    selection: input.selection,
-    classifiedProfileId: input.classification.profileId,
-  }));
-  const event = {
-    type: 'connected_service_auth_group_switch',
-    serviceId: input.selection.serviceId,
-    groupId: input.selection.groupId,
-    fromProfileId,
-    toProfileId: input.result.activeProfileId,
-    reason: input.classification.kind,
-    ...(input.result.mode ? { mode: input.result.mode } : {}),
-    fromGeneration: 0,
-    toGeneration: input.result.generation,
-    resultStatus: input.result.status,
-    success: true,
-    latencyMs: 0,
-  } satisfies ConnectedServiceAuthGroupSwitchEvent;
-  input.emitSessionEvent?.(input.sessionId, event);
-}
-
 async function runRuntimeGroupSwitchRecovery(input: Readonly<{
   sessionId: string;
   selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
@@ -339,21 +309,12 @@ async function runRuntimeGroupSwitchRecovery(input: Readonly<{
 }
 
 function finalizeRuntimeGroupSwitchAttempt(input: Readonly<{
-  emitSessionEvent?: (sessionId: string, event: unknown) => void;
   sessionId: string;
   selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
-  classification: ConnectedServiceRuntimeFailureClassification;
   result: Awaited<ReturnType<typeof handleConnectedServiceRuntimeAuthFailure>>;
   switchAttemptTracker?: SwitchAttemptTrackerLike | null;
 }>): void {
   if (input.result.status !== 'switch_attempted') return;
-  emitRuntimeGroupSwitchSessionEvent({
-    emitSessionEvent: input.emitSessionEvent,
-    sessionId: input.sessionId,
-    selection: input.selection,
-    classification: input.classification,
-    result: input.result.result,
-  });
   input.switchAttemptTracker?.recordSwitchResult({
     sessionId: input.sessionId,
     serviceId: input.selection.serviceId,
@@ -718,10 +679,8 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
         }),
       });
       finalizeRuntimeGroupSwitchAttempt({
-        emitSessionEvent: input.emitSessionEvent,
         sessionId: input.sessionId,
         selection,
-        classification,
         result,
         switchAttemptTracker: input.switchAttemptTracker ?? null,
       });
@@ -849,10 +808,8 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
   });
   if (result.status === 'switch_attempted' && isGroupRuntimeRecoverySelection(selection)) {
     finalizeRuntimeGroupSwitchAttempt({
-      emitSessionEvent: input.emitSessionEvent,
       sessionId: input.sessionId,
       selection,
-      classification,
       result,
       switchAttemptTracker: input.switchAttemptTracker ?? null,
     });

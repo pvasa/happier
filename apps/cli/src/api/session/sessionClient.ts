@@ -187,7 +187,7 @@ export class ApiSessionClient extends EventEmitter {
     private socket!: Socket<ServerToClientEvents, ClientToServerEvents>;
     private userSocket: Socket<ServerToClientEvents, ClientToServerEvents>;
     private pendingMessages: UserMessage[] = [];
-    private pendingMessageCallback: ((message: UserMessage) => void) | null = null;
+    private pendingMessageCallback: ((message: UserMessage, info?: Readonly<{ seq: number | null }>) => void) | null = null;
     private userMessageCallbackAttachedAtMs: number | null = null;
     readonly rpcHandlerManager: RpcHandlerManager;
     private agentStateLock = new AsyncLock();
@@ -241,6 +241,14 @@ export class ApiSessionClient extends EventEmitter {
     /** Owed-delivery watermark (A-F2/D15b): highest user-row seq handed to the agent loop this process. */
     private highestDeliveredUserMessageSeq: number | null = null;
     private deliveredUserMessageSeqPersistInFlight = false;
+    /**
+     * A3-HIGH-1: when true (launchers wired for provider-acceptance confirmation), the watermark
+     * is NOT persisted at agent-queue handoff — "queued in volatile memory" is not "delivered".
+     * The seq travels with the queued message and `confirmUserMessageDeliveredToProvider` persists
+     * it once the provider actually accepted the batch. Failure direction stays duplicate-attempt
+     * (at-least-once, deduped), never silent loss.
+     */
+    private deliveredUserMessageWatermarkDeferredToProviderAcceptance = false;
     private readonly turnAssistantTextSnapshotStore = createTurnAssistantTextSnapshotStore({
         maxTextChars: configuration.readyNotificationAssistantTextMaxChars,
     });
@@ -448,6 +456,7 @@ export class ApiSessionClient extends EventEmitter {
             getSessionMetadata: () => this.getMetadataSnapshot(),
             updateSessionMetadata: (handler) => this.updateMetadata(handler),
             enqueueSessionUserMessage: (request) => this.enqueueSessionUserMessage(request),
+            materializeNextPendingMessageSafely: (opts) => this.materializeNextPendingMessageSafely(opts),
             sessionRuntimeControls: this.sessionRuntimeControls,
             // QAE-1: a user "Stop waiting" handled session-side (provider runtime
             // control or metadata fallback) must also cancel the daemon's durable
@@ -1244,6 +1253,9 @@ export class ApiSessionClient extends EventEmitter {
                         catchUpAfterSeqIsExplicit: opts.catchUpAfterSeqIsExplicit,
                     }),
                 onUserMessageDeliveredToAgentQueue: (seq) => this.recordDeliveredUserMessageSeq(seq),
+                // Echo-proven local handoffs never carried a seq into the queue, so they keep
+                // persist-at-echo semantics even when queue handoffs defer to provider acceptance.
+                onUserMessageDeliveryProvenByLocalEcho: (seq) => this.persistDeliveredUserMessageWatermark(seq),
                 onObservedMessage: (message) => {
                     this.observeTurnAssistantTextFromSessionContent(message.body, {
                         source: 'transcript',
@@ -1598,7 +1610,7 @@ export class ApiSessionClient extends EventEmitter {
         return true;
     }
 
-    onUserMessage(callback: (data: UserMessage) => void) {
+    onUserMessage(callback: (data: UserMessage, info?: Readonly<{ seq: number | null }>) => void) {
         logger.debug('[API] onUserMessage callback attached', {
             sessionId: this.sessionId,
             startedByDaemonProcess: this.startedByDaemonProcess,
@@ -1615,7 +1627,9 @@ export class ApiSessionClient extends EventEmitter {
         }
         this.kickUserSocketConnect();
         while (this.pendingMessages.length > 0) {
-            callback(this.pendingMessages.shift()!);
+            // Buffered messages lost their seq attribution; null keeps the watermark behind
+            // (at-least-once redelivery on resume, deduped) instead of over-covering.
+            callback(this.pendingMessages.shift()!, { seq: null });
         }
         if (!this.daemonInitialPromptSeeded && typeof this.daemonInitialPrompt === 'string') {
             this.daemonInitialPromptSeeded = true;
@@ -2559,7 +2573,7 @@ export class ApiSessionClient extends EventEmitter {
         } satisfies UserMessage;
         if (!this.hasAgentQueueEchoSuppressedLocalId(localId)) {
             if (this.pendingMessageCallback) {
-                this.pendingMessageCallback(prompt);
+                this.pendingMessageCallback(prompt, { seq: null });
             } else {
                 this.pendingMessages.push(prompt);
             }
@@ -2802,6 +2816,14 @@ export class ApiSessionClient extends EventEmitter {
             mode
         };
 
+        if (thinking) {
+            void this.sessionTurnLifecycle.touchActiveTurn({ observedAt: payload.time }).catch((error) => {
+                logger.debug('[API] Failed to touch active session turn from keepalive (non-fatal)', {
+                    error: serializeAxiosErrorForLog(error),
+                });
+            });
+        }
+
         // Keep-alive/presence is ephemeral_drop_ok. Durable primary-turn status is delivered
         // through the session mutation outbox, not through session-alive.
         if (thinking) {
@@ -2899,6 +2921,32 @@ export class ApiSessionClient extends EventEmitter {
      * behind, which only widens redelivery (never loses messages).
      */
     private recordDeliveredUserMessageSeq(seq: number): void {
+        if (this.deliveredUserMessageWatermarkDeferredToProviderAcceptance) {
+            // Volatile custody only (queue residency, parked locals): wait for provider acceptance.
+            return;
+        }
+        this.persistDeliveredUserMessageWatermark(seq);
+    }
+
+    /**
+     * A3-HIGH-1: opt-in by launchers whose consumption path confirms provider acceptance
+     * (Claude unified terminal + remote). Without the opt-in, legacy persist-at-handoff stays.
+     */
+    deferDeliveredUserMessageWatermarkToProviderAcceptance(): void {
+        this.deliveredUserMessageWatermarkDeferredToProviderAcceptance = true;
+    }
+
+    /**
+     * Persist the owed-delivery watermark for a batch the provider actually accepted (or that
+     * otherwise provably left local volatile custody). Null/absent seq is a no-op: an
+     * unattributed batch keeps the watermark behind, which only widens redelivery.
+     */
+    confirmUserMessageDeliveredToProvider(seq: number | null | undefined): void {
+        if (typeof seq !== 'number') return;
+        this.persistDeliveredUserMessageWatermark(seq);
+    }
+
+    private persistDeliveredUserMessageWatermark(seq: number): void {
         if (!Number.isInteger(seq) || seq < 0) return;
         this.highestDeliveredUserMessageSeq = Math.max(this.highestDeliveredUserMessageSeq ?? -1, seq);
         void this.persistDeliveredUserMessageSeq();

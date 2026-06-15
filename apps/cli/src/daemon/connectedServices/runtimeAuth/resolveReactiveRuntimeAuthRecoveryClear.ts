@@ -15,8 +15,8 @@
 // This module routes every reactive entrypoint through the SAME shared,
 // provider-agnostic proof contract (`recovery/providerOutcomeProof.ts` via
 // `resolveRuntimeAuthRecoveryProof`). A reactive source clears recovery ONLY when
-// it carries accepted recovered provider-outcome proof (currently
-// account-adoption verified). A genuinely fresh candidate remains useful
+// it carries accepted recovered provider-outcome proof (exact verified account
+// adoption or weak auth-surface/provenance verification). A genuinely fresh candidate remains useful
 // intermediate evidence but does NOT clear recovery by itself. Otherwise the
 // recovery stays pending
 // (provider-outcome-waiting) under the scheduler's backoff/exhaustion lifecycle.
@@ -43,7 +43,7 @@ export type ReactiveRuntimeAuthRecoverySignal = Readonly<{
   fromProfileId?: string | null;
   /** The profile the switch landed ON. */
   activeProfileId?: string | null;
-  /** Post-switch account-adoption verification, when known (adoption proof). */
+  /** Post-switch verification, when known (exact account proof or weak auth-surface proof). */
   verificationByServiceId?: AcceptedConnectedServiceAccountVerificationByServiceId | null;
 }>;
 

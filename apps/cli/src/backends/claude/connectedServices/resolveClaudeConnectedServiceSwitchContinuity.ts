@@ -18,6 +18,7 @@ import { claudeConnectedServiceStateSharingDescriptor } from './claudeConnectedS
 import {
   CLAUDE_CONNECTED_SERVICES_LEGACY_RESTART_SAME_HOME_ENV,
 } from './verifyResumeReachableClaude';
+import { readClaudeRuntimeAuthHotApplyMetadata } from './claudeRuntimeAuthHotApplyMetadata';
 
 const CLAUDE_RESTART_REMATERIALIZE_REQUIRED_REASON = 'claude_restart_rematerialize_required';
 const CLAUDE_SHARED_STATE_REQUIRED_REASON = 'claude_shared_state_required';
@@ -35,6 +36,16 @@ function asNonEmptyString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function canUseClaudeRuntimeConfigHotApply(params: ConnectedServiceSwitchContinuityParams): boolean {
+  if (params.serviceId !== 'claude-subscription') return false;
+  const metadata = readClaudeRuntimeAuthHotApplyMetadata(params.runtimeAuthSelection);
+  if (!metadata) return false;
+  return (
+    params.targetMaterializedRoot === metadata.runtimeMaterializedRoot
+    && params.targetMaterializedEnv?.CLAUDE_CONFIG_DIR === metadata.runtimeClaudeConfigDir
+  );
 }
 
 export async function resolveClaudeConnectedServiceSwitchContinuity(
@@ -92,6 +103,9 @@ export async function resolveClaudeConnectedServiceSwitchContinuity(
   }
 
   if (isConnectedToConnectedServiceSwitch(params)) {
+    if (canUseClaudeRuntimeConfigHotApply(params)) {
+      return { mode: 'hot_apply' };
+    }
     return resolveConnectedServiceRestartContinuityAction({
       stateSharingDescriptor: claudeConnectedServiceStateSharingDescriptor,
       restartReason: CLAUDE_RESTART_REMATERIALIZE_REQUIRED_REASON,

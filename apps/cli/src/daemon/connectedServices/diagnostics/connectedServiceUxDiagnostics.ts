@@ -34,8 +34,17 @@ export function resolveConnectedServiceUxDiagnosticActions(
         CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.openConnectedAccounts,
       ];
     case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.recoveryRetryScheduled:
+    case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.runtimeAuthRecoverySuperseded:
+    case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.runtimeAuthGenerationStale:
+    case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaSnapshotStale:
+    case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaFetchBackoff:
       return [
         CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.retry,
+        CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.openConnectedAccounts,
+      ];
+    case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaFetchDisabled:
+    case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.authSurfaceWeaklyVerified:
+      return [
         CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.openConnectedAccounts,
       ];
     case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.recoveryDeadLettered:
@@ -53,6 +62,9 @@ export function resolveConnectedServiceUxDiagnosticActions(
         CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.openConnectedAccounts,
       ];
     case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.providerAccountAdoptionMismatch:
+    case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.hotApplyUnavailable:
+    case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.appServerUnavailable:
+    case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.providerAccountIdentityUnverified:
     case CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.postSwitchVerificationFailed:
       return retryable
         ? [

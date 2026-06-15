@@ -39,7 +39,11 @@ import {
   type ConnectedServiceRuntimeFailureClassification,
 } from './connectedServices/runtimeAuth/types';
 import { resolveRuntimeAuthRecoveryDurableWaitPlan } from './connectedServices/runtimeAuth/RuntimeAuthRecoveryScheduler';
-import { isProvenRuntimeAuthRecoverySuccess } from './connectedServices/runtimeAuth/resolveRuntimeAuthRecoveryOutcome';
+import {
+  isProvenRuntimeAuthRecoverySuccess,
+  resolveRuntimeAuthRecoveryProof,
+  type RuntimeAuthRecoveryProofKind,
+} from './connectedServices/runtimeAuth/resolveRuntimeAuthRecoveryOutcome';
 import { buildConnectedServiceRuntimeAuthSwitchAttemptLogContext } from './connectedServices/runtimeAuth/buildConnectedServiceRuntimeAuthSwitchAttemptLogContext';
 import { sanitizeConnectedServiceDiagnosticString } from './connectedServices/diagnostics/sanitizeConnectedServiceDiagnosticString';
 import {
@@ -98,6 +102,10 @@ type RuntimeAuthRecoverySchedulerForControlServer = Readonly<{
     result: unknown;
     classificationResetsAtMs: number | null;
   }>) => Promise<unknown>;
+  markProviderOutcomeProofByKey?: (input: Readonly<{
+    recoveryKey: string;
+    proofKind: RuntimeAuthRecoveryProofKind;
+  }>) => Promise<unknown>;
   markSucceededByKey?: (recoveryKey: string) => Promise<unknown>;
 }>;
 
@@ -111,14 +119,15 @@ function readRuntimeAuthSwitchResult(result: unknown): Readonly<Record<string, u
   return result;
 }
 
-// Only deterministic provider-outcome proof (verified account adoption or a
-// genuinely fresh candidate) clears the recovery intent here. A bare switch /
+// Only deterministic recovered provider-outcome proof clears the recovery intent
+// here. A bare switch /
 // observed_generation / credential_refreshed / generic ok:true is a local phase,
 // not proof the provider can authenticate; clearing on those produced the live
 // "recovery cleared while session still broken" loop. See
 // resolveRuntimeAuthRecoveryOutcome.
-function isRuntimeAuthSwitchSuccessResult(result: unknown): boolean {
-  return isProvenRuntimeAuthRecoverySuccess(result);
+function resolveRuntimeAuthSwitchSuccessProof(result: unknown): RuntimeAuthRecoveryProofKind | null {
+  if (!isProvenRuntimeAuthRecoverySuccess(result)) return null;
+  return resolveRuntimeAuthRecoveryProof(result);
 }
 
 function isScheduledRuntimeAuthRecovery(result: unknown): boolean {
@@ -593,19 +602,21 @@ export function createDaemonControlApp({
           });
         }
       }
-      if (isRuntimeAuthSwitchSuccessResult(result)) {
+      const recoveredProofKind = resolveRuntimeAuthSwitchSuccessProof(result);
+      if (recoveredProofKind) {
         const recoveryKey = buildRuntimeAuthRecoveryKey({
           sessionId,
           serviceId: classification.serviceId,
           profileId: classification.profileId,
           groupId: classification.groupId,
         });
-        // Call the scheduler method directly so `this` stays bound. Extracting it
-        // into a local (`const fn = scheduler.markSucceededByKey`) unbinds it, and
-        // `markSucceededByKey` calls `this.readByKey(...)`, so the unbound call
-        // threw "Cannot read properties of undefined (reading 'readByKey')" — the
-        // throw was swallowed below and successful recoveries were never cleared.
-        const clearRecovery = async (): Promise<unknown> => {
+        const resolveRecoveryProof = async (): Promise<unknown> => {
+          if (runtimeAuthRecoveryScheduler?.markProviderOutcomeProofByKey) {
+            return await runtimeAuthRecoveryScheduler.markProviderOutcomeProofByKey({
+              recoveryKey,
+              proofKind: recoveredProofKind,
+            });
+          }
           if (runtimeAuthRecoveryScheduler?.markSucceededByKey) {
             return await runtimeAuthRecoveryScheduler.markSucceededByKey(recoveryKey);
           }
@@ -614,10 +625,11 @@ export function createDaemonControlApp({
           }
           return undefined;
         };
-        await clearRecovery().catch((error) => {
-          logger.debug('[CONTROL SERVER] Connected-service runtime auth recovery cancel failed after success', {
+        await resolveRecoveryProof().catch((error) => {
+          logger.debug('[CONTROL SERVER] Connected-service runtime auth recovery proof resolution failed after success', {
             sessionId,
             recoveryKey,
+            proofKind: recoveredProofKind,
             error: readSafeDaemonControlErrorDiagnostic(error),
           });
         });

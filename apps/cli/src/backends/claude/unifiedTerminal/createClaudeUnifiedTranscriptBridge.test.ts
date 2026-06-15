@@ -173,6 +173,56 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
     }
   });
 
+  it('ignores sidechain SessionStart hooks: a subagent must never re-key the session/resume identity (A4-MED-2)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unified-transcript-'));
+    tempDirs.push(dir);
+    const transcriptPath = join(dir, 'sess_main.jsonl');
+    await writeFile(transcriptPath, '');
+
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const onSessionFound = vi.fn();
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId: null,
+      transcriptPath: null,
+      workingDirectory: dir,
+      onSessionFound,
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      transcriptMissingWarningMs: 0,
+    });
+
+    try {
+      await bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('hook subscription missing');
+
+      hook({
+        hook_event_name: 'SessionStart',
+        source: 'startup',
+        session_id: 'sess_sidechain',
+        transcript_path: join(dir, 'sess_sidechain.jsonl'),
+        agent_id: 'subagent-1',
+      });
+      expect(onSessionFound).not.toHaveBeenCalled();
+
+      hook({
+        hook_event_name: 'SessionStart',
+        source: 'startup',
+        session_id: 'sess_main',
+        transcript_path: transcriptPath,
+      });
+      expect(onSessionFound).toHaveBeenCalledTimes(1);
+      expect(onSessionFound).toHaveBeenCalledWith('sess_main', expect.objectContaining({ session_id: 'sess_main' }));
+    } finally {
+      await bridge.dispose();
+    }
+  });
+
   it('does not pre-mark a known hook-driven resume transcript before Claude announces SessionStart', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unified-transcript-known-resume-'));
     tempDirs.push(dir);

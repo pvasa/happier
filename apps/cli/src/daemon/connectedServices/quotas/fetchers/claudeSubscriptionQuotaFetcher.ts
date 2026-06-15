@@ -1,5 +1,5 @@
 import { ConnectedServiceQuotaFetchError, type ConnectedServiceQuotaFetcher } from '../types';
-import type { ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
+import type { ConnectedServiceCredentialRecordV1, ConnectedServiceQuotaMeterV1 } from '@happier-dev/protocol';
 import { createHash } from 'node:crypto';
 
 import { resolveClaudeCodeUserAgent } from '@/backends/claude/utils/claudeCodeUserAgent';
@@ -50,6 +50,20 @@ function createMissingClaudeCodeScopeQuotaError(): ConnectedServiceQuotaFetchErr
   );
 }
 
+function buildQuotaUnknownMeter(meterId: string, label: string): ConnectedServiceQuotaMeterV1 {
+  return {
+    meterId,
+    label,
+    used: null,
+    limit: null,
+    unit: 'unknown',
+    utilizationPct: null,
+    resetsAt: null,
+    status: 'unavailable',
+    details: { code: 'quota_unknown' },
+  };
+}
+
 const WINDOW_LABELS: Readonly<Record<string, string>> = Object.freeze({
   five_hour: '5-hour',
   seven_day: 'Weekly',
@@ -65,10 +79,17 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
   staleAfterMs?: number;
   userAgent?: string;
   nowMs?: () => number;
+  /**
+   * When true, skip the private Anthropic OAuth usage endpoint and return a
+   * quota_unknown snapshot. A custom usageUrl takes precedence over this flag.
+   */
+  disablePrivateEndpoint?: boolean;
 }>): ConnectedServiceQuotaFetcher {
   const usageUrl = typeof params?.usageUrl === 'string' && params.usageUrl.trim()
     ? params.usageUrl.trim()
     : DEFAULT_CLAUDE_SUBSCRIPTION_USAGE_URL;
+  const disablePrivateEndpoint = params?.disablePrivateEndpoint === true
+    && usageUrl === DEFAULT_CLAUDE_SUBSCRIPTION_USAGE_URL;
   const betaHeaderValue = params?.betaHeaderValue ?? DEFAULT_BETA_HEADER_VALUE;
   const staleAfterMs =
     typeof params?.staleAfterMs === 'number' && Number.isFinite(params.staleAfterMs)
@@ -126,6 +147,20 @@ export function createClaudeSubscriptionQuotaFetcher(params?: Readonly<{
       if (record.kind !== 'oauth') return null;
       if (resolveMissingClaudeSubscriptionClaudeCodeScopes(record.oauth.scope).length > 0) {
         throw createMissingClaudeCodeScopeQuotaError();
+      }
+      if (disablePrivateEndpoint) {
+        return {
+          v: 1,
+          serviceId: record.serviceId,
+          profileId: record.profileId,
+          fetchedAt: now,
+          staleAfterMs,
+          planLabel: null,
+          accountLabel: resolveAccountLabel(record),
+          meters: Object.entries(WINDOW_LABELS).map(([meterId, label]) =>
+            buildQuotaUnknownMeter(meterId, label),
+          ),
+        };
       }
       const backoffKey = buildCredentialBackoffKey(record);
       const backoffUntil = backoffKey ? (retryAfterBackoffByCredentialKey.get(backoffKey) ?? 0) : 0;

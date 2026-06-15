@@ -1,4 +1,5 @@
 import { parseClaudeScreenState, type ClaudeScreenState } from './tuiControls/screenState';
+import { isControllerTypedSlashCommandResidue } from './tuiControls/slashControls';
 
 const DEFAULT_DRAFT_CLEAR_SETTLE_MS = 250;
 // Same bounded semantics as the slash-control leftover clear (lane U): one clear key can leave the
@@ -53,7 +54,12 @@ export async function clearOwnLeftoverComposerDraft(opts: Readonly<{
     const content = screen.composerContent ?? '';
     if (content.length === 0) return 'empty';
     if (screen.generating) return 'generating';
-    return opts.ownComposerTexts.matches(content) ? 'own' : 'foreign';
+    if (opts.ownComposerTexts.matches(content)) return 'own';
+    // RESUME2 respawn gap (A2-HIGH-1): controller-typed slash commands are echo-suppressed out
+    // of the persisted transcript, so a respawned registry can never exact-match their residue.
+    // The finite controller vocabulary (/model, /effort) is still OUR OWN text and stays
+    // clearable; everything else (incl. user-typed slash drafts like /compact …) stays foreign.
+    return isControllerTypedSlashCommandResidue(content) ? 'own' : 'foreign';
   }
 
   let screen = await capture();

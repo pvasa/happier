@@ -364,6 +364,60 @@ async function readOverlayFromArgs(args: readonly string[], hookSettingsPath: st
     expect(args[settingsIndex + 1]).toBe('/tmp/settings.json');
   });
 
+  it('rejects user --settings path args so they cannot shadow the managed overlay', async () => {
+    await expect(buildClaudeUnifiedTerminalSpawn({
+      path: '/workspace/project',
+      first: {
+        message: 'hello',
+        mode: {
+          permissionMode: 'default',
+        },
+      },
+      claudeArgs: ['--settings', '/tmp/user-settings.json'],
+      hookSettingsPath: '/tmp/managed-settings.json',
+      deps: {
+        resolveClaudeCliPath: () => '/opt/claude/cli.js',
+        isClaudeCliJavaScriptFile: () => true,
+        ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+        claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+        terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+        resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+      },
+    })).rejects.toMatchObject({
+      code: 'claude_unified_terminal_managed_settings_option',
+      diagnostics: [
+        expect.objectContaining({ code: 'managed_settings_option', option: '--settings' }),
+      ],
+    });
+  });
+
+  it('rejects user --settings inline args so they cannot disable managed hooks', async () => {
+    await expect(buildClaudeUnifiedTerminalSpawn({
+      path: '/workspace/project',
+      first: {
+        message: 'hello',
+        mode: {
+          permissionMode: 'default',
+        },
+      },
+      claudeArgs: ['--settings={"permissions":{"allow":[]}}'],
+      hookSettingsPath: '/tmp/managed-settings.json',
+      deps: {
+        resolveClaudeCliPath: () => '/opt/claude/cli.js',
+        isClaudeCliJavaScriptFile: () => true,
+        ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+        claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+        terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+        resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+      },
+    })).rejects.toMatchObject({
+      code: 'claude_unified_terminal_managed_settings_option',
+      diagnostics: [
+        expect.objectContaining({ code: 'managed_settings_option', option: '--settings' }),
+      ],
+    });
+  });
+
   it('fails open to no statusline forwarder when no node runtime can be resolved for the wrapper', async () => {
     const spawn = await buildClaudeUnifiedTerminalSpawn({
       path: '/workspace/project',

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { TerminalHostStartupError } from '@/integrations/terminalHost/errors';
+import { ClaudeUnifiedTerminalManagedSettingsOptionError } from './buildClaudeUnifiedTerminalSpawn';
 import { ClaudeUnifiedTerminalHostDeadError } from './createClaudeUnifiedController';
 import { ClaudeUnifiedTerminalReadinessTimeoutError } from './createClaudeUnifiedTerminalReadinessBridge';
 import { ClaudeUnifiedTerminalInjectionFailureError } from './terminalInjectionFailureError';
@@ -8,7 +10,9 @@ import {
   surfaceClaudeUnifiedTerminalRuntimeIssue,
 } from './surfaceClaudeUnifiedTerminalRuntimeIssue';
 
-function buildInjectionFailureError(): ClaudeUnifiedTerminalInjectionFailureError {
+function buildInjectionFailureError(
+  failureState: 'failed_terminal' | 'failed_ambiguous' = 'failed_terminal',
+): ClaudeUnifiedTerminalInjectionFailureError {
   return new ClaudeUnifiedTerminalInjectionFailureError({
     batch: {
       message: 'hello',
@@ -21,7 +25,7 @@ function buildInjectionFailureError(): ClaudeUnifiedTerminalInjectionFailureErro
       duplicateRisk: 'likely',
       recoverable: true,
     },
-    failureState: 'failed_terminal',
+    failureState,
   });
 }
 
@@ -44,11 +48,38 @@ function buildReadinessTimeoutError(): ClaudeUnifiedTerminalReadinessTimeoutErro
   });
 }
 
+function buildTerminalHostStartupError(): TerminalHostStartupError {
+  return new TerminalHostStartupError({
+    hostKind: 'zellij',
+    reason: 'pane_disappeared_after_bootstrap_cleanup',
+    message: 'zellij launched terminal pane disappeared after bootstrap cleanup',
+  });
+}
+
 describe('surfaceClaudeUnifiedTerminalRuntimeIssue', () => {
-  it('classifies host-dead, injection-failure, and readiness-timeout as runtime issues', () => {
+  it('classifies host-dead, terminal injection-failure, readiness-timeout, and host-startup failures as runtime issues', () => {
     expect(isClaudeUnifiedTerminalRuntimeIssueError(new ClaudeUnifiedTerminalHostDeadError())).toBe(true);
     expect(isClaudeUnifiedTerminalRuntimeIssueError(buildInjectionFailureError())).toBe(true);
     expect(isClaudeUnifiedTerminalRuntimeIssueError(buildReadinessTimeoutError())).toBe(true);
+    expect(isClaudeUnifiedTerminalRuntimeIssueError(buildTerminalHostStartupError())).toBe(true);
+    expect(isClaudeUnifiedTerminalRuntimeIssueError(
+      new ClaudeUnifiedTerminalManagedSettingsOptionError([
+        { code: 'managed_settings_option', option: '--settings' },
+      ]),
+    )).toBe(true);
+  });
+
+  it('classifies structurally wrapped terminal-host startup failures as runtime issues', () => {
+    expect(isClaudeUnifiedTerminalRuntimeIssueError({
+      code: 'terminal_host_startup_failed',
+      hostKind: 'zellij',
+      reason: 'pane_disappeared_after_bootstrap_cleanup',
+      message: 'zellij launched terminal pane disappeared after bootstrap cleanup',
+    })).toBe(true);
+  });
+
+  it('does not classify recoverable ambiguous injection failures as terminal runtime issues', () => {
+    expect(isClaudeUnifiedTerminalRuntimeIssueError(buildInjectionFailureError('failed_ambiguous'))).toBe(false);
   });
 
   it('does not classify unrelated errors as runtime issues', () => {
@@ -62,6 +93,10 @@ describe('surfaceClaudeUnifiedTerminalRuntimeIssue', () => {
       new ClaudeUnifiedTerminalHostDeadError(),
       buildInjectionFailureError(),
       buildReadinessTimeoutError(),
+      buildTerminalHostStartupError(),
+      new ClaudeUnifiedTerminalManagedSettingsOptionError([
+        { code: 'managed_settings_option', option: '--settings' },
+      ]),
     ]) {
       const failTurn = vi.fn(async () => {});
       const session = {
@@ -99,6 +134,25 @@ describe('surfaceClaudeUnifiedTerminalRuntimeIssue', () => {
 
     const surfaced = await surfaceClaudeUnifiedTerminalRuntimeIssue({
       error: new Error('unrelated'),
+      session,
+    });
+    expect(surfaced).toBe(false);
+    expect(failTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not surface recoverable ambiguous injection failures through the primary turn lifecycle', async () => {
+    const failTurn = vi.fn(async () => {});
+    const session = {
+      sessionTurnLifecycle: {
+        beginTurn: vi.fn(async () => ({ turnId: 't1' })),
+        completeTurn: vi.fn(async () => {}),
+        cancelTurn: vi.fn(async () => {}),
+        failTurn,
+      },
+    } as unknown as Parameters<typeof surfaceClaudeUnifiedTerminalRuntimeIssue>[0]['session'];
+
+    const surfaced = await surfaceClaudeUnifiedTerminalRuntimeIssue({
+      error: buildInjectionFailureError('failed_ambiguous'),
       session,
     });
     expect(surfaced).toBe(false);

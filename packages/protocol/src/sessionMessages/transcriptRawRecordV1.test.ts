@@ -356,6 +356,7 @@ describe('TranscriptRawRecordV1Schema', () => {
           type: 'connected-service-account-switch',
           serviceId: 'openai-codex',
           groupId: 'codex-main',
+          groupLabel: 'Codex pool',
           fromProfileId: 'work',
           toProfileId: 'backup',
           fromProfileLabel: 'Work account',
@@ -373,6 +374,7 @@ describe('TranscriptRawRecordV1Schema', () => {
       ? parsed.data.content.data
       : null).toMatchObject({
       type: 'connected-service-account-switch',
+      groupLabel: 'Codex pool',
       fromProfileLabel: 'Work account',
       toProfileLabel: 'Backup account',
     });

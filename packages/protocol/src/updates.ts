@@ -282,9 +282,23 @@ export const DirectSessionTranscriptDeltaEphemeralSchema = z.object({
   type: z.literal('direct-session-transcript-delta'),
   sessionId: z.string(),
   items: z.array(DirectTranscriptRawMessageV1Schema),
+  fromCursor: z.string().min(1).nullable().optional(),
   nextCursor: z.string().min(1).nullable().optional(),
   truncated: z.boolean(),
-}).passthrough();
+}).passthrough().superRefine((value, ctx) => {
+  const advancesCursor = Object.prototype.hasOwnProperty.call(value, 'nextCursor');
+  if (
+    value.truncated !== true
+    && advancesCursor
+    && (typeof value.fromCursor !== 'string' || value.fromCursor.trim().length === 0)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'fromCursor is required when nextCursor is present on non-truncated direct-session transcript deltas',
+      path: ['fromCursor'],
+    });
+  }
+});
 
 export const EphemeralUpdateSchema = z.discriminatedUnion('type', [
   z.object({

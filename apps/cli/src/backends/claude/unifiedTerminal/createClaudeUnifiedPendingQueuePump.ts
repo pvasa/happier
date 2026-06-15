@@ -36,6 +36,7 @@ export function createClaudeUnifiedPendingQueuePump<Mode = unknown>(opts: Readon
       message: batch.message,
       mode: batch.mode,
       origin: { kind: 'ui_pending' },
+      maxUserMessageSeq: batch.maxUserMessageSeq ?? null,
     });
     await opts.arbiter.drainWhenSafe();
     return true;

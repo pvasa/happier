@@ -159,7 +159,47 @@ describe('resolveClaudeConnectedServiceSwitchContinuity', () => {
     });
   });
 
-  it('requires shared state when switching Claude group members within the same auth group', async () => {
+  it('uses hot_apply for Claude subscription group member switches targeting the shared group config dir', async () => {
+    const runtimeClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-group-config-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-source-root-'));
+    await expect(resolveClaudeConnectedServiceSwitchContinuity(createParams({
+      previousBinding: {
+        source: 'connected',
+        selection: 'group',
+        serviceId: 'claude-subscription',
+        profileId: 'primary',
+        groupId: 'claude',
+      },
+      nextBinding: {
+        source: 'connected',
+        selection: 'group',
+        serviceId: 'claude-subscription',
+        profileId: 'backup',
+        groupId: 'claude',
+      },
+      runtimeAuthSelection: {
+        serviceId: 'claude-subscription',
+        targetMaterializedEnv: { CLAUDE_CONFIG_DIR: runtimeClaudeConfigDir },
+        targetMaterializedRoot: runtimeClaudeConfigDir,
+        claudeRuntimeAuthHotApply: {
+          mode: 'group_runtime_config_rewrite',
+          runtimeClaudeConfigDir,
+          runtimeMaterializedRoot: runtimeClaudeConfigDir,
+          sourceClaudeConfigDir,
+        },
+      },
+      targetMaterializedEnv: { CLAUDE_CONFIG_DIR: runtimeClaudeConfigDir },
+      targetMaterializedRoot: runtimeClaudeConfigDir,
+      connectedServiceMaterializationIdentityV1: {
+        v: 1,
+        id: 'materialization-1',
+        createdAtMs: 1,
+      },
+      vendorResumeId: 'vendor-session-1',
+    }))).resolves.toEqual({ mode: 'hot_apply' });
+  });
+
+  it('requires shared state when switching Claude group members without a hot-applyable shared group target', async () => {
     await expect(resolveClaudeConnectedServiceSwitchContinuity(createParams({
       previousBinding: {
         source: 'connected',

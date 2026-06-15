@@ -48,6 +48,15 @@ function isSlashCommandPrompt(batch: Readonly<{ message: string }>): boolean {
   return normalizePromptText(batch.message).startsWith('/');
 }
 
+function isDeterministicPreProviderInputRejection(
+  failure: Extract<TerminalInputInjectionResult, { status: 'failed' }>,
+): boolean {
+  return failure.reason === 'invalid_prompt_text'
+    && failure.phase === 'before_write'
+    && failure.duplicateRisk === 'none'
+    && failure.recoverable === false;
+}
+
 export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
   injectPrompt: ClaudeUnifiedPromptInjector<Mode>['injectPrompt'];
   onPromptInjected?: ClaudeUnifiedPromptInjectedHandler<Mode> | undefined;
@@ -73,6 +82,15 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
    */
   isCanonicalTurnActive?: (() => boolean) | undefined;
   onInjectionFailure?: ClaudeUnifiedPromptInjectionFailureHandler<Mode> | undefined;
+  /**
+   * Undeliverable-batch handback (F-1 / A3-MED-1): fired with every batch the arbiter can no
+   * longer deliver — all still-queued batches on dispose (including a `failed_terminal` head
+   * that would otherwise be dropped by the park/relaunch unwind) and any batch enqueued after
+   * dispose. Batches are handed back in FIFO order so the owner can re-pend them to its queue
+   * instead of silently losing user input. Mirrors the pump-level `onUndeliverableBatch` seam,
+   * which only covers the pulled-but-not-yet-enqueued window.
+   */
+  onUndeliverableBatches?: ((batches: ReadonlyArray<ClaudeUnifiedPromptBatch<Mode>>) => void) | undefined;
   /**
    * Screen-evidence evaluation for steering a pending UI prompt into a RUNNING turn (D19). When
    * absent or vetoing, the prompt keeps the existing bounded defer-until-idle behavior.
@@ -320,6 +338,15 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     };
   }
 
+  function readCanonicalTurnInactive(): boolean {
+    if (!opts.isCanonicalTurnActive) return false;
+    try {
+      return opts.isCanonicalTurnActive() === false;
+    } catch {
+      return false;
+    }
+  }
+
   async function acceptBatch(
     batch: ClaudeUnifiedPromptBatch<Mode>,
     acceptance: ClaudeUnifiedPromptAcceptance,
@@ -454,6 +481,7 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
         let steerSafe = false;
         let steerEvaluationAttempted = false;
         let steerTurnLikelyEnded = false;
+        let canonicalTurnInactive = false;
         if (opts.evaluateInFlightSteer && !isSlashCommandPrompt(next)) {
           steerEvaluationAttempted = true;
           try {
@@ -463,6 +491,10 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
           } catch {
             steerSafe = false;
           }
+        }
+        canonicalTurnInactive = readCanonicalTurnInactive();
+        if (canonicalTurnInactive) {
+          steerSafe = false;
         }
         if (disposed || queue[0] !== next) continue;
         if (turnState !== 'running') continue;
@@ -474,14 +506,6 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
           // possible for this prompt (slash command / no evaluator) — drain the prompt normally
           // as a new turn instead of deferring forever. A veto without turn-end screen evidence
           // keeps the bounded deferred path (fail-closed).
-          let canonicalTurnInactive = false;
-          if (opts.isCanonicalTurnActive) {
-            try {
-              canonicalTurnInactive = opts.isCanonicalTurnActive() === false;
-            } catch {
-              canonicalTurnInactive = false;
-            }
-          }
           const screenAllowsStaleRecovery = !steerEvaluationAttempted || steerTurnLikelyEnded || canonicalTurnInactive;
           const lastProviderEvidenceMs = lastOutputAtMs ?? firstObservedAtMs;
           if (screenAllowsStaleRecovery && nowMs() - lastProviderEvidenceMs >= staleTurnRecoveryMs) {
@@ -583,6 +607,22 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       clearProviderAcceptanceTimer();
       clearPendingSteerArming();
       headInputState = 'failed_terminal';
+      if (isDeterministicPreProviderInputRejection(result)) {
+        const rejected = queue.shift();
+        if (rejected) {
+          notifyInjectionFailure({
+            batch: rejected,
+            result,
+            failureState: 'failed_terminal',
+          });
+        }
+        headInputState = null;
+        if (queue.length > 0) {
+          retryAttempt = 0;
+          continue;
+        }
+        return;
+      }
       notifyInjectionFailure({
         batch: next,
         result,
@@ -601,9 +641,19 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     await draining;
   }
 
+  function handBackUndeliverableBatches(batches: ReadonlyArray<ClaudeUnifiedPromptBatch<Mode>>): void {
+    if (batches.length === 0) return;
+    opts.onUndeliverableBatches?.(batches);
+  }
+
   return {
     async enqueueUiMessage(batch) {
-      if (disposed) return;
+      if (disposed) {
+        // The arbiter can never deliver this batch; hand it back instead of silently
+        // swallowing it (races the pump's own disposed check).
+        handBackUndeliverableBatches([batch]);
+        return;
+      }
       queue.push(batch);
     },
     observeLifecycle,
@@ -619,6 +669,11 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       clearRetryDrainTimer();
       clearProviderAcceptanceTimer();
       clearPendingSteerArming();
+      // Anything still queued (including a failed_terminal head and batches awaiting provider
+      // acceptance — duplicate-attempt is the safe direction, dedupe absorbs it) is undeliverable
+      // by this arbiter; hand it back to the owner before clearing.
+      const undelivered = queue.splice(0, queue.length);
+      handBackUndeliverableBatches(undelivered);
       queue.length = 0;
       pendingProviderAcceptance = null;
       pendingAcceptanceCompletedCompaction = false;

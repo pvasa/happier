@@ -140,6 +140,7 @@ const DEFAULT_RUNTIME_AUTH_RECOVERY_DEGRADED_BACKOFF_MS = 60_000;
 // hour of attempt-free coalesced replays before the normal attempt budget takes
 // over and settles the recovery terminal.
 const DEFAULT_RUNTIME_AUTH_RECOVERY_MAX_COALESCED_REPLAYS = 12;
+const RUNTIME_AUTH_RECOVERY_UNPROVEN_PROVIDER_OUTCOME_ERROR = 'recovery_unproven_awaiting_provider_outcome';
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null;
@@ -433,7 +434,7 @@ function classifyApplyFailure(result: unknown): RetryDecision | null {
 // Provider-outcome proof gate. A switch event, auth-store adoption, credential
 // refresh, or restart request is a recovery PHASE, not proof the provider can
 // authenticate. Recovery is only cleared as recovered when there is deterministic
-// recovered proof (currently verified account adoption). A genuinely fresh
+// recovered proof (exact verified account adoption or weak auth-surface verification). A genuinely fresh
 // candidate is still useful intermediate evidence, but it is not yet provider
 // acceptance. Local-only completions (credential_refreshed, generic ok:true,
 // unverified switch / observed_generation) are NOT success — see
@@ -472,7 +473,20 @@ function resolveRuntimeAuthRecoveryTerminalReason(result: unknown): string | nul
   if (!switchResult) return 'terminal_recovery_result';
   const status = readString(switchResult.status);
   if (!status || status === 'generation_apply_failed') return null;
+  // A1-MED-1: a temporary-throttle handoff is never terminal for THIS scheduler — ownership
+  // moved (or failed to move) to the TemporaryThrottleRecoveryScheduler; terminalizing it
+  // persisted an unclearable `cancelled` record that blocked the key for 7 days.
+  if (readTemporaryRetryHandoffStatus(switchResult) !== null) return null;
   return status;
+}
+
+// `temporary_retry_armed`: the TemporaryThrottleRecoveryScheduler now owns this failure.
+// `temporary_retry_unavailable`: the failure is a transient capacity class that could not arm a
+// temporary retry (no session id / no scheduler) — never a durable-auth terminal state either.
+function readTemporaryRetryHandoffStatus(result: Readonly<Record<string, unknown>>): string | null {
+  const status = readString(result.status);
+  if (status === 'temporary_retry_armed' || status === 'temporary_retry_unavailable') return status;
+  return null;
 }
 
 // F0: group-exhausted (and switch-limited) recoveries with ANY wait signal are durable
@@ -889,6 +903,16 @@ function isStaleProfileReplayForPendingProofTarget(input: Readonly<{
   return Boolean(failingProfileId && failingProfileId !== currentTargetProfileId);
 }
 
+function isUntargetedProviderOutcomeProofWaitRefresh(input: Readonly<{
+  intent: RuntimeAuthRecoveryIntent;
+  pendingTarget: RuntimeAuthPendingProofTarget | null;
+}>): boolean {
+  return input.intent.lastError === RUNTIME_AUTH_RECOVERY_UNPROVEN_PROVIDER_OUTCOME_ERROR
+    && input.pendingTarget === null
+    && input.intent.pendingTargetProfileId === null
+    && input.intent.pendingTargetGeneration === null;
+}
+
 // Handler verdict: the replayed recovery no longer applies (e.g. the group already moved
 // off the failing profile). The scheduler removes the durable record so the same key can
 // re-arm on a genuine future failure — see `DurableRecoveryOutcome['superseded']`.
@@ -990,6 +1014,15 @@ export class RuntimeAuthRecoveryScheduler {
           if (supersededReason) {
             return { status: 'superseded', reason: supersededReason };
           }
+          // A1-MED-1: temporary-throttle handoff — remove this durable intent (the temporary
+          // scheduler owns the wait now) so the key can re-arm on a genuine future failure.
+          const switchResultForHandoff = readSwitchAttemptResult(result);
+          const temporaryRetryHandoff = switchResultForHandoff
+            ? readTemporaryRetryHandoffStatus(switchResultForHandoff)
+            : null;
+          if (temporaryRetryHandoff) {
+            return { status: 'superseded', reason: temporaryRetryHandoff };
+          }
           const applyDecision = classifyApplyFailure(result);
           if (applyDecision?.retryable) {
             return {
@@ -1027,15 +1060,17 @@ export class RuntimeAuthRecoveryScheduler {
               intent,
               pendingTarget,
             });
-            // RD-REC-15 / F4: each coalesced replay re-runs the full switch pipeline,
-            // so the attempt rollback must be budgeted. Once `maxCoalescedReplays`
-            // is spent, replays consume the normal attempt budget and the recovery
-            // settles terminal instead of looping forever for an idle session.
+            // RD-REC-15 / F4: while a local repair is waiting for provider-outcome
+            // proof, repeated local-only wakeups refresh the proof wait instead of
+            // burning the dead-letter budget. Stale-profile replays are still
+            // additionally bounded by maxCoalescedReplays when the target profile
+            // keeps changing under the same durable recovery.
             const coalescedReplayCount = intent.coalescedReplayCount ?? 0;
-            const rollbackAttempt = coalescedReplay && coalescedReplayCount < this.maxCoalescedReplays;
+            const rollbackAttempt = isUntargetedProviderOutcomeProofWaitRefresh({ intent, pendingTarget })
+              || (coalescedReplay && coalescedReplayCount < this.maxCoalescedReplays);
             return {
               status: 'wait',
-              lastError: 'recovery_unproven_awaiting_provider_outcome',
+              lastError: RUNTIME_AUTH_RECOVERY_UNPROVEN_PROVIDER_OUTCOME_ERROR,
               intent: {
                 ...intent,
                 status: 'resumed_awaiting_proof',

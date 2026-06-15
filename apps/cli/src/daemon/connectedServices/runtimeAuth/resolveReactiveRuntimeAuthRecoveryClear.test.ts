@@ -33,7 +33,7 @@ describe('resolveReactiveRuntimeAuthRecoveryClear', () => {
     expect(decision.clear).toBe(false);
   });
 
-  it('clears on verified account adoption (adoption proof still works)', () => {
+  it('clears on verified exact account adoption', () => {
     const decision = resolveReactiveRuntimeAuthRecoveryClear({
       activeProfileId: 'backup',
       verificationByServiceId: {
@@ -44,7 +44,7 @@ describe('resolveReactiveRuntimeAuthRecoveryClear', () => {
     expect(decision.proof).toBe('account_adoption_verified');
   });
 
-  it('clears on weakly_verified account adoption', () => {
+  it('clears on weakly_verified auth-surface proof without treating it as exact identity', () => {
     const decision = resolveReactiveRuntimeAuthRecoveryClear({
       activeProfileId: 'backup',
       verificationByServiceId: {

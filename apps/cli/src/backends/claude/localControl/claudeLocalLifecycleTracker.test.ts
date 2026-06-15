@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createLocalTurnLifecycleController, type LocalTurnLifecycleSnapshot } from '@/agent/localControl/turnLifecycle';
+import type { RawJSONLines } from '../types';
 import { createClaudeLocalLifecycleTracker } from './claudeLocalLifecycleTracker';
 
 describe('createClaudeLocalLifecycleTracker', () => {
@@ -37,6 +38,45 @@ describe('createClaudeLocalLifecycleTracker', () => {
     await expect(waiting).resolves.toMatchObject({ lastTerminalReason: 'completed' });
     lifecycle.dispose();
     vi.useRealTimers();
+  });
+
+  it('does not convert a meta continuation no-op transcript pair into a completed provider turn', () => {
+    const observed: LocalTurnLifecycleSnapshot[] = [];
+    const lifecycle = createLocalTurnLifecycleController({
+      completionQuiescenceMs: 0,
+      onStateChange: (snapshot) => {
+        observed.push(snapshot);
+      },
+    });
+    const tracker = createClaudeLocalLifecycleTracker({ lifecycle });
+
+    tracker.observeTranscript({
+      type: 'user',
+      uuid: 'meta-continuation-prompt',
+      isMeta: true,
+      message: {
+        role: 'user',
+        content: 'The interrupted turn was recovered. Continue from where you left off.',
+      },
+    } satisfies RawJSONLines);
+    tracker.observeTranscript({
+      type: 'assistant',
+      uuid: 'synthetic-no-response',
+      model: '<synthetic>',
+      message: {
+        role: 'assistant',
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'No response requested.' }],
+      },
+    } satisfies RawJSONLines);
+
+    expect(lifecycle.snapshot()).toMatchObject({
+      active: false,
+      terminal: false,
+      waitingForQuiescence: false,
+    });
+    expect(observed).toEqual([]);
+    lifecycle.dispose();
   });
 
   it('treats StopFailure, transcript interruption, SessionEnd, and process exit as terminal boundaries', async () => {

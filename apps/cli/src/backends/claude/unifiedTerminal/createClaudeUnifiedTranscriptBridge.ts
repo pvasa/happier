@@ -1,6 +1,7 @@
 import { createSessionScanner, type SessionScanner } from '../utils/sessionScanner';
 import type { CommittedClaudeJsonlMessageBaseline } from '../utils/claudeJsonlMessageKey';
 import type { RawJSONLines } from '../types';
+import { isSidechainSessionHook } from '../utils/sessionHookAttribution';
 import { logger } from '@/ui/logger';
 
 // Allowance for clock skew between Claude JSONL row timestamps (runner machine clock) and the
@@ -182,6 +183,9 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
       const waitForSessionStartHook = Boolean(opts.subscribeClaudeSessionHooks);
       if (opts.subscribeClaudeSessionHooks && !unsubscribe) {
         unsubscribe = opts.subscribeClaudeSessionHooks((data) => {
+          // A4-MED-2: a subagent (sidechain) SessionStart must never re-key the transcript /
+          // resume identity — same shared gate the hook lifecycle bridge uses.
+          if (isSidechainSessionHook(data)) return;
           const sessionInfo = readSessionStartInfo(data);
           if (!sessionInfo) return;
           applySessionStart(sessionInfo, data, Date.now());

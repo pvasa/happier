@@ -34,7 +34,8 @@ export function projectConnectedServiceRuntimeAuthRecoveryReport(input: Readonly
   }
 
   const hasTypedProjection = Boolean(projection?.uxDiagnostic || projection?.transcriptEvent);
-  if (projection && hasTypedProjection && input.commitTypedProjection) {
+  const daemonHandledTranscriptProjection = Boolean(input.report.handled && projection?.transcriptEvent);
+  if (projection && hasTypedProjection && input.commitTypedProjection && !daemonHandledTranscriptProjection) {
     const result = input.commitTypedProjection(projection);
     typedProjectionCommitted = typeof result === 'boolean'
       ? result
@@ -52,7 +53,7 @@ export function projectConnectedServiceRuntimeAuthRecoveryReport(input: Readonly
     usageLimitMetadataCommitted = result === false ? false : true;
   }
 
-  const requiresFallback = Boolean(statusMessage) && !typedProjectionCommitted;
+  const requiresFallback = Boolean(statusMessage) && !typedProjectionCommitted && !daemonHandledTranscriptProjection;
   if (statusMessage && requiresFallback && input.sendGenericStatusMessage) {
     const result = input.sendGenericStatusMessage(statusMessage);
     genericMessageEmitted = result === false ? false : true;

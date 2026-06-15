@@ -51,6 +51,30 @@ export class ClaudeUnifiedTerminalUnsupportedOptionError extends Error {
   }
 }
 
+type ClaudeUnifiedTerminalManagedSettingsDiagnostic = Readonly<{
+  code: 'managed_settings_option';
+  option: '--settings';
+}>;
+
+export class ClaudeUnifiedTerminalManagedSettingsOptionError extends Error {
+  readonly code = 'claude_unified_terminal_managed_settings_option';
+  readonly diagnostics: readonly ClaudeUnifiedTerminalManagedSettingsDiagnostic[];
+
+  constructor(diagnostics: readonly ClaudeUnifiedTerminalManagedSettingsDiagnostic[]) {
+    super('Claude unified terminal owns --settings so managed hooks, statusline, and ultracode cannot be shadowed.');
+    this.name = 'ClaudeUnifiedTerminalManagedSettingsOptionError';
+    this.diagnostics = diagnostics;
+  }
+}
+
+export function isClaudeUnifiedTerminalManagedSettingsOptionError(
+  error: unknown,
+): error is ClaudeUnifiedTerminalManagedSettingsOptionError {
+  return Boolean(error)
+    && typeof error === 'object'
+    && (error as { code?: unknown }).code === 'claude_unified_terminal_managed_settings_option';
+}
+
 function chmodPrivateFileIfSupported(path: string): void {
   if (process.platform === 'win32') return;
   try {
@@ -107,6 +131,7 @@ const managedClaudeArgFlagsWithValue = new Set([
   '--fallback-model',
   '--system-prompt',
   '--append-system-prompt',
+  '--settings',
 ]);
 
 const managedClaudeArgFlagsWithoutValue = new Set([
@@ -151,6 +176,16 @@ function appendClaudeArgsWithoutManagedPromptAndSpawnMode(
   }
 }
 
+function assertNoUserSettingsArg(claudeArgs: readonly string[] | undefined): void {
+  for (const arg of claudeArgs ?? []) {
+    if (arg === '--settings' || arg.startsWith('--settings=')) {
+      throw new ClaudeUnifiedTerminalManagedSettingsOptionError([
+        { code: 'managed_settings_option', option: '--settings' },
+      ]);
+    }
+  }
+}
+
 /**
  * Resolve the single `--settings` overlay value for the spawned Claude CLI.
  *
@@ -159,10 +194,6 @@ function appendClaudeArgsWithoutManagedPromptAndSpawnMode(
  * the hook settings content is merged with `{"ultracode":true}` / `{"statusLine":{...}}` and
  * passed as one inline JSON overlay (`--settings` accepts a file path or a JSON string).
  * Otherwise the file path is passed through untouched.
- *
- * KNOWN pre-existing caveat: a user-supplied `--settings` in claudeArgs precedes this overlay
- * in the argv, and Claude keeps the first one — their overlay then wins over hooks settings,
- * ultracode, and the statusline forwarder alike.
  *
  * Merged overlays are written to a 0600 SIBLING FILE of the hook settings file and passed as a
  * path. The statusline forwarder secret rides in a separate 0600 sibling file; the command string
@@ -436,6 +467,7 @@ function defaultDeps(inputDeps: Partial<ClaudeUnifiedTerminalSpawnDeps> | undefi
 export async function buildClaudeUnifiedTerminalSpawn<Mode extends EnhancedMode = EnhancedMode>(
   input: ClaudeUnifiedTerminalSpawnInput<Mode>,
 ): Promise<ClaudeUnifiedTerminalSpawn> {
+  assertNoUserSettingsArg(input.claudeArgs);
   const deps = defaultDeps(input.deps);
   const resolvedClaudeCliPath = deps.resolveClaudeCliPath();
   // Env first: the statusline overlay resolves the user's original statusline command from the

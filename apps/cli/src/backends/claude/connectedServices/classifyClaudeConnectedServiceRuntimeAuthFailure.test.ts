@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import { createClaudeConnectedServiceRuntimeAuthAdapter } from './createClaudeConnectedServiceRuntimeAuthAdapter';
 import { classifyClaudeConnectedServiceRuntimeAuthFailure } from './classifyClaudeConnectedServiceRuntimeAuthFailure';
-import { mapClaudeRateLimitEventToUsageDetails } from './mapClaudeRateLimitEventToUsageDetails';
+import {
+  mapClaudeRateLimitEventToUsageDetails,
+  mapClaudeStopFailureHookToUsageDetails,
+} from './mapClaudeRateLimitEventToUsageDetails';
 
 const selection = {
   serviceId: 'claude-subscription',
@@ -185,6 +188,31 @@ describe('classifyClaudeConnectedServiceRuntimeAuthFailure', () => {
     ).toMatchObject({
       kind: 'rate_limit',
       limitCategory: 'rate_limit',
+    });
+  });
+
+  it('classifies Claude temporary provider throttling StopFailure hooks as temporary throttles, not account usage exhaustion', () => {
+    const hook = {
+      hook_event_name: 'StopFailure',
+      error: 'rate_limit',
+      last_assistant_message: 'API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited',
+    };
+    const details = mapClaudeStopFailureHookToUsageDetails(hook);
+
+    expect(details).toMatchObject({
+      providerLimitId: 'transient',
+      recoverability: 'wait',
+    });
+    expect(
+      classifyClaudeConnectedServiceRuntimeAuthFailure({
+        details,
+        error: hook,
+        selection,
+      }),
+    ).toMatchObject({
+      kind: 'temporary_throttle',
+      limitCategory: 'rate_limit',
+      providerLimitId: 'transient',
     });
   });
 

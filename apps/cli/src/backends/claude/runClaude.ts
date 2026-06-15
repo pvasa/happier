@@ -703,7 +703,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             existingSessionId,
             defaultSystemPromptText,
         }); // Track current append system prompt
-        session.onUserMessage((message) => {
+        session.onUserMessage((message, deliveryInfo) => {
         const adoptedModel = adoptModelOverrideFromMetadata({
             currentModelId: currentModel,
             currentUpdatedAt: currentModelUpdatedAt,
@@ -891,20 +891,20 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
             if (specialCommand.type === 'compact') {
                 logger.debug('[start] Detected /compact command');
-                messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode);
+                messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode, { userMessageSeq: deliveryInfo?.seq ?? null });
                 logger.debugLargeJson('[start] /compact command pushed to queue:', message);
                 return;
             }
 
             if (specialCommand.type === 'clear') {
                 logger.debug('[start] Detected /clear command');
-                messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode);
+                messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode, { userMessageSeq: deliveryInfo?.seq ?? null });
                 logger.debugLargeJson('[start] /clear command pushed to queue:', message);
                 return;
             }
         }
 
-        messageQueue.push(baseQueuedText, enhancedMode);
+        messageQueue.push(baseQueuedText, enhancedMode, { userMessageSeq: deliveryInfo?.seq ?? null });
         logger.debugLargeJson('User message pushed to queue:', message)
     });
 
@@ -1303,7 +1303,10 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
     const startupSpec = createClaudeStartupSpec({
         deps: {
             registerRpcHandlers: ({ artifacts }) => {
-                registerSessionHandlers(artifacts.deferredSession.rpcHandlerManager, workingDirectory);
+                registerSessionHandlers(artifacts.deferredSession.rpcHandlerManager, workingDirectory, {
+                    materializeNextPendingMessageSafely:
+                        artifacts.deferredSession.materializeNextPendingMessageSafely.bind(artifacts.deferredSession),
+                });
             },
                 startHookServer: async () => {
                     return await startHookServer(hookServerOptions);
@@ -1463,7 +1466,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
 	                seedInitialAppendSystemPrompt(defaultSystemPromptText);
 
 	                // Forward messages from server to the local queue.
-	                session.onUserMessage((message) => {
+	                session.onUserMessage((message, deliveryInfo) => {
                     const adoptedModel = adoptModelOverrideFromMetadata({
                         currentModelId: currentModel,
                         currentUpdatedAt: currentModelUpdatedAt,
@@ -1620,12 +1623,12 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                     if (!structuredRouting) {
                         const specialCommand = parseSpecialCommand(message.content.text);
                         if (specialCommand.type === 'compact' || specialCommand.type === 'clear') {
-                            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode);
+                            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode, { userMessageSeq: deliveryInfo?.seq ?? null });
                             return;
                         }
                     }
 
-                    messageQueue.push(baseQueuedText, enhancedMode);
+                    messageQueue.push(baseQueuedText, enhancedMode, { userMessageSeq: deliveryInfo?.seq ?? null });
                 });
 
                 if (timing.enabled) {

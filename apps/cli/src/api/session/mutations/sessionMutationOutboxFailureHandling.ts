@@ -15,6 +15,11 @@ export type SessionMutationDeliveredPath =
 export type SessionMutationDeliveryOutcome =
     | Readonly<{ status: 'delivered'; path: SessionMutationDeliveredPath }>
     | Readonly<{
+        status: 'ignored_lossy';
+        reason: string;
+        httpStatus?: number;
+    }>
+    | Readonly<{
         status: 'retryable';
         reason: string;
         httpStatus?: number;

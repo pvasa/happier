@@ -1,16 +1,20 @@
 import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
+import { isTerminalHostStartupError } from '@/integrations/terminalHost/errors';
 import { logger } from '@/ui/logger';
 
+import { isClaudeUnifiedTerminalManagedSettingsOptionError } from './buildClaudeUnifiedTerminalSpawn';
 import { isClaudeUnifiedTerminalHostDeadError } from './createClaudeUnifiedController';
 import { isClaudeUnifiedTerminalReadinessTimeoutError } from './createClaudeUnifiedTerminalReadinessBridge';
-import { isClaudeUnifiedTerminalInjectionFailureError } from './terminalInjectionFailureError';
+import { isClaudeUnifiedTerminalTerminalInjectionFailureError } from './terminalInjectionFailureError';
 
 type RuntimeIssueSessionClient = Parameters<typeof surfacePrimarySessionRuntimeIssue>[0]['session'];
 
 export function isClaudeUnifiedTerminalRuntimeIssueError(error: unknown): boolean {
   return isClaudeUnifiedTerminalHostDeadError(error)
-    || isClaudeUnifiedTerminalInjectionFailureError(error)
-    || isClaudeUnifiedTerminalReadinessTimeoutError(error);
+    || isClaudeUnifiedTerminalTerminalInjectionFailureError(error)
+    || isClaudeUnifiedTerminalReadinessTimeoutError(error)
+    || isTerminalHostStartupError(error)
+    || isClaudeUnifiedTerminalManagedSettingsOptionError(error);
 }
 
 export async function surfaceClaudeUnifiedTerminalRuntimeIssue(params: Readonly<{

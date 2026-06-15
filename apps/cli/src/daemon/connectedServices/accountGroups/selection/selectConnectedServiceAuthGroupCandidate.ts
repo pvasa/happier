@@ -365,7 +365,10 @@ function resolveLeastLimitedScore(snapshot: ConnectedServiceAuthGroupQuotaSnapsh
 }
 
 function requiresFreshQuotaEvidenceForSwitchReason(reason: string): boolean {
-  return reason === 'usage_limit' || reason === 'rate_limit' || reason === 'soft_threshold';
+  return reason === 'usage_limit'
+    || reason === 'rate_limit'
+    || reason === 'soft_threshold'
+    || reason === 'same_provider_account_exhausted';
 }
 
 export function hasConnectedServiceAuthGroupCandidateEvidenceForSwitchReason(

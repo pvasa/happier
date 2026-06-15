@@ -6,6 +6,7 @@ import { dispatchConnectedServiceAccountSwitchNotificationAsync } from './dispat
 
 type SendToAllDevicesAsync = (title: string, body: string, data: Record<string, unknown>) => Promise<void>;
 type PushNotificationCall = Parameters<SendToAllDevicesAsync>;
+type FetchNotificationCall = (input: unknown, init?: { body?: unknown }) => Promise<{ ok: boolean; status: number }>;
 type PushNotificationSpy = Readonly<{
   mock: Readonly<{
     calls: PushNotificationCall[];
@@ -203,6 +204,118 @@ describe('dispatchConnectedServiceAccountSwitchNotificationAsync', () => {
     });
 
     expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
+  });
+
+  it('does not expose provider account ids in outbound account-switch notifications', async () => {
+    const sendToAllDevicesAsync = vi.fn<SendToAllDevicesAsync>(async (
+      _title: string,
+      _body: string,
+      _data: Record<string, unknown>,
+    ) => {});
+    const fetchSpy = vi.fn<FetchNotificationCall>(async () => ({
+      ok: true,
+      status: 202,
+    }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+
+    try {
+      await dispatchConnectedServiceAccountSwitchNotificationAsync({
+        settings: accountSettingsParse({
+          notificationChannelsV1: [
+            {
+              v: 1,
+              id: 'expo',
+              kind: 'expo_push',
+              enabled: true,
+              topics: {
+                ready: false,
+                permissionRequest: false,
+                userActionRequest: false,
+                connectedServiceAccountSwitch: true,
+                connectedServiceQuotaBlocked: false,
+                connectedServiceQuotaRecovered: false,
+              },
+              readyIncludeMessageText: false,
+            },
+            {
+              v: 1,
+              id: 'webhook-primary',
+              kind: 'webhook',
+              enabled: true,
+              url: 'https://hooks.example.test/happier',
+              signingSecret: null,
+              topics: {
+                ready: false,
+                permissionRequest: false,
+                userActionRequest: false,
+                connectedServiceAccountSwitch: true,
+                connectedServiceQuotaBlocked: false,
+                connectedServiceQuotaRecovered: false,
+              },
+              readyIncludeMessageText: false,
+            },
+          ],
+        }),
+        expoPushSender: { sendToAllDevicesAsync },
+        settingsSecretsReadKeys: [],
+        runtimeQuotaSnapshots,
+        listConnectedServiceProfiles: vi.fn(async () => ({
+          serviceId: 'openai-codex' as const,
+          profiles: [
+            {
+              profileId: 'primary',
+              status: 'connected' as const,
+              providerEmail: null,
+              providerAccountId: 'acct-provider-primary-secret',
+            },
+            {
+              profileId: 'backup',
+              status: 'connected' as const,
+              providerEmail: null,
+              providerAccountId: 'acct-provider-backup-secret',
+            },
+          ],
+        })),
+        source: {
+          sessionId: 'session-private-account-switch',
+          sessionTitle: 'Fix checkout flow',
+          serviceId: 'openai-codex',
+          groupId: 'main',
+          fromProfileId: 'primary',
+          toProfileId: 'backup',
+          reason: 'usage_limit',
+        },
+        nowMs: () => 2_000,
+        dedupeWindowMs: 0,
+      });
+
+      const [_title, body, data] = readOnlyPushNotificationCall(sendToAllDevicesAsync);
+      expect(body).not.toContain('acct-provider-primary-secret');
+      expect(body).not.toContain('acct-provider-backup-secret');
+      expect(data).toMatchObject({
+        fromProfileLabel: 'primary',
+        toProfileLabel: 'backup',
+      });
+      expect(JSON.stringify(data)).not.toContain('acct-provider-primary-secret');
+      expect(JSON.stringify(data)).not.toContain('acct-provider-backup-secret');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const fetchCall = fetchSpy.mock.calls[0];
+      if (!fetchCall) throw new Error('Expected one webhook notification call');
+      const payloadText = String(fetchCall[1]?.body);
+      const payload = JSON.parse(payloadText);
+      expect(payload.content.body).not.toContain('acct-provider-primary-secret');
+      expect(payload.content.body).not.toContain('acct-provider-backup-secret');
+      expect(payload.metadata).toMatchObject({
+        fromProfileLabel: 'primary',
+        toProfileLabel: 'backup',
+      });
+      expect(payloadText).not.toContain('acct-provider-primary-secret');
+      expect(payloadText).not.toContain('acct-provider-backup-secret');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('uses provider short display names for Claude subscription switch notifications', async () => {

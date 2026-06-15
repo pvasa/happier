@@ -203,6 +203,7 @@ function createRemoteHarness(options?: {
       endSession: vi.fn(async () => {}),
       markRollbackEligible: vi.fn(async () => {}),
       markRolledBack: vi.fn(async () => {}),
+      touchActiveTurn: vi.fn(async () => {}),
       hasActiveTurn: vi.fn(() => false),
       observeAcpLifecycleMarker: vi.fn((input) => ({ body: input.body, pendingWrite: null })),
     },
@@ -230,6 +231,8 @@ function createRemoteHarness(options?: {
       invokeLocal: vi.fn(async () => ({})),
     },
     sendClaudeSessionMessage,
+    deferDeliveredUserMessageWatermarkToProviderAcceptance: vi.fn(),
+    confirmUserMessageDeliveredToProvider: vi.fn(),
     fetchRecentTranscriptTextItemsForAcpImport: vi.fn(async () => []),
     sendSessionEvent: vi.fn(),
     getMetadataSnapshot: () => metadataState,
@@ -404,14 +407,14 @@ function createRemoteHarness(options?: {
     await vi.waitFor(() => {
       expect(harness.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalled();
     }, { timeout: 2_000 });
-    expect(harness.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
+    expect(harness.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'claude',
       issue: expect.objectContaining({
         provider: 'claude',
         source: 'provider_session_error',
         code: 'provider_session_error',
       }),
-    });
+    }));
 
     const switchHandler = await harness.switchHandlerReady;
     await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
@@ -484,14 +487,14 @@ function createRemoteHarness(options?: {
     await vi.waitFor(() => {
       expect(harness.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalled();
     }, { timeout: 2_000 });
-    expect(harness.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
+    expect(harness.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'claude',
       issue: expect.objectContaining({
         provider: 'claude',
         source: 'provider_session_error',
         code: 'provider_session_error',
       }),
-    });
+    }));
 
     // Parked: no eager relaunch without a new message.
     expect(mockClaudeRemoteDispatch).toHaveBeenCalledTimes(1);
@@ -506,6 +509,69 @@ function createRemoteHarness(options?: {
     const switchHandler = await harness.switchHandlerReady;
     await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
     await expect(launcherPromise).resolves.toBe('switch');
+  }, 30_000);
+
+  it('stops repeated classified unified relaunches after the bounded budget and leaves the requeued batch redeliverable', async () => {
+    const injectionFailure = new ClaudeUnifiedTerminalInjectionFailureError({
+      batch: {
+        message: 'poison prompt',
+        origin: { kind: 'ui_pending' },
+      },
+      result: {
+        status: 'failed',
+        reason: 'timeout',
+        phase: 'after_enter_unknown',
+        duplicateRisk: 'likely',
+        recoverable: true,
+      },
+      failureState: 'failed_terminal',
+    });
+    const mode = {
+      permissionMode: 'default',
+      claudeUnifiedTerminalEnabled: true,
+      claudeUnifiedTerminalHost: 'zellij',
+    } satisfies EnhancedMode;
+    const harness = createRemoteHarness({ sessionId: 'sess_unified_relaunch_budget' });
+    harness.client.waitForMetadataUpdate = vi.fn(
+      (signal?: AbortSignal) => new Promise<boolean>((resolve) => {
+        if (signal?.aborted) {
+          resolve(false);
+          return;
+        }
+        signal?.addEventListener('abort', () => resolve(false), { once: true });
+      }),
+    );
+    harness.session.queue.push('poison prompt', mode, { userMessageSeq: 44 });
+
+    mockClaudeRemoteDispatch.mockImplementation(async (opts: unknown) => {
+      const dispatchOpts = opts as UnifiedTerminalDispatchMockOptions & {
+        returnUnconsumedMessage?: (batch: { message: string; mode: EnhancedMode; maxUserMessageSeq?: number | null }) => void;
+      };
+      const batch = await dispatchOpts.nextMessage?.() as { message?: string; mode?: EnhancedMode; maxUserMessageSeq?: number | null } | null;
+      if (batch?.message && batch.mode) {
+        dispatchOpts.returnUnconsumedMessage?.({
+          message: batch.message,
+          mode: batch.mode,
+          maxUserMessageSeq: batch.maxUserMessageSeq ?? null,
+        });
+      }
+      throw injectionFailure;
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+
+    await expect(claudeRemoteLauncher(harness.session)).resolves.toBe('exit');
+
+    expect(mockClaudeRemoteDispatch).toHaveBeenCalledTimes(4);
+    expect(harness.session.queue.queue).toHaveLength(1);
+    expect(harness.session.queue.queue[0]).toMatchObject({
+      message: 'poison prompt',
+      userMessageSeq: 44,
+    });
+    expect(harness.client.sendSessionEvent).toHaveBeenCalledWith({
+      type: 'message',
+      message: expect.stringContaining('Not retrying automatically'),
+    });
   }, 30_000);
 
   it('passes the resolved default coding prompt to remote unified terminal dispatch', async () => {
@@ -685,6 +751,69 @@ function createRemoteHarness(options?: {
     expect(harness.client.sendAgentMessage).not.toHaveBeenCalledWith('claude', expect.objectContaining({
       type: 'task_complete',
     }));
+
+    const switchHandler = await harness.switchHandlerReady;
+    await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  });
+
+  it('defers the remote unified delivered watermark until provider acceptance and preserves seq on handback', async () => {
+    const harness = createRemoteHarness({ sessionId: 'sess_unified_watermark_acceptance' });
+    const mode = {
+      permissionMode: 'default',
+      claudeUnifiedTerminalEnabled: true,
+      claudeUnifiedTerminalHost: 'auto',
+    } satisfies EnhancedMode;
+    harness.session.queue.push('watermarked remote prompt', mode, { userMessageSeq: 31 });
+    const runnerCompleted = createDeferred<void>();
+
+    const runClaudeUnifiedTerminalSession = vi.fn(async (opts: {
+      nextMessage?: () => Promise<{ message: string; mode: EnhancedMode; maxUserMessageSeq: number | null } | null>;
+      returnUnconsumedMessage?: (input: { message: string; mode: EnhancedMode; maxUserMessageSeq?: number | null }) => void;
+      onPromptAcceptedByProvider?: (input: { message: string; maxUserMessageSeq: number | null }) => void;
+    }) => {
+      const batch = await opts.nextMessage?.();
+      expect(batch).toMatchObject({
+        message: 'watermarked remote prompt',
+        maxUserMessageSeq: 31,
+      });
+      expect(harness.client.confirmUserMessageDeliveredToProvider).not.toHaveBeenCalled();
+
+      opts.returnUnconsumedMessage?.({
+        message: 'watermarked remote prompt',
+        mode,
+        maxUserMessageSeq: batch?.maxUserMessageSeq ?? null,
+      });
+      expect(harness.client.confirmUserMessageDeliveredToProvider).not.toHaveBeenCalled();
+
+      opts.onPromptAcceptedByProvider?.({
+        message: 'watermarked remote prompt',
+        maxUserMessageSeq: batch?.maxUserMessageSeq ?? null,
+      });
+      runnerCompleted.resolve(undefined);
+    });
+    vi.doMock('./unifiedTerminal/runClaudeUnifiedTerminalSession', () => ({
+      runClaudeUnifiedTerminalSession,
+    }));
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown, deps?: unknown) => {
+      const dispatchDeps = deps as UnifiedTerminalDispatchDeps | undefined;
+      expect(dispatchDeps?.claudeUnifiedTerminal).toEqual(expect.any(Function));
+      await dispatchDeps?.claudeUnifiedTerminal?.(opts);
+      await waitForAbort((opts as UnifiedTerminalDispatchMockOptions).signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(harness.session);
+    vi.doUnmock('./unifiedTerminal/runClaudeUnifiedTerminalSession');
+
+    await runnerCompleted.promise;
+    expect(harness.client.deferDeliveredUserMessageWatermarkToProviderAcceptance).toHaveBeenCalledTimes(1);
+    expect(harness.session.queue.queue[0]).toMatchObject({
+      message: 'watermarked remote prompt',
+      userMessageSeq: 31,
+    });
+    expect(harness.client.confirmUserMessageDeliveredToProvider).toHaveBeenCalledTimes(1);
+    expect(harness.client.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(31);
 
     const switchHandler = await harness.switchHandlerReady;
     await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
@@ -972,8 +1101,70 @@ function createRemoteHarness(options?: {
     await expect(launcherPromise).resolves.toBe('switch');
   });
 
+  it('does not suppress matching non-unified transcript messages when the unified binding is inactive', async () => {
+    const harness = createRemoteHarness({ sessionId: 'sess_legacy_persisted_echo' });
+    const fetchRecentTranscriptTextItemsForAcpImport = harness.client.fetchRecentTranscriptTextItemsForAcpImport;
+    if (!fetchRecentTranscriptTextItemsForAcpImport) {
+      throw new Error('test fixture missing fetchRecentTranscriptTextItemsForAcpImport');
+    }
+    vi.mocked(fetchRecentTranscriptTextItemsForAcpImport).mockResolvedValueOnce([
+      { role: 'user', text: 'legacy prompt' },
+    ]);
+    const legacyMode = {
+      permissionMode: 'default',
+      claudeRemoteAgentSdkEnabled: true,
+    } satisfies EnhancedMode;
+    harness.session.queue.push('legacy prompt', legacyMode);
+    const legacyMessageObserved = createDeferred<void>();
+
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown) => {
+      const dispatchOpts = opts as UnifiedTerminalDispatchMockOptions;
+      const legacyBatch = await dispatchOpts.nextMessage?.();
+      expect(legacyBatch).toMatchObject({
+        message: 'legacy prompt',
+        mode: legacyMode,
+      });
+      mockConvert.mockReturnValueOnce({
+        type: 'user',
+        uuid: 'legacy-user-row',
+        timestamp: '2000-01-01T00:00:00.000Z',
+        message: { role: 'user', content: 'legacy prompt' },
+      });
+      dispatchOpts.onMessage?.({
+        type: 'user',
+        message: { role: 'user', content: 'legacy prompt' },
+      });
+      legacyMessageObserved.resolve();
+      await waitForAbort(dispatchOpts.signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(harness.session);
+
+    await legacyMessageObserved.promise;
+    await sleep(10);
+    expect(harness.sendClaudeSessionMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'user',
+        uuid: 'legacy-user-row',
+        message: { role: 'user', content: 'legacy prompt' },
+      }),
+      undefined,
+    );
+
+    const switchHandler = await harness.switchHandlerReady;
+    await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  });
+
   it('suppresses historical persisted user echoes during unified terminal resume replay without suppressing fresh terminal input', async () => {
     const harness = createRemoteHarness({ sessionId: 'sess_unified_resume_echo' });
+    const mode = {
+      permissionMode: 'default',
+      claudeUnifiedTerminalEnabled: true,
+      claudeUnifiedTerminalHost: 'auto',
+    } satisfies EnhancedMode;
+    harness.session.queue.push('repeatable prompt', mode);
     const fetchRecentTranscriptTextItemsForAcpImport = harness.client.fetchRecentTranscriptTextItemsForAcpImport;
     if (!fetchRecentTranscriptTextItemsForAcpImport) {
       throw new Error('test fixture missing fetchRecentTranscriptTextItemsForAcpImport');
@@ -986,6 +1177,11 @@ function createRemoteHarness(options?: {
 
     mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown) => {
       const dispatchOpts = opts as UnifiedTerminalDispatchMockOptions;
+      const queuedPrompt = await dispatchOpts.nextMessage?.();
+      expect(queuedPrompt).toMatchObject({
+        message: 'repeatable prompt',
+        mode,
+      });
       dispatchStarted.resolve(undefined);
       expect(dispatchOpts.onMessage).toEqual(expect.any(Function));
       mockConvert

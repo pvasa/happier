@@ -2,6 +2,7 @@ import type {
   ConnectedServiceCredentialRecordV1,
   ConnectedServiceId,
 } from '@happier-dev/protocol';
+import { resolve } from 'node:path';
 
 import type { ConnectedServiceRuntimeAuthSelectionMaterializer } from '@/daemon/connectedServices/sessionAuthSwitch/runtimeAuthSelectionMaterializerTypes';
 import type { ConnectedServiceResolvedSelection } from '@/daemon/connectedServices/materialize/materializeConnectedServicesForSpawn';
@@ -10,6 +11,11 @@ import { resolveTrackedConnectedServiceSwitchContinuityContext } from '@/daemon/
 import type { Credentials } from '@/persistence';
 
 import { materializeClaudeConnectedServiceSelection } from './materializeClaudeConnectedServiceSelection';
+import { resolveClaudeConnectedServiceStableConfigDir } from './resolveClaudeConnectedServiceStableAuthDir';
+import {
+  CLAUDE_RUNTIME_AUTH_HOT_APPLY_METADATA_KEY,
+  buildClaudeRuntimeAuthHotApplyMetadata,
+} from './claudeRuntimeAuthHotApplyMetadata';
 
 function readCredentialRecord(value: unknown): ConnectedServiceCredentialRecordV1 | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -21,6 +27,13 @@ function readBinding(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function samePath(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  const leftTrimmed = left.trim();
+  const rightTrimmed = right.trim();
+  return leftTrimmed.length > 0 && rightTrimmed.length > 0 && resolve(leftTrimmed) === resolve(rightTrimmed);
 }
 
 async function resolvePersistedClaudeSessionMetadata(params: Readonly<{
@@ -142,6 +155,42 @@ export const materializeClaudeConnectedServiceRuntimeAuthSelection: ConnectedSer
     candidatePersistedSessionFile: continuityContext.candidatePersistedSessionFile,
   });
   if (!materialized) return params.baseSelection;
+
+  const trackedEnv = params.input.tracked.spawnOptions?.environmentVariables;
+  const materializedClaudeConfigDir = materialized.env.CLAUDE_CONFIG_DIR;
+  const sourceClaudeConfigDir = selection?.kind === 'group' && params.input.serviceId === 'claude-subscription'
+    ? resolveClaudeConnectedServiceStableConfigDir({
+        activeServerDir,
+        serviceId: 'claude-subscription',
+        fallbackProfileId: selection.activeProfileId,
+        selection: {
+          kind: 'profile',
+          serviceId: 'claude-subscription',
+          profileId: selection.activeProfileId,
+          record,
+        },
+      })
+    : null;
+  const hotApplyMetadata = params.input.serviceId === 'claude-subscription'
+    && selection?.kind === 'group'
+    && samePath(trackedEnv?.CLAUDE_CONFIG_DIR, materializedClaudeConfigDir)
+    ? buildClaudeRuntimeAuthHotApplyMetadata({
+        runtimeClaudeConfigDir: materializedClaudeConfigDir,
+        runtimeMaterializedRoot: materialized.targetMaterializedRoot,
+        sourceClaudeConfigDir,
+      })
+    : null;
+  if (hotApplyMetadata) {
+    return {
+      ...params.baseSelection,
+      targetMaterializedEnv: {
+        CLAUDE_CONFIG_DIR: hotApplyMetadata.runtimeClaudeConfigDir,
+      },
+      targetMaterializedRoot: hotApplyMetadata.runtimeMaterializedRoot,
+      materializationDiagnostics: materialized.diagnostics,
+      [CLAUDE_RUNTIME_AUTH_HOT_APPLY_METADATA_KEY]: hotApplyMetadata,
+    };
+  }
 
   return {
     ...params.baseSelection,

@@ -1214,15 +1214,18 @@ async function runPostSwitchVerificationThenContinuation(
   };
 }
 
-function isRetryableProviderAccountAdoptionVerificationFailure(
+function isRetryableHotApplyPostSwitchVerificationFailure(
   failure: SessionConnectedServiceAuthSwitchFailure,
 ): boolean {
-  return failure.errorCode === 'provider_account_adoption_mismatch'
+  return (
+    failure.errorCode === 'provider_account_adoption_mismatch'
+    || failure.errorCode === 'post_switch_verification_failed'
+  )
     && failure.diagnostics?.failurePhase === 'post_switch_verification'
     && failure.diagnostics.retryable === true;
 }
 
-async function restartAfterHotApplyAdoptionMismatch(input: SwitchContinuationRecoveryInput & Readonly<{
+async function restartAfterRetryableHotApplyVerificationFailure(input: SwitchContinuationRecoveryInput & Readonly<{
   restartSession: SwitchSessionConnectedServiceAuthInput['restartSession'];
   recoverAfterRuntimeAuthSwitch: SwitchSessionConnectedServiceAuthInput['recoverAfterRuntimeAuthSwitch'];
   continueAfterRuntimeAuthSwitch: SwitchSessionConnectedServiceAuthInput['continueAfterRuntimeAuthSwitch'];
@@ -1659,7 +1662,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
         ...(runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId } : {}),
       });
       if (continuationOutcome.failure) {
-        if (isRetryableProviderAccountAdoptionVerificationFailure(continuationOutcome.failure)) {
+        if (isRetryableHotApplyPostSwitchVerificationFailure(continuationOutcome.failure)) {
           const restartServiceIds = new Set([serviceId]);
           const restartContinuationAttemptId = buildConnectedServiceSwitchContinuationAttemptId({
             action: 'restart_requested',
@@ -1667,7 +1670,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
             normalizedBindings: input.normalizedBindings,
             expectedGroupGenerationByServiceId: input.request.expectedGroupGenerationByServiceId,
           });
-          const restartContinuationFailure = await restartAfterHotApplyAdoptionMismatch({
+          const restartContinuationFailure = await restartAfterRetryableHotApplyVerificationFailure({
             restartSession: input.restartSession,
             recoverAfterRuntimeAuthSwitch: input.recoverAfterRuntimeAuthSwitch,
 	            continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch,
@@ -2195,7 +2198,7 @@ export async function switchSessionConnectedServiceAuth(
               ...(runtimeAuthSelectionsByServiceId.size === 0 ? {} : { runtimeAuthSelectionsByServiceId }),
             });
             if (continuationOutcome.failure) {
-              if (isRetryableProviderAccountAdoptionVerificationFailure(continuationOutcome.failure)) {
+              if (isRetryableHotApplyPostSwitchVerificationFailure(continuationOutcome.failure)) {
                 action = 'restart_requested';
                 Object.assign(continuityByServiceId, markHotApplyContinuityAsRestart(continuityByServiceId));
                 const restartContinuationAttemptId = buildConnectedServiceSwitchContinuationAttemptId({
@@ -2204,7 +2207,7 @@ export async function switchSessionConnectedServiceAuth(
                   normalizedBindings: normalized.normalized,
                   expectedGroupGenerationByServiceId: input.request.expectedGroupGenerationByServiceId,
                 });
-                const restartContinuationFailure = await restartAfterHotApplyAdoptionMismatch({
+                const restartContinuationFailure = await restartAfterRetryableHotApplyVerificationFailure({
                   restartSession: input.restartSession,
                   recoverAfterRuntimeAuthSwitch: input.recoverAfterRuntimeAuthSwitch,
                   continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch,
