@@ -16,6 +16,7 @@ import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } fr
 import { resolveServerStartScript } from './utils/server/flavor_scripts.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from './utils/server/infra/happy_server_infra.mjs';
 import { applyServerLightEnvDefaults } from './utils/server/apply_server_light_env_defaults.mjs';
+import { applyStackServerLoggingDefaults } from './utils/server/logging_env.mjs';
 import {
   getAccountCountForServerComponent,
   prepareDaemonAuthSeedIfNeeded,
@@ -358,6 +359,7 @@ async function main() {
     ...(serveUi ? { HAPPIER_SERVER_UI_REQUIRED: uiRequired ? '1' : '0' } : {}),
     ...resolveServerUiEnv({ serveUi, uiBuildDir, uiPrefix, uiBuildDirExists: Boolean(serveUi && uiBuildDirExists && uiIndexExists) }),
   };
+  applyStackServerLoggingDefaults({ baseEnv, serverEnv });
   let serverLightAccountCount = null;
   let happierServerAccountCount = null;
   if (serverComponentName === 'happier-server-light') {

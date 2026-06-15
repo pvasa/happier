@@ -194,7 +194,7 @@ function makeNoOp(params: Readonly<{
 }
 
 function shouldMoveLatestTurnPointer(action: SessionTurnMutationV1["action"]): boolean {
-    return action === "begin" || action === "complete" || action === "fail" || action === "cancel";
+    return action === "begin" || action === "touch_active" || action === "complete" || action === "fail" || action === "cancel";
 }
 
 function replaceTurn(turns: readonly SessionTurnV1[], nextTurn: SessionTurnV1): readonly SessionTurnV1[] {
@@ -318,6 +318,49 @@ export function applySessionTurnMutationToTurns(params: Readonly<{
             appliedAt: params.appliedAt,
             turnId: requestedTurnId,
         });
+    }
+
+    if (mutation.action === "touch_active") {
+        if (!existingTurn) {
+            return makeNoOp({
+                reason: "missing-turn",
+                latestTurnId: params.currentLatestTurnId,
+                mutation,
+                turns,
+                appliedAt: params.appliedAt,
+                turnId: requestedTurnId,
+            });
+        }
+        if (existingTurn.status !== "in_progress") {
+            return makeNoOp({
+                reason: "stale-terminal",
+                latestTurnId: params.currentLatestTurnId,
+                mutation,
+                turns,
+                appliedAt: params.appliedAt,
+                turnId: existingTurn.turnId,
+            });
+        }
+        if (params.currentLatestTurnId && existingTurn.turnId !== params.currentLatestTurnId) {
+            return makeNoOp({
+                reason: "stale-in-progress",
+                latestTurnId: params.currentLatestTurnId,
+                mutation,
+                turns,
+                appliedAt: params.appliedAt,
+                turnId: existingTurn.turnId,
+            });
+        }
+        if (mutation.observedAt <= existingTurn.updatedAt) {
+            return makeNoOp({
+                reason: "stale-in-progress",
+                latestTurnId: params.currentLatestTurnId,
+                mutation,
+                turns,
+                appliedAt: params.appliedAt,
+                turnId: existingTurn.turnId,
+            });
+        }
     }
 
     if ((mutation.action === "attach_provider_turn_id" || mutation.action === "append_transcript_anchors") && !existingTurn) {

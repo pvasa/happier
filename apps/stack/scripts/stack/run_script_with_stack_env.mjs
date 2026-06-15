@@ -25,6 +25,7 @@ import {
 import { listAllStackNames } from '../utils/stack/stacks.mjs';
 import { stopStackWithEnv } from '../utils/stack/stop.mjs';
 import { openUrlInBrowser } from '../utils/ui/browser.mjs';
+import { preflightDevServerRestart } from '../utils/dev/server.mjs';
 
 import { collectReservedStackPorts, getDefaultPortStart } from './port_reservation.mjs';
 import { withStackEnv } from './stack_environment.mjs';
@@ -172,11 +173,22 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
       const isTrueRestart = shouldReuseRuntimePortsOnRestart({ wantsRestart, runtimeState, wasRunning });
 
       // Restart semantics (stack mode):
-      // - Stop stack-owned processes first (runner, daemon, Expo, etc.)
+      // - Preflight source-backed server rebuilds before stopping the old stack.
+      // - Stop stack-owned processes after preflight (runner, daemon, Expo, etc.)
       // - Never kill arbitrary port listeners
       // - Preserve previous runtime ports in memory so a true restart can reuse them
       if (wantsRestart && !wantsJson) {
         const baseDir = resolveStackEnvPath(stackName).baseDir;
+        if (scriptPath === 'dev.mjs') {
+          const serverDir = getComponentDir(rootDir, serverComponent, env);
+          await preflightDevServerRestart({
+            serverDir,
+            serverComponentName: serverComponent,
+            serverEnv: env,
+            logger: console,
+          });
+          env.HAPPIER_STACK_SERVER_RESTART_PREFLIGHT_ALREADY_DONE = '1';
+        }
         try {
           await stopStackWithEnv({
             rootDir,

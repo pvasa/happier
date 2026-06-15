@@ -50,6 +50,23 @@ const memberOrderBy = [
     { profileId: "asc" as const },
 ];
 
+type AuthGroupMemberActiveCandidate = Readonly<{
+    profileId: string;
+    priority: number;
+    enabled: boolean;
+}>;
+
+function resolveFirstEnabledMemberProfileId(
+    members: readonly AuthGroupMemberActiveCandidate[],
+): string | null {
+    return [...members]
+        .filter((member) => member.enabled)
+        .sort((left, right) => {
+            if (left.priority !== right.priority) return left.priority - right.priority;
+            return left.profileId.localeCompare(right.profileId);
+        })[0]?.profileId ?? null;
+}
+
 export function stringifyAuthGroupState(state: AuthGroupState | null | undefined): string | null {
     if (state == null) return null;
     return JSON.stringify(ConnectedServiceAuthGroupStateSchema.parse(state));
@@ -87,7 +104,7 @@ export function toAuthGroupResponse(row: AuthGroupRow): AuthGroupResponse {
         groupId: row.groupId,
         displayName: row.displayName,
         policy: parseConnectedServiceAuthGroupPolicyJson(row.policyJson),
-        activeProfileId: row.activeProfileId,
+        activeProfileId: row.activeProfileId ?? resolveFirstEnabledMemberProfileId(row.members),
         generation: row.generation,
         state: parseAuthGroupStateJson(row.stateJson),
         members: row.members.map((member) => ({
@@ -135,6 +152,24 @@ export async function findAuthGroupForAccount(params: {
         include: { members: { orderBy: memberOrderBy } },
     });
     return row ? toAuthGroupResponse(row) : null;
+}
+
+export async function findAuthGroupWithStoredActiveProfileForAccount(params: {
+    accountId: string;
+    serviceId: string;
+    groupId: string;
+}): Promise<{ group: AuthGroupResponse; storedActiveProfileId: string | null } | null> {
+    const row = await db.connectedServiceAuthGroup.findUnique({
+        where: {
+            accountId_vendor_groupId: {
+                accountId: params.accountId,
+                vendor: params.serviceId,
+                groupId: params.groupId,
+            },
+        },
+        include: { members: { orderBy: memberOrderBy } },
+    });
+    return row ? { group: toAuthGroupResponse(row), storedActiveProfileId: row.activeProfileId } : null;
 }
 
 export async function hasConnectedServiceProfile(params: {
@@ -283,7 +318,14 @@ export async function createAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
                 groupId: params.groupId,
             },
         },
-        select: { id: true, generation: true },
+        select: {
+            id: true,
+            activeProfileId: true,
+            generation: true,
+            members: {
+                select: { profileId: true, priority: true, enabled: true },
+            },
+        },
     });
     if (!group) return "group_not_found";
     if (group.generation !== params.expectedGeneration) {
@@ -302,9 +344,20 @@ export async function createAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
     });
     if (!profile) return "profile_not_found";
 
+    const nextActiveProfileId = group.activeProfileId ?? resolveFirstEnabledMemberProfileId([
+        ...group.members,
+        {
+            profileId: params.profileId,
+            priority: params.priority,
+            enabled: params.enabled,
+        },
+    ]);
     const generationUpdate = await tx.connectedServiceAuthGroup.updateMany({
         where: { id: group.id, generation: params.expectedGeneration },
-        data: { generation: { increment: 1 } },
+        data: {
+            generation: { increment: 1 },
+            ...(group.activeProfileId !== nextActiveProfileId ? { activeProfileId: nextActiveProfileId } : {}),
+        },
     });
     if (generationUpdate.count !== 1) {
         const current = await tx.connectedServiceAuthGroup.findUnique({
@@ -346,36 +399,44 @@ export async function updateAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
                 groupId: params.groupId,
             },
         },
-        select: { id: true, activeProfileId: true, generation: true },
+        select: {
+            id: true,
+            activeProfileId: true,
+            generation: true,
+            members: {
+                select: { id: true, profileId: true, priority: true, enabled: true },
+            },
+        },
     });
     if (!group) return "not_found";
     if (group.generation !== params.expectedGeneration) {
         return { type: "generation_conflict", generation: group.generation };
     }
 
-    const member = await tx.connectedServiceAuthGroupMember.findUnique({
-        where: {
-            accountId_vendor_groupId_profileId: {
-                accountId: params.accountId,
-                vendor: params.serviceId,
-                groupId: params.groupId,
-                profileId: params.profileId,
-            },
-        },
-        select: { id: true, priority: true, enabled: true },
-    });
+    const member = group.members.find((candidate) => candidate.profileId === params.profileId) ?? null;
     if (!member) return "not_found";
 
     const changesCandidate = (params.priority !== undefined && params.priority !== member.priority)
         || (params.enabled !== undefined && params.enabled !== member.enabled);
-    if (!changesCandidate) return "unchanged";
+    const nextMembers = group.members.map((candidate) => candidate.profileId === params.profileId
+        ? {
+            profileId: candidate.profileId,
+            priority: params.priority ?? candidate.priority,
+            enabled: params.enabled ?? candidate.enabled,
+        }
+        : candidate);
+    const nextActiveProfileId = group.activeProfileId
+        && nextMembers.some((candidate) => candidate.profileId === group.activeProfileId && candidate.enabled)
+        ? group.activeProfileId
+        : resolveFirstEnabledMemberProfileId(nextMembers);
+    const changesActiveProfile = group.activeProfileId !== nextActiveProfileId;
+    if (!changesCandidate && !changesActiveProfile) return "unchanged";
 
-    const shouldClearActiveProfile = params.enabled === false && group.activeProfileId === params.profileId;
     const generationUpdate = await tx.connectedServiceAuthGroup.updateMany({
         where: { id: group.id, generation: params.expectedGeneration },
         data: {
             generation: { increment: 1 },
-            ...(shouldClearActiveProfile ? { activeProfileId: null } : {}),
+            ...(changesActiveProfile ? { activeProfileId: nextActiveProfileId } : {}),
         },
     });
     if (generationUpdate.count !== 1) {
@@ -411,31 +472,32 @@ export async function deleteAuthGroupMemberAndBumpGenerationInTx(tx: Tx, params:
                 groupId: params.groupId,
             },
         },
-        select: { id: true, activeProfileId: true, generation: true },
+        select: {
+            id: true,
+            activeProfileId: true,
+            generation: true,
+            members: {
+                select: { id: true, profileId: true, priority: true, enabled: true },
+            },
+        },
     });
     if (!group) return "not_found";
     if (group.generation !== params.expectedGeneration) {
         return { type: "generation_conflict", generation: group.generation };
     }
 
-    const member = await tx.connectedServiceAuthGroupMember.findUnique({
-        where: {
-            accountId_vendor_groupId_profileId: {
-                accountId: params.accountId,
-                vendor: params.serviceId,
-                groupId: params.groupId,
-                profileId: params.profileId,
-            },
-        },
-        select: { id: true },
-    });
+    const member = group.members.find((candidate) => candidate.profileId === params.profileId) ?? null;
     if (!member) return "not_found";
 
+    const remainingMembers = group.members.filter((candidate) => candidate.profileId !== params.profileId);
+    const nextActiveProfileId = group.activeProfileId === params.profileId || group.activeProfileId === null
+        ? resolveFirstEnabledMemberProfileId(remainingMembers)
+        : group.activeProfileId;
     const generationUpdate = await tx.connectedServiceAuthGroup.updateMany({
         where: { id: group.id, generation: params.expectedGeneration },
         data: {
             generation: { increment: 1 },
-            ...(group.activeProfileId === params.profileId ? { activeProfileId: null } : {}),
+            ...(group.activeProfileId !== nextActiveProfileId ? { activeProfileId: nextActiveProfileId } : {}),
         },
     });
     if (generationUpdate.count !== 1) {

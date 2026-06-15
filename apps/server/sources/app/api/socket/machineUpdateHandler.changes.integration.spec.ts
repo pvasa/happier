@@ -241,6 +241,7 @@ describe("machineUpdateHandler (AccountChange integration)", () => {
                     },
                 },
             ],
+            fromCursor: "cursor-1",
             nextCursor: "cursor-2",
             truncated: false,
             futureField: { preserved: true },

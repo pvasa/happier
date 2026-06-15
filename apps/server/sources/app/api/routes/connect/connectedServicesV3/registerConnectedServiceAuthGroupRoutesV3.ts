@@ -40,6 +40,7 @@ import {
     deleteAuthGroupMemberAndBumpGenerationInTx,
     encodePolicyForStorage,
     findAuthGroupForAccount,
+    findAuthGroupWithStoredActiveProfileForAccount,
     hasConnectedServiceProfile,
     listAuthGroupsForAccount,
     stringifyAuthGroupMemberState,
@@ -180,12 +181,21 @@ function resolveCreateActiveProfileId(params: {
     members: readonly { profileId: string; enabled?: boolean }[];
     requestedActiveProfileId: string | null | undefined;
 }): string | null | "invalid" {
-    if (params.requestedActiveProfileId !== undefined) {
-        if (params.requestedActiveProfileId === null) return null;
+    if (params.requestedActiveProfileId !== undefined && params.requestedActiveProfileId !== null) {
         const requestedMember = params.members.find((member) => member.profileId === params.requestedActiveProfileId);
         return requestedMember?.enabled !== false ? params.requestedActiveProfileId : "invalid";
     }
     return params.members.find((member) => member.enabled !== false)?.profileId ?? null;
+}
+
+function resolveStoredActiveProfileMutation(params: {
+    storedActiveProfileId: string | null;
+    requestedActiveProfileId: string | null;
+}): { nextActiveProfileId: string | null; changesActiveProfile: boolean } {
+    return {
+        nextActiveProfileId: params.requestedActiveProfileId,
+        changesActiveProfile: params.storedActiveProfileId !== params.requestedActiveProfileId,
+    };
 }
 
 async function loadGroupEnvelope(params: {
@@ -320,8 +330,9 @@ export function registerConnectedServiceAuthGroupRoutesV3(app: Fastify): void {
         },
     }, async (request, reply) => {
         const { serviceId, groupId } = request.params;
-        const existing = await findAuthGroupForAccount({ accountId: request.userId, serviceId, groupId });
-        if (!existing) return reply.code(404).send({ error: "connect_group_not_found" });
+        const existingRecord = await findAuthGroupWithStoredActiveProfileForAccount({ accountId: request.userId, serviceId, groupId });
+        if (!existingRecord) return reply.code(404).send({ error: "connect_group_not_found" });
+        const existing = existingRecord.group;
         const policyPatch = parsePolicyPatchForRequest(request.body.policy);
         if (policyPatch === null) {
             return reply.code(400).send({ error: "connect_group_invalid" });
@@ -356,8 +367,13 @@ export function registerConnectedServiceAuthGroupRoutesV3(app: Fastify): void {
         }
         const changesDisplayName = request.body.displayName !== undefined
             && existing.displayName !== request.body.displayName;
-        const changesActiveProfile = request.body.activeProfileId !== undefined
-            && existing.activeProfileId !== request.body.activeProfileId;
+        const activeProfileMutation = request.body.activeProfileId !== undefined
+            ? resolveStoredActiveProfileMutation({
+                storedActiveProfileId: existingRecord.storedActiveProfileId,
+                requestedActiveProfileId: request.body.activeProfileId,
+            })
+            : null;
+        const changesActiveProfile = activeProfileMutation?.changesActiveProfile === true;
         const existingPolicyJson = encodePolicyForStorage(existing.policy);
         const nextPolicyJson = encodePolicyForStorage(policy);
         const changesPolicy = request.body.policy !== undefined
@@ -373,7 +389,7 @@ export function registerConnectedServiceAuthGroupRoutesV3(app: Fastify): void {
             const data = {
                 ...(request.body.displayName !== undefined ? { displayName: request.body.displayName } : {}),
                 ...(request.body.policy !== undefined ? { policyJson: nextPolicyJson } : {}),
-                ...(request.body.activeProfileId !== undefined ? { activeProfileId: request.body.activeProfileId } : {}),
+                ...(changesActiveProfile && activeProfileMutation !== null ? { activeProfileId: activeProfileMutation.nextActiveProfileId } : {}),
                 ...(changesGeneration ? { generation: { increment: 1 } } : {}),
             };
             if (changesGeneration) {
@@ -393,7 +409,7 @@ export function registerConnectedServiceAuthGroupRoutesV3(app: Fastify): void {
                     });
                     return { type: "generation-conflict" as const, generation: current?.generation ?? existing.generation };
                 }
-            } else {
+            } else if (request.body.displayName !== undefined || request.body.policy !== undefined) {
                 await tx.connectedServiceAuthGroup.update({
                     where: { accountId_vendor_groupId: { accountId: request.userId, vendor: serviceId, groupId } },
                     data,
@@ -745,14 +761,17 @@ export function registerConnectedServiceAuthGroupRoutesV3(app: Fastify): void {
                 return { type: "generation-conflict" as const, generation: group.generation };
             }
 
-            const changesActiveProfile = group.activeProfileId !== request.body.profileId;
-            if (!changesActiveProfile) {
+            const activeProfileMutation = resolveStoredActiveProfileMutation({
+                storedActiveProfileId: group.activeProfileId,
+                requestedActiveProfileId: request.body.profileId,
+            });
+            if (!activeProfileMutation.changesActiveProfile) {
                 return { type: "success" as const };
             }
 
             const update = await tx.connectedServiceAuthGroup.updateMany({
                 where: { id: group.id, generation: expectedGeneration },
-                data: { activeProfileId: request.body.profileId, generation: { increment: 1 } },
+                data: { activeProfileId: activeProfileMutation.nextActiveProfileId, generation: { increment: 1 } },
             });
             if (update.count !== 1) {
                 const current = await tx.connectedServiceAuthGroup.findUnique({

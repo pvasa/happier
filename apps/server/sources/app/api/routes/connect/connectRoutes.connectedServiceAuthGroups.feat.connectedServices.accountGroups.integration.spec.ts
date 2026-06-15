@@ -107,6 +107,23 @@ async function readAccountChangeCursor(accountId: string): Promise<number | null
     }))?.cursor ?? null;
 }
 
+async function readStoredAuthGroupActiveState(params: {
+    accountId: string;
+    serviceId: string;
+    groupId: string;
+}): Promise<{ activeProfileId: string | null; generation: number } | null> {
+    return db.connectedServiceAuthGroup.findUnique({
+        where: {
+            accountId_vendor_groupId: {
+                accountId: params.accountId,
+                vendor: params.serviceId,
+                groupId: params.groupId,
+            },
+        },
+        select: { activeProfileId: true, generation: true },
+    });
+}
+
 function expectLastProjectedGroup(params: {
     accountId: string;
     group: {
@@ -548,7 +565,7 @@ describe("connectRoutes connected service auth groups (integration)", () => {
             group: {
                 groupId: "codex-main",
                 displayName: "Codex Primary",
-                activeProfileId: null,
+                activeProfileId: "work",
                 generation: 3,
                 memberProfileIds: ["work"],
             },
@@ -1052,6 +1069,153 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         });
     });
 
+    it("canonicalizes a stored-null synthesized active profile through PATCH and active-profile routes", async () => {
+        const user = await createAccount("pk-groups-stored-null-fallback-canonicalize");
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        await createConnectedProfile(user.id, "openai-codex", "backup");
+        await seedAuthGroup({
+            accountId: user.id,
+            serviceId: "openai-codex",
+            groupId: "codex-patch",
+            memberProfileIds: ["work", "backup"],
+            activeProfileId: null,
+        });
+        await seedAuthGroup({
+            accountId: user.id,
+            serviceId: "openai-codex",
+            groupId: "codex-post",
+            memberProfileIds: ["work", "backup"],
+            activeProfileId: null,
+        });
+        const app = await createReadyApp();
+
+        const patchBefore = await app.inject({
+            method: "GET",
+            url: "/v3/connect/openai-codex/groups/codex-patch",
+            headers: authHeaders(user.id),
+        });
+        expect(patchBefore.statusCode).toBe(200);
+        expect(patchBefore.json().group).toMatchObject({ activeProfileId: "work", generation: 0 });
+        expect(await readStoredAuthGroupActiveState({
+            accountId: user.id,
+            serviceId: "openai-codex",
+            groupId: "codex-patch",
+        })).toEqual({ activeProfileId: null, generation: 0 });
+
+        const beforeCursor = await readAccountChangeCursor(user.id);
+        const patched = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-patch",
+            headers: authHeaders(user.id),
+            payload: { activeProfileId: "work", expectedGeneration: 0 },
+        });
+
+        expect(patched.statusCode).toBe(200);
+        expect(patched.json().group).toMatchObject({ activeProfileId: "work", generation: 1 });
+        expect(await readStoredAuthGroupActiveState({
+            accountId: user.id,
+            serviceId: "openai-codex",
+            groupId: "codex-patch",
+        })).toEqual({ activeProfileId: "work", generation: 1 });
+        const patchCursor = await readAccountChangeCursor(user.id);
+        expect(patchCursor).toEqual(expect.any(Number));
+        expect(patchCursor).toBeGreaterThan(beforeCursor ?? -1);
+
+        const repeatedPatch = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-patch",
+            headers: authHeaders(user.id),
+            payload: { activeProfileId: "work", expectedGeneration: 1 },
+        });
+
+        expect(repeatedPatch.statusCode).toBe(200);
+        expect(repeatedPatch.json().group).toMatchObject({ activeProfileId: "work", generation: 1 });
+        expect(await readStoredAuthGroupActiveState({
+            accountId: user.id,
+            serviceId: "openai-codex",
+            groupId: "codex-patch",
+        })).toEqual({ activeProfileId: "work", generation: 1 });
+        expect(await readAccountChangeCursor(user.id)).toBe(patchCursor);
+
+        const posted = await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups/codex-post/active-profile",
+            headers: authHeaders(user.id),
+            payload: { profileId: "work", expectedGeneration: 0 },
+        });
+
+        expect(posted.statusCode).toBe(200);
+        expect(posted.json().group).toMatchObject({ activeProfileId: "work", generation: 1 });
+        expect(await readStoredAuthGroupActiveState({
+            accountId: user.id,
+            serviceId: "openai-codex",
+            groupId: "codex-post",
+        })).toEqual({ activeProfileId: "work", generation: 1 });
+        const postCursor = await readAccountChangeCursor(user.id);
+        expect(postCursor).toEqual(expect.any(Number));
+        expect(postCursor).toBeGreaterThan(patchCursor ?? -1);
+    });
+
+    it("treats explicit null PATCH against a stored-null synthesized active profile as idempotent", async () => {
+        const user = await createAccount("pk-groups-stored-null-fallback-null-idempotent");
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        await createConnectedProfile(user.id, "openai-codex", "backup");
+        await seedAuthGroup({
+            accountId: user.id,
+            serviceId: "openai-codex",
+            groupId: "codex-main",
+            memberProfileIds: ["work", "backup"],
+            activeProfileId: null,
+        });
+        const app = await createReadyApp();
+
+        const before = await app.inject({
+            method: "GET",
+            url: "/v3/connect/openai-codex/groups/codex-main",
+            headers: authHeaders(user.id),
+        });
+        expect(before.statusCode).toBe(200);
+        expect(before.json().group).toMatchObject({ activeProfileId: "work", generation: 0 });
+        expect(await readStoredAuthGroupActiveState({
+            accountId: user.id,
+            serviceId: "openai-codex",
+            groupId: "codex-main",
+        })).toEqual({ activeProfileId: null, generation: 0 });
+
+        const beforeCursor = await readAccountChangeCursor(user.id);
+        const patched = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-main",
+            headers: authHeaders(user.id),
+            payload: { activeProfileId: null, expectedGeneration: 0 },
+        });
+
+        expect(patched.statusCode).toBe(200);
+        expect(patched.json().group).toMatchObject({ activeProfileId: "work", generation: 0 });
+        expect(await readStoredAuthGroupActiveState({
+            accountId: user.id,
+            serviceId: "openai-codex",
+            groupId: "codex-main",
+        })).toEqual({ activeProfileId: null, generation: 0 });
+        expect(await readAccountChangeCursor(user.id)).toBe(beforeCursor);
+
+        const repeated = await app.inject({
+            method: "PATCH",
+            url: "/v3/connect/openai-codex/groups/codex-main",
+            headers: authHeaders(user.id),
+            payload: { activeProfileId: null, expectedGeneration: 0 },
+        });
+
+        expect(repeated.statusCode).toBe(200);
+        expect(repeated.json().group).toMatchObject({ activeProfileId: "work", generation: 0 });
+        expect(await readStoredAuthGroupActiveState({
+            accountId: user.id,
+            serviceId: "openai-codex",
+            groupId: "codex-main",
+        })).toEqual({ activeProfileId: null, generation: 0 });
+        expect(await readAccountChangeCursor(user.id)).toBe(beforeCursor);
+    });
+
     it("applies the group patch policy contract with generation CAS", async () => {
         const user = await createAccount("pk-groups-patch-policy-cas");
         await createConnectedProfile(user.id, "openai-codex", "work");
@@ -1131,6 +1295,27 @@ describe("connectRoutes connected service auth groups (integration)", () => {
                     expect.objectContaining({ profileId: "disabled-backup", enabled: false }),
                     expect.objectContaining({ profileId: "work", enabled: true }),
                 ]),
+            }),
+        });
+
+        const explicitNullDefaulted = await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "codex-explicit-null",
+                members: [
+                    { profileId: "disabled-backup", enabled: false, priority: 10 },
+                    { profileId: "work", priority: 20 },
+                ],
+                activeProfileId: null,
+            },
+        });
+
+        expect(explicitNullDefaulted.statusCode).toBe(200);
+        expect(explicitNullDefaulted.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: "work",
             }),
         });
 
@@ -1274,6 +1459,74 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         });
     });
 
+    it("defaults member additions and active-member removals to an enabled member", async () => {
+        const user = await createAccount("pk-groups-active-profile-member-defaults");
+        await createConnectedProfile(user.id, "openai-codex", "work");
+        await createConnectedProfile(user.id, "openai-codex", "backup");
+        const app = await createReadyApp();
+
+        const created = await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups",
+            headers: authHeaders(user.id),
+            payload: {
+                groupId: "codex-main",
+                members: [],
+                activeProfileId: null,
+            },
+        });
+        expect(created.statusCode).toBe(200);
+        expect(created.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: null,
+                generation: 0,
+                members: [],
+            }),
+        });
+
+        const addedBackup = await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups/codex-main/members",
+            headers: authHeaders(user.id),
+            payload: { profileId: "backup", priority: 20, expectedGeneration: 0 },
+        });
+        expect(addedBackup.statusCode).toBe(200);
+        expect(addedBackup.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: "backup",
+                generation: 1,
+            }),
+        });
+
+        const addedWork = await app.inject({
+            method: "POST",
+            url: "/v3/connect/openai-codex/groups/codex-main/members",
+            headers: authHeaders(user.id),
+            payload: { profileId: "work", priority: 10, expectedGeneration: 1 },
+        });
+        expect(addedWork.statusCode).toBe(200);
+        expect(addedWork.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: "backup",
+                generation: 2,
+            }),
+        });
+
+        const removedActive = await app.inject({
+            method: "DELETE",
+            url: "/v3/connect/openai-codex/groups/codex-main/members/backup?expectedGeneration=2",
+            headers: { "x-test-user-id": user.id },
+        });
+        expect(removedActive.statusCode).toBe(200);
+        expect(removedActive.json()).toEqual({
+            group: expect.objectContaining({
+                activeProfileId: "work",
+                generation: 3,
+                members: [expect.objectContaining({ profileId: "work", enabled: true })],
+            }),
+        });
+    });
+
     it("requires expectedGeneration for member create, update, and delete without bumping rejected mutations", async () => {
         const user = await createAccount("pk-groups-member-generation-required");
         await createConnectedProfile(user.id, "openai-codex", "work");
@@ -1407,7 +1660,7 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         });
     });
 
-    it("clears disabled active profiles and blocks patch or switch routes from reselecting them", async () => {
+    it("falls back from disabled active profiles and blocks patch or switch routes from reselecting them", async () => {
         const user = await createAccount("pk-groups-disabled-active-retain");
         await createConnectedProfile(user.id, "openai-codex", "work");
         await createConnectedProfile(user.id, "openai-codex", "backup");
@@ -1434,7 +1687,7 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         expect(disabled.statusCode).toBe(200);
         expect(disabled.json()).toEqual({
             group: expect.objectContaining({
-                activeProfileId: null,
+                activeProfileId: "work",
                 generation: 1,
                 members: expect.arrayContaining([
                     expect.objectContaining({ profileId: "backup", enabled: false }),
@@ -1550,7 +1803,7 @@ describe("connectRoutes connected service auth groups (integration)", () => {
         });
         expect(main.statusCode).toBe(200);
         expect(main.json().group).toMatchObject({
-            activeProfileId: null,
+            activeProfileId: "backup",
             generation: 1,
             members: [expect.objectContaining({ profileId: "backup" })],
         });

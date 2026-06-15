@@ -1,15 +1,118 @@
-import { resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 import { ensureDepsInstalled, pmSpawnScript } from '../proc/pm.mjs';
+import { run } from '../proc/proc.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
 import { applyServerLightEnvDefaults } from '../server/apply_server_light_env_defaults.mjs';
 import { resolveServerDevScript } from '../server/flavor_scripts.mjs';
+import { applyStackServerLoggingDefaults } from '../server/logging_env.mjs';
 import { resolveServerReadyTimeoutMs, waitForServerReady } from '../server/server.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from '../net/ports.mjs';
 import { readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 import { killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
 import { watchDebounced } from '../proc/watch.mjs';
 import { pickMetroPort, resolveStablePortStart } from '../expo/metro_ports.mjs';
+
+function readPackageScripts(dir) {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8'));
+    return pkg?.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+  } catch {
+    return {};
+  }
+}
+
+function hasPackageScript(dir, scriptName) {
+  const script = readPackageScripts(dir)?.[scriptName];
+  return typeof script === 'string' && script.trim().length > 0;
+}
+
+function resolveDevServerWatchPaths({ serverDir, existsSyncImpl = existsSync }) {
+  const repoRoot = resolve(serverDir, '..', '..');
+  const sharedPackages = ['agents', 'cli-common', 'protocol'];
+  const serverPaths = [
+    join(serverDir, 'sources'),
+    join(serverDir, 'scripts'),
+    join(serverDir, 'prisma'),
+    join(serverDir, 'package.json'),
+    join(serverDir, 'tsconfig.json'),
+    join(serverDir, 'tsconfig.build.json'),
+  ];
+  const sharedPaths = sharedPackages.flatMap((pkg) => ([
+    join(repoRoot, 'packages', pkg, 'src'),
+    join(repoRoot, 'packages', pkg, 'package.json'),
+    join(repoRoot, 'packages', pkg, 'tsconfig.json'),
+  ]));
+
+  return [...serverPaths, ...sharedPaths].filter((p) => existsSyncImpl(p));
+}
+
+function appendWatchSignatureEntries(path, entries) {
+  let stats;
+  try {
+    stats = lstatSync(path);
+  } catch {
+    entries.push(`${path}\0missing`);
+    return false;
+  }
+
+  if (stats.isDirectory()) {
+    entries.push(`${path}\0dir`);
+    let names = [];
+    try {
+      names = readdirSync(path, { withFileTypes: true })
+        .map((entry) => entry.name)
+        .sort();
+    } catch {
+      return true;
+    }
+    for (const name of names) {
+      appendWatchSignatureEntries(join(path, name), entries);
+    }
+    return true;
+  }
+
+  if (stats.isFile() || stats.isSymbolicLink()) {
+    entries.push(`${path}\0file\0${stats.size}\0${Math.trunc(stats.mtimeMs)}`);
+    return true;
+  }
+
+  entries.push(`${path}\0other\0${Math.trunc(stats.mtimeMs)}`);
+  return true;
+}
+
+function readDevServerWatchChangeSignature(paths) {
+  const entries = [];
+  let observed = false;
+  for (const path of paths) {
+    observed = appendWatchSignatureEntries(path, entries) || observed;
+  }
+  return observed ? entries.join('\n') : null;
+}
+
+export async function preflightDevServerRestart(
+  { serverDir, serverEnv = {}, logger = console },
+  { runImpl = run } = {},
+) {
+  const enabled = String(serverEnv.HAPPIER_STACK_SERVER_RESTART_PREFLIGHT ?? '').trim() !== '0';
+  if (!enabled) return { ran: false, reason: 'disabled' };
+  if (String(serverEnv.HAPPIER_STACK_SERVER_RESTART_PREFLIGHT_ALREADY_DONE ?? '').trim() === '1') {
+    return { ran: false, reason: 'already-done' };
+  }
+  if (!hasPackageScript(serverDir, 'build')) return { ran: false, reason: 'missing-build-script' };
+
+  logger.log('[local] watch: server changed → preflight build...');
+  await runImpl('yarn', ['-s', 'build'], {
+    cwd: serverDir,
+    env: {
+      ...serverEnv,
+      HAPPIER_STACK_SKIP_REFRESH_DEPS: serverEnv.HAPPIER_STACK_SKIP_REFRESH_DEPS ?? '1',
+    },
+    stdio: 'inherit',
+  });
+  return { ran: true, reason: 'build-ok' };
+}
 
 export function resolveStackUiDevPortStart({ env = process.env, stackName }) {
   return resolveStablePortStart({
@@ -55,6 +158,7 @@ export async function startDevServer({
     // Avoid noisy failures if a previous run left the metrics port busy.
     METRICS_ENABLED: baseEnv.METRICS_ENABLED ?? 'false',
   };
+  applyStackServerLoggingDefaults({ baseEnv, serverEnv });
 
   if (serverComponentName === 'happier-server-light') {
     applyServerLightEnvDefaults({ baseEnv, serverEnv, baseDir: autostart.baseDir });
@@ -88,6 +192,7 @@ export async function startDevServer({
 
   // Restart behavior (stack-safe): only kill when we can prove ownership via runtime state.
   if (restart && stackMode && runtimeStatePath && serverAlreadyRunning) {
+    await preflightDevServerRestart({ serverDir, serverComponentName, serverEnv, logger: console });
     const st = await readStackRuntimeStateFile(runtimeStatePath);
     const pid = Number(st?.processes?.serverPid);
     if (pid > 1) {
@@ -150,6 +255,9 @@ export function watchDevServerAndRestart({
   pmSpawnScriptImpl = pmSpawnScript,
   recordStackRuntimeUpdateImpl = recordStackRuntimeUpdate,
   waitForServerReadyImpl = waitForServerReady,
+  preflightDevServerRestartImpl = preflightDevServerRestart,
+  readWatchChangeSignatureImpl = readDevServerWatchChangeSignature,
+  existsSyncImpl = existsSync,
   logger = console,
 } = {}) {
   if (!enabled) return null;
@@ -159,12 +267,27 @@ export function watchDevServerAndRestart({
 
   let inFlight = false;
   let pending = false;
+  const watchPaths = resolveDevServerWatchPaths({ serverDir, existsSyncImpl });
+  let lastWatchSignature = readWatchChangeSignatureImpl(watchPaths);
+
+  const hasRealWatchedChange = () => {
+    const nextWatchSignature = readWatchChangeSignatureImpl(watchPaths);
+    if (lastWatchSignature && nextWatchSignature && nextWatchSignature === lastWatchSignature) {
+      return false;
+    }
+    if (nextWatchSignature) {
+      lastWatchSignature = nextWatchSignature;
+    }
+    return true;
+  };
 
   const restartOnce = async () => {
     const pid = Number(serverProcRef?.current?.pid);
     if (!Number.isFinite(pid) || pid <= 1) return false;
 
-    logger.log('[local] watch: server changed → restarting...');
+    await preflightDevServerRestartImpl({ serverDir, serverComponentName, serverEnv, logger });
+
+    logger.log('[local] watch: server preflight passed → restarting...');
     const killResult = await killProcessGroupOwnedByStackImpl(pid, { stackName, envPath, label: 'server', json: false });
     if (!killResult.killed) {
       const free = await isTcpPortFreeImpl(serverPort, { host: '127.0.0.1' });
@@ -191,10 +314,11 @@ export function watchDevServerAndRestart({
   };
 
   return watchDebouncedImpl({
-    paths: [resolve(serverDir)],
+    paths: (watchPaths.length ? watchPaths : [serverDir]).map((p) => resolve(p)),
     debounceMs: 600,
     onChange: async () => {
       if (isShuttingDown?.()) return;
+      if (!hasRealWatchedChange()) return;
       if (inFlight) {
         pending = true;
         return;

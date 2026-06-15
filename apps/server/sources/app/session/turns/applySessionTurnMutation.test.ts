@@ -195,4 +195,115 @@ describe("applySessionTurnMutationToTurns", () => {
         expect(decision.apply).toBe(false);
         expect(decision.materialized.latestTurnStatus).toBe("in_progress");
     });
+
+    it("touches the active turn so in-progress freshness follows trusted runtime progress", () => {
+        const decision = applySessionTurnMutationToTurns({
+            currentLatestTurnId: "turn-1",
+            turns: [failedUsageLimitTurn({
+                status: "in_progress",
+                startedAt: 100,
+                updatedAt: 100,
+                terminalAt: undefined,
+                lastRuntimeIssue: null,
+            })],
+            appliedAt: 181,
+            mutation: {
+                v: 1,
+                sessionId: "s1",
+                mutationId: "active-touch-1",
+                action: "touch_active",
+                turnId: "turn-1",
+                provider: "codex",
+                observedAt: 180,
+            },
+        });
+
+        expect(decision.apply).toBe(true);
+        expect(decision.materialized).toEqual({
+            latestTurnId: "turn-1",
+            latestTurnStatus: "in_progress",
+            latestTurnStatusObservedAt: 180,
+            lastRuntimeIssue: null,
+        });
+        if (decision.apply) {
+            expect(decision.changedTurn).toEqual(expect.objectContaining({
+                status: "in_progress",
+                startedAt: 100,
+                updatedAt: 180,
+                lastMutationId: "active-touch-1",
+            }));
+        }
+    });
+
+    it("ignores stale active touches for non-current or terminal turns", () => {
+        const terminalDecision = applySessionTurnMutationToTurns({
+            currentLatestTurnId: "turn-1",
+            turns: [failedUsageLimitTurn({ status: "completed", lastRuntimeIssue: null })],
+            appliedAt: 301,
+            mutation: {
+                v: 1,
+                sessionId: "s1",
+                mutationId: "terminal-touch",
+                action: "touch_active",
+                turnId: "turn-1",
+                observedAt: 300,
+            },
+        });
+        expect(terminalDecision.apply).toBe(false);
+
+        const oldTurnDecision = applySessionTurnMutationToTurns({
+            currentLatestTurnId: "turn-2",
+            turns: [
+                failedUsageLimitTurn({ status: "in_progress", terminalAt: undefined, lastRuntimeIssue: null }),
+                {
+                    turnId: "turn-2",
+                    status: "in_progress",
+                    startedAt: 250,
+                    updatedAt: 250,
+                },
+            ],
+            appliedAt: 301,
+            mutation: {
+                v: 1,
+                sessionId: "s1",
+                mutationId: "old-turn-touch",
+                action: "touch_active",
+                turnId: "turn-1",
+                observedAt: 300,
+            },
+        });
+        expect(oldTurnDecision.apply).toBe(false);
+    });
+
+    it("ignores out-of-order active touches that would move in-progress freshness backwards", () => {
+        const decision = applySessionTurnMutationToTurns({
+            currentLatestTurnId: "turn-1",
+            turns: [failedUsageLimitTurn({
+                status: "in_progress",
+                startedAt: 100,
+                updatedAt: 500,
+                terminalAt: undefined,
+                lastRuntimeIssue: null,
+                lastMutationId: "active-touch-newer",
+            })],
+            appliedAt: 601,
+            mutation: {
+                v: 1,
+                sessionId: "s1",
+                mutationId: "active-touch-older",
+                action: "touch_active",
+                turnId: "turn-1",
+                provider: "codex",
+                observedAt: 450,
+            },
+        });
+
+        expect(decision.apply).toBe(false);
+        expect(decision.materialized).toEqual({
+            latestTurnId: "turn-1",
+            latestTurnStatus: "in_progress",
+            latestTurnStatusObservedAt: 500,
+            lastRuntimeIssue: null,
+        });
+    });
 });

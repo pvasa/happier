@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -32,6 +32,11 @@ function createWatcherOptions(serverDir, overrides = {}) {
     isShuttingDown: () => false,
     ...overrides,
   };
+}
+
+function createChangingSignatureReader() {
+  let value = 0;
+  return () => String(value++);
 }
 
 test('watchDevServerAndRestart watches server-light because dev:light does not self-reload', async (t) => {
@@ -85,6 +90,7 @@ test('watchDevServerAndRestart serializes pending server-light restarts', async 
             firstReadyCompleted = true;
           }
         },
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
         logger: { log() {}, error() {} },
       }
     );
@@ -104,6 +110,66 @@ test('watchDevServerAndRestart serializes pending server-light restarts', async 
         [201, 202]
       );
       assert.equal(serverProcRef.current.pid, 202);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart keeps the existing server when preflight rebuild fails', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    let spawnCalls = 0;
+    let readyCalls = 0;
+    const killedPids = [];
+    const errors = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        preflightDevServerRestartImpl: async () => {
+          throw new Error('server build failed');
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return { killed: true };
+        },
+        pmSpawnScriptImpl: async () => {
+          spawnCalls += 1;
+          return { pid: 200 + spawnCalls, exitCode: null };
+        },
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {
+          readyCalls += 1;
+        },
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: {
+          log() {},
+          error(message) {
+            errors.push(String(message));
+          },
+        },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      assert.equal(typeof capturedOnChange, 'function');
+
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.deepEqual(killedPids, []);
+      assert.equal(spawnCalls, 0);
+      assert.equal(readyCalls, 0);
+      assert.deepEqual(children, []);
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.ok(errors.some((message) => message.includes('server restart failed')));
     } finally {
       watcher?.close?.();
     }
@@ -140,6 +206,7 @@ test('watchDevServerAndRestart refuses to spawn when existing server is not stac
         waitForServerReadyImpl: async () => {
           readyCalls += 1;
         },
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
         logger: {
           log() {},
           error(message) {
@@ -161,6 +228,33 @@ test('watchDevServerAndRestart refuses to spawn when existing server is not stac
       assert.deepEqual(children, []);
       assert.equal(serverProcRef.current.pid, 101);
       assert.ok(errors.some((message) => message.includes('server restart failed')));
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart watches source/config paths instead of the whole server directory', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    await mkdir(join(serverDir, 'sources'), { recursive: true });
+    let capturedPaths = null;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir),
+      {
+        watchDebouncedImpl: ({ paths }) => {
+          capturedPaths = paths;
+          return { close() {} };
+        },
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      assert.ok(Array.isArray(capturedPaths));
+      assert.ok(!capturedPaths.includes(serverDir), 'must not watch the whole server directory');
+      assert.ok(capturedPaths.every((p) => !p.includes('/dist') && !p.includes('/node_modules') && !p.includes('/logs')));
     } finally {
       watcher?.close?.();
     }

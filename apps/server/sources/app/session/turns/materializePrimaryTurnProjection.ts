@@ -32,7 +32,7 @@ export function materializePrimaryTurnProjection(params: Readonly<{
         latestTurnStatus: currentTurn.status,
         latestTurnStatusObservedAt: isTerminalStatus(currentTurn.status)
             ? currentTurn.terminalAt ?? currentTurn.updatedAt
-            : currentTurn.startedAt,
+            : currentTurn.updatedAt,
         lastRuntimeIssue: currentTurn.status === "failed" ? currentTurn.lastRuntimeIssue ?? null : null,
     };
 }
