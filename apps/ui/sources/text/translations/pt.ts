@@ -4133,6 +4133,11 @@ export const pt: TranslationStructure = {
       sizeCompact: 'Compacto',
       sizeRegular: 'Normal',
       sizeLarge: 'Grande',
+      blur: 'Desfoque',
+      blurIntensity: 'Intensidade do desfoque',
+      intensityLight: 'Leve',
+      intensityRegular: 'Normal',
+      intensityStrong: 'Forte',
     },
     tabBarBadges: {
       title: 'Selos da barra de abas',

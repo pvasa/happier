@@ -4294,6 +4294,11 @@ localTailscale: {
       sizeCompact: 'コンパクト',
       sizeRegular: '標準',
       sizeLarge: '大',
+      blur: 'ぼかし',
+      blurIntensity: 'ぼかしの強さ',
+      intensityLight: '弱',
+      intensityRegular: '標準',
+      intensityStrong: '強',
     },
     tabBarBadges: {
       title: 'タブバーのバッジ',

@@ -3812,6 +3812,11 @@ export const ca: TranslationStructure = {
         sizeCompact: 'Compacta',
         sizeRegular: 'Normal',
         sizeLarge: 'Gran',
+        blur: 'Difuminat',
+        blurIntensity: 'Intensitat del difuminat',
+        intensityLight: 'Suau',
+        intensityRegular: 'Normal',
+        intensityStrong: 'Forta',
       },
         tabBarBadges: {
             title: 'Distintius de la barra de pestanyes',

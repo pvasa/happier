@@ -3898,6 +3898,11 @@ export const zhHans: TranslationStructure = {
       sizeCompact: '紧凑',
       sizeRegular: '标准',
       sizeLarge: '大',
+      blur: '模糊',
+      blurIntensity: '模糊强度',
+      intensityLight: '轻',
+      intensityRegular: '标准',
+      intensityStrong: '强',
     },
     tabBarBadges: {
       title: '标签栏角标',

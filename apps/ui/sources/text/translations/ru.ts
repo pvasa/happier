@@ -3975,6 +3975,11 @@ export const ru: TranslationStructure = {
       sizeCompact: 'Компактный',
       sizeRegular: 'Обычный',
       sizeLarge: 'Большой',
+      blur: 'Размытие',
+      blurIntensity: 'Интенсивность размытия',
+      intensityLight: 'Слабая',
+      intensityRegular: 'Обычная',
+      intensityStrong: 'Сильная',
     },
     tabBarBadges: {
       title: 'Значки панели вкладок',

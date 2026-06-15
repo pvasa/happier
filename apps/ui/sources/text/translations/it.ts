@@ -4347,6 +4347,11 @@ export const it: TranslationStructure = {
       sizeCompact: 'Compatta',
       sizeRegular: 'Normale',
       sizeLarge: 'Grande',
+      blur: 'Sfocatura',
+      blurIntensity: 'Intensità sfocatura',
+      intensityLight: 'Leggera',
+      intensityRegular: 'Normale',
+      intensityStrong: 'Forte',
     },
     tabBarBadges: {
       title: 'Badge della barra schede',

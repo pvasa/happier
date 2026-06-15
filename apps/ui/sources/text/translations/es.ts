@@ -4008,6 +4008,11 @@ export const es: TranslationStructure = {
       sizeCompact: 'Compacto',
       sizeRegular: 'Normal',
       sizeLarge: 'Grande',
+      blur: 'Desenfoque',
+      blurIntensity: 'Intensidad del desenfoque',
+      intensityLight: 'Ligera',
+      intensityRegular: 'Normal',
+      intensityStrong: 'Fuerte',
     },
     tabBarBadges: {
       title: 'Insignias de la barra de pestañas',

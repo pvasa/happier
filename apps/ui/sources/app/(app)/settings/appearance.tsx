@@ -95,6 +95,8 @@ export default React.memo(function AppearanceSettingsScreen() {
     const [tabBarOpenTabsBadgeEnabled, setTabBarOpenTabsBadgeEnabled] = useSettingMutable('tabBarOpenTabsBadgeEnabled');
     const [tabBarShowLabels, setTabBarShowLabels] = useSettingMutable('tabBarShowLabels');
     const [tabBarSize, setTabBarSize] = useSettingMutable('tabBarSize');
+    const [tabBarBlurEnabled, setTabBarBlurEnabled] = useSettingMutable('tabBarBlurEnabled');
+    const [tabBarBlurIntensity, setTabBarBlurIntensity] = useSettingMutable('tabBarBlurIntensity');
     const [preferredLanguage] = useSettingMutable('preferredLanguage');
     const [openTextSizeMenu, setOpenTextSizeMenu] = React.useState(false);
     const [openThemeMenu, setOpenThemeMenu] = React.useState(false);
@@ -106,6 +108,7 @@ export default React.memo(function AppearanceSettingsScreen() {
     const [openAvatarStyleMenu, setOpenAvatarStyleMenu] = React.useState(false);
     const [openGitBadgeMenu, setOpenGitBadgeMenu] = React.useState(false);
     const [openTabBarSizeMenu, setOpenTabBarSizeMenu] = React.useState(false);
+    const [openTabBarBlurMenu, setOpenTabBarBlurMenu] = React.useState(false);
     const safeThemeProfiles = themeProfiles ?? DEFAULT_THEME_PROFILES_LOCAL_STATE;
     const activeLightThemeProfile = React.useMemo(
         () => findActiveThemeProfileForMode(safeThemeProfiles, 'light'),
@@ -159,6 +162,14 @@ export default React.memo(function AppearanceSettingsScreen() {
             { id: 'compact', title: t('settingsAppearance.tabBarAppearance.sizeCompact') },
             { id: 'regular', title: t('settingsAppearance.tabBarAppearance.sizeRegular') },
             { id: 'large', title: t('settingsAppearance.tabBarAppearance.sizeLarge') },
+        ];
+    }, []);
+
+    const tabBarBlurIntensityMenuItems = React.useMemo((): readonly DropdownMenuItem[] => {
+        return [
+            { id: 'light', title: t('settingsAppearance.tabBarAppearance.intensityLight') },
+            { id: 'regular', title: t('settingsAppearance.tabBarAppearance.intensityRegular') },
+            { id: 'strong', title: t('settingsAppearance.tabBarAppearance.intensityStrong') },
         ];
     }, []);
 
@@ -529,6 +540,42 @@ export default React.memo(function AppearanceSettingsScreen() {
                     }
                     showChevron={false}
                 />
+                <Item
+                    title={t('settingsAppearance.tabBarAppearance.blur')}
+                    icon={<Ionicons name="contrast-outline" size={29} color={theme.colors.accent.blue} />}
+                    rightElement={
+                        <Switch
+                            testID="settings-appearance-tabBarBlur-switch"
+                            value={tabBarBlurEnabled}
+                            onValueChange={setTabBarBlurEnabled}
+                        />
+                    }
+                    showChevron={false}
+                />
+                {tabBarBlurEnabled ? (
+                    <DropdownMenu
+                        open={openTabBarBlurMenu}
+                        onOpenChange={setOpenTabBarBlurMenu}
+                        variant="selectable"
+                        search={false}
+                        selectedId={tabBarBlurIntensity}
+                        showCategoryTitles={false}
+                        matchTriggerWidth={true}
+                        connectToTrigger={true}
+                        rowKind="item"
+                        itemTrigger={{
+                            title: t('settingsAppearance.tabBarAppearance.blurIntensity'),
+                            icon: <Ionicons name="options-outline" size={29} color={theme.colors.accent.blue} />,
+                            showSelectedSubtitle: false,
+                            itemProps: { testID: 'settings-appearance-tabBarBlurIntensity-select' },
+                        }}
+                        items={tabBarBlurIntensityMenuItems}
+                        onSelect={(itemId) => {
+                            if (itemId !== 'light' && itemId !== 'regular' && itemId !== 'strong') return;
+                            setTabBarBlurIntensity(itemId);
+                        }}
+                    />
+                ) : null}
             </ItemGroup>
 
             {/* Tab bar badges */}

@@ -3652,6 +3652,11 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         sizeCompact: '緊湊',
         sizeRegular: '標準',
         sizeLarge: '大',
+        blur: '模糊',
+        blurIntensity: '模糊強度',
+        intensityLight: '輕',
+        intensityRegular: '標準',
+        intensityStrong: '強',
       },
         tabBarBadges: {
             title: '標籤列徽章',

@@ -4043,6 +4043,11 @@ export const pl: TranslationStructure = {
       sizeCompact: 'Kompaktowy',
       sizeRegular: 'Normalny',
       sizeLarge: 'Duży',
+      blur: 'Rozmycie',
+      blurIntensity: 'Intensywność rozmycia',
+      intensityLight: 'Lekka',
+      intensityRegular: 'Normalna',
+      intensityStrong: 'Mocna',
     },
     tabBarBadges: {
       title: 'Odznaki paska kart',

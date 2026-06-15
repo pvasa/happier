@@ -3779,6 +3779,11 @@ export const en = {
         sizeCompact: 'Compact',
         sizeRegular: 'Regular',
         sizeLarge: 'Large',
+        blur: 'Blur',
+        blurIntensity: 'Blur intensity',
+        intensityLight: 'Light',
+        intensityRegular: 'Regular',
+        intensityStrong: 'Strong',
       },
         tabBarBadges: {
             title: 'Tab bar badges',
