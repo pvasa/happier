@@ -9364,6 +9364,34 @@ const ChatListInternal = React.memo((props: {
                                 }
                                 if (
                                     Platform.OS !== 'web' &&
+                                    usesNativeFlashListBottomMaintenance &&
+                                    !isTrusted &&
+                                    wantsPinnedRef.current &&
+                                    bottomFollowModeStateRef.current.mode === 'following' &&
+                                    mountSettleCoordinatorRef.current?.getSnapshot().isMountSettleActive === true &&
+                                    nowMs - lastUserScrollIntentAtMsRef.current >= TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS
+                                ) {
+                                    // Cold-open open-flicker root fix: a structural
+                                    // `clearLayoutCacheOnUpdate` inside the mount-settle window resets
+                                    // FlashList bottom maintenance and yanks the inverted follow-bottom
+                                    // list toward the visual top. MVCP only MAINTAINS a bottom already
+                                    // reached — it never re-travels there — so the passive-drift bail
+                                    // below would wrongly leave the list yanked. While the mount window
+                                    // is still active and an untrusted frame observes the list off the
+                                    // bottom with no recent user intent, re-issue the canonical inverted
+                                    // bottom pin to catch the yank (and a known ~260ms second-source
+                                    // transient). The pin's own off-bottom guard makes a same-content
+                                    // re-pin a no-op once the bottom is reached, so this cannot loop.
+                                    const mountSettleDistanceFromBottom = readCurrentNativeDistanceFromBottom();
+                                    if (
+                                        mountSettleDistanceFromBottom != null &&
+                                        mountSettleDistanceFromBottom > pinThresholdPx
+                                    ) {
+                                        pinNativeFlashListToBottomIfMeasured({ telemetryReason: 'layout-change' });
+                                    }
+                                }
+                                if (
+                                    Platform.OS !== 'web' &&
                                     !isTrusted &&
                                     bottomFollowModeStateRef.current.mode === 'following' &&
                                     followIntent.wantsPinned &&

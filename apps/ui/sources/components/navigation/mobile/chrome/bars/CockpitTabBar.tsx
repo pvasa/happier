@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Color from 'color';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -28,14 +29,16 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
     },
+    // Selection highlight behind the whole active tab (icon + label). Subtle
+    // overlay of the foreground color so it reads softly over the glass material.
     activePill: {
         position: 'absolute',
-        top: -5,
-        bottom: -5,
-        left: -12,
-        right: -12,
-        borderRadius: 999,
-        backgroundColor: theme.colors.surface.ripple,
+        top: 3,
+        bottom: 3,
+        left: 4,
+        right: 4,
+        borderRadius: 16,
+        backgroundColor: Color(theme.colors.text.primary).alpha(0.05).rgb().string(),
     },
     label: {
         marginTop: 4,
@@ -94,8 +97,8 @@ export function CockpitTabBar<TSurface extends string>(props: CockpitTabBarProps
                             hitSlop={8}
                             style={[styles.tab, { paddingVertical: metrics.tabPaddingVertical, paddingHorizontal: metrics.tabPaddingHorizontal }]}
                         >
+                            {active ? <View pointerEvents="none" style={styles.activePill} /> : null}
                             <View style={styles.iconContainer}>
-                                {active ? <View pointerEvents="none" style={styles.activePill} /> : null}
                                 {icon}
                                 {renderTabBadge(tab.badge, `${props.tabTestIdPrefix}${tab.id}-badge`)}
                             </View>

@@ -3,6 +3,7 @@ import { View, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
+import Color from 'color';
 import { t } from '@/text';
 import { Typography } from '@/constants/Typography';
 import { useInboxHasContent } from '@/hooks/inbox/useInboxHasContent';
@@ -40,14 +41,16 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
         position: 'relative',
     },
+    // Selection highlight behind the whole active tab (icon + label). Subtle
+    // overlay of the foreground color so it reads softly over the glass material.
     activePill: {
         position: 'absolute',
-        top: -5,
-        bottom: -5,
-        left: -12,
-        right: -12,
-        borderRadius: 999,
-        backgroundColor: theme.colors.surface.ripple,
+        top: 3,
+        bottom: 3,
+        left: 4,
+        right: 4,
+        borderRadius: 16,
+        backgroundColor: Color(theme.colors.text.primary).alpha(0.05).rgb().string(),
     },
     label: {
         fontSize: 10,
@@ -105,8 +108,8 @@ export const TabBar = React.memo(({ activeTab, onTabPress }: TabBarProps) => {
                             onPress={() => onTabPress(tab.key)}
                             hitSlop={8}
                         >
+                            {isActive ? <View pointerEvents="none" style={styles.activePill} /> : null}
                             <View style={styles.tabContent}>
-                                {isActive ? <View pointerEvents="none" style={styles.activePill} /> : null}
                                 <Image
                                     source={tab.icon}
                                     contentFit="contain"
