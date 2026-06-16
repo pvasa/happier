@@ -3595,6 +3595,9 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             kiro: {
                 title: "Kiro"
             },
+            hermes: {
+                title: "Hermes"
+            },
             pi: {
                 title: "Pi"
             },
@@ -4701,7 +4704,9 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         copilotSessionId: 'Copilot 工作階段 ID',
         copilotSessionIdCopied: 'Copilot 工作階段 ID 已複製到剪貼簿',
         cursorSessionId: 'Cursor 工作階段 ID',
+        hermesSessionId: 'Hermes 工作階段 ID',
         cursorSessionIdCopied: 'Cursor 工作階段 ID 已複製到剪貼簿',
+        hermesSessionIdCopied: 'Hermes 工作階段 ID 已複製到剪貼簿',
         metadataCopied: '中繼資料已複製到剪貼簿',
         failedToCopyMetadata: '複製中繼資料失敗',
         failedToKillSession: '終止工作階段失敗',
@@ -4830,6 +4835,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             gemini: 'Gemini',
             copilot: 'Copilot',
             cursor: 'Cursor',
+            hermes: 'Hermes',
         },
           model: {
               title: '模型',
@@ -7650,6 +7656,7 @@ settingsSession: {
         aiBackend: {
             copilotSubtitleExperimental: 'GitHub Copilot CLI（實驗）',
             cursorSubtitleExperimental: 'Cursor Agent CLI（實驗）',
+            hermesSubtitleExperimental: 'Hermes 命令列（實驗）',
         },
     },
 };

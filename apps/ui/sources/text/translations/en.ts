@@ -3722,6 +3722,9 @@ export const en = {
             kiro: {
                 title: "Kiro"
             },
+            hermes: {
+                title: "Hermes"
+            },
             pi: {
                 title: "Pi"
             },
@@ -5326,7 +5329,9 @@ export const en = {
         copilotSessionId: 'Copilot Session ID',
         copilotSessionIdCopied: 'Copilot Session ID copied to clipboard',
         cursorSessionId: 'Cursor Session ID',
+        hermesSessionId: 'Hermes Session ID',
         cursorSessionIdCopied: 'Cursor Session ID copied to clipboard',
+        hermesSessionIdCopied: 'Hermes Session ID copied to clipboard',
         metadataCopied: 'Metadata copied to clipboard',
         failedToCopyMetadata: 'Failed to copy metadata',
         failedToKillSession: 'Failed to kill session',
@@ -5536,6 +5541,7 @@ export const en = {
             pi: 'Pi',
             copilot: 'Copilot',
             cursor: 'Cursor',
+            hermes: 'Hermes',
         },
         auggieIndexingChip: {
             on: 'Indexing on',
@@ -9183,6 +9189,7 @@ settingsSession: {
             piSubtitleExperimental: 'Pi CLI (experimental)',
             copilotSubtitleExperimental: 'GitHub Copilot CLI (experimental)',
             cursorSubtitleExperimental: 'Cursor Agent CLI (experimental)',
+            hermesSubtitleExperimental: 'Hermes CLI (experimental)',
         },
         tmux: {
             title: 'Tmux',

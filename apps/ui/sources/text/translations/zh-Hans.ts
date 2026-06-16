@@ -3840,6 +3840,9 @@ export const zhHans: TranslationStructure = {
             kiro: {
                 title: "Kiro"
             },
+            hermes: {
+                title: "Hermes"
+            },
             pi: {
                 title: "Pi"
             },
@@ -5462,7 +5465,9 @@ export const zhHans: TranslationStructure = {
     copilotSessionId: "Copilot 会话 ID",
     copilotSessionIdCopied: "Copilot 会话 ID 已复制到剪贴板",
     cursorSessionId: "Cursor 会话 ID",
+    hermesSessionId: "Hermes 会话 ID",
     cursorSessionIdCopied: "Cursor 会话 ID 已复制到剪贴板",
+    hermesSessionIdCopied: "Hermes 会话 ID 已复制到剪贴板",
     metadataCopied: "元数据已复制到剪贴板",
     failedToCopyMetadata: "复制元数据失败",
     failedToKillSession: "终止会话失败",
@@ -5676,6 +5681,7 @@ export const zhHans: TranslationStructure = {
       pi: "Pi",
       copilot: "Copilot",
       cursor: "Cursor",
+      hermes: "Hermes",
     },
     auggieIndexingChip: {
       on: "已开启索引",
@@ -9429,6 +9435,7 @@ settingsSession: {
       piSubtitleExperimental: "Pi 命令行（实验）",
       copilotSubtitleExperimental: "GitHub Copilot CLI（实验）",
       cursorSubtitleExperimental: "Cursor Agent CLI（实验）",
+      hermesSubtitleExperimental: "Hermes 命令行（实验）",
     },
     tmux: {
       title: "tmux",

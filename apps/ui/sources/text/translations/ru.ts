@@ -3916,6 +3916,9 @@ export const ru: TranslationStructure = {
             kiro: {
                 title: "Kiro"
             },
+            hermes: {
+                title: "Hermes"
+            },
             pi: {
                 title: "Pi"
             },
@@ -5027,7 +5030,9 @@ export const ru: TranslationStructure = {
     copilotSessionId: "ID сессии Copilot",
     copilotSessionIdCopied: "ID сессии Copilot скопирован в буфер обмена",
     cursorSessionId: "ID сессии Cursor",
+    hermesSessionId: "ID сессии Hermes",
     cursorSessionIdCopied: "ID сессии Cursor скопирован в буфер обмена",
+    hermesSessionIdCopied: "ID сессии Hermes скопирован в буфер обмена",
     metadataCopied: "Метаданные скопированы в буфер обмена",
     failedToCopyMetadata: "Не удалось скопировать метаданные",
     failedToKillSession: "Не удалось завершить сессию",
@@ -5885,6 +5890,7 @@ export const ru: TranslationStructure = {
       pi: "Pi",
       copilot: "Copilot",
       cursor: "Cursor",
+      hermes: "Hermes",
     },
     auggieIndexingChip: {
       on: "Индексация включена",
@@ -9808,6 +9814,7 @@ settingsSession: {
       piSubtitleExperimental: "Pi CLI (экспериментально)",
       copilotSubtitleExperimental: "GitHub Copilot CLI (экспериментально)",
       cursorSubtitleExperimental: "Cursor Agent CLI (экспериментально)",
+      hermesSubtitleExperimental: "Hermes CLI (экспериментально)",
     },
     tmux: {
       title: "Tmux",

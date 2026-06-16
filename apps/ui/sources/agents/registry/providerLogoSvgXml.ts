@@ -171,6 +171,23 @@ function auggieSvg(theme: Theme): string {
     );
 }
 
+function hermesSvg(theme: Theme): string {
+    // Hermes monogram: a winged "H" glyph (two uprights + crossbar with small wings),
+    // rendered as a monochrome mark to match the app theme.
+    return monochrome(
+        theme.colors.text.primary,
+        `
+            <!-- Wings flanking the crossbar -->
+            <path d="M2 11h4l-2-2v4l2-2H2v0Zm20 0h-4l2-2v4l-2-2h4v0Z"/>
+            <!-- Letter H uprights -->
+            <path d="M7 5h2.4v14H7V5Zm7.6 0H17v14h-2.4V5Z"/>
+            <!-- Letter H crossbar -->
+            <path d="M9.4 10.8h5.2v2.4H9.4v-2.4Z"/>
+        `,
+        '0 0 24 24',
+    );
+}
+
 export const PROVIDER_LOGO_SVG_XML: Partial<Record<AgentId, AgentIconSvgXmlResolver>> = {
     auggie: auggieSvg,
     claude: claudeSvg,
@@ -179,6 +196,7 @@ export const PROVIDER_LOGO_SVG_XML: Partial<Record<AgentId, AgentIconSvgXmlResol
     cursor: cursorSvg,
     customAcp: customAcpSvg,
     gemini: geminiSvg,
+    hermes: hermesSvg,
     kimi: kimiSvg,
     kilo: kiloSvg,
     kiro: kiroSvg,

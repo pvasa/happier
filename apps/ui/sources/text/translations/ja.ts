@@ -1456,6 +1456,7 @@ export const ja: TranslationStructure = {
       piSubtitleExperimental: "Pi CLI（実験）",
       copilotSubtitleExperimental: "GitHub Copilot CLI（実験的）",
       cursorSubtitleExperimental: "Cursor Agent CLI（実験）",
+      hermesSubtitleExperimental: "Hermes CLI（実験）",
     },
     tmux: {
       title: "Tmux",
@@ -4236,6 +4237,9 @@ localTailscale: {
             kiro: {
                 title: "Kiro"
             },
+            hermes: {
+                title: "Hermes"
+            },
             pi: {
                 title: "Pi"
             },
@@ -5929,8 +5933,10 @@ localTailscale: {
     copilotSessionIdCopied:
       "Copilot セッション ID をクリップボードにコピーしました",
     cursorSessionId: "Cursor セッション ID",
+    hermesSessionId: "Hermes セッション ID",
     cursorSessionIdCopied:
       "Cursor セッション ID をクリップボードにコピーしました",
+    hermesSessionIdCopied: "Hermes セッション ID をクリップボードにコピーしました",
     metadataCopied: "メタデータがクリップボードにコピーされました",
     failedToCopyMetadata: "メタデータのコピーに失敗しました",
     failedToKillSession: "セッションの終了に失敗しました",
@@ -6147,6 +6153,7 @@ localTailscale: {
       pi: "Pi",
       copilot: "Copilot",
       cursor: "Cursor",
+      hermes: "Hermes",
     },
     auggieIndexingChip: {
       on: "インデックス有効",

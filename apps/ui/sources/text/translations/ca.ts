@@ -3755,6 +3755,9 @@ export const ca: TranslationStructure = {
             kiro: {
                 title: "Kiro"
             },
+            hermes: {
+                title: "Hermes"
+            },
             pi: {
                 title: "Pi"
             },
@@ -5311,7 +5314,9 @@ deps: {
         copilotSessionId: 'ID de sessió de Copilot',
         copilotSessionIdCopied: 'ID de sessió de Copilot copiat al porta-retalls',
         cursorSessionId: 'ID de sessió de Cursor',
+        hermesSessionId: 'ID de la sessió de Hermes',
         cursorSessionIdCopied: 'ID de sessió de Cursor copiat al porta-retalls',
+        hermesSessionIdCopied: 'ID de la sessió de Hermes copiat al porta-retalls',
         metadataCopied: 'Metadades copiades al porta-retalls',
         failedToCopyMetadata: 'Ha fallat copiar les metadades',
         failedToKillSession: 'Ha fallat finalitzar la sessió',
@@ -5506,6 +5511,7 @@ deps: {
             pi: 'Pi',
             copilot: 'Copilot',
             cursor: 'Cursor',
+            hermes: 'Hermes',
         },
         auggieIndexingChip: {
             on: 'Indexació activada',
@@ -9007,6 +9013,7 @@ settingsSession: {
             piSubtitleExperimental: 'CLI de Pi (experimental)',
             copilotSubtitleExperimental: 'GitHub Copilot CLI (en proves)',
             cursorSubtitleExperimental: 'Cursor Agent CLI (en proves)',
+            hermesSubtitleExperimental: 'CLI de Hermes (en proves)',
         },
         tmux: {
             title: 'Tmux',
