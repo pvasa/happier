@@ -1,0 +1,76 @@
+---
+title: Hermes
+description: Configure Hermes in Happier, including install, terminal-based authentication, and how Hermes speaks ACP.
+---
+
+Happier supports **Hermes** as a local CLI-backed provider.
+
+Hermes is the Nous Research autonomous CLI agent. It is a built-in provider in its own right and speaks the Agent Client Protocol (ACP), so Happier runs it through the standard ACP path rather than as a [Custom ACP](/docs/providers/custom-acp) backend.
+
+## Requirements
+
+- Hermes CLI installed locally
+- binary available on `PATH` (or set `HAPPIER_HERMES_PATH` if needed)
+
+## Install Hermes
+
+Install Hermes using the official Hermes installer from [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent), then verify the `hermes` binary is on `PATH`:
+
+```bash
+hermes --version
+```
+
+## Local authentication in Happier
+
+Hermes authenticates through its own terminal setup flow rather than a vendor API key.
+
+You can run the setup directly in your terminal:
+
+```bash
+hermes acp --setup
+hermes model
+```
+
+Happier can also launch Hermes's native setup from:
+
+- **Settings → AI provider settings → Hermes**
+
+Auth-status detection for Hermes is currently conservative, so Happier may still show **Unknown** even though the login flow is available.
+
+For the shared user guide, see [Provider authentication](/docs/features/provider-authentication).
+
+## Start Hermes with Happier
+
+```bash
+happier hermes
+```
+
+## Hermes and ACP
+
+Hermes speaks ACP, so it also appears in Happier's **ACP Backends** settings screen as a built-in ACP-capable provider.
+
+That screen is useful when you want to understand how ACP backends work in general, but you do **not** need to configure Hermes there for normal Hermes usage.
+
+Use:
+
+- **Hermes provider page** when you want Hermes itself
+- **Custom ACP / ACP Backends** when you want to add arbitrary ACP-compatible CLIs or create your own backend choices
+
+See:
+
+- [ACP backends](/docs/features/acp-backends)
+- [Custom ACP](/docs/providers/custom-acp)
+
+## Notes
+
+- Hermes runs locally on your machine through the real Hermes CLI.
+- Resume and fork are supported through Hermes's ACP session capabilities. These are currently marked **experimental** pending end-to-end verification.
+- Tool calls are normalized to canonical Happier tool renderers.
+
+## Troubleshooting
+
+If Hermes is not detected:
+
+1. Verify `hermes --version` works.
+2. Restart Happier.
+3. If Hermes isn't on `PATH`, set `HAPPIER_HERMES_PATH` to the absolute path of the `hermes` binary.

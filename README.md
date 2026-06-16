@@ -98,6 +98,7 @@ happier opencode
 
 # More providers:
 happier gemini
+happier hermes
 happier kilo
 happier kimi
 happier qwen
@@ -124,7 +125,7 @@ Happier is about exploring a faster-moving, more collaborative direction, while 
 ## Key Features
 
 - **Broad provider support**<br />
-  Works with **Claude Code, Codex, OpenCode, Gemini, GitHub Copilot, Kiro, Pi, Kilo, Kimi, Qwen, Augment**, and any custom ACP-compatible CLI — all from one unified interface.
+  Works with **Claude Code, Codex, OpenCode, Gemini, GitHub Copilot, Kiro, Hermes, Pi, Kilo, Kimi, Qwen, Augment**, and any custom ACP-compatible CLI — all from one unified interface.
 
 - **Browse, follow, and take over existing sessions**<br />
   Open any existing Codex, Claude, or OpenCode session on your machine directly in Happier, follow a live session started outside the app in real time, or take control and import it into Happier with full continuity.
