@@ -8,6 +8,7 @@ import { executionRunBackendFactory as kimi } from '@/backends/kimi/executionRun
 import { executionRunBackendFactory as kilo } from '@/backends/kilo/executionRuns/executionRunBackendFactory';
 import { executionRunBackendFactory as copilot } from '@/backends/copilot/executionRuns/executionRunBackendFactory';
 import { executionRunBackendFactory as pi } from '@/backends/pi/executionRuns/executionRunBackendFactory';
+import { executionRunBackendFactory as hermes } from '@/backends/hermes/executionRuns/executionRunBackendFactory';
 
 import { listNativeReviewEngineIds, resolveNativeReviewExecutionRunBackendFactory } from '@/agent/reviews/engines/nativeReviewEngines';
 import type { BackendIsolationBundle, BackendIsolationRequest } from '@/runtime/isolation/types';
@@ -29,6 +30,7 @@ const REGISTRY: Record<string, ExecutionRunBackendDescriptor> = {
   kilo: { factory: kilo },
   copilot: { factory: copilot },
   pi: { factory: pi },
+  hermes: { factory: hermes },
 };
 
 // Aliases: UI/agents may reference provider IDs that are distinct from the execution-run backend ID.

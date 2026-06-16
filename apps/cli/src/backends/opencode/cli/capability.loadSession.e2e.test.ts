@@ -39,6 +39,7 @@ function makeCliSnapshot(overrides: Partial<DetectCliSnapshot['clis']>): DetectC
       pi: makeUnavailableCliEntry(),
       copilot: makeUnavailableCliEntry(),
       cursor: makeUnavailableCliEntry(),
+      hermes: makeUnavailableCliEntry(),
       ...overrides,
     },
     tmux: { available: false },

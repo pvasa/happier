@@ -23,6 +23,7 @@ function makeDetectCliSnapshot(): DetectCliSnapshot {
       pi: makeUnavailableCliEntry(),
       copilot: makeUnavailableCliEntry(),
       cursor: makeUnavailableCliEntry(),
+      hermes: makeUnavailableCliEntry(),
     },
     tmux: { available: false },
     windowsTerminal: { available: false },

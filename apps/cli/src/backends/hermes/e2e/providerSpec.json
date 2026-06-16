@@ -1,0 +1,34 @@
+{
+  "v": 1,
+  "id": "hermes",
+  "enableEnvVar": "HAPPIER_E2E_PROVIDER_HERMES",
+  "protocol": "acp",
+  "traceProvider": "hermes",
+  "requiredBinaries": [
+    {
+      "bin": "hermes",
+      "envOverride": "HAPPIER_E2E_PROVIDER_HERMES_BIN",
+      "requireExists": true
+    }
+  ],
+  "auth": {
+    "mode": "auto"
+  },
+  "permissions": {
+    "v": 1,
+    "acp": {
+      "expectToolPermissionPrompts": false
+    }
+  },
+  "cli": {
+    "subcommand": "hermes",
+    "extraArgs": ["--started-by", "terminal"],
+    "env": {
+      "HEADLESS": "1",
+      "HAPPIER_VARIANT": "dev"
+    },
+    "envFrom": {
+      "HAPPIER_HERMES_PATH": "HAPPIER_E2E_PROVIDER_HERMES_BIN"
+    }
+  }
+}

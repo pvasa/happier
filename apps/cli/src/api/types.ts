@@ -507,6 +507,7 @@ export type Metadata = {
   sessionUsageLimitRecoveryV1?: SessionUsageLimitRecoveryV1,
   copilotSessionId?: string, // Copilot ACP session ID (opaque)
   cursorSessionId?: string, // Cursor ACP session ID (opaque)
+  hermesSessionId?: string, // Hermes ACP session ID (opaque)
   auggieAllowIndexing?: boolean, // Auggie indexing enablement (spawn-time)
   tools?: string[],
   slashCommands?: string[],
