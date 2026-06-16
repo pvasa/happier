@@ -71,6 +71,7 @@ import {
     type TranscriptViewportTelemetryBlankAreaSource,
     type TranscriptViewportTelemetryBottomFollowMode,
     type TranscriptViewportTelemetryListOrientation,
+    type TranscriptViewportTelemetryLiveTailAnchorKind,
     type TranscriptViewportTelemetryMvcpPolicy,
     type TranscriptViewportTelemetryScrollReason,
     type TranscriptViewportTelemetryScrollWriter,
@@ -135,7 +136,9 @@ import {
     useOptionalTranscriptSelectionState,
 } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 import { buildTranscriptHotColdSegments } from '@/components/sessions/transcript/segments/buildTranscriptHotColdSegments';
-import { resolveWebColdListScrollTarget } from '@/components/sessions/transcript/segments/resolveWebHotColdScrollDecision';
+import { resolveNativeInvertedColdScrollIndex, resolveWebColdListScrollTarget } from '@/components/sessions/transcript/segments/resolveWebHotColdScrollDecision';
+import { TranscriptHotTail } from '@/components/sessions/transcript/segments/TranscriptHotTail';
+import { resolvePendingWebPrependAnchorIndex as resolvePendingWebPrependAnchorItemIndex } from '@/components/sessions/transcript/webTranscriptPrependAnchorIndex';
 import {
     isMessageRolledBack,
     readSessionRollbackRangesV1,
@@ -236,6 +239,7 @@ import {
     resolveTranscriptRowItemType,
     type TranscriptRowShellItem,
 } from '@/components/sessions/transcript/measurement/transcriptRowShellSignature';
+import { readStreamSegmentMetaV1 } from '@/sync/reducer/helpers/streamSegmentMeta';
 import {
     createTranscriptMountSettlePinCoordinator,
     type TranscriptMountSettlePinCoordinator,
@@ -286,6 +290,115 @@ type ScrollableChatListRef = Readonly<{
 }>;
 
 type ChatTranscriptListItem = TranscriptRowShellItem;
+
+type TranscriptLiveTailAnchorReason = TranscriptViewportTelemetryLiveTailAnchorKind;
+type TranscriptLiveTailAnchor = Readonly<{ messageId: string; reason: TranscriptLiveTailAnchorReason }> | null;
+
+/**
+ * Classify a candidate live-tail row: a per-token-streaming assistant message, or an in-flight
+ * (running) tool call. Returns null for everything else (the carve does not engage on it directly).
+ *
+ * BOTH live-tail signals are scoped to `sessionActive` (R2 + defense-in-depth): a tool left
+ * `running`, OR an assistant segment left `segmentState:'streaming'`, after a disconnect / missed
+ * completion / interrupted turn on an otherwise-idle session must NOT keep the carve open, or its
+ * trailing rows would be permanently detached into the edge slot — the exact idle orphan the carve
+ * exists to avoid. A streaming assistant segment is normally self-gating (the reducer clears
+ * `segmentState` on finalize), but that clear can be missed (interrupt / reconnect) leaving a stale
+ * `streaming` flag far up a completed transcript; gating on `sessionActive` makes the carve fail
+ * closed on an idle session regardless of a stale segment marker. `sessionActive` is true throughout
+ * a genuinely-active streaming turn, so the legitimate live case is unaffected.
+ */
+function classifyLiveTailAnchorMessage(
+    message: Message | null,
+    sessionActive: boolean,
+): 'streaming-message' | 'streaming-tool' | null {
+    if (!message) return null;
+    if (!sessionActive) return null;
+    if (message.kind === 'tool-call') {
+        return message.tool?.state === 'running' ? 'streaming-tool' : null;
+    }
+    if (message.kind !== 'agent-text') return null;
+    return readStreamSegmentMetaV1(message.meta)?.segmentState === 'streaming' ? 'streaming-message' : null;
+}
+
+/**
+ * Derive the native edge-slot carve anchor (plan §12 #1). The anchor is the FIRST actively-streaming
+ * row (assistant text or running tool, scanning oldest→newest so the carve runs anchor→end). When no
+ * row is detectably mid-stream this frame, two fallbacks keep the carve from collapsing mid-turn:
+ *   1. `thinkingFallbackMessageId` (activeThinkingMessageId) — the live thinking pulse row.
+ *   2. the WHOLE-TURN floor: while `turnActive` (`session.thinking` spans the whole turn) and a
+ *      committed row exists, anchor at `latestCommittedActivityKey`. This is what prevents the carve
+ *      collapsing at the thinking→answer / text→tool transition frame (where the thinking pulse has
+ *      cleared and the next row has not yet been flagged streaming). Idle (turnActive false, nothing
+ *      streaming) returns null → no carve → no orphaned trailing block.
+ */
+function resolveTranscriptLiveTailAnchor(params: Readonly<{
+    items: readonly ChatTranscriptListItem[];
+    getMessageById: (messageId: string) => Message | null;
+    thinkingFallbackMessageId: string | null;
+    turnActive: boolean;
+    sessionActive: boolean;
+    latestCommittedActivityKey: string | null;
+}>): TranscriptLiveTailAnchor {
+    const sessionActive = params.sessionActive;
+    for (const item of params.items) {
+        if (item.kind === 'message') {
+            const reason = classifyLiveTailAnchorMessage(params.getMessageById(item.messageId), sessionActive);
+            if (reason) return { messageId: item.messageId, reason };
+            continue;
+        }
+
+        if (
+            item.kind === 'tool-calls-group' ||
+            item.kind === 'tool-group-header' ||
+            item.kind === 'tool-group-expand' ||
+            item.kind === 'tool-group-tool' ||
+            item.kind === 'tool-group-footer'
+        ) {
+            for (const messageId of item.toolMessageIds) {
+                const reason = classifyLiveTailAnchorMessage(params.getMessageById(messageId), sessionActive);
+                if (reason) return { messageId, reason };
+            }
+            continue;
+        }
+
+        if (item.kind === 'turn') {
+            if (item.turn.userMessageId) {
+                const reason = classifyLiveTailAnchorMessage(params.getMessageById(item.turn.userMessageId), sessionActive);
+                if (reason) return { messageId: item.turn.userMessageId, reason };
+            }
+            for (const contentItem of item.turn.content) {
+                if (contentItem.kind === 'message') {
+                    const reason = classifyLiveTailAnchorMessage(params.getMessageById(contentItem.messageId), sessionActive);
+                    if (reason) return { messageId: contentItem.messageId, reason };
+                    continue;
+                }
+                if (contentItem.kind === 'tool_calls') {
+                    for (const messageId of contentItem.toolMessageIds) {
+                        const reason = classifyLiveTailAnchorMessage(params.getMessageById(messageId), sessionActive);
+                        if (reason) return { messageId, reason };
+                    }
+                }
+            }
+        }
+    }
+
+    if (params.thinkingFallbackMessageId != null) {
+        return { messageId: params.thinkingFallbackMessageId, reason: 'thinking' };
+    }
+
+    // The whole-turn floor must fail closed on an idle session exactly like the streaming-message and
+    // running-tool anchors (FIX 1 / orphan-safe). A `thinking && !active` state (a debounced thinking
+    // grace flag lingering after the turn ended, or a thinking flag stuck across a disconnect) is NOT
+    // a live turn — anchoring on it would detach the trailing block into the edge slot with no growing
+    // row to justify it (the idle orphan). A genuinely-active turn is BOTH active and thinking, so the
+    // legitimate live case (incl. the Gemini/legacy no-segment-meta path) is unaffected.
+    if (sessionActive && params.turnActive && params.latestCommittedActivityKey != null) {
+        return { messageId: params.latestCommittedActivityKey, reason: 'turn-floor' };
+    }
+
+    return null;
+}
 
 function measureTranscriptDerivation<T>(
     name: string,
@@ -351,6 +464,13 @@ type ScheduledPinToBottom = {
     id: any;
     previousWebMetrics: WebTranscriptScrollMetrics | null;
     reason: TranscriptViewportTelemetryScrollReason;
+    /**
+     * Native hot/cold carve only: snapshot of "was following the live tail at the inverted bottom"
+     * taken BEFORE the data/layout change. The post-change distance is unreliable on native because
+     * FlashList MVCP offset-correction re-anchors the index-0 (live-tail-advance) insert; this
+     * pre-change decision lets the bottom pin fire authoritatively (mirrors web's capture-before).
+     */
+    nativePrevFollowAtBottom?: boolean;
 };
 
 const EMPTY_MESSAGES_BY_ID: Readonly<Record<string, Message>> = Object.freeze({});
@@ -895,6 +1015,7 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
                     metadata={stableSessionMetadata}
                 sessionId={props.session.id}
                 sessionActive={props.session.active === true}
+                sessionThinking={props.session.thinking === true}
                 groupingMode={groupingMode}
                 forkedTranscriptEnabled={forkedTranscriptEnabled}
                 items={groupedItems}
@@ -1170,6 +1291,7 @@ const ChatListInternal = React.memo((props: {
     metadata: Metadata | null,
     sessionId: string,
     sessionActive: boolean,
+    sessionThinking: boolean,
     groupingMode: string,
     forkedTranscriptEnabled: boolean,
     items: ChatTranscriptListItem[],
@@ -1489,6 +1611,40 @@ const ChatListInternal = React.memo((props: {
     const finishEntryRestoreTransactionRef = React.useRef<(transaction: EntryRestoreTransaction) => void>(() => {});
     const legacyEntryRestoreAppliedRef = React.useRef<{ sessionId: string; offsetY: number } | null>(null);
     const composerInsetHeightRef = React.useRef(0);
+    // Rendered height of the native hot-tail block (live-tail rows carved into the inverted
+    // visual-bottom edge slot). Folded into the inverted bottom command's viewOffset so the
+    // live tail lands fully above the composer. 0 when the native split is OFF/empty.
+    const nativeHotTailHeightRef = React.useRef(0);
+    // §12 #4: live-region carve context for per-pin telemetry (anchor id+kind, hot/cold counts,
+    // whether the carve owns the bottom). Updated each render; read by the scroll-write executor
+    // and the height-driven pin so they never re-derive it inside scroll callbacks.
+    const liveTailCarveTelemetryRef = React.useRef<{
+        active: boolean;
+        anchorId: string | null;
+        anchorKind: TranscriptLiveTailAnchorReason | null;
+        coldCount: number;
+        hotCount: number;
+    }>({ active: false, anchorId: null, anchorKind: null, coldCount: 0, hotCount: 0 });
+    // §12 #2: stable bridge to the latest height-driven live-tail pin (assigned after the pin
+    // helpers exist). Keeps `handleNativeHotTailHeightChange` identity-stable while still calling
+    // the freshest pin logic — height + pin become ONE event, killing the async-ref overlap race.
+    const pinNativeLiveTailForHotTailHeightRef = React.useRef<((height: number) => void) | null>(null);
+    // §12 #4: carve fields for an issued inverted bottom pin (the deterministic inset = composerInset
+    // + hot-tail height, the anchor that opened the carve, hot/cold counts). Empty when the carve is
+    // OFF so non-carve / flag=0 pins stay byte-for-byte unchanged.
+    const resolveInvertedBottomPinCarveTelemetryFields = React.useCallback((): Record<string, unknown> => {
+        const carve = liveTailCarveTelemetryRef.current;
+        if (!carve.active) return {};
+        return {
+            liveRegionActive: true,
+            nativeHotTailHeightPx: nativeHotTailHeightRef.current,
+            nativeCarvePinIssued: true,
+            ...(carve.anchorId ? { liveTailAnchorId: carve.anchorId } : {}),
+            ...(carve.anchorKind ? { liveTailAnchorKind: carve.anchorKind } : {}),
+            coldCount: carve.coldCount,
+            hotCount: carve.hotCount,
+        };
+    }, []);
     const scheduledPinRef = React.useRef<ScheduledPinToBottom | null>(null);
     const latestJumpToSeqRef = React.useRef<number | null>(props.jumpToSeq ?? null);
     latestJumpToSeqRef.current = props.jumpToSeq ?? null;
@@ -1767,6 +1923,13 @@ const ChatListInternal = React.memo((props: {
                     : 'none';
         const pendingWebPrependAnchorId =
             pendingAnchor?.anchorTestId ?? pendingAnchor?.itemTestId ?? undefined;
+        const pendingWebPrependAnchorIndex = pendingAnchor
+            ? resolvePendingWebPrependAnchorItemIndex({
+                anchorTestId: pendingAnchor.anchorTestId,
+                itemTestId: pendingAnchor.itemTestId,
+                items: itemsRef.current,
+            })
+            : undefined;
         return {
             trigger: params.trigger,
             ...(metrics ? {
@@ -1786,6 +1949,7 @@ const ChatListInternal = React.memo((props: {
             hotCount: counts.hotCount,
             pendingWebPrependAnchorKind,
             ...(pendingWebPrependAnchorId ? { pendingWebPrependAnchorId } : {}),
+            ...(pendingWebPrependAnchorIndex !== undefined ? { pendingWebPrependAnchorIndex } : {}),
             programmaticWebWrite: params.programmaticWebWrite,
         };
     }, [resolveFirstVisibleWebAnchorTestId]);
@@ -2912,40 +3076,125 @@ const ChatListInternal = React.memo((props: {
     entrySliceWithheldCountRef.current = entrySliceSourceBounds
         ? decomposedItems.length - (entrySliceSourceBounds.end - entrySliceSourceBounds.start)
         : 0;
+    // Canonical (oldest-first) windowed view BEFORE the orientation boundary. The hot/cold
+    // segmentation runs here so web (standard) and native (inverted) share one policy call;
+    // each segment is then oriented independently for the rendered list.
+    const canonicalWindowedItems = React.useMemo<readonly ChatTranscriptListItem[]>(() => {
+        if (listImplementation === 'flatlist_legacy') return decomposedItems;
+        return entrySliceSourceBounds
+            ? decomposedItems.slice(entrySliceSourceBounds.start, entrySliceSourceBounds.end)
+            : decomposedItems;
+    }, [decomposedItems, entrySliceSourceBounds, listImplementation]);
     const displayItems = React.useMemo<readonly ChatTranscriptListItem[]>(() => {
         if (listImplementation === 'flatlist_legacy') {
             // Legacy: inverted lists expect newest-first input.
             return [...props.items].reverse();
         }
-        const windowedItems = entrySliceSourceBounds
-            ? decomposedItems.slice(entrySliceSourceBounds.start, entrySliceSourceBounds.end)
-            : decomposedItems;
         // N3.1: the orientation reversal is a view adapter at the LIST BOUNDARY only —
         // turn grouping, derived items, and the slice window above stay oldest-first.
-        return orientTranscriptListItems(windowedItems, listOrientation);
-    }, [decomposedItems, entrySliceSourceBounds, listImplementation, listOrientation, props.items]);
+        return orientTranscriptListItems(canonicalWindowedItems, listOrientation);
+    }, [canonicalWindowedItems, listImplementation, listOrientation, props.items]);
+    const liveTailAnchor = React.useMemo(() => resolveTranscriptLiveTailAnchor({
+        items: canonicalWindowedItems,
+        getMessageById: getTurnMessageById,
+        thinkingFallbackMessageId: props.activeThinkingMessageId,
+        // Whole-turn gate (plan §12 #1): session.thinking spans the entire active turn, so the carve
+        // stays anchored at the latest committed row through the thinking→answer / text→tool
+        // transition instead of collapsing on the frame no single row is flagged streaming.
+        turnActive: props.sessionThinking,
+        // R2: scope the running-tool anchor to a genuinely-active session — an idle session whose
+        // trailing tool is stuck in `running` (disconnect / missed completion) yields NO anchor, so
+        // its trailing rows are not permanently carved into the edge slot (the idle orphan).
+        sessionActive: props.sessionActive,
+        latestCommittedActivityKey: props.latestCommittedActivityKey,
+    }), [
+        canonicalWindowedItems,
+        getTurnMessageById,
+        props.activeThinkingMessageId,
+        props.latestCommittedActivityKey,
+        props.sessionActive,
+        props.sessionThinking,
+    ]);
+    const liveTailAnchorMessageId = liveTailAnchor?.messageId ?? null;
     const transcriptHotColdSegments = React.useMemo(() => {
         const tuning = sync.getSyncTuning();
-        return buildTranscriptHotColdSegments({
-            enabled: listImplementation === 'flash_v2',
-            hotTailItemCount: tuning.transcriptWebHotTailItemCount,
-            items: displayItems,
+        const platformIsWeb = Platform.OS === 'web';
+        // Web keeps its trailing-N window; native carves only the live-tail (flag = item count,
+        // default 0 = OFF = today's all-in-FlashList behavior). Both call ONE policy on the
+        // canonical oldest-first array (trailing = newest), then orient each segment.
+        const hotTailItemCount = platformIsWeb
+            ? tuning.transcriptWebHotTailItemCount
+            : tuning.transcriptNativeHotTailItemCount;
+        // FIX 2 (native standard orientation guard): the native carve renders the live tail in the
+        // edge slot, which hardcodes `displayIndexMode="invertedEdgeSlot"` and whose pin guards assume
+        // inverted orientation. flash_v2 STANDARD is selectable on native (non-default), so the native
+        // carve must ONLY engage under inverted orientation — standard-native flash_v2 falls back to
+        // the cold list / all-in behavior (never the inverted edge slot). Web is always standard and
+        // owns its in-flow footer carve, so it is unaffected by this guard.
+        const enabled =
+            listImplementation === 'flash_v2' &&
+            (platformIsWeb || (hotTailItemCount > 0 && listOrientation === 'inverted'));
+        const segments = buildTranscriptHotColdSegments({
+            enabled,
+            hotTailItemCount: hotTailItemCount > 0 ? hotTailItemCount : 1,
+            // Native renders the hot tail OUTSIDE the recycler (inverted edge slot), so it must be
+            // bounded to the trailing window — otherwise an early active item un-virtualizes the whole
+            // transcript (device-proven blank/jank). Web keeps the unbounded pullers (web-virtualized cold).
+            maxHotTailItems: platformIsWeb ? undefined : (hotTailItemCount > 0 ? hotTailItemCount : 1),
+            // Native carves ONLY the actively-streaming live tail (empty when idle) — the edge slot's
+            // sole job is the per-token-growing row, so an idle/trailing block there just orphans +
+            // persists stale rows. Web keeps its trailing-N window (in-flow footer, recent rows hot).
+            liveTailOnly: !platformIsWeb,
+            items: canonicalWindowedItems,
             activeThinkingMessageId: props.activeThinkingMessageId,
+            liveTailAnchorMessageId,
             expandedToolCallsAnchorMessageIds,
         });
-    }, [displayItems, expandedToolCallsAnchorMessageIds, listImplementation, props.activeThinkingMessageId]);
-    const shouldUseWebHotColdSplit =
-        Platform.OS === 'web' &&
-        listImplementation === 'flash_v2' &&
-        transcriptHotColdSegments.hotItems.length > 0;
-    const listData = shouldUseWebHotColdSplit ? transcriptHotColdSegments.coldItems : displayItems;
+        return {
+            coldItems: orientTranscriptListItems(segments.coldItems, listOrientation),
+            hotItems: orientTranscriptListItems(segments.hotItems, listOrientation),
+            // The CANONICAL (pre-orientation, oldest-first) hot slice. The native inverted edge
+            // slot renders these directly (top→bottom = oldest→newest) so, under the slot's
+            // order-preserving scaleY(-1) translation, the newest row sits at the VISUAL bottom.
+            // The oriented `hotItems` above is newest-first; on web (standard orientation) the two
+            // are byte-identical references (orientTranscriptListItems is identity for 'standard'),
+            // so the web footer path is unchanged.
+            hotItemsCanonical: segments.hotItems,
+            // Counts/boundary stay in canonical oldest-first terms (orientation-invariant length).
+            coldCount: segments.coldItems.length,
+            hotCount: segments.hotItems.length,
+            splitIndex: segments.splitIndex,
+        };
+    }, [canonicalWindowedItems, expandedToolCallsAnchorMessageIds, listImplementation, listOrientation, liveTailAnchorMessageId, props.activeThinkingMessageId]);
+    const transcriptHotColdSplitActive =
+        listImplementation === 'flash_v2' && transcriptHotColdSegments.hotItems.length > 0;
+    const shouldUseWebHotColdSplit = Platform.OS === 'web' && transcriptHotColdSplitActive;
+    const shouldUseNativeHotColdSplit = Platform.OS !== 'web' && transcriptHotColdSplitActive;
+    const listData = transcriptHotColdSplitActive ? transcriptHotColdSegments.coldItems : displayItems;
+    if (!shouldUseNativeHotColdSplit) {
+        // The native hot tail unmounts when the split is OFF/empty (e.g. after a finalize
+        // hand-off) — drop its captured height so the inverted bottom inset returns to the
+        // composer-only inset on the next pin.
+        nativeHotTailHeightRef.current = 0;
+    }
     webHotColdCountsRef.current = {
-        coldCount: shouldUseWebHotColdSplit
+        coldCount: transcriptHotColdSplitActive
             ? transcriptHotColdSegments.coldItems.length
             : listData.length,
-        hotCount: shouldUseWebHotColdSplit
+        hotCount: transcriptHotColdSplitActive
             ? transcriptHotColdSegments.hotItems.length
             : 0,
+    };
+    // §12 #4 telemetry (review R9): snapshot the live-region carve context each render so the
+    // scroll-write executor + the height-driven pin can stamp every carve pin with the anchor that
+    // opened it, the hot/cold counts, and whether the live region owns the bottom — without
+    // re-deriving any of it inside the scroll callbacks (which would force a recompute).
+    liveTailCarveTelemetryRef.current = {
+        active: shouldUseNativeHotColdSplit,
+        anchorId: liveTailAnchor?.messageId ?? null,
+        anchorKind: liveTailAnchor?.reason ?? null,
+        coldCount: transcriptHotColdSegments.coldCount,
+        hotCount: transcriptHotColdSegments.hotCount,
     };
 
     React.useEffect(() => {
@@ -3768,10 +4017,14 @@ const ChatListInternal = React.memo((props: {
                     // proven: viewOffset = -composerInset drives distance-from-bottom to exactly 0; +inset
                     // or 0 leaves the gap the user has to manually scroll past). No inset (e.g. tests) →
                     // the plain index-0 command.
-                    const composerInset = composerInsetHeightRef.current;
+                    // With the native hot/cold split ON, the live tail lives in the visual-bottom edge
+                    // slot BELOW data[0], so the bottom command must clear BOTH the composer inset and
+                    // the hot-tail's rendered height for the live tail to land above the composer. The
+                    // hot-tail ref is 0 when the split is OFF, so this reduces to the composer-only inset.
+                    const bottomInset = composerInsetHeightRef.current + nativeHotTailHeightRef.current;
                     node.scrollToIndex(
-                        composerInset > 0
-                            ? { index: 0, animated: command.animated ?? false, viewOffset: -composerInset }
+                        bottomInset > 0
+                            ? { index: 0, animated: command.animated ?? false, viewOffset: -bottomInset }
                             : { index: 0, animated: command.animated ?? false },
                     );
                 } else {
@@ -3788,6 +4041,10 @@ const ChatListInternal = React.memo((props: {
                     contentHeight: listContentHeightRef.current,
                     distanceFromBottom: 0,
                     nativeMountSettleStable,
+                    // §12 #4: stamp the deterministic pin inset (composerInset + hot-tail height) so
+                    // device QA can prove the inverted bottom command compensated for the EXACT
+                    // rendered live-tail height. Only when the carve owns this pin (flag=0 unchanged).
+                    ...resolveInvertedBottomPinCarveTelemetryFields(),
                 });
                 return true;
             }
@@ -3931,6 +4188,19 @@ const ChatListInternal = React.memo((props: {
                 }
                 index = target.index;
             }
+            if (Platform.OS !== 'web' && shouldUseNativeHotColdSplit) {
+                // Map the FULL rendered display index to a COLD rendered index (FlashList `data` is the
+                // cold slice). A hot-tail target resolves to the newest cold row, bringing the live
+                // tail's edge slot into view — mirroring the web hot/cold index discipline.
+                const renderedColdIndex = resolveNativeInvertedColdScrollIndex({
+                    renderedFullIndex: index,
+                    fullCount: itemsRef.current.length,
+                    coldCount: listDataRef.current.length,
+                });
+                if (renderedColdIndex != null) {
+                    index = renderedColdIndex;
+                }
+            }
             const node = listRef.current;
             if (!node || typeof node.scrollToIndex !== 'function') return false;
                 if (command.kind === 'restore-index') {
@@ -3993,9 +4263,11 @@ const ChatListInternal = React.memo((props: {
             nativeMountSettleStable,
             recordRestoreDecisionTelemetry,
             recordViewportTelemetryEvent,
+            resolveInvertedBottomPinCarveTelemetryFields,
             resolveViewportCommandTelemetryWriter,
             resolveWebViewportTelemetryDiagnostics,
             resolveWebScrollMetrics,
+            shouldUseNativeHotColdSplit,
             shouldUseWebHotColdSplit,
             telemetryPlatform,
             transcriptHotColdSegments.coldItems.length,
@@ -4334,6 +4606,9 @@ const ChatListInternal = React.memo((props: {
             hasOpenViewportTransaction:
                 hasOpenEntryRestoreTransactionForSession() || hasOpenNativePrependTransactionForSession(),
             layoutHeight: flashListMvcpThresholdLayoutHeight,
+            // Plan §12 #3: while the native edge-slot carve is active the JS force-pin owns the
+            // bottom; withhold the MVCP bottom autoscroll threshold so it cannot fight the pin.
+            liveRegionActive: shouldUseNativeHotColdSplit,
             nativeEntryShouldUseBottomMaintenance,
             orientation: listOrientation,
             pinEnabled,
@@ -4352,6 +4627,7 @@ const ChatListInternal = React.memo((props: {
         nativePrependTransactionRevision,
         pinEnabled,
         pinThresholdPx,
+        shouldUseNativeHotColdSplit,
     ]);
     nativeFlashListMvcpPolicyRef.current =
         Platform.OS !== 'web' && listImplementation === 'flash_v2'
@@ -5605,13 +5881,20 @@ const ChatListInternal = React.memo((props: {
             const toolChromeMode = toolTimelineChromeMode === 'activity_feed' ? 'activity_feed' : 'cards';
             // N3.1: the chronologically-previous (older) row is index - 1 in standard
             // orientation and index + 1 under inverted (rendered order is newest-first).
+            // Hot/cold split: cold rows carry a `listData` index, hot-tail rows carry a full
+            // `displayItems` index. Resolve the neighbor against whichever array actually holds
+            // the item at this index — when the split is OFF both refs are the same array, so this
+            // is identical to the full-array lookup (no behavior change).
+            const neighborItems = listDataRef.current[index]?.id === item.id
+                ? listDataRef.current
+                : itemsRef.current;
             const olderNeighborIndex = resolveOlderNeighborRenderedIndex(
                 index,
-                itemsRef.current.length,
+                neighborItems.length,
                 listOrientationRef.current,
             );
             const prev = listImplementation === 'flash_v2' && olderNeighborIndex != null
-                ? itemsRef.current[olderNeighborIndex]
+                ? neighborItems[olderNeighborIndex]
                 : undefined;
             const shouldTightenToolStack =
                 listImplementation === 'flash_v2' &&
@@ -7186,6 +7469,20 @@ const ChatListInternal = React.memo((props: {
         };
     }, [listImplementation, resolveWebScrollMetrics]);
 
+    // Native analog of captureWebBottomFollowPreviousMetrics (carve only). Snapshots "the user was
+    // following the live tail at the inverted bottom" BEFORE a data/layout change, using the
+    // bottom-follow MODE (the reliable persisted signal) rather than the post-change distance, which
+    // FlashList MVCP offset-correction corrupts on the hot→cold (index-0) insert. Returns false when
+    // the carve is OFF (nativeHotTailHeightRef === 0), so flag=0 behavior is byte-for-byte unchanged.
+    const captureNativeBottomFollowPreviousFollow = React.useCallback((): boolean => {
+        if (Platform.OS === 'web' || !usesNativeFlashListBottomMaintenance) return false;
+        if (nativeHotTailHeightRef.current <= 0) return false;
+        if (!wantsPinnedRef.current) return false;
+        if (bottomFollowModeStateRef.current.mode !== 'following') return false;
+        if (Date.now() - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS) return false;
+        return true;
+    }, [usesNativeFlashListBottomMaintenance]);
+
     const applyWebBottomFollowAdjustment = React.useCallback((
         previousMetrics: WebTranscriptScrollMetrics,
         reason: TranscriptViewportTelemetryScrollReason = 'content-size-change',
@@ -7224,6 +7521,14 @@ const ChatListInternal = React.memo((props: {
         force?: boolean;
         markInitialViewportApplied?: 'always' | 'when-scrollable';
         telemetryReason?: TranscriptViewportTelemetryScrollReason;
+        /**
+         * Native carve only: the pre-change "was following the live tail" decision (captured before
+         * the data/layout change). When true the inverted bottom command is issued authoritatively,
+         * bypassing the post-change distance gate that FlashList MVCP offset-correction corrupts on
+         * the hot→cold (index-0) insert. Mirrors web's applyWebBottomFollowAdjustment writing the
+         * absolute bottom regardless of the (re-anchored) intermediate offset.
+         */
+        forceFollowPin?: boolean;
     }): boolean => {
         if (!usesNativeFlashListBottomMaintenance) return false;
         const telemetryReason = options?.telemetryReason ?? 'content-size-change';
@@ -7295,7 +7600,14 @@ const ChatListInternal = React.memo((props: {
             // steady-state streaming write-free and only re-pinning when content growth (or a stale
             // cold-open layout) has pushed the viewport away from the newest row.
             const distanceFromInvertedBottom = readCurrentNativeDistanceFromBottom();
-            if (distanceFromInvertedBottom != null && distanceFromInvertedBottom > pinThresholdPx) {
+            // Carve auto-follow: when the pre-change state was "following the live tail" (captured
+            // before MVCP could re-anchor the hot→cold index-0 insert), re-issue the inverted bottom
+            // command authoritatively — the post-change distance is unreliable here (MVCP races it).
+            // Otherwise keep the steady-state write-free gate (only pin when measurably off-bottom).
+            const willFireInvertedPin =
+                options?.forceFollowPin === true ||
+                (distanceFromInvertedBottom != null && distanceFromInvertedBottom > pinThresholdPx);
+            if (willFireInvertedPin) {
                 executeViewportCommand(resolveViewportCommand({
                     type: 'pin-bottom',
                     sessionId: props.sessionId,
@@ -7567,7 +7879,10 @@ const ChatListInternal = React.memo((props: {
         usesNativeFlashListBottomMaintenance,
     ]);
 
-    const pinToBottomRespectingNativeMountSettle = React.useCallback((reason: TranscriptViewportTelemetryScrollReason = 'mount-settle') => {
+    const pinToBottomRespectingNativeMountSettle = React.useCallback((
+        reason: TranscriptViewportTelemetryScrollReason = 'mount-settle',
+        forceFollowPin: boolean = false,
+    ) => {
         if (usesNativeFlashListBottomMaintenance) {
             if (pinNativeInitialFollowBottomViewportIfReady(reason)) {
                 return;
@@ -7575,7 +7890,7 @@ const ChatListInternal = React.memo((props: {
             if (reason === 'initial-open') {
                 return;
             }
-            if (pinNativeFlashListToBottomIfMeasured({ telemetryReason: reason })) {
+            if (pinNativeFlashListToBottomIfMeasured({ telemetryReason: reason, forceFollowPin })) {
                 if (hasNativeInitialViewportAppliedForCurrentSession()) {
                     pendingNativeMountSettleBottomPinRef.current = false;
                 }
@@ -7621,6 +7936,46 @@ const ChatListInternal = React.memo((props: {
         shouldKeepPendingNativeMountSettleBottomPin,
     ]);
     flushPendingNativeMountSettleBottomPinRef.current = flushPendingNativeMountSettleBottomPin;
+
+    // §12 #2/#3: synchronized live-tail pin. Fired from the edge-slot onLayout (same event that
+    // measured the height) so the inverted bottom inset compensates for the EXACT rendered hot-tail
+    // height. While the carve owns the bottom (#3) the MVCP threshold is withheld, so this
+    // authoritative JS force-pin is the sole bottom owner; it only fires while the reader is still
+    // following (captured before the change), so a scrolled-up reader is never yanked.
+    const pinNativeLiveTailForHotTailHeight = React.useCallback((height: number) => {
+        if (Platform.OS === 'web' || !usesNativeFlashListBottomMaintenance) return;
+        if (listOrientationRef.current !== 'inverted') return;
+        const carve = liveTailCarveTelemetryRef.current;
+        if (!carve.active) return;
+        const wasFollowing = captureNativeBottomFollowPreviousFollow();
+        if (!wasFollowing) {
+            // Reader scrolled up (escaped/released): record the skip so device QA can PROVE the
+            // growing live row did not yank the reader, then leave the viewport untouched.
+            recordViewportTelemetryEvent({
+                type: 'scroll-observed',
+                mode: resolveViewportTelemetryMode(),
+                reason: 'skipped',
+                nativeHotTailHeightPx: height,
+                liveRegionActive: true,
+                nativeCarvePinIssued: false,
+                liveTailAnchorId: carve.anchorId ?? undefined,
+                liveTailAnchorKind: carve.anchorKind ?? undefined,
+                coldCount: carve.coldCount,
+                hotCount: carve.hotCount,
+            });
+            return;
+        }
+        // Authoritative inverted bottom pin: bypasses the post-change distance gate MVCP corrupts on
+        // the hot→cold index-0 insert (forceFollowPin), reading the just-committed hot-tail height.
+        pinNativeFlashListToBottomIfMeasured({ telemetryReason: 'stream-append', forceFollowPin: true });
+    }, [
+        captureNativeBottomFollowPreviousFollow,
+        pinNativeFlashListToBottomIfMeasured,
+        recordViewportTelemetryEvent,
+        resolveViewportTelemetryMode,
+        usesNativeFlashListBottomMaintenance,
+    ]);
+    pinNativeLiveTailForHotTailHeightRef.current = pinNativeLiveTailForHotTailHeight;
 
     React.useEffect(() => {
         if (!nativeMountSettleStable) return;
@@ -7766,6 +8121,7 @@ const ChatListInternal = React.memo((props: {
     const schedulePinToBottom = React.useCallback((
         previousWebMetrics: WebTranscriptScrollMetrics | null = null,
         reason: TranscriptViewportTelemetryScrollReason = 'content-size-change',
+        nativePrevFollowAtBottom: boolean = false,
     ) => {
         if (listImplementation !== 'flash_v2') return;
         const waitMs = resolveAutoPinWaitMs(reason);
@@ -7783,7 +8139,7 @@ const ChatListInternal = React.memo((props: {
 
         const raf = (globalThis as any)?.requestAnimationFrame as undefined | ((cb: () => void) => any);
         if (waitMs === 0 && typeof raf === 'function') {
-            const handle: ScheduledPinToBottom = { kind: 'raf', id: 0, previousWebMetrics, reason };
+            const handle: ScheduledPinToBottom = { kind: 'raf', id: 0, previousWebMetrics, reason, nativePrevFollowAtBottom };
             scheduledPinRef.current = handle;
             handle.id = raf(() => {
                 if (scheduledPinRef.current !== handle) return;
@@ -7791,7 +8147,7 @@ const ChatListInternal = React.memo((props: {
                 if (resolveAutoPinWaitMs(reason) !== 0) return;
                 if (handle.previousWebMetrics && applyWebBottomFollowAdjustment(handle.previousWebMetrics, reason)) return;
                 if (usesNativeFlashListBottomMaintenance) {
-                    pinToBottomRespectingNativeMountSettle(reason);
+                    pinToBottomRespectingNativeMountSettle(reason, handle.nativePrevFollowAtBottom === true);
                     return;
                 }
                 pinToBottom(reason);
@@ -7799,7 +8155,7 @@ const ChatListInternal = React.memo((props: {
             return;
         }
 
-        const handle: ScheduledPinToBottom = { kind: 'timeout', id: null, previousWebMetrics, reason };
+        const handle: ScheduledPinToBottom = { kind: 'timeout', id: null, previousWebMetrics, reason, nativePrevFollowAtBottom };
         scheduledPinRef.current = handle;
         handle.id = setTimeout(() => {
             if (scheduledPinRef.current !== handle) return;
@@ -7807,7 +8163,7 @@ const ChatListInternal = React.memo((props: {
             if (resolveAutoPinWaitMs(reason) !== 0) return;
             if (handle.previousWebMetrics && applyWebBottomFollowAdjustment(handle.previousWebMetrics, reason)) return;
             if (usesNativeFlashListBottomMaintenance) {
-                pinToBottomRespectingNativeMountSettle(reason);
+                pinToBottomRespectingNativeMountSettle(reason, handle.nativePrevFollowAtBottom === true);
                 return;
             }
             pinToBottom(reason);
@@ -7915,24 +8271,62 @@ const ChatListInternal = React.memo((props: {
         props.sessionId,
         webPrependRangeReservePx,
     ]);
+    const handleNativeHotTailHeightChange = React.useCallback((height: number) => {
+        const normalizedHeight =
+            typeof height === 'number' && Number.isFinite(height) ? Math.max(0, Math.trunc(height)) : 0;
+        if (nativeHotTailHeightRef.current === normalizedHeight) return;
+        // §12 #2: the edge-slot re-measured (the live row grew a token). Commit the fresh height and
+        // pin in the SAME event so the inverted bottom inset (composerInset + hot-tail height) is read
+        // from this exact measurement — never the stale async ref a separate onContentSizeChange→rAF
+        // pin would read (the device-proven under-compensation / overlap race).
+        nativeHotTailHeightRef.current = normalizedHeight;
+        pinNativeLiveTailForHotTailHeightRef.current?.(normalizedHeight);
+    }, []);
     const flashListFooterNode = React.useMemo(() => {
-        if (!shouldUseWebHotColdSplit) {
-            return listFooterNode;
+        if (shouldUseWebHotColdSplit) {
+            return (
+                <WebTranscriptSplitFooter
+                    hotItems={transcriptHotColdSegments.hotItems}
+                    startIndex={transcriptHotColdSegments.coldItems.length}
+                    renderItemAtIndex={renderTranscriptItemAtIndex}
+                    footer={listFooterNode}
+                />
+            );
         }
-        return (
-            <WebTranscriptSplitFooter
-                hotItems={transcriptHotColdSegments.hotItems}
-                startIndex={transcriptHotColdSegments.coldItems.length}
-                renderItemAtIndex={renderTranscriptItemAtIndex}
-                footer={listFooterNode}
-            />
-        );
+        if (shouldUseNativeHotColdSplit) {
+            // The visual-bottom edge slot (inverted ListHeaderComponent) is rendered OUTSIDE the
+            // recycler, so the live-tail row flows in real layout and cannot be positioned from a
+            // stale committed height. The slot's nested scaleY(-1) transforms compose to a pure
+            // TRANSLATION that preserves child DOM stacking order, so we feed the CANONICAL
+            // (oldest-first) hot slice and render it top→bottom: the newest row lands at the visual
+            // bottom (just above the composer) and a multi-row hot tail (reasoning + tool rows +
+            // answer) reads in correct chronological order. Each row's DISPLAY index counts DOWN
+            // from `hotCount - 1` (its index in the newest-first displayItems), so the host
+            // older-neighbor lookup + tool-stack tightening resolve the identical displayItems
+            // entry as the pre-carve render. The hot rows reuse the cold renderItem.
+            return (
+                <TranscriptHotTail
+                    hotItems={transcriptHotColdSegments.hotItemsCanonical}
+                    startIndex={Math.max(0, transcriptHotColdSegments.hotCount - 1)}
+                    displayIndexMode="invertedEdgeSlot"
+                    renderItemAtIndex={renderTranscriptItemAtIndex}
+                    footer={listFooterNode}
+                    testIDPrefix="transcript-native-hot-tail"
+                    onHeightChange={handleNativeHotTailHeightChange}
+                />
+            );
+        }
+        return listFooterNode;
     }, [
+        handleNativeHotTailHeightChange,
         listFooterNode,
         renderTranscriptItemAtIndex,
+        shouldUseNativeHotColdSplit,
         shouldUseWebHotColdSplit,
         transcriptHotColdSegments.coldItems.length,
+        transcriptHotColdSegments.hotCount,
         transcriptHotColdSegments.hotItems,
+        transcriptHotColdSegments.hotItemsCanonical,
     ]);
     // N3.2: in an inverted FlashList the header slot renders at the data start =
     // VISUAL BOTTOM, so the visual-top/visual-bottom nodes swap slots there.
@@ -8759,6 +9153,7 @@ const ChatListInternal = React.memo((props: {
                           if (typeof h === 'number' && Number.isFinite(h)) {
                               const layoutHeightChanged = listLayoutHeightRef.current !== h;
                               const previousWebMetrics = captureWebBottomFollowPreviousMetrics();
+                              const nativePrevFollowAtBottom = captureNativeBottomFollowPreviousFollow();
                               listLayoutHeightRef.current = h;
                                       setListLayoutHeight(h);
                                       if (layoutHeightChanged) {
@@ -8786,7 +9181,7 @@ const ChatListInternal = React.memo((props: {
                                       verifyNativeSliceEntryRestoreTransaction();
                                   }
                                         if (layoutHeightChanged && listContentHeightRef.current > 0) {
-                                            schedulePinToBottom(previousWebMetrics, 'layout-change');
+                                            schedulePinToBottom(previousWebMetrics, 'layout-change', nativePrevFollowAtBottom);
                                         }
                           }
                       }}
@@ -8839,6 +9234,7 @@ const ChatListInternal = React.memo((props: {
                                               ? { sessionId: props.sessionId, contentHeight: measuredContentHeight }
                                               : null;
                                   const previousWebMetrics = captureWebBottomFollowPreviousMetrics();
+                                  const nativePrevFollowAtBottom = captureNativeBottomFollowPreviousFollow();
                                   markNativeContentMeasurementForCurrentSession();
                                       listContentHeightRef.current = measuredContentHeight;
                                       lastMeasuredContentActivityKeyRef.current = props.latestCommittedActivityKey;
@@ -8880,7 +9276,7 @@ const ChatListInternal = React.memo((props: {
                                       verifyNativeSliceEntryRestoreTransaction();
                                   }
                                         if (contentHeightChanged && listLayoutHeightRef.current > 0) {
-                                            schedulePinToBottom(previousWebMetrics, contentSizeScrollReason);
+                                            schedulePinToBottom(previousWebMetrics, contentSizeScrollReason, nativePrevFollowAtBottom);
                                         }
                           }
                       }}

@@ -4637,7 +4637,11 @@ describe('ChatList (FlashList v2)', () => {
 
         const second = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
 
-        expect(readStyleMinHeight(findTranscriptItemShell(second, 'a1').props.style)).toBeUndefined();
+        // An active streaming row's measured height is never persisted to the cross-mount STABLE cache.
+        // On a fresh mount it carries at most the small first-frame floor (issue #2) — never the stale
+        // measured 180, which would mis-reserve a row whose new content differs.
+        const reserved = readStyleMinHeight(findTranscriptItemShell(second, 'a1').props.style);
+        expect(reserved === undefined || reserved < 180).toBe(true);
     });
 
     it('does not cache running tool-call rows as stable row-shell heights when they are not latest activity', async () => {

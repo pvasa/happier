@@ -256,6 +256,54 @@ const OLDEST_FIRST_MESSAGES = [
     { kind: 'agent-text', id: 'm4', localId: null, createdAt: 4, seq: 4, text: 'four' },
 ];
 
+/** A streaming assistant-text segment meta — the live-tail anchor signal the carve gates on. */
+function streamingAssistantMeta() {
+    return {
+        happierStreamSegmentV1: {
+            v: 1,
+            segmentKind: 'assistant' as const,
+            segmentState: 'streaming' as const,
+            segmentLocalId: null,
+            updatedAtMs: 0,
+        },
+    };
+}
+
+/**
+ * Flag the newest committed agent-text row as actively streaming (opens the native carve).
+ * A genuinely streaming turn is, by the runtime contract, an ACTIVE session — `session.active`
+ * is true throughout. The carve's streaming-message anchor is gated on `sessionActive` (so a
+ * STALE `streaming` flag left on an IDLE session by an interrupted turn fails closed), so the
+ * helper sets `active: true` to model the real live-streaming case it represents.
+ */
+function markNewestAgentMessageStreaming(id: string): void {
+    flashListChatListHarnessState.sessionState = {
+        ...flashListChatListHarnessState.sessionState,
+        active: true,
+    };
+    flashListChatListHarnessState.sessionMessagesState = {
+        isLoaded: true,
+        messages: flashListChatListHarnessState.sessionMessagesState.messages.map((message: any) =>
+            message.id === id ? { ...message, kind: 'agent-text', meta: streamingAssistantMeta() } : message),
+    };
+}
+
+/** Drive the edge-slot rows onLayout (the live-tail measurement that the synchronized pin reads). */
+async function measureNativeHotTailRows(
+    screen: Awaited<ReturnType<typeof renderFlashListChatList>>,
+    height: number,
+): Promise<void> {
+    const rows = screen.findByTestId('transcript-native-hot-tail-rows');
+    await act(async () => {
+        rows?.props?.onLayout?.({ nativeEvent: { layout: { height } } });
+    });
+    await screen.settle({ cycles: 1, turns: 1 });
+}
+
+function carvePinWrites(telemetrySink: ReturnType<typeof vi.fn>): any[] {
+    return committedScrollWrites(telemetrySink).filter((event: any) => event.liveRegionActive === true);
+}
+
 let previousRequestAnimationFrame: typeof globalThis.requestAnimationFrame | undefined;
 let previousCancelAnimationFrame: typeof globalThis.cancelAnimationFrame | undefined;
 
@@ -332,6 +380,21 @@ function visibleWindowEvents(telemetrySink: ReturnType<typeof vi.fn>): any[] {
 
 function listDataIds(screen: Awaited<ReturnType<typeof renderFlashListChatList>>): string[] {
     return (screen.requireCapturedFlashListProps().data ?? []).map((item: any) => item.id);
+}
+
+/**
+ * Pre-order (DOM) list of the message ids of the carved hot-tail rows under the `-rows` wrapper.
+ * `findAll` walks the tree depth-first in render order, so this is the on-screen top→bottom DOM
+ * order of the edge-slot rows.
+ */
+function hotTailRowDomOrder(rows: { findAll: (predicate: (node: any) => boolean) => any[] }): string[] {
+    const prefix = 'transcript-native-hot-tail-item-';
+    return rows
+        .findAll((node: any) =>
+            typeof node?.type === 'string'
+            && typeof node?.props?.testID === 'string'
+            && node.props.testID.startsWith(prefix))
+        .map((node: any) => String(node.props.testID).slice(prefix.length));
 }
 
 function findTranscriptItemShell(screen: { findByTestId: (testID: string) => any }, itemId: string) {
@@ -577,6 +640,47 @@ describe('ChatList (FlashList v2 inverted pilot)', () => {
                 autoscrollToBottomThreshold: 72 / 500,
                 animateAutoScrollToBottom: false,
             });
+        });
+
+        it('re-pins the inverted follow-bottom list when a structural clear yanks it off the bottom inside the mount-settle window', async () => {
+            // Cold-open open-flicker root fix (device-proven on session
+            // cmqbym9nh0m1ztmwgdjd8rsqw): a structural clearLayoutCacheOnUpdate inside the
+            // mount-settle window resets FlashList bottom maintenance and yanks the inverted
+            // follow-bottom list toward the visual top (raw ~6 -> ~contentHeight). MVCP only
+            // MAINTAINS a bottom it has already reached, so an untrusted off-bottom frame that
+            // is still 'following' inside the mount window must re-issue the canonical inverted
+            // bottom pin (scrollToIndex(0)) instead of bailing as passive drift.
+            const screen = await renderInvertedChatList();
+
+            // First paint only — no settleNativeMount, so the mount-settle window stays active
+            // (matches the cold-open deadlock-fix setup above).
+            listRefMockState.absoluteScrollOffset = 0;
+            await screen.triggerInitialFill({
+                layoutHeight: 500,
+                contentHeight: 2000,
+                contentWidth: 0,
+                flushOptions: { cycles: 1, turns: 1 },
+            });
+            fileFlashListRefHandle.scrollToIndex.mockClear();
+
+            // The yank: an untrusted scroll frame observes the list far off the bottom while
+            // still following with no user intent — the post-clear re-stack seen on device.
+            await scrollRaw(screen, 900, { layoutHeight: 500, contentHeight: 2000 });
+
+            expect(fileFlashListRefHandle.scrollToIndex).toHaveBeenCalledWith({ index: 0, animated: false });
+        });
+
+        it('does not re-pin a settled inverted follow-bottom list on a passive off-bottom drift frame', async () => {
+            // Guard the mount-settle gate: once the cold-open window has settled, MVCP owns
+            // bottom maintenance and a passive height-churn drift frame must stay write-free
+            // (no scrollToIndex). Only the active mount window re-pins.
+            const screen = await renderInvertedChatList();
+            await coldOpenAtBottom(screen, { layoutHeight: 500, contentHeight: 2000 });
+            fileFlashListRefHandle.scrollToIndex.mockClear();
+
+            await scrollRaw(screen, 900, { layoutHeight: 500, contentHeight: 2000 });
+
+            expect(fileFlashListRefHandle.scrollToIndex).not.toHaveBeenCalled();
         });
 
         it('lands at the bottom with zero JS scroll writes — native list start is the newest visual edge', async () => {
@@ -1706,6 +1810,419 @@ describe('ChatList (FlashList v2 inverted pilot)', () => {
             await act(async () => {
                 warm.tree.unmount();
             });
+        });
+    });
+
+    describe('native hot/cold streaming split (Phase 1, flag-gated)', () => {
+        it('flag OFF (default 0) keeps EVERY row in the recycler — identical to today', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 0 } });
+            const screen = await renderInvertedChatList();
+
+            // The full inverted (newest-first) array is the FlashList data; nothing is carved out.
+            expect(listDataIds(screen)).toEqual(['m4', 'm3', 'm2', 'm1']);
+            expect(screen.findAllByTestId('transcript-native-hot-tail').length).toBe(0);
+
+            await act(async () => {
+                screen.tree.unmount();
+            });
+        });
+
+        it('flag ON (count 1) but idle carves NOTHING — live-tail-only keeps every row in the recycler', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            const screen = await renderInvertedChatList();
+
+            // liveTailOnly: the native edge-slot carve engages ONLY while a row is actively streaming
+            // (activeThinkingMessageId). With nothing streaming there is NO carve — every row stays in
+            // the recycler and no detached edge-slot block renders at the bottom (the device-reported
+            // idle "orphan"). The carve-while-streaming segmentation (live tail from the streaming row
+            // to the end, bounded) is covered by buildTranscriptHotColdSegments.test.ts.
+            expect(listDataIds(screen)).toEqual(['m4', 'm3', 'm2', 'm1']);
+            expect(screen.findAllByTestId('transcript-native-hot-tail').length).toBe(0);
+
+            await act(async () => {
+                screen.tree.unmount();
+            });
+        });
+
+        it('carves the actively-streaming live row out of the recycler (text streaming)', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            markNewestAgentMessageStreaming('m4');
+            const screen = await renderInvertedChatList();
+
+            // m4 streams → carved into the inverted edge slot; older committed rows stay in the
+            // recycler (cold). The cold list keeps at least one row and never holds the live row.
+            expect(listDataIds(screen)).toEqual(['m3', 'm2', 'm1']);
+            expect(screen.findByTestId('transcript-native-hot-tail')).not.toBeNull();
+            expect(screen.findByTestId('transcript-native-hot-tail-item-m4')).not.toBeNull();
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('carves an in-flight (running) tool-call row of an ACTIVE session without any thinking pulse (R2 positive control)', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            // Newest row is a running tool call (no streaming text, no thinking) on an ACTIVE session —
+            // a genuine live tail, so it carves. The running-tool anchor is scoped to session.active
+            // (R2): an idle session with the same stale running tool must NOT carve (next test).
+            flashListChatListHarnessState.sessionState = {
+                ...flashListChatListHarnessState.sessionState,
+                active: true,
+            };
+            flashListChatListHarnessState.sessionMessagesState = {
+                isLoaded: true,
+                messages: [
+                    ...OLDEST_FIRST_MESSAGES.slice(0, 3).map((message) => ({ ...message })),
+                    { kind: 'tool-call', id: 'm4', localId: null, createdAt: 4, seq: 4, tool: { state: 'running' } },
+                ],
+            };
+            const screen = await renderInvertedChatList();
+
+            expect(screen.findByTestId('transcript-native-hot-tail')).not.toBeNull();
+            expect(listDataIds(screen)).toEqual(['m3', 'm2', 'm1']);
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('does NOT carve an idle session whose trailing tool is stuck in `running` (R2 orphan fix)', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            // The orphan repro: a tool left `running` after a disconnect/missed-completion while the
+            // session is otherwise idle (active:false, thinking:false). The running-tool anchor must be
+            // scoped to the genuinely-active region — an idle stuck tool yields NO anchor → NO carve,
+            // so the trailing rows are not permanently detached into the edge slot.
+            flashListChatListHarnessState.sessionState = {
+                ...flashListChatListHarnessState.sessionState,
+                active: false,
+                thinking: false,
+            };
+            flashListChatListHarnessState.sessionMessagesState = {
+                isLoaded: true,
+                messages: [
+                    ...OLDEST_FIRST_MESSAGES.slice(0, 3).map((message) => ({ ...message })),
+                    { kind: 'tool-call', id: 'm4', localId: null, createdAt: 4, seq: 4, tool: { state: 'running' } },
+                ],
+            };
+            const screen = await renderInvertedChatList();
+
+            // Every row stays in the recycler; no detached edge-slot block at the bottom.
+            expect(listDataIds(screen)).toEqual(['m4', 'm3', 'm2', 'm1']);
+            expect(screen.findAllByTestId('transcript-native-hot-tail').length).toBe(0);
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('engages the carve via the whole-turn floor for legacy/no-segment-meta streaming text (Gemini case, R5)', async () => {
+            const telemetrySink = configureTelemetrySink();
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            // Legacy / Gemini path: assistant text carries NO `segmentState` meta (the default
+            // OLDEST_FIRST_MESSAGES are bare agent-text), so no row is detectably mid-stream. A REAL
+            // streaming turn is both `active` AND `thinking` — the whole-turn floor (gated on
+            // sessionActive like the streaming-message + running-tool anchors) anchors the carve at the
+            // newest committed row (m4) instead of leaving the growing answer in the recycler.
+            flashListChatListHarnessState.sessionState = {
+                ...flashListChatListHarnessState.sessionState,
+                active: true,
+                thinking: true,
+            };
+            const screen = await renderInvertedChatList();
+
+            // The carve engages and the newest committed row (m4) is the carved live row.
+            expect(screen.findByTestId('transcript-native-hot-tail-item-m4')).not.toBeNull();
+            expect(listDataIds(screen)).toEqual(['m3', 'm2', 'm1']);
+
+            // Provenance proof: the carve pin stamps the whole-turn-floor anchor at m4 (NOT a
+            // streaming-message/tool anchor — there is no segment meta), so QA can see the legacy
+            // path engaged through the floor, not a per-row stream signal.
+            await coldOpenAtBottom(screen, { layoutHeight: 500, contentHeight: 2000 });
+            telemetrySink.mockClear();
+            await measureNativeHotTailRows(screen, 180);
+
+            const pins = carvePinWrites(telemetrySink);
+            expect(pins.length).toBeGreaterThan(0);
+            expect(pins[pins.length - 1]).toMatchObject({
+                liveRegionActive: true,
+                liveTailAnchorKind: 'turn-floor',
+                liveTailAnchorId: 'm4',
+            });
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('recomputes the anchor when a row flips streaming -> complete (memo freshness, R5)', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            // m4 streams → carve engages on m4.
+            markNewestAgentMessageStreaming('m4');
+            const screen = await renderInvertedChatList();
+            expect(screen.findByTestId('transcript-native-hot-tail-item-m4')).not.toBeNull();
+            expect(listDataIds(screen)).toEqual(['m3', 'm2', 'm1']);
+
+            // The segment finalizes (streaming -> complete) and nothing else is live (idle). The carve
+            // memo MUST recompute the anchor off the flipped segmentState — a stale memo would keep m4
+            // detached in the edge slot forever (the silent-staleness regression this pins).
+            flashListChatListHarnessState.sessionMessagesState = {
+                isLoaded: true,
+                messages: flashListChatListHarnessState.sessionMessagesState.messages.map((message: any) =>
+                    message.id === 'm4'
+                        ? { ...message, kind: 'agent-text', meta: undefined }
+                        : message),
+            };
+            const { ChatList } = await import('./ChatList');
+            await screen.update(
+                <ChatList session={{ ...flashListChatListHarnessState.sessionState, seq: 1 }} />,
+            );
+
+            // Anchor recomputed to null → no carve → every row back in the recycler.
+            expect(listDataIds(screen)).toEqual(['m4', 'm3', 'm2', 'm1']);
+            expect(screen.findAllByTestId('transcript-native-hot-tail').length).toBe(0);
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('keeps the carve across the whole active turn — the thinking→answer transition does not collapse it', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            // The transition frame of a REAL active turn: session is `active` AND `thinking` spans the
+            // whole turn, but the thinking pulse has cleared (no activeThinkingMessageId) and the newest
+            // committed row is not yet flagged streaming. Without the whole-turn floor the carve would
+            // collapse here (the device repro). The floor is gated on sessionActive (FIX 1), so a
+            // genuinely-active turn still carves.
+            flashListChatListHarnessState.sessionState = {
+                ...flashListChatListHarnessState.sessionState,
+                active: true,
+                thinking: true,
+            };
+            const screen = await renderInvertedChatList();
+
+            // The whole-turn floor anchors the carve at the latest committed row — carve stays engaged.
+            expect(screen.findByTestId('transcript-native-hot-tail')).not.toBeNull();
+            expect(listDataIds(screen)).toEqual(['m3', 'm2', 'm1']);
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('does NOT carve via the whole-turn floor when the session is not active (thinking && !active is not a live turn)', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            // The orphan-prone state: `session.thinking` is stale-true but `session.active` is false
+            // (e.g. a debounced thinking grace flag lingering after the turn ended, or a thinking flag
+            // left set across a disconnect). A `thinking && !active` state is NOT a live turn — the
+            // whole-turn floor must fail closed on sessionActive just like the streaming-message and
+            // running-tool anchors, so no trailing block is detached into the edge slot (FIX 1).
+            flashListChatListHarnessState.sessionState = {
+                ...flashListChatListHarnessState.sessionState,
+                active: false,
+                thinking: true,
+            };
+            const screen = await renderInvertedChatList();
+
+            // No anchor → no carve → every row stays in the recycler.
+            expect(listDataIds(screen)).toEqual(['m4', 'm3', 'm2', 'm1']);
+            expect(screen.findAllByTestId('transcript-native-hot-tail').length).toBe(0);
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('does NOT carve while idle with the flag on even when session.thinking is false (no orphan)', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            // No streaming row, no thinking pulse, session.thinking false → no anchor → no carve.
+            const screen = await renderInvertedChatList();
+
+            expect(listDataIds(screen)).toEqual(['m4', 'm3', 'm2', 'm1']);
+            expect(screen.findAllByTestId('transcript-native-hot-tail').length).toBe(0);
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('does NOT engage the native carve when the list is standard-oriented flash_v2 (FIX 2 orientation guard)', async () => {
+            // flash_v2 STANDARD is selectable on native (non-default; default is flash_v2_inverted).
+            // The native edge slot hardcodes the inverted edge-slot display-index mode + inverted pin
+            // guards, so the carve must ONLY engage under inverted orientation. Standard-native falls
+            // back to the cold list / all-in behavior (no detached edge slot).
+            configureHarness({
+                implementation: 'flash_v2',
+                syncTuningState: { transcriptNativeHotTailItemCount: 1 },
+            });
+            // A genuinely-streaming row that WOULD carve under inverted orientation.
+            markNewestAgentMessageStreaming('m4');
+            const screen = await renderInvertedChatList();
+
+            // No native carve: the full transcript stays in the recycler (standard order, oldest→newest)
+            // and there is no detached edge-slot block.
+            expect(listDataIds(screen)).toEqual(['m1', 'm2', 'm3', 'm4']);
+            expect(screen.findAllByTestId('transcript-native-hot-tail').length).toBe(0);
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('withholds the MVCP bottom autoscroll threshold while the carve owns the bottom (single pin owner #3)', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            markNewestAgentMessageStreaming('m4');
+            const screen = await renderInvertedChatList();
+            await coldOpenAtBottom(screen, { layoutHeight: 500, contentHeight: 2000 });
+
+            // Carve active + following → startRenderingFromBottom ONLY (no threshold). MVCP keeps only
+            // prepend/top offset correction, so it cannot fight the JS force-pin at the live tail.
+            expect(screen.requireCapturedFlashListProps().maintainVisibleContentPosition).toEqual({
+                startRenderingFromBottom: true,
+            });
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('pins deterministically to the freshly-measured hot-tail height in one event (#2) and records the proof telemetry (#4)', async () => {
+            const telemetrySink = configureTelemetrySink();
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            markNewestAgentMessageStreaming('m4');
+            const screen = await renderInvertedChatList();
+            await coldOpenAtBottom(screen, { layoutHeight: 500, contentHeight: 2000 });
+            fileFlashListRefHandle.scrollToIndex.mockClear();
+            telemetrySink.mockClear();
+
+            // The live row grew → the edge slot reports its new rendered height. The pin issued from
+            // THIS same event reads exactly that height for the inverted bottom inset (composerInset is
+            // 0 in the harness), so the newest row lands above the composer with no overlap.
+            await measureNativeHotTailRows(screen, 220);
+
+            expect(fileFlashListRefHandle.scrollToIndex).toHaveBeenCalledWith(
+                expect.objectContaining({ index: 0, viewOffset: -220 }),
+            );
+
+            // #4 proof surface: the carve pin stamps the deterministic height + anchor + single-owner
+            // MVCP policy so device QA can prove FlashList MVCP is not fighting the JS pin.
+            const pins = carvePinWrites(telemetrySink);
+            expect(pins.length).toBeGreaterThan(0);
+            expect(pins[pins.length - 1]).toMatchObject({
+                liveRegionActive: true,
+                nativeHotTailHeightPx: 220,
+                nativeCarvePinIssued: true,
+                liveTailAnchorId: 'm4',
+                liveTailAnchorKind: 'streaming-message',
+                mvcpPolicy: 'start-rendering-from-bottom',
+            });
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('does not yank a scrolled-up reader when the live row grows (records the skip for QA)', async () => {
+            const telemetrySink = configureTelemetrySink();
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 1 } });
+            markNewestAgentMessageStreaming('m4');
+            const screen = await renderInvertedChatList();
+            await coldOpenAtBottom(screen, { layoutHeight: 500, contentHeight: 2000 });
+            await releaseFollowByDrag(screen, 1200, { layoutHeight: 500, contentHeight: 2000 });
+            fileFlashListRefHandle.scrollToIndex.mockClear();
+            telemetrySink.mockClear();
+
+            await measureNativeHotTailRows(screen, 260);
+
+            // Released reader: the carve issues NO bottom pin (no yank) and records the skip.
+            expect(fileFlashListRefHandle.scrollToIndex).not.toHaveBeenCalled();
+            const skips = sinkEvents(telemetrySink).filter(
+                (event: any) => event?.type === 'scroll-observed' && event.nativeCarvePinIssued === false,
+            );
+            expect(skips.length).toBeGreaterThan(0);
+            expect(skips[skips.length - 1]).toMatchObject({
+                liveRegionActive: true,
+                nativeHotTailHeightPx: 260,
+                nativeCarvePinIssued: false,
+            });
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        // §12 issue (A): multi-row hot-tail BOTTOM ORDERING. A complex turn carves >1 row into the
+        // inverted edge slot. Before the fix the host fed the ORIENTED (newest-first) hot slice with
+        // startIndex 0; the edge slot's nested scaleY(-1) transforms compose to an order-preserving
+        // translation, so newest-on-top in DOM rendered the rows REVERSED at the visual bottom.
+        describe('multi-row hot-tail ordering (§12 issue A)', () => {
+            it('carves a multi-row live region and renders it CANONICAL oldest->newest in DOM (newest at the visual bottom, not reversed)', async () => {
+                configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 4 } });
+                // Stream from an EARLIER row (m2) so the live region is [m2, m3, m4] = 3 hot rows.
+                // (markNewestAgentMessageStreaming marks any id + sets the session active.)
+                markNewestAgentMessageStreaming('m2');
+                const screen = await renderInvertedChatList();
+
+                // The cold recycler holds only the older rows (newest-first); the live region is carved.
+                expect(listDataIds(screen)).toEqual(['m1']);
+                expect(screen.findByTestId('transcript-native-hot-tail')).not.toBeNull();
+
+                // DOM order of the carved rows is CANONICAL oldest->newest (m2, m3, m4). Under the edge
+                // slot's order-preserving scaleY(-1) translation this places m4 (newest) at the visual
+                // bottom, just above the composer — the multi-row reversal fix. A reversed (pre-fix)
+                // render would read ['m4', 'm3', 'm2'] here.
+                const rows = screen.findByTestId('transcript-native-hot-tail-rows');
+                expect(rows).not.toBeNull();
+                expect(hotTailRowDomOrder(rows!)).toEqual(['m2', 'm3', 'm4']);
+
+                await act(async () => { screen.tree.unmount(); });
+            });
+
+            it('hands the multi-row hot tail the per-row DISPLAY index it has in displayItems, so the older-neighbor lookup resolves the chronologically-previous row', async () => {
+                configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 4 } });
+                markNewestAgentMessageStreaming('m2');
+                renderedMessageViewProps.length = 0;
+                const screen = await renderInvertedChatList();
+
+                // displayItems is newest-first: [m4(0), m3(1), m2(2), m1(3)]. The host resolves a row's
+                // older neighbor as displayItems[displayIndex + 1] under inversion. For the lookup to be
+                // correct, each carved row must render at its displayItems index — m2->2, m3->1, m4->0.
+                // We prove the pairing held by asserting every carved message row rendered (the host
+                // would otherwise throw / mis-resolve), the live region membership is exact, and the
+                // newest row is the visual-bottom DOM row (display index 0). The display-index formula
+                // itself is unit-pinned in TranscriptHotTail.test.tsx; here we pin the host wiring.
+                const carvedIds = new Set(
+                    renderedMessageViewProps.map((props: any) => props?.message?.id).filter(Boolean),
+                );
+                expect(carvedIds.has('m2')).toBe(true);
+                expect(carvedIds.has('m3')).toBe(true);
+                expect(carvedIds.has('m4')).toBe(true);
+                const rows = screen.findByTestId('transcript-native-hot-tail-rows');
+                expect(hotTailRowDomOrder(rows!)).toEqual(['m2', 'm3', 'm4']);
+
+                await act(async () => { screen.tree.unmount(); });
+            });
+        });
+
+        // §12 issue (C): a STALE `segmentState:'streaming'` left on a far-back row by an interrupted
+        // turn must NOT engage the carve on an IDLE session. The streaming-MESSAGE anchor is gated on
+        // session.active (defense-in-depth, mirroring the running-tool R2 gate), so an idle session
+        // fails closed regardless of the stale marker.
+        it('does NOT carve an idle session that still carries a stale streaming segment flag (issue C)', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 4 } });
+            // Stale streaming flag on m2 (interrupted turn) but the session is idle (active:false).
+            flashListChatListHarnessState.sessionMessagesState = {
+                isLoaded: true,
+                messages: flashListChatListHarnessState.sessionMessagesState.messages.map((message: any) =>
+                    message.id === 'm2' ? { ...message, kind: 'agent-text', meta: streamingAssistantMeta() } : message),
+            };
+            flashListChatListHarnessState.sessionState = {
+                ...flashListChatListHarnessState.sessionState,
+                active: false,
+                thinking: false,
+            };
+            const screen = await renderInvertedChatList();
+
+            // Fail closed: every row stays in the recycler, no detached edge-slot block at the bottom.
+            expect(listDataIds(screen)).toEqual(['m4', 'm3', 'm2', 'm1']);
+            expect(screen.findAllByTestId('transcript-native-hot-tail').length).toBe(0);
+
+            await act(async () => { screen.tree.unmount(); });
+        });
+
+        it('still carves the SAME stale streaming row once the session is active again (issue C positive control)', async () => {
+            configureHarness({ syncTuningState: { transcriptNativeHotTailItemCount: 4 } });
+            flashListChatListHarnessState.sessionMessagesState = {
+                isLoaded: true,
+                messages: flashListChatListHarnessState.sessionMessagesState.messages.map((message: any) =>
+                    message.id === 'm2' ? { ...message, kind: 'agent-text', meta: streamingAssistantMeta() } : message),
+            };
+            flashListChatListHarnessState.sessionState = {
+                ...flashListChatListHarnessState.sessionState,
+                active: true,
+            };
+            const screen = await renderInvertedChatList();
+
+            // Active + streaming m2 → carve engages on the live region [m2, m3, m4].
+            expect(listDataIds(screen)).toEqual(['m1']);
+            expect(screen.findByTestId('transcript-native-hot-tail')).not.toBeNull();
+
+            await act(async () => { screen.tree.unmount(); });
         });
     });
 });

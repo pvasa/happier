@@ -254,6 +254,12 @@ export function resetFlashListChatListHarness(
         transcriptBackwardPrefetchThresholdPx: 0,
         transcriptFlashListEstimatedItemSize: 120,
         transcriptWebHotTailItemCount: 2,
+        // The native hot/cold carve ships DEFAULT-ON (syncTuning default 4), which replaces the
+        // flag=0 inverted "zero-writes" design with an authoritative force-pin. Pin it OFF in the
+        // harness BASE so the flag=0-invariant inverted tests (write-free streaming, older-pagination,
+        // anchored-entry) stay deterministic; carve behavior is covered by explicit flag>0 tests +
+        // segments/webHotColdSplit/TranscriptHotTail. Tests opt into the carve via syncTuningState.
+        transcriptNativeHotTailItemCount: 0,
         transcriptWebInitialPinStabilizeMs: 3000,
         transcriptWebInitialPinRetryIntervalMs: 250,
         ...(options.syncTuningState ?? {}),
