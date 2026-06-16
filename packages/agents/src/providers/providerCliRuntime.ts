@@ -90,6 +90,7 @@ function cmdInstall(command: string, opts: Readonly<{ requiresAdmin?: boolean; n
 }
 
 export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRuntimeSpec>> = {
+  hermes: { id: 'hermes', title: 'Hermes Agent CLI', binaryName: 'hermes', knownCommandCandidates: null, sourcePreferenceDefault: 'system-first', managedInstall: null, manualInstallKind: 'command', manualInstallRecipes: null, acceptsJavaScriptFileOverride: false, docsUrl: 'https://github.com/NousResearch/hermes-agent' },
   claude: {
     id: 'claude',
     title: 'Claude Code CLI',

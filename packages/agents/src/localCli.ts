@@ -46,6 +46,7 @@ function createAgentLocalCliConfig(agentId: AgentId, input: AgentLocalCliConfigI
 }
 
 export const AGENT_LOCAL_CLI_CONFIG: Readonly<Record<AgentId, AgentLocalCliConfig>> = Object.freeze({
+  hermes: createAgentLocalCliConfig('hermes', { machineLoginKey: 'hermes', authSupport: 'login_terminal', loginLaunch: { args: ['model'] } }),
   claude: createAgentLocalCliConfig('claude', {
     machineLoginKey: 'claude-code',
     authSupport: 'login_terminal',

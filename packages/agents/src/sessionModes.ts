@@ -25,6 +25,7 @@ export type AgentSessionModeDescriptor = Readonly<{
  * - avoid duplicating “does this agent expose ACP modes?” logic across packages
  */
 export const AGENT_SESSION_MODE_DESCRIPTORS: Readonly<Record<AgentId, AgentSessionModeDescriptor>> = Object.freeze({
+  hermes: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
   claude: { source: 'provider-native', semantics: 'agent-modes', runtimeSwitch: 'provider-native' },
   codex: { source: 'acp', semantics: 'policy-presets', runtimeSwitch: 'metadata-gating' },
   opencode: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
@@ -60,6 +61,7 @@ function descriptorToSessionModesKind(descriptor: AgentSessionModeDescriptor): A
 }
 
 export const AGENT_SESSION_MODES: Readonly<Record<AgentId, AgentSessionModesKind>> = Object.freeze({
+  hermes: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.hermes),
   claude: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.claude),
   codex: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.codex),
   opencode: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.opencode),

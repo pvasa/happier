@@ -25,6 +25,7 @@ export type AgentAuthProbeConfig = Readonly<{
 }>;
 
 export const AGENT_AUTH_PROBE_CONFIG: Readonly<Record<AgentId, AgentAuthProbeConfig>> = Object.freeze({
+  hermes: { agentId: 'hermes', binaryNames: [getProviderCliRuntimeSpec('hermes').binaryName], statusCommand: null, parser: 'unknown', backgroundChecks: 'manual_only' },
   claude: {
     agentId: 'claude',
     binaryNames: [getProviderCliRuntimeSpec('claude').binaryName],

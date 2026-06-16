@@ -12,6 +12,17 @@ function providerDetectKey(agentId: AgentId): string {
 }
 
 export const AGENTS_CORE = {
+    hermes: {
+        id: 'hermes', cliSubcommand: 'hermes', detectKey: providerDetectKey('hermes'), flavorAliases: ['hermes-agent'],
+        cloudConnect: null, connectedServices: null,
+        resume: { vendorResume: 'experimental', vendorResumeIdField: 'hermesSessionId' },
+        sessionStorage: { direct: false, persisted: true },
+        sessionCapabilities: { sessionListing: 'unsupported', sessionFork: { conversation: 'experimental', fromMessage: 'unsupported' }, sessionRollback: { conversation: 'unsupported' } },
+        handoff: { vendorStateTransfer: 'unsupported' },
+        localControl: { supported: true, topology: 'exclusive', attachStrategy: 'unsupported' },
+        tools: { delivery: 'native_mcp', support: 'supported' },
+        media: { acceptsImageInput: 'experimental', emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT, nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION },
+    },
     claude: {
         id: 'claude',
         cliSubcommand: 'claude',
