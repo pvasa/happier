@@ -1,9 +1,12 @@
 /**
  * Hermes CLI Entry Point
  *
- * Runs the Nous Research Hermes agent through Happier CLI using ACP.
+ * Runs the Nous Research Hermes agent through Happier CLI. Two modes:
+ *  - local  (default on a foreground TTY): the native `hermes chat` TUI on the
+ *           host, mirrored to the phone (see runHermesLocalSession).
+ *  - remote (daemon / no TTY / forced): the `hermes acp` ACP backend via
+ *           runStandardAcpProvider; drive from the phone, read-only host mirror.
  */
-
 import type { PermissionMode } from '@/api/types';
 import { logger } from '@/ui/logger';
 import type { Credentials } from '@/persistence';
@@ -12,11 +15,32 @@ import { runStandardAcpProvider, type StandardAcpProviderRunOptions } from '@/ag
 
 import { HermesTerminalDisplay } from '@/backends/hermes/ui/HermesTerminalDisplay';
 import { createHermesAcpRuntime } from '@/backends/hermes/acp/runtime';
+import { resolveHermesStartingMode } from '@/backends/hermes/localControl/resolveHermesStartingMode';
+import { runHermesLocalSession } from '@/backends/hermes/localControl/runHermesLocalSession';
+
+function readHermesForceRemote(env: NodeJS.ProcessEnv): boolean {
+  const raw = (env.HAPPIER_HERMES_FORCE_REMOTE ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
 
 export async function runHermes(opts: StandardAcpProviderRunOptions & {
   credentials: Credentials;
   permissionMode?: PermissionMode;
+  startingMode?: 'local' | 'remote';
 }): Promise<void> {
+  const startingMode = resolveHermesStartingMode({
+    explicit: opts.startingMode,
+    startedBy: opts.startedBy,
+    hasTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    forceRemote: readHermesForceRemote(process.env),
+  });
+
+  if (startingMode === 'local') {
+    const code = await runHermesLocalSession(opts);
+    process.exitCode = code;
+    return;
+  }
+
   await runStandardAcpProvider(opts, {
     flavor: 'hermes',
     backendDisplayName: 'Hermes',
