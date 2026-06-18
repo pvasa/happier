@@ -15,7 +15,7 @@ export const AGENTS_CORE = {
     hermes: {
         id: 'hermes', cliSubcommand: 'hermes', detectKey: providerDetectKey('hermes'), flavorAliases: ['hermes-agent'],
         cloudConnect: null, connectedServices: null,
-        resume: { vendorResume: 'experimental', vendorResumeIdField: 'hermesSessionId' },
+        resume: { vendorResume: 'experimental', experimentalResumePolicy: 'runtime_checked', vendorResumeIdField: 'hermesSessionId' },
         sessionStorage: { direct: false, persisted: true },
         sessionCapabilities: { sessionListing: 'unsupported', sessionFork: { conversation: 'experimental', fromMessage: 'unsupported' }, sessionRollback: { conversation: 'unsupported' } },
         handoff: { vendorStateTransfer: 'unsupported' },

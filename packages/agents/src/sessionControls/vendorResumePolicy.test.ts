@@ -26,6 +26,19 @@ describe('vendorResumePolicy', () => {
     expect(resolveVendorResumeIdFromSessionMetadata(cursorAgentId, { cursorSessionId: ' cursor-session ' })).toBe('cursor-session');
   });
 
+  it('treats Hermes vendor resume as runtime-checked and eligible when a hermesSessionId exists', () => {
+    expect(AGENTS_CORE.hermes.resume.vendorResume).toBe('experimental');
+    expect(
+      evaluateVendorResumeEligibility({ agentId: 'hermes', metadata: { hermesSessionId: ' h1 ' }, accountSettings: {} }),
+    ).toEqual({ eligible: true, vendorResumeId: 'h1' });
+  });
+
+  it('reports Hermes resume ineligible via vendor_resume_id_missing (not experimental_disabled) when no id exists', () => {
+    expect(
+      evaluateVendorResumeEligibility({ agentId: 'hermes', metadata: {}, accountSettings: {} }),
+    ).toEqual({ eligible: false, reasonCode: 'vendor_resume_id_missing' });
+  });
+
   it('prefers vendor session ids from agentRuntimeDescriptorV1 over legacy top-level metadata', () => {
     expect(resolveVendorResumeIdFromSessionMetadata('codex', {
       agentRuntimeDescriptorV1: {
