@@ -23,6 +23,7 @@ import { createStartupMetadataOverrides } from '@/agent/runtime/createStartupMet
 import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRunSession';
 import { updateAgentStateBestEffort, updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { logger } from '@/ui/logger';
+import { resolveSwitchRequestTarget } from '@/agent/localControl/switchRequestTarget';
 import type { StandardAcpProviderRunOptions } from '@/agent/runtime/runStandardAcpProvider';
 import type { Credentials } from '@/persistence';
 import type { PermissionMode } from '@/api/types';
@@ -43,7 +44,11 @@ export type RunHermesLocalSessionOptions = StandardAcpProviderRunOptions & {
   permissionMode?: PermissionMode;
 };
 
-export async function runHermesLocalSession(opts: RunHermesLocalSessionOptions): Promise<number> {
+export type RunHermesLocalSessionResult =
+  | { type: 'exit'; code: number }
+  | { type: 'switch'; happierSessionId: string; hermesSessionId: string | null };
+
+export async function runHermesLocalSession(opts: RunHermesLocalSessionOptions): Promise<RunHermesLocalSessionResult> {
   const { api, machineId } = await initializeBackendApiContext({
     credentials: opts.credentials,
     machineMetadata: initialMachineMetadata,
@@ -101,6 +106,21 @@ export async function runHermesLocalSession(opts: RunHermesLocalSessionOptions):
 
   const child = spawnChat(buildHermesChatArgs({ resumeSessionId: knownSessionId }));
 
+  const resolvedHermesIdHolder: { current: string | null } = { current: knownSessionId };
+  let switchToRemoteRequested = false;
+  // The phone can move control to remote: tear down the host TUI so the SAME
+  // session continues over ACP (the caller resumes it). Without this handler the
+  // phone's switch request fails with 'Failed to switch control mode'.
+  session.rpcHandlerManager.registerHandler('switch', async (requestParams: unknown) => {
+    const to = resolveSwitchRequestTarget(requestParams);
+    if (to === 'local') {
+      return true;
+    }
+    switchToRemoteRequested = true;
+    child.kill('SIGTERM');
+    return true;
+  });
+
   const mirrorHolder: { current: HermesSessionMirror | null } = { current: null };
   let stopped = false;
 
@@ -119,6 +139,7 @@ export async function runHermesLocalSession(opts: RunHermesLocalSessionOptions):
       logger.debug(`${LOG_PREFIX} Could not resolve a Hermes session id to mirror (non-fatal)`);
       return;
     }
+    resolvedHermesIdHolder.current = sessionId;
     if (!knownSessionId) {
       updateMetadataBestEffort(
         session,
@@ -143,8 +164,15 @@ export async function runHermesLocalSession(opts: RunHermesLocalSessionOptions):
 
   stopped = true;
   mirrorHolder.current?.stop();
-  publishMode('remote', 'hermes_local_session_exit');
+  publishMode('remote', switchToRemoteRequested ? 'hermes_local_switch_to_remote' : 'hermes_local_session_exit');
   reconnectionHandle?.cancel();
 
-  return code;
+  // Let the best-effort mode/transcript writes flush over the relay connection
+  // before the caller exits or hands off to remote.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  if (switchToRemoteRequested) {
+    return { type: 'switch', happierSessionId: session.sessionId, hermesSessionId: resolvedHermesIdHolder.current };
+  }
+  return { type: 'exit', code };
 }
