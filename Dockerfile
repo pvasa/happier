@@ -177,6 +177,7 @@ COPY packages/transfers ./packages/transfers
 COPY scripts/pipeline/release/precompress-ui-web-assets.mjs ./scripts/pipeline/release/precompress-ui-web-assets.mjs
 COPY scripts/pipeline/release/lib/precompress-ui-web-assets.mjs ./scripts/pipeline/release/lib/precompress-ui-web-assets.mjs
 
+COPY scripts ./scripts
 RUN yarn workspace @happier-dev/protocol postinstall:real \
     && yarn workspace @happier-dev/release-runtime postinstall:real \
     && yarn workspace @happier-dev/agents postinstall:real \
@@ -279,6 +280,7 @@ COPY packages/agents ./packages/agents
 COPY packages/cli-common ./packages/cli-common
 COPY packages/protocol ./packages/protocol
 COPY packages/release-runtime ./packages/release-runtime
+COPY scripts ./scripts
 RUN yarn workspace @happier-dev/protocol postinstall:real && yarn workspace @happier-dev/agents postinstall:real
 RUN yarn workspace @happier-dev/release-runtime postinstall:real
 RUN yarn workspace @happier-dev/server postinstall:real
