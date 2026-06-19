@@ -19,6 +19,7 @@ import { createSessionMetadata, type CreateSessionMetadataOptions } from '@/agen
 import { createStartupMetadataOverrides } from '@/agent/runtime/createStartupMetadataOverrides';
 import { initializeBackendApiContext } from '@/agent/runtime/initializeBackendApiContext';
 import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRunSession';
+import { resolveSwitchRequestTarget } from '@/agent/localControl/switchRequestTarget';
 import { registerRunnerTerminationHandlers } from '@/agent/runtime/runnerTerminationHandlers';
 import { runPermissionModePromptLoop, type ReadyNotificationTurnContext } from '@/agent/runtime/runPermissionModePromptLoop';
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
@@ -145,6 +146,13 @@ export type StandardAcpProviderConfig = {
   onTerminalDisplayControllerReady?: (controller: TerminalDisplayController) => void;
   shouldRenderTerminalDisplay?: (params: { opts: StandardAcpProviderRunOptions; session: ApiSessionClient; metadata: Metadata }) => boolean;
   resolveKeepAliveMode?: () => KeepAliveMode;
+  /**
+   * Opt-in: when set, register a `switch` RPC handler so the phone can hand
+   * control back to a host (local) session. On `to:'local'` the run tears down
+   * and resolves with `{ type: 'switch-to-local' }`. Used by hermes for the
+   * remote->local half of the control handoff.
+   */
+  onSwitchToLocal?: (params: { session: ApiSessionClient }) => void | Promise<void>;
 };
 
 type StandardAcpProviderDeps = {
@@ -166,7 +174,7 @@ export async function runStandardAcpProvider(
   opts: StandardAcpProviderRunOptions,
   config: StandardAcpProviderConfig,
   deps: StandardAcpProviderDeps = {},
-): Promise<void> {
+): Promise<void | { type: 'switch-to-local' }> {
   const initializeBackendApiContextFn = deps.initializeBackendApiContextFn ?? initializeBackendApiContext;
   const createSessionMetadataFn = deps.createSessionMetadataFn ?? createSessionMetadata;
   const initializeBackendRunSessionFn = deps.initializeBackendRunSessionFn ?? initializeBackendRunSession;
@@ -331,6 +339,7 @@ export async function runStandardAcpProvider(
 
   let thinking = false;
   let shouldExit = false;
+  let switchToLocalRequested = false;
   let abortController = new AbortController();
   const getKeepAliveMode = (): KeepAliveMode => config.resolveKeepAliveMode?.() ?? 'remote';
   let lastKeepAliveSentAt = 0;
@@ -452,6 +461,21 @@ export async function runStandardAcpProvider(
   session.rpcHandlerManager.registerHandler('abort', handleAbort);
   registerKillSessionHandlerFn(session.rpcHandlerManager, handleKillSession);
 
+  if (config.onSwitchToLocal) {
+    // Opt-in (hermes): the phone can hand control back to the host's native TUI.
+    // Tear down this remote run and resolve with a switch-to-local result so the
+    // caller can re-spawn the local session resuming the same vendor session id.
+    session.rpcHandlerManager.registerHandler('switch', async (requestParams: unknown) => {
+      const to = resolveSwitchRequestTarget(requestParams);
+      if (to === 'remote') return true;
+      switchToLocalRequested = true;
+      await config.onSwitchToLocal?.({ session });
+      shouldExit = true;
+      await handleAbort();
+      return true;
+    });
+  }
+
   const sendReady = config.createSendReady
     ? config.createSendReady({ session, api })
     : ((context?: ReadyNotificationTurnContext) => {
@@ -536,4 +560,6 @@ export async function runStandardAcpProvider(
     terminationHandlers.dispose();
     await cleanupOnce();
   }
+
+  return switchToLocalRequested ? { type: 'switch-to-local' as const } : undefined;
 }

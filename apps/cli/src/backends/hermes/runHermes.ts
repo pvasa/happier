@@ -1,20 +1,25 @@
 /**
  * Hermes CLI Entry Point
  *
- * Runs the Nous Research Hermes agent through Happier CLI. Two modes:
+ * Runs the Nous Research Hermes agent through Happier CLI. Two modes, with a
+ * bidirectional control handoff:
  *  - local  (default on a foreground TTY): the native `hermes chat` TUI on the
  *           host, mirrored to the phone (see runHermesLocalSession).
  *  - remote (daemon / no TTY / forced): the `hermes acp` ACP backend via
  *           runStandardAcpProvider; drive from the phone, read-only host mirror.
  *
- * A host local session can hand control to remote (the phone's "switch to
- * remote"): the local session tears down the native TUI and returns a switch
- * result, and we continue the SAME session over the remote ACP path, resuming
- * the Hermes conversation.
+ * The phone can switch control either way. local->remote: the local session
+ * tears down the TUI and returns a switch result; we continue the SAME session
+ * over the remote ACP path. remote->local: runStandardAcpProvider's opt-in
+ * onSwitchToLocal handler tears the remote run down and returns
+ * `switch-to-local`, and we re-spawn the native TUI resuming the same Hermes
+ * session (`hermes chat --resume <id>`). Session continuity is the persisted
+ * hermesSessionId (state.db-backed, same id-space as `--resume`).
  */
 import type { PermissionMode } from '@/api/types';
 import { logger } from '@/ui/logger';
 import type { Credentials } from '@/persistence';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { initialMachineMetadata } from '@/daemon/startDaemon';
 import {
   runStandardAcpProvider,
@@ -69,30 +74,46 @@ export async function runHermes(opts: StandardAcpProviderRunOptions & {
   permissionMode?: PermissionMode;
   startingMode?: 'local' | 'remote';
 }): Promise<void> {
-  const startingMode = resolveHermesStartingMode({
+  let mode: 'local' | 'remote' = resolveHermesStartingMode({
     explicit: opts.startingMode,
     startedBy: opts.startedBy,
     hasTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     forceRemote: readHermesForceRemote(process.env),
   });
 
-  if (startingMode === 'local') {
-    const result = await runHermesLocalSession(opts);
-    if (result.type === 'switch') {
-      // The phone took control: continue the SAME session over the remote ACP
-      // path, resuming the Hermes conversation. runStandardAcpProvider owns its
-      // own termination/exit from here.
-      await runStandardAcpProvider(
-        { ...opts, existingSessionId: result.happierSessionId, resume: result.hermesSessionId ?? opts.resume },
-        hermesAcpConfig(),
-      );
-      return;
-    }
-    // The live relay/session connection keeps the event loop alive, so a plain
-    // return hangs the CLI after the TUI exits. Exit explicitly, mirroring the
-    // remote path's termination handlers (runStandardAcpProvider uses process.exit).
-    process.exit(result.code);
-  }
+  let existingSessionId = opts.existingSessionId;
+  let resumeId = opts.resume;
 
-  await runStandardAcpProvider(opts, hermesAcpConfig());
+  for (;;) {
+    if (mode === 'local') {
+      const result = await runHermesLocalSession({ ...opts, existingSessionId, resume: resumeId });
+      if (result.type === 'switch') {
+        // Phone took control -> continue the SAME session over remote ACP.
+        mode = 'remote';
+        existingSessionId = result.happierSessionId;
+        resumeId = result.hermesSessionId ?? resumeId;
+        continue;
+      }
+      // The live relay/session connection keeps the event loop alive, so a plain
+      // return hangs the CLI after the TUI exits. Exit explicitly.
+      process.exit(result.code);
+    }
+
+    // remote
+    const switchSessionHolder: { current: ApiSessionClient | null } = { current: null };
+    const config = hermesAcpConfig();
+    config.onSwitchToLocal = ({ session }) => {
+      switchSessionHolder.current = session;
+    };
+    const result = await runStandardAcpProvider({ ...opts, existingSessionId, resume: resumeId }, config);
+    if (result?.type === 'switch-to-local') {
+      // Phone handed control back to the host -> re-spawn the native TUI resuming
+      // the same Hermes session.
+      mode = 'local';
+      existingSessionId = switchSessionHolder.current?.sessionId ?? existingSessionId;
+      resumeId = switchSessionHolder.current?.getMetadataSnapshot()?.hermesSessionId ?? resumeId;
+      continue;
+    }
+    return; // remote owns its own termination/exit otherwise
+  }
 }
