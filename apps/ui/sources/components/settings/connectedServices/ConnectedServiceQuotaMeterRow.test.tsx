@@ -54,7 +54,7 @@ describe('ConnectedServiceQuotaMeterRow', () => {
         expect(screen.getTextContent()).toContain('18% left · resets in translated-2h');
         expect(screen.getTextContent()).toContain('82/100 used');
 
-        const bar = screen.findByTestId('connected-service-quota-meter-row:remaining-bar');
+        const bar = screen.findByTestId('connected-service-quota-meter-row:remaining-bar:fill');
         const style = flattenStyle(bar?.props?.style);
         expect(style.width).toBe('18%');
         expect(style.backgroundColor).toBe(lightTheme.colors.state.warning.foreground);

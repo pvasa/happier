@@ -5,6 +5,7 @@ import {
   isConnectedServiceQuotaMeterPercentRankable,
   selectComparableConnectedServiceQuotaMeters,
 } from './connectedServiceQuotaGauge';
+import { summarizeConnectedServiceQuotaRecoveryCredits } from './connectedServiceQuotaRecoveryCreditSummary';
 
 function resolveQuotaBadgeMeterContext(params: Readonly<{
   meterId: string;
@@ -18,6 +19,8 @@ export function computeConnectedServiceQuotaSummaryBadges(params: Readonly<{
   snapshot: ConnectedServiceQuotaSnapshotV1 | null;
   pinnedMeterIds: ReadonlyArray<string>;
   strategy?: 'primary' | 'min_remaining';
+  nowMs?: number | null;
+  formatRecoveryCreditBadge?: (params: Readonly<{ count: number }>) => string;
 }>): Array<{ meterId: string; text: string }> {
   const meters = params.snapshot?.meters ?? [];
   const defaultMeterIds = selectComparableConnectedServiceQuotaMeters(meters)
@@ -51,7 +54,7 @@ export function computeConnectedServiceQuotaSummaryBadges(params: Readonly<{
   const strategy = params.strategy ?? 'primary';
   if (strategy === 'min_remaining') {
     const comparableMeterIds = new Set(selectComparableConnectedServiceQuotaMeters(meters).map((meter) => meter.meterId));
-    return badgesWithMeta
+    const meterBadges = badgesWithMeta
       .slice()
       .sort((a, b) => {
         const aScore = a.rankable && comparableMeterIds.has(a.meterId) && a.remainingPct !== null ? a.remainingPct : Number.POSITIVE_INFINITY;
@@ -60,7 +63,27 @@ export function computeConnectedServiceQuotaSummaryBadges(params: Readonly<{
         return a.index - b.index;
       })
       .map(({ meterId, text }) => ({ meterId, text }));
+    const recoveryCreditSummary = summarizeConnectedServiceQuotaRecoveryCredits(params.snapshot?.recoveryCredits, params.nowMs);
+    return recoveryCreditSummary && params.formatRecoveryCreditBadge
+      ? [
+        ...meterBadges,
+        {
+          meterId: 'recovery_credits',
+          text: params.formatRecoveryCreditBadge({ count: recoveryCreditSummary.availableCount }),
+        },
+      ]
+      : meterBadges;
   }
 
-  return badgesWithMeta.map(({ meterId, text }) => ({ meterId, text }));
+  const meterBadges = badgesWithMeta.map(({ meterId, text }) => ({ meterId, text }));
+  const recoveryCreditSummary = summarizeConnectedServiceQuotaRecoveryCredits(params.snapshot?.recoveryCredits, params.nowMs);
+  return recoveryCreditSummary && params.formatRecoveryCreditBadge
+    ? [
+      ...meterBadges,
+      {
+        meterId: 'recovery_credits',
+        text: params.formatRecoveryCreditBadge({ count: recoveryCreditSummary.availableCount }),
+      },
+    ]
+    : meterBadges;
 }

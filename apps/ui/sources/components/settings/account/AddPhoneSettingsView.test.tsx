@@ -9,16 +9,28 @@ import { installAccountCommonModuleMocks } from '../../account/accountTestHelper
 vi.spyOn(globalThis, 'setInterval').mockImplementation(() => 0 as any);
 vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => {});
 
-installAccountCommonModuleMocks();
+const clipboardMocks = vi.hoisted(() => ({
+    setStringAsync: vi.fn(async () => {}),
+}));
+const modalMocks = vi.hoisted(() => ({
+    alertAsync: vi.fn(async () => undefined),
+}));
+
+installAccountCommonModuleMocks({
+    modal: async () => {
+        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+        return createModalModuleMock({
+            spies: modalMocks,
+        }).module;
+    },
+});
 
 vi.mock('@/components/ui/text/Text', () => ({
     Text: 'Text',
     TextInput: 'TextInput',
 }));
 
-vi.mock('expo-clipboard', () => ({
-    setStringAsync: vi.fn(async () => {}),
-}));
+vi.mock('expo-clipboard', () => clipboardMocks);
 
 vi.mock('@/components/qr/QRCode', () => ({
     QRCode: 'QRCode',
@@ -104,6 +116,27 @@ describe('AddPhoneSettingsView', () => {
         const qr = qrContainer.findByType('QRCode');
         expect(String(qr.props.data)).toContain('happier:///pair?v=1');
         expect(String(qr.props.data)).toContain('pairId=pair_123');
+    });
+
+    it('copies the pairing deep link with inline feedback', async () => {
+        featureState = 'enabled';
+        activeServerUrl = 'https://stack.example.test';
+        pairingStatusResponse = {
+            ok: true,
+            status: 200,
+            json: async () => ({ state: 'pending', pairId: 'pair_123', expiresAt: '2026-02-23T00:00:00.000Z' }),
+        } as any;
+        clipboardMocks.setStringAsync.mockClear();
+        modalMocks.alertAsync.mockClear();
+
+        const { AddPhoneSettingsView } = await import('./AddPhoneSettingsView');
+
+        const screen = await renderScreen(<AddPhoneSettingsView />);
+        await screen.pressByTestIdAsync('add-phone-pairing-link');
+
+        expect(clipboardMocks.setStringAsync).toHaveBeenCalledWith(expect.stringContaining('happier:///pair?v=1'));
+        expect(modalMocks.alertAsync).not.toHaveBeenCalledWith('common.success', 'common.copied');
+        expect(screen.findByTestId('add-phone-pairing-link-copied')).toBeTruthy();
     });
 
     it('clears the QR code when the pairing session expires', async () => {

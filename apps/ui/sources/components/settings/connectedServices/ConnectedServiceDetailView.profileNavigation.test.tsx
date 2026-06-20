@@ -1,8 +1,10 @@
 import React from 'react';
+import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import {
     connectedServicesModuleState,
+    installConnectedServiceDetailShellMocks,
     installConnectedServicesCommonModuleMocks,
 } from './connectedServicesTestHelpers';
 
@@ -24,6 +26,7 @@ installConnectedServicesCommonModuleMocks({
         }).module;
     },
 });
+installConnectedServiceDetailShellMocks();
 
 vi.mock('@/auth/context/AuthContext', () => ({
   useAuth: () => ({ credentials: { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') } }),
@@ -75,12 +78,22 @@ vi.mock('@/components/ui/lists/ItemRowActions', () => {
 });
 
 describe('ConnectedServiceDetailView profile navigation', () => {
-  it('opens profile detail when the profile navigation control is pressed', async () => {
+  it('opens account detail via the AccountBlock open action', async () => {
     const { ConnectedServiceDetailView } = await import('./ConnectedServiceDetailView');
 
     const screen = await renderScreen(<ConnectedServiceDetailView />);
 
-    await screen.pressByTestIdAsync('connected-services-profile:work:open');
+    // Opening the account is now the `open` kebab action on the shared AccountBlock.
+    const actionHost = screen.tree.root
+      .findAll((node) => (node.type as unknown) === 'ItemRowActions')
+      .find((host) => host.props?.title === 'work');
+    const openAction = ((actionHost?.props?.actions ?? []) as ReadonlyArray<{ id: string; onPress: () => void }>)
+      .find((action) => action.id === 'open');
+    expect(openAction).toBeTruthy();
+
+    await act(async () => {
+      openAction?.onPress();
+    });
 
     expect(connectedServicesModuleState.routerPushSpy).toHaveBeenCalledWith(
       expect.objectContaining({

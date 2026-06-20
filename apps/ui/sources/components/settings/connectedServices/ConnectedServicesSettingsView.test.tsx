@@ -128,6 +128,18 @@ describe('ConnectedServicesSettingsView', () => {
         });
     });
 
+    it('does not render empty copy beside registry provider rows on first run', async () => {
+        useFeatureEnabledSpy.mockReturnValue(true);
+        useProfileSpy.mockReturnValue({ connectedServicesV2: [] });
+
+        const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
+        const screen = await renderScreen(React.createElement(ConnectedServicesSettingsView));
+
+        const items = screen.tree.findAllByType('Item' as any);
+        expect(items.length).toBeGreaterThan(0);
+        expect(screen.getTextContent()).not.toContain('connectedServices.list.empty');
+    });
+
     it('opens the profile recovery flow for default-auth reauth selections', async () => {
         useFeatureEnabledSpy.mockImplementation((featureId: string) =>
             featureId === 'connectedServices' || featureId === 'connectedServices.accountGroups'

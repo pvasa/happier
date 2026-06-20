@@ -2,7 +2,10 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
-import { installConnectedServicesCommonModuleMocks } from './connectedServicesTestHelpers';
+import {
+  installConnectedServiceDetailShellMocks,
+  installConnectedServicesCommonModuleMocks,
+} from './connectedServicesTestHelpers';
 
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -16,10 +19,13 @@ installConnectedServicesCommonModuleMocks({
         const routerMock = createExpoRouterMock({
             router: { back: vi.fn(), push: pushSpy },
             params: { serviceId: 'claude-subscription' },
+            // The redesigned controller registers a header-right "+" via setOptions.
+            navigation: { setOptions: vi.fn() },
         });
         return routerMock.module;
     },
 });
+installConnectedServiceDetailShellMocks();
 
 vi.mock('@/auth/context/AuthContext', () => ({
   useAuth: () => ({ credentials: { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') } }),

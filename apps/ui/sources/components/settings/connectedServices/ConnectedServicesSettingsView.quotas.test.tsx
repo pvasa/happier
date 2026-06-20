@@ -28,6 +28,15 @@ installConnectedServicesCommonModuleMocks({
   },
 });
 
+// The provider rows now render the brand mark via `SvgXml`; mock the native svg
+// boundary to a host element so the test renderer can mount it (mirrors AccountBlock).
+vi.mock('react-native-svg', () => ({
+  SvgXml: (props: Record<string, unknown>) => React.createElement('SvgXml', props),
+  Svg: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
+    React.createElement('Svg', props, props.children),
+  Circle: (props: Record<string, unknown>) => React.createElement('Circle', props, null),
+}));
+
 const stableCredentials = { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') } as const;
 vi.mock('@/auth/context/AuthContext', () => ({
   useAuth: () => ({ credentials: stableCredentials }),
@@ -234,6 +243,23 @@ describe('ConnectedServicesSettingsView quotas', () => {
 
     expect(tree.findAll((n) => n.props?.children === 'Weekly 18%')).not.toHaveLength(0);
     expect(tree.findAll((n) => n.props?.children === 'Daily 40%')).not.toHaveLength(0);
+  });
+
+  it('renders the brand mark and a derived health dot on provider rows (not key-outline)', async () => {
+    useFeatureEnabledSpy.mockReturnValue(true);
+
+    const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
+
+    const { tree } = await renderScreen(<ConnectedServicesSettingsView />);
+    await flushHookEffects({ cycles: 2, turns: 1 });
+
+    // Provider rows now resolve themed brand marks (-> SvgXml) instead of a
+    // uniform generic key-outline glyph (the index unification win).
+    expect(tree.root.findAll((n) => String(n.type) === 'SvgXml').length).toBeGreaterThan(0);
+    // The connected anthropic account drives a derived health dot.
+    expect(
+      tree.root.findAll((n) => n.props?.testID === 'connected-services-index:anthropic:health-dot').length,
+    ).toBeGreaterThan(0);
   });
 
   it('requires acknowledgement before enabling shared provider state as a global default', async () => {

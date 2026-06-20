@@ -40,6 +40,11 @@ vi.mock('@/components/ui/lists/Item', () => ({
     Item: (props: any) => React.createElement('Item', props),
 }));
 
+const narrowLayoutRef = vi.hoisted(() => ({ value: false }));
+vi.mock('@/components/settings/actions/useActionSettingsNarrowLayout', () => ({
+    useActionSettingsNarrowLayout: () => narrowLayoutRef.value,
+}));
+
 type SelectionListProps = Readonly<{
     selectedOptionId: string | null;
     rootStep: {
@@ -89,6 +94,49 @@ describe('ConnectedServicesDefaultAuthRow', () => {
     beforeEach(() => {
         modalShowMock.mockClear();
         modalUpdateMock.mockClear();
+        narrowLayoutRef.value = false;
+    });
+
+    async function renderClaudeNativeRow() {
+        const { ConnectedServicesDefaultAuthRow } = await import('./ConnectedServicesDefaultAuthRow');
+        return (await renderScreen(
+            <ConnectedServicesDefaultAuthRow
+                agentId="claude"
+                agentTitle="Claude"
+                agentCore={{ connectedServices: { supportedServiceIds: ['anthropic' as ConnectedServiceId] } }}
+                connectedServicesEnabled={true}
+                accountGroupsEnabled={false}
+                accountProfileConnectedServicesV2={[{
+                    serviceId: 'anthropic' as ConnectedServiceId,
+                    profiles: [{ profileId: 'work', status: 'connected', kind: 'token', providerEmail: 'work@example.com' }],
+                }]}
+                settings={{
+                    connectedServicesProfileLabelByKey: { 'anthropic/work': 'Work' },
+                    connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} },
+                }}
+                setDefaultAuthSettings={vi.fn()}
+                onOpenConnectedServiceSettings={vi.fn()}
+            />,
+        )).tree;
+    }
+
+    it('on a compact layout shows the selected value in the subtitle and hides the right detail', async () => {
+        narrowLayoutRef.value = true;
+        const tree = await renderClaudeNativeRow();
+        const dropdown = findDefaultAuthDropdown(tree);
+        // Compact: the (long) selected value moves to the subtitle; the right detail
+        // is suppressed so it doesn't crowd the title.
+        expect(dropdown.itemTrigger.showSelectedDetail).toBe(false);
+        expect(dropdown.itemTrigger.subtitle).toBe(dropdown.itemTrigger.detailFormatter(null));
+    });
+
+    it('on a wide layout keeps the selected value in the right detail, not the subtitle', async () => {
+        narrowLayoutRef.value = false;
+        const tree = await renderClaudeNativeRow();
+        const dropdown = findDefaultAuthDropdown(tree);
+        expect(dropdown.itemTrigger.showSelectedDetail).not.toBe(false);
+        expect(dropdown.itemTrigger.subtitle).not.toBe(dropdown.itemTrigger.detailFormatter(null));
     });
 
     it('renders as a settings dropdown and writes the per-agent default binding', async () => {

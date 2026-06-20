@@ -4,34 +4,25 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
+import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { ConnectedServiceQuotaMeterV1 } from '@happier-dev/protocol';
 
 import { clampQuotaPct, deriveQuotaUtilizationPct } from '@/sync/domains/connectedServices/deriveQuotaUtilizationPct';
+import { formatResetCountdown, type ResetCountdownFormatter } from '@/sync/domains/connectedServices/formatResetCountdown';
+import { resolveQuotaTone } from '@/sync/domains/connectedServices/resolveQuotaTone';
 import { t } from '@/text';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
-const QUOTA_REMAINING_WARNING_THRESHOLD_PCT = 25;
-const QUOTA_REMAINING_DANGER_THRESHOLD_PCT = 10;
-
-function formatResetCountdown(nowMs: number, resetsAtMs: number | null): string | null {
-  if (!resetsAtMs) return null;
-  const delta = resetsAtMs - nowMs;
-  if (!Number.isFinite(delta) || delta <= 0) return t('connectedServices.quota.duration.now');
-
-  const totalMinutes = Math.floor(delta / 60000);
-  const days = Math.floor(totalMinutes / (60 * 24));
-  const hours = Math.floor((totalMinutes - days * 60 * 24) / 60);
-  const minutes = totalMinutes - days * 60 * 24 - hours * 60;
-
-  if (days > 0) return t('connectedServices.quota.duration.daysHours', { days, hours });
-  if (hours > 0) return minutes > 0
-    ? t('connectedServices.quota.duration.hoursMinutes', { hours, minutes })
-    : t('connectedServices.quota.duration.hours', { hours });
-  return t('connectedServices.quota.duration.minutes', { minutes });
-}
+const RESET_COUNTDOWN_FORMATTER: ResetCountdownFormatter = {
+  durationNow: () => t('connectedServices.quota.duration.now'),
+  durationDaysHours: ({ days, hours }) => t('connectedServices.quota.duration.daysHours', { days, hours }),
+  durationHoursMinutes: ({ hours, minutes }) => t('connectedServices.quota.duration.hoursMinutes', { hours, minutes }),
+  durationHours: ({ hours }) => t('connectedServices.quota.duration.hours', { hours }),
+  durationMinutes: ({ minutes }) => t('connectedServices.quota.duration.minutes', { minutes }),
+};
 
 const stylesheet = StyleSheet.create((theme) => ({
   subtitleRow: {
@@ -40,17 +31,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     gap: 10,
     marginTop: 4,
   },
-  barOuter: {
+  bar: {
     flex: 1,
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: theme.colors.surface.pressedOverlay,
-    overflow: 'hidden',
-  },
-  barInner: {
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: theme.colors.state.success.foreground,
   },
   subtitleText: {
     ...Typography.rowMeta(),
@@ -79,19 +61,13 @@ export const ConnectedServiceQuotaMeterRow = React.memo(function ConnectedServic
     ? clampQuotaPct(props.meter.remainingPct)
     : utilization === null ? null : clampQuotaPct(100 - utilization);
   const remainingText = remaining === null ? '—' : `${Math.round(remaining)}%`;
-  const resetText = formatResetCountdown(props.nowMs, props.meter.resetAtMs ?? props.meter.resetsAt);
+  const resetText = formatResetCountdown(props.nowMs, props.meter.resetAtMs ?? props.meter.resetsAt, RESET_COUNTDOWN_FORMATTER);
   const right = remaining === null
     ? remainingText
     : resetText
     ? t('connectedServices.quota.remainingWithReset', { percent: remainingText, reset: resetText })
     : t('connectedServices.quota.remaining', { percent: remainingText });
-  const remainingBarColor = remaining === null
-    ? theme.colors.state.neutral.foreground
-    : remaining <= QUOTA_REMAINING_DANGER_THRESHOLD_PCT
-      ? theme.colors.state.danger.foreground
-      : remaining <= QUOTA_REMAINING_WARNING_THRESHOLD_PCT
-        ? theme.colors.state.warning.foreground
-        : theme.colors.state.success.foreground;
+  const tone = resolveQuotaTone(remaining);
 
   const usageText =
     typeof props.meter.used === 'number' && typeof props.meter.limit === 'number'
@@ -101,12 +77,12 @@ export const ConnectedServiceQuotaMeterRow = React.memo(function ConnectedServic
   const subtitle = (
     <View>
       <View style={styles.subtitleRow}>
-        <View style={styles.barOuter}>
-          <View
-            testID="connected-service-quota-meter-row:remaining-bar"
-            style={[styles.barInner, { width: `${remaining ?? 0}%`, backgroundColor: remainingBarColor }]}
-          />
-        </View>
+        <MeterBar
+          testID="connected-service-quota-meter-row:remaining-bar"
+          style={styles.bar}
+          tone={tone}
+          value={(remaining ?? 0) / 100}
+        />
         <Text style={styles.rightText}>{right}</Text>
       </View>
       {usageText ? <Text style={styles.subtitleText}>{usageText}</Text> : null}

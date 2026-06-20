@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { ConnectedServiceQuotaMeterV1, ConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol';
+import type {
+    ConnectedServiceQuotaMeterV1,
+    ConnectedServiceQuotaRecoveryCreditsV1,
+    ConnectedServiceQuotaSnapshotV1,
+} from '@happier-dev/protocol';
 
 import {
     type ConnectedServiceQuotaGaugeLabelFormatter,
@@ -187,6 +191,60 @@ describe('computeConnectedServiceQuotaGaugeViewModel', () => {
         expect(viewModel?.allMeterRows[0]?.usedPct).toBe(82);
     });
 
+    it('summarizes available recovery credits with the next expiry', () => {
+        const viewModel = computeConnectedServiceQuotaGaugeViewModel({
+            snapshot: {
+                ...snapshot([
+                    meter({ meterId: 'weekly', label: 'Weekly', used: 82, limit: 100 }),
+                ]),
+                recoveryCredits: {
+                    kind: 'usage_limit_resets',
+                    availableCount: 2,
+                    nextExpiresAtMs: 12_000,
+                    credits: [
+                        { providerCreditId: 'reset-credit-1', kind: 'usage_limit_reset', status: 'available', expiresAtMs: 11_000 },
+                        { providerCreditId: 'reset-credit-2', kind: 'usage_limit_reset', status: 'available', expiresAtMs: 13_000 },
+                        { kind: 'usage_limit_reset', status: 'redeemed', expiresAtMs: 9_000 },
+                        { kind: 'usage_limit_reset', status: 'available', expiresAtMs: 1_500 },
+                    ],
+                },
+            },
+            windowMode: 'weekly',
+            nowMs: 2_000,
+            formatter,
+        });
+
+        expect(viewModel?.recoveryCreditSummary).toEqual({
+            availableCount: 2,
+            nextExpiresAtMs: 11_000,
+            providerCreditId: 'reset-credit-1',
+        });
+    });
+
+    it('does not summarize stale aggregate recovery credits when detailed credits are all unusable', () => {
+        const viewModel = computeConnectedServiceQuotaGaugeViewModel({
+            snapshot: {
+                ...snapshot([
+                    meter({ meterId: 'weekly', label: 'Weekly', used: 82, limit: 100 }),
+                ]),
+                recoveryCredits: {
+                    kind: 'usage_limit_resets',
+                    availableCount: 2,
+                    nextExpiresAtMs: 12_000,
+                    credits: [
+                        { kind: 'usage_limit_reset', status: 'redeemed', expiresAtMs: 13_000 },
+                        { kind: 'usage_limit_reset', status: 'available', expiresAtMs: 1_500 },
+                    ],
+                },
+            },
+            windowMode: 'weekly',
+            nowMs: 2_000,
+            formatter,
+        });
+
+        expect(viewModel?.recoveryCreditSummary).toBeNull();
+    });
+
     it('returns null when no reliable quota meter exists', () => {
         const viewModel = computeConnectedServiceQuotaGaugeViewModel({
             snapshot: snapshot([
@@ -256,6 +314,171 @@ describe('computeConnectedServiceQuotaGaugeViewModel', () => {
         })?.snapshot).toBe(quotaSnapshot);
     });
 
+    it('preserves reset credits on runtime-evidence session gauges', () => {
+        const recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1 = {
+            kind: 'usage_limit_resets',
+            availableCount: 1,
+            credits: [
+                { kind: 'usage_limit_reset', status: 'available', expiresAtMs: 9_000 },
+            ],
+            nextExpiresAtMs: 9_000,
+        };
+        const quotaSnapshot = {
+            ...snapshot([
+                meter({ meterId: 'weekly', label: 'Weekly', used: 82, limit: 100 }),
+            ]),
+            recoveryCredits,
+        };
+        const params: Parameters<typeof selectConnectedServiceSessionProviderUsageGaugeSource>[0] & {
+            recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1;
+        } = {
+            providerId: 'codex',
+            connectedServiceSnapshot: quotaSnapshot,
+            connectedServiceRefProvenance: 'connected_binding_profile',
+            sessionCheckNowSupported: true,
+            recoveryCredits,
+            runtimeIssue: {
+                v: 1,
+                scope: 'primary_session',
+                status: 'failed',
+                code: 'usage_limit',
+                source: 'usage_limit',
+                occurredAt: 1_000,
+                provider: 'codex',
+                usageLimit: {
+                    v: 1,
+                    resetAtMs: 8_200_000,
+                    retryAfterMs: null,
+                    quotaScope: 'account',
+                    recoverability: 'manual',
+                    limitCategory: 'usage_limit',
+                    quotaSnapshotRef: {
+                        serviceId: 'openai-codex',
+                        profileId: 'work',
+                        fetchedAtMs: 2_000,
+                    },
+                    effectiveMeterId: 'weekly',
+                    effectiveRemainingPct: 7,
+                },
+            },
+        };
+
+        const source = selectConnectedServiceSessionProviderUsageGaugeSource(params);
+
+        expect(source?.snapshot.source).toBe('runtime_event');
+        expect(source?.snapshot.recoveryCredits).toBe(recoveryCredits);
+        expect(computeConnectedServiceQuotaGaugeViewModel({
+            snapshot: source?.snapshot ?? null,
+            windowMode: 'most_constrained',
+            nowMs: 2_000,
+            formatter,
+        })?.recoveryCreditSummary).toEqual({
+            availableCount: 1,
+            nextExpiresAtMs: 9_000,
+            providerCreditId: null,
+        });
+    });
+
+    it('lets a same-profile connected-service snapshot with no credits beat stale metadata credits', () => {
+        const staleMetadataCredits: ConnectedServiceQuotaRecoveryCreditsV1 = {
+            kind: 'usage_limit_resets',
+            availableCount: 1,
+            credits: [
+                { kind: 'usage_limit_reset', status: 'available', expiresAtMs: 9_000 },
+            ],
+            nextExpiresAtMs: 9_000,
+        };
+        const consumedSnapshot = snapshot([
+            meter({ meterId: 'weekly', label: 'Weekly', used: 82, limit: 100 }),
+        ]);
+
+        const source = selectConnectedServiceSessionProviderUsageGaugeSource({
+            providerId: 'codex',
+            connectedServiceSnapshot: consumedSnapshot,
+            connectedServiceRefProvenance: 'connected_binding_profile',
+            sessionCheckNowSupported: true,
+            recoveryCredits: staleMetadataCredits,
+            runtimeIssue: {
+                v: 1,
+                scope: 'primary_session',
+                status: 'failed',
+                code: 'usage_limit',
+                source: 'usage_limit',
+                occurredAt: 1_000,
+                provider: 'codex',
+                usageLimit: {
+                    v: 1,
+                    resetAtMs: 8_200_000,
+                    retryAfterMs: null,
+                    quotaScope: 'account',
+                    recoverability: 'manual',
+                    limitCategory: 'usage_limit',
+                    quotaSnapshotRef: {
+                        serviceId: 'openai-codex',
+                        profileId: 'work',
+                        fetchedAtMs: 2_000,
+                    },
+                    effectiveMeterId: 'weekly',
+                    effectiveRemainingPct: 7,
+                },
+            },
+        });
+
+        expect(source?.snapshot.source).toBe('runtime_event');
+        expect(source?.snapshot.recoveryCredits).toBeUndefined();
+        expect(computeConnectedServiceQuotaGaugeViewModel({
+            snapshot: source?.snapshot ?? null,
+            windowMode: 'most_constrained',
+            nowMs: 2_000,
+            formatter,
+        })?.recoveryCreditSummary).toBeNull();
+    });
+
+    it('still applies metadata recovery credits when no connected-service snapshot is available', () => {
+        const metadataCredits: ConnectedServiceQuotaRecoveryCreditsV1 = {
+            kind: 'usage_limit_resets',
+            availableCount: 1,
+            credits: [
+                { kind: 'usage_limit_reset', status: 'available', expiresAtMs: 9_000 },
+            ],
+            nextExpiresAtMs: 9_000,
+        };
+
+        const source = selectConnectedServiceSessionProviderUsageGaugeSource({
+            providerId: 'codex',
+            connectedServiceSnapshot: null,
+            connectedServiceRefProvenance: null,
+            sessionCheckNowSupported: true,
+            recoveryCredits: metadataCredits,
+            runtimeIssue: {
+                v: 1,
+                scope: 'primary_session',
+                status: 'failed',
+                code: 'usage_limit',
+                source: 'usage_limit',
+                occurredAt: 1_000,
+                provider: 'codex',
+                usageLimit: {
+                    v: 1,
+                    resetAtMs: 8_200_000,
+                    retryAfterMs: null,
+                    quotaScope: 'account',
+                    recoverability: 'manual',
+                    limitCategory: 'usage_limit',
+                    quotaSnapshotRef: {
+                        serviceId: 'openai-codex',
+                        profileId: 'work',
+                        fetchedAtMs: 2_000,
+                    },
+                    effectiveMeterId: 'weekly',
+                    effectiveRemainingPct: 7,
+                },
+            },
+        });
+
+        expect(source?.snapshot.recoveryCredits).toBe(metadataCredits);
+    });
+
     it('marks Gemini check-now support only for connected-service sources', () => {
         const quotaSnapshot = snapshot([
             meter({ meterId: 'daily', label: 'Daily', used: 40, limit: 100 }),
@@ -301,6 +524,7 @@ describe('computeConnectedServiceQuotaGaugeViewModel', () => {
 
         expect(quotaSnapshot?.serviceId).toBe('openai-codex');
         expect(quotaSnapshot?.profileId).toBe('work');
+        expect(quotaSnapshot?.accountLabel).toBe('codex-main');
         expect(quotaSnapshot?.meters.map((quotaMeter) => quotaMeter.meterId)).toEqual(['daily', 'weekly']);
 
         const viewModel = computeConnectedServiceQuotaGaugeViewModel({
@@ -480,7 +704,7 @@ describe('computeConnectedServiceQuotaGaugeViewModel', () => {
         });
 
         expect(quotaSnapshot?.profileId).toBe('runtime');
-        expect(quotaSnapshot?.accountLabel).toBeNull();
+        expect(quotaSnapshot?.accountLabel).toBe('codex-main');
     });
 
     it('prefers session runtime quota evidence over launch-time connected profile polling', () => {

@@ -15,6 +15,7 @@ import type {
 } from '@/components/sessions/new/components/buildNewSessionConnectedServicesSelectionListModel';
 
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { useActionSettingsNarrowLayout } from '@/components/settings/actions/useActionSettingsNarrowLayout';
 import { t } from '@/text';
 import {
     buildNewSessionConnectedServicesSelectionListModel,
@@ -115,6 +116,7 @@ function resolveDefaultAuthWarningLabel(warningCode: ConnectedServicesAuthWarnin
 export function ConnectedServicesDefaultAuthRow(props: ConnectedServicesDefaultAuthRowProps) {
     const { theme } = useUnistyles();
     const [menuOpen, setMenuOpen] = React.useState(false);
+    const narrowLayout = useActionSettingsNarrowLayout();
     const supportedServiceIds = React.useMemo(() => resolveAgentSupportedConnectedServiceIds({
         connectedServicesFeatureEnabled: props.connectedServicesEnabled,
         agentCore: props.agentCore,
@@ -164,6 +166,7 @@ export function ConnectedServicesDefaultAuthRow(props: ConnectedServicesDefaultA
         formatConnectedCountLabel: (count) => t('connectedServices.authChip.connectedCountLabel', { count }),
     });
     const warningCode = authLabelModel.warningCodes[0];
+    const warningLabel = resolveDefaultAuthWarningLabel(warningCode);
 
     const setBindingForService = React.useCallback((serviceId: string, binding: ConnectedServicesServiceBinding) => {
         const nextBindingsByServiceId: Record<string, ConnectedServicesServiceBinding | undefined> = {
@@ -274,9 +277,15 @@ export function ConnectedServicesDefaultAuthRow(props: ConnectedServicesDefaultA
             rowKind="item"
             itemTrigger={{
                 title: props.agentTitle,
-                subtitle: resolveDefaultAuthWarningLabel(warningCode) ?? t('connectedServices.defaultAuth.rowDetail'),
+                // On a compact (mobile) layout the selected auth value is too long to
+                // sit in the row's right detail next to the title, so surface it in the
+                // subtitle and drop the detail. The wide layout keeps it on the right.
+                subtitle: narrowLayout
+                    ? (warningLabel ?? authLabelModel.label)
+                    : (warningLabel ?? t('connectedServices.defaultAuth.rowDetail')),
                 icon: <Ionicons name="key-outline" size={22} color={theme.colors.accent.blue} />,
                 showSelectedSubtitle: false,
+                showSelectedDetail: !narrowLayout,
                 detailFormatter: () => authLabelModel.label,
                 itemProps: {
                     testID: `settings-connected-services-default-auth-${props.agentId}`,
