@@ -4,6 +4,7 @@ import type { SessionActionTarget } from '@/components/sessions/actions/sessionA
 export type SessionRowMoreMenuBuildParams = Readonly<{
     target: SessionActionTarget;
     iconColor: string;
+    leadingItems?: readonly DropdownMenuItem[];
     folderMoveMenuItems?: readonly DropdownMenuItem[];
     canMoveToFolder?: boolean;
 }>;

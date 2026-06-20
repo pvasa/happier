@@ -129,6 +129,8 @@ installSessionShellCommonModuleMocks({
       useSetting: () => null,
       useSettings: () => ({ experiments: true, featureToggles: {} }),
       useAutomations: () => [],
+      useSessionAutomationsEnabledCount: () => 0,
+      useOpenApprovalArtifactsForSession: () => [],
       useMachine: () => null,
     });
   },

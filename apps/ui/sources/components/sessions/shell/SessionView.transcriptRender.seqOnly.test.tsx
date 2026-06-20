@@ -89,7 +89,7 @@ function getStorageStateForTest() {
     return {
         sessions: sessionState ? { s1: sessionState } : {},
         settings: {
-            sessionMessageSendMode: 'direct',
+            sessionMessageSendMode: 'agent_queue',
             sessionBusySteerSendPolicy: 'steerImmediately',
         },
         sessionListViewDataByServerId: sessionListViewDataByServerIdState,
@@ -288,6 +288,8 @@ installSessionShellCommonModuleMocks({
                 useSetting: () => null,
                 useSettings: () => ({ experiments: true, featureToggles: {} }),
                 useAutomations: () => [],
+                useSessionAutomationsEnabledCount: () => 0,
+                useOpenApprovalArtifactsForSession: () => [],
                 useMachine: () => null,
             } as any,
         });
@@ -438,6 +440,7 @@ vi.mock('@/sync/sync', () => ({
         publishSessionAcpConfigOptionOverrideToMetadata: async () => {},
         publishSessionModelOverrideToMetadata: async () => {},
         refreshSessions: async () => {},
+        refreshSessionForSubmit: async (sessionId: string) => sessionState?.id === sessionId ? sessionState : null,
         onSessionVisible: onSessionVisibleSpy,
         markSessionLiveTailIntent: markSessionLiveTailIntentSpy,
         sendMessage: async () => {},
@@ -568,6 +571,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
             presence: 'online',
             active: true,
             accessLevel: 'edit',
+            agentStateVersion: 1,
             metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp' },
             agentState: {},
         };
@@ -697,15 +701,16 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         await screen.unmount();
     });
 
-    it('passes cached route hydration pending state to the transcript instead of remounting as blank content', async () => {
+    it('keeps cached route hydration content mounted without marking the transcript pending', async () => {
         const screen = await renderSessionView({
             routeHydrationState: { kind: 'loading', sessionId: 's1', reason: 'store-miss' },
         });
 
         expect(chatListRenderSpy).toHaveBeenCalled();
         expect(chatListRenderSpy.mock.calls.at(-1)?.[0]).toMatchObject({
-            routeHydrationPending: true,
+            routeHydrationPending: false,
         });
+        expect(agentContentViewRenderSpy.mock.calls.at(-1)?.[0]?.placeholder).toBeNull();
 
         await screen.unmount();
     });

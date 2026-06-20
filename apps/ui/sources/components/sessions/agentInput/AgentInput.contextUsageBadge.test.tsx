@@ -74,6 +74,9 @@ installAgentInputCommonModuleMocks({
                 if (key === 'agentInput.context.description') return 'Automatically compacts its context when needed.';
                 if (key === 'agentInput.providerUsage.titleForProvider') return `${params?.provider} usage`;
                 if (key === 'agentInput.providerUsage.activeAccount') return `Account: ${params?.account}`;
+                if (key === 'connectedServices.quota.recoveryCreditTitle') return `${params?.count} reset available`;
+                if (key === 'connectedServices.quota.recoveryCreditSubtitle') return 'Use a reset to restore usage immediately.';
+                if (key === 'session.usageLimitRecovery.consumeResetCreditAction') return 'Use reset';
                 return key;
             },
         });
@@ -128,6 +131,9 @@ vi.mock('@/sync/domains/state/storageStore', async () => {
 });
 
 vi.mock('@/agents/catalog/catalog', () => ({
+    getAgentIconSvgXml: () => null,
+    getAgentIconSource: () => null,
+    getAgentIconTintColor: () => undefined,
     AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],
     DEFAULT_AGENT_ID: 'codex',
     resolveAgentIdFromFlavor: () => null,
@@ -430,7 +436,8 @@ describe('AgentInput (context usage badge)', () => {
                     outputTokens: 0,
                     cacheCreation: 0,
                     cacheRead: 0,
-                    contextSize: 38_691,
+                    contextSize: 198_000,
+                    contextWindowTokens: 200_000,
                 }}
                 alwaysShowContextSize={true}
             />,
@@ -517,6 +524,11 @@ describe('AgentInput (context usage badge)', () => {
             resetLabel: '2h',
             tone: 'warning',
             isStale: false,
+            recoveryCreditSummary: {
+                availableCount: 1,
+                nextExpiresAtMs: null,
+                providerCreditId: null,
+            },
             effectiveMeter: {
                 meterId: 'weekly',
                 label: 'Weekly',
@@ -543,6 +555,7 @@ describe('AgentInput (context usage badge)', () => {
                 },
             ],
         };
+        const onProviderUsageRecoveryCreditPress = vi.fn();
 
         const screen = await renderScreen(
             <AgentInput
@@ -562,6 +575,7 @@ describe('AgentInput (context usage badge)', () => {
                 }}
                 alwaysShowContextSize={true}
                 {...{ providerUsageGauge }}
+                onProviderUsageRecoveryCreditPress={onProviderUsageRecoveryCreditPress}
             />,
         );
 
@@ -582,6 +596,13 @@ describe('AgentInput (context usage badge)', () => {
         expect(screen.getTextContent()).toContain('Work account');
         expect(screen.getTextContent()).toContain('18% left · resets in 2h');
         expect(screen.getTextContent()).toContain('82/100 used');
+        expect(screen.getTextContent()).toContain('1 reset available');
+        expect(screen.getTextContent()).toContain('Use a reset to restore usage immediately.');
+
+        act(() => {
+            screen.findByTestId('agent-input-provider-usage-recovery-credit-action')?.props.onPress?.();
+        });
+        expect(onProviderUsageRecoveryCreditPress).toHaveBeenCalledTimes(1);
 
         act(() => screen.tree.unmount());
     });
@@ -606,6 +627,7 @@ describe('AgentInput (context usage badge)', () => {
             resetLabel: '2h',
             tone: 'warning',
             isStale: false,
+            recoveryCreditSummary: null,
             effectiveMeter: {
                 meterId: 'weekly',
                 label: 'Weekly',

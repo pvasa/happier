@@ -220,6 +220,7 @@ type SessionViewportTestSnapshot = {
 };
 let sessionViewportByIdState = new Map<string, SessionViewportTestSnapshot>();
 let deferredNewerSessionIdsState = new Set<string>();
+let catchingUpNewerState = false;
 
 const settingValues: Record<string, any> = {};
 const runtimeMockState = vi.hoisted(() => ({
@@ -758,6 +759,14 @@ vi.mock('@/sync/sync', () => {
     };
 });
 
+vi.mock('@/sync/store/hooks', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/store/hooks')>();
+    return {
+        ...actual,
+        useSessionCatchingUpNewer: () => catchingUpNewerState,
+    };
+});
+
 vi.mock('@/components/sessions/transcript/thinking/resolveActiveThinkingMessageId', async () => await import('./thinking/resolveActiveThinkingMessageId'));
 
 vi.mock('@/sync/domains/settings/settings', async (importOriginal) => {
@@ -823,6 +832,7 @@ describe('ChatList (FlashList v2)', () => {
         transcriptTurnsState = [];
         sessionViewportByIdState = new Map();
         deferredNewerSessionIdsState = new Set();
+        catchingUpNewerState = false;
         deferredNewerDrainInFlightState.clear();
         runtimeMockState.headerHeight = 0;
         runtimeMockState.safeAreaTop = 0;
@@ -5048,6 +5058,186 @@ describe('ChatList (FlashList v2)', () => {
         });
     });
 
+    it('re-arms a parked-inside web viewport from a near-top fractional frame after cooldown (EPSILON classification)', async () => {
+        // EPSILON secondary cause: the web scroll element reports `scrollTop` as an integer-rounded
+        // (dpr=1) or sub-pixel-residue (Retina) value, so a viewport resting at the genuine top is
+        // rarely EXACTLY 0 — it commonly settles at ~1. The pre-EPSILON classifier required
+        // `effectiveScrollOffset === 0`, so a near-top frame (offset 1) was misclassified 'scroll',
+        // the machine suspended it, and the parked-inside viewport never re-armed. With the
+        // genuine-top epsilon, the same near-top frame classifies 'edge-reached' and re-arms.
+        await withWebFlashListFakeTimers(0, async () => {
+            sessionState = { ...sessionState, seq: 25 };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            const syncMod = await import('@/sync/sync');
+            const loadOlderMessagesMock = vi.mocked(syncMod.sync.loadOlderMessages);
+            loadOlderMessagesMock.mockResolvedValue({ loaded: 1, hasMore: true, status: 'loaded' as const });
+            loadOlderMessagesMock.mockClear();
+
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptBackwardPrefetchThresholdPx: 800,
+                transcriptOlderLoadCooldownMs: 2500,
+            };
+
+            const { ChatList } = await import('./ChatList');
+            await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(600, 1800, { turns: 1 });
+
+            // Park inside the threshold (a tall top row keeps the offset off zero): one load fires.
+            await scrollFlashListTo(100, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            // Cooldown elapses while still parked inside, with NO observed threshold exit.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(2500);
+            });
+            await scrollFlashListTo(80, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            // Reaching the genuine top reports a near-top fractional offset (1), NOT exactly 0. The
+            // EPSILON classifier marks it 'edge-reached', satisfying the machine's exact-edge re-arm
+            // and loading exactly one more older page. (Pre-EPSILON this stayed at 1.)
+            await scrollFlashListTo(1, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(2);
+
+            // A frame just past the epsilon band (mid-band) after the re-arm does not widen the band:
+            // no extra load without a fresh exit -> re-enter or another genuine-top frame.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(2500);
+            });
+            await scrollFlashListTo(120, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    it('renders the §13 catch-up overlay whenever catching up, regardless of pin state', async () => {
+        // §13 wiring gate: `useSessionCatchingUpNewer(sessionId)` with NO pin gate. The signal is
+        // catch-up-only (resume / deferred-newer drain / socket-reconnect bracket it in sync; normal
+        // realtime live streaming never does), so it cannot nag during ordinary pinned streaming.
+        // Reopening a background-working session restores the user PINNED at the live tail while sync
+        // silently catches up — exactly the scenario the overlay exists for — so a `!isPinned` gate
+        // would suppress it in its primary case. The overlay therefore shows whenever the signal is
+        // true, pinned or not.
+        sessionState = { ...sessionState, seq: 25 };
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+        syncTuningState = { ...syncTuningState, transcriptOlderLoadSpinnerDelayMs: 0 };
+
+        const sessionId = sessionState.id;
+
+        // Case 1: catching up AND pinned-following the live tail (reopen of an actively-working
+        // session) -> overlay SHOWN. The pin must NOT suppress the catch-up surface.
+        catchingUpNewerState = true;
+        sessionViewportByIdState.set(sessionId, {
+            isPinned: true,
+            offsetY: 0,
+            anchor: null,
+            lastUpdatedAt: Date.now(),
+            source: 'observed',
+        });
+        const { ChatList } = await import('./ChatList');
+        const pinnedScreen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+        await primeFlashListMetrics(600, 1800, { turns: 1 });
+        expect(pinnedScreen.findByTestId('transcript-catch-up-progress-overlay')).toBeTruthy();
+
+        // Case 2: catching up AND unpinned (scrolled-up reopen/resume) -> overlay shown.
+        catchingUpNewerState = true;
+        sessionViewportByIdState.set(sessionId, {
+            isPinned: false,
+            offsetY: 400,
+            anchor: null,
+            lastUpdatedAt: Date.now(),
+            source: 'observed',
+        });
+        const unpinnedScreen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+        await primeFlashListMetrics(600, 1800, { turns: 1 });
+        expect(unpinnedScreen.findByTestId('transcript-catch-up-progress-overlay')).toBeTruthy();
+
+        // Case 3: NOT catching up -> overlay hidden (idle), regardless of pin state. Confirms the
+        // signal — not the pin — is the sole gate (spinner-delay is set to 0 so a true signal would
+        // surface immediately).
+        catchingUpNewerState = false;
+        const idleScreen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+        await primeFlashListMetrics(600, 1800, { turns: 1 });
+        expect(idleScreen.findByTestId('transcript-catch-up-progress-overlay')).toBeNull();
+    });
+
+    it('re-arms older-load from a genuine-top frame when the TOP row is a tool group (row-kind-independent)', async () => {
+        // Regression for the user's exact scenario: the genuine-top re-arm must not depend on the
+        // top visible row being a simple message. A tall tool-calls-group at the top keeps the
+        // viewport parked inside the threshold (the offset never settles to zero until the genuine
+        // top is reached) and `onStartReached` does NOT fire. The continuous web scroll observation,
+        // classifying the genuine-top frame (scrollTop 0) as 'edge-reached', must still re-arm the
+        // machine — proving the fix is row-kind-independent.
+        await withWebFlashListFakeTimers(0, async () => {
+            sessionState = { ...sessionState, seq: 25 };
+            settingValues.transcriptGroupingMode = 'linear';
+            settingValues.transcriptGroupToolCalls = true;
+            settingValues.toolViewTimelineChromeMode = 'activity_feed';
+            // Oldest-first: a tool-call lands at the top, so the first (top) list item is a tool group.
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [
+                    { kind: 'tool-call', id: 'tool-top', localId: null, createdAt: 1, seq: 1, tool: { name: 'shell' }, children: [] },
+                    { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, seq: 2, text: 'reply' },
+                ],
+            };
+
+            const syncMod = await import('@/sync/sync');
+            const loadOlderMessagesMock = vi.mocked(syncMod.sync.loadOlderMessages);
+            loadOlderMessagesMock.mockResolvedValue({ loaded: 1, hasMore: true, status: 'loaded' as const });
+            loadOlderMessagesMock.mockClear();
+
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptBackwardPrefetchThresholdPx: 800,
+                transcriptOlderLoadCooldownMs: 2500,
+            };
+
+            const { ChatList } = await import('./ChatList');
+            await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(600, 1800, { turns: 1 });
+
+            // The TOP (oldest, first) visible row is a tool group, not a message — this is the load-
+            // bearing fixture difference from the simple-message genuine-top test.
+            const topItem = getCapturedFlashListProps().data?.[0];
+            expect(typeof topItem?.kind).toBe('string');
+            expect(topItem.kind).toMatch(/^tool-/);
+
+            // The redundant onStartReached edge callback is never invoked in this flow; the scroll path
+            // alone must re-arm. Assert it stays untouched so the load below is attributable to the
+            // genuine-top scroll classification, not the edge callback.
+            const onStartReachedSpy = vi.fn(getCapturedFlashListProps().onStartReached);
+
+            // Park inside the threshold (the tall tool group keeps the offset off zero): one load fires.
+            await scrollFlashListTo(100, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            // Cooldown elapses while parked inside, with NO observed threshold exit; a mid-band scroll
+            // must NOT chain another load (anti-burst).
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(2500);
+            });
+            await scrollFlashListTo(80, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            // Reaching the genuine top (scrollTop 0) re-arms via the 'edge-reached' classification and
+            // loads exactly one more older page — even though the top row is a tool group and
+            // onStartReached never fired.
+            await scrollFlashListTo(0, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(2);
+            expect(onStartReachedSpy).not.toHaveBeenCalled();
+        });
+    });
+
     it('loads older messages near the top even when onScroll is not marked isTrusted (web)', async () => {
         sessionState = { ...sessionState, seq: 25 };
         sessionMessagesState = {
@@ -5859,6 +6049,83 @@ describe('ChatList (FlashList v2)', () => {
                         turns: 3,
                         frames: 1,
                     });
+
+                    scrollEl.scrollTop = 1000;
+                    await scrollFlashListTo(1000, { turns: 1 });
+                    await vi.advanceTimersByTimeAsync(25);
+                    await screen.settle({ cycles: 1, turns: 2 });
+
+                    scrollEl.scrollTop = 100;
+                    await scrollFlashListTo(100, { turns: 3 });
+
+                    expect(loadOlderMessagesMock).toHaveBeenCalledTimes(2);
+                },
+                {
+                    document: { getElementById: vi.fn(() => scrollEl) },
+                    window: {
+                        getComputedStyle: vi.fn(() => ({
+                            overflowY: 'auto',
+                            overflowX: 'hidden',
+                            overflow: 'auto',
+                        })),
+                    },
+                },
+            );
+        });
+    });
+
+    it('closes the web prepend owner on expiry even without a later layout callback', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            const syncMod = await import('@/sync/sync');
+            const loadOlderMessagesMock = vi.mocked(syncMod.sync.loadOlderMessages);
+
+            const scrollEl: any = {
+                scrollHeight: 1200,
+                clientHeight: 600,
+                scrollWidth: 0,
+                clientWidth: 0,
+                scrollTop: 600,
+                querySelectorAll: () => [],
+                parentElement: null,
+                contains: () => false,
+                isConnected: true,
+            };
+
+            loadOlderMessagesMock.mockImplementation(async () => {
+                scrollEl.scrollHeight += 600;
+                return { loaded: 5, hasMore: true, status: 'loaded' as const };
+            });
+            loadOlderMessagesMock.mockClear();
+
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptBackwardPrefetchThresholdPx: 800,
+                transcriptOlderLoadCooldownMs: 20,
+                transcriptWebInitialPinStabilizeMs: 20,
+            };
+            sessionState = { ...sessionState, seq: 25 };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            await withFlashListChatListWebScrollerDom(
+                scrollEl,
+                async () => {
+                    const { ChatList } = await import('./ChatList');
+                    const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+                    getCapturedFlashListProps();
+
+                    await primeFlashListMetrics(600, 1200);
+                    scrollEl.scrollHeight = 1200;
+
+                    scrollEl.scrollTop = 100;
+                    await scrollFlashListTo(100, { turns: 3 });
+                    expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+                    expect(scrollEl.scrollTop).toBe(700);
+
+                    await vi.advanceTimersByTimeAsync(25);
+                    await screen.settle({ cycles: 1, turns: 2 });
 
                     scrollEl.scrollTop = 1000;
                     await scrollFlashListTo(1000, { turns: 1 });

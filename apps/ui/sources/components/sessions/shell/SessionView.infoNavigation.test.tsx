@@ -78,6 +78,7 @@ installSessionShellCommonModuleMocks({
         const session: any = {
             id: 's1',
             seq: 1,
+            serverId: 'server-2',
             presence: 'online',
             active: true,
             accessLevel: 'edit',
@@ -120,6 +121,8 @@ installSessionShellCommonModuleMocks({
             },
             useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
             useAutomations: () => [],
+            useSessionAutomationsEnabledCount: () => 0,
+            useOpenApprovalArtifactsForSession: () => [],
             useMachine: () => null,
             useAllMachines: () => [{ id: 'm1', metadata: {} }],
         });
@@ -374,7 +377,7 @@ describe('SessionView info navigation', () => {
         standardCleanup();
     });
 
-    it('opens session info via singular navigate using the cached owning server id instead of a stale route server id', async () => {
+    it('opens session info via singular navigate using the explicit route server id for a route-owned session', async () => {
         const { SessionView } = await import('./SessionView');
 
         await renderScreen(
@@ -389,7 +392,7 @@ describe('SessionView info navigation', () => {
 
         expect(routerPushSpy).not.toHaveBeenCalled();
         expect(routerNavigateSpy).toHaveBeenCalledTimes(1);
-        expect(routerNavigateSpy).toHaveBeenCalledWith('/session/s1/info?serverId=server-cache', expect.objectContaining({
+        expect(routerNavigateSpy).toHaveBeenCalledWith('/session/s1/info?serverId=server-2', expect.objectContaining({
             dangerouslySingular: expect.any(Function),
         }));
 
@@ -508,7 +511,7 @@ describe('SessionView info navigation', () => {
 
         capturedOpenSessionSpy('child-session-1');
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/child-session-1?serverId=server-cache');
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/child-session-1?serverId=server-2');
     });
 
     it('does not eagerly hydrate discovered subagent sidechains from the session shell or header', async () => {

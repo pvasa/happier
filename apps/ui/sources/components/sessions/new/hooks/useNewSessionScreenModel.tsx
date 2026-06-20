@@ -1735,6 +1735,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         persistDraftIfEnabled,
         draftPersistenceEnabled,
         draftPersistenceGenerationRef,
+        draftTextLength: sessionPrompt.length,
     });
 
     const submitAccessibilityLabel = newSessionAuthoringContext.submitAccessibilityLabelKey

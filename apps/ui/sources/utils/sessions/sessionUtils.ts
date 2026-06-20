@@ -6,7 +6,6 @@ import type { SessionListRenderableSession } from '@/sync/domains/session/listin
 import {
     derivePendingRequestFlagsFromSession,
     deriveLatestPendingRequestObservedAtFromSession,
-    listPendingRequestListsFromSession,
     listPendingPermissionRequestsFromSession,
     listPendingTranscriptRequests as listPendingTranscriptRequestsFromSession,
     listPendingUserActionRequestsFromSession,
@@ -48,10 +47,6 @@ export interface SessionStatus {
 export const OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS = 15_000;
 
 export type PendingPermissionRequest = SessionPendingRequest;
-export type PendingAgentInputRequests = Readonly<{
-    permissionRequests: readonly PendingPermissionRequest[];
-    userActionRequests: readonly PendingPermissionRequest[];
-}>;
 
 type SessionStatusSource = Session | SessionListRenderableSession;
 type SessionWorkingTextMode = 'animated' | 'static';
@@ -96,13 +91,6 @@ export function listPendingPermissionRequests(session: Session, messages?: Reado
 
 export function listPendingUserActionRequests(session: Session, messages?: ReadonlyArray<Message>): PendingPermissionRequest[] {
     return listPendingUserActionRequestsFromSession(session, messages);
-}
-
-export function listPendingAgentInputRequests(
-    session: Session,
-    messages?: ReadonlyArray<Message>,
-): PendingAgentInputRequests {
-    return listPendingRequestListsFromSession(session, messages);
 }
 
 export function shouldReadTranscriptForPendingRequests(session: Session): boolean {

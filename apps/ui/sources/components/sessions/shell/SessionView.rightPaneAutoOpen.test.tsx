@@ -157,6 +157,8 @@ installSessionShellCommonModuleMocks({
             useSetting: <K extends keyof Settings>(key: K) => settingsDefaults[key],
             useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
             useAutomations: () => [],
+            useSessionAutomationsEnabledCount: () => 0,
+            useOpenApprovalArtifactsForSession: () => [],
             useMachine: () => null,
         });
     },

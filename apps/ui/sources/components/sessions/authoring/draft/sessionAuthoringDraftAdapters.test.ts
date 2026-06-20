@@ -6,6 +6,7 @@ import {
     buildAutomationTemplateFromSessionAuthoringDraft,
     buildExistingSessionAutomationFallbackDraft,
     buildExistingSessionAuthoringDraftFromSessionSnapshot,
+    buildLiveNewSessionAuthoringDraftFromResolvedInputs,
     buildNewSessionAuthoringDraft,
     buildNewSessionAuthoringDraftFromResolvedInputs,
     buildNewSessionAuthoringDraftFromPersistedDraft,
@@ -1039,6 +1040,43 @@ describe('sessionAuthoringDraftAdapters', () => {
                 timezone: 'Europe/Zurich',
             },
         }));
+    });
+
+    it('builds a live new-session authoring draft without trimming or duplicating missing display text', () => {
+        const prompt = `  ${'x'.repeat(256)}  `;
+
+        const draft = buildLiveNewSessionAuthoringDraftFromResolvedInputs({
+            directory: '/tmp/project',
+            prompt,
+            connectedServices: null,
+        });
+
+        expect(draft.prompt).toBe(prompt);
+        expect(draft.displayText).toBe('');
+    });
+
+    it('persists a live new-session draft with trimmed prompt input when display text is omitted', () => {
+        const prompt = '  <html_like attr="value">large prompt body</html_like>  ';
+
+        const liveDraft = buildLiveNewSessionAuthoringDraftFromResolvedInputs({
+            directory: '/tmp/project',
+            prompt,
+            connectedServices: null,
+        });
+
+        const persistedDraft = buildPersistedNewSessionDraftFromAuthoringDraft({
+            draft: liveDraft,
+            machineId: null,
+            selectedSecretId: null,
+            selectedSecretIdByProfileIdByEnvVarName: null,
+            sessionOnlySecretValueEncByProfileIdByEnvVarName: null,
+            agentNewSessionOptionStateByAgentId: null,
+            updatedAt: 123,
+        });
+
+        expect(liveDraft.prompt).toBe(prompt);
+        expect(liveDraft.displayText).toBe('');
+        expect(persistedDraft.input).toBe('<html_like attr="value">large prompt body</html_like>');
     });
 
     it('builds a persisted new-session draft from the shared authoring draft', () => {

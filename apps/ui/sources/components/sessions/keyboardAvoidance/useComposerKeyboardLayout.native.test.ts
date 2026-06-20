@@ -275,6 +275,99 @@ describe('useComposerKeyboardLayout native', () => {
         expect(hook.getCurrent().listBottomInset.value).toBe(140);
     });
 
+    it('does not resurrect hidden keyboard lift from a stale non-zero end frame after iOS hide', async () => {
+        nativeHookState.platformOS = 'ios';
+        const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.native');
+        const hook = await renderHook(() => useComposerKeyboardLayout({
+            headerHeight: 100,
+            layoutBottomInset: 80,
+            safeAreaBottom: 0,
+        }));
+
+        act(() => {
+            hook.getCurrent().setComposerMeasuredHeight(140);
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 300, progress: 1 });
+        });
+        act(() => {
+            nativeHookState.keyboardListeners.get('keyboardDidHide')?.();
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 300, progress: 1 });
+        });
+
+        expect(hook.getCurrent().bottomInset.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightLive.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightForInset.value).toBe(0);
+        expect(hook.getCurrent().listBottomInset.value).toBe(140);
+    });
+
+    it('does not resurrect hidden keyboard lift from stale non-zero frames after iOS hide before refocus', async () => {
+        nativeHookState.platformOS = 'ios';
+        const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.native');
+        const hook = await renderHook(() => useComposerKeyboardLayout({
+            headerHeight: 100,
+            layoutBottomInset: 80,
+            safeAreaBottom: 0,
+        }));
+
+        act(() => {
+            hook.getCurrent().setComposerMeasuredHeight(140);
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 300, progress: 1 });
+        });
+        act(() => {
+            nativeHookState.keyboardListeners.get('keyboardDidHide')?.();
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onStart?.({ height: 300, progress: 1 });
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 300, progress: 1 });
+        });
+
+        expect(hook.getCurrent().bottomInset.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightLive.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightForInset.value).toBe(0);
+        expect(hook.getCurrent().listBottomInset.value).toBe(140);
+    });
+
+    it('allows the next iOS keyboard sequence to lift after composer refocus follows hide', async () => {
+        nativeHookState.platformOS = 'ios';
+        const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.native');
+        const hook = await renderHook(() => useComposerKeyboardLayout({
+            headerHeight: 100,
+            layoutBottomInset: 80,
+            safeAreaBottom: 0,
+        }));
+
+        act(() => {
+            hook.getCurrent().setComposerMeasuredHeight(140);
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 300, progress: 1 });
+        });
+        act(() => {
+            nativeHookState.keyboardListeners.get('keyboardDidHide')?.();
+        });
+        act(() => {
+            hook.getCurrent().setComposerInputFocused?.(true);
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onStart?.({ height: 300, progress: 1 });
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 300, progress: 1 });
+        });
+
+        expect(hook.getCurrent().bottomInset.value).toBe(220);
+        expect(hook.getCurrent().keyboardHeightLive.value).toBe(220);
+        expect(hook.getCurrent().keyboardHeightForInset.value).toBe(220);
+        expect(hook.getCurrent().listBottomInset.value).toBe(360);
+    });
+
     it('does not let native keyboard hide fallback defeat retained overlay lift', async () => {
         nativeHookState.platformOS = 'ios';
         const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.native');

@@ -368,6 +368,8 @@ installSessionShellCommonModuleMocks({
       },
       useSettings: () => ({ experiments: true, featureToggles: {} }),
       useAutomations: () => [],
+      useSessionAutomationsEnabledCount: () => 0,
+      useOpenApprovalArtifactsForSession: () => [],
     });
   },
 });
@@ -397,6 +399,13 @@ function findPressableByAccessibilityLabel(screen: RenderScreenResult, label: st
 }
 
 async function renderSessionView(routeServerId?: string) {
+  const normalizedRouteServerId = routeServerId?.trim();
+  if (normalizedRouteServerId) {
+    sessionState.session = {
+      ...sessionState.session,
+      serverId: normalizedRouteServerId,
+    };
+  }
   return renderScreen(
     <SessionView id="s1" routeServerId={routeServerId} />,
     {

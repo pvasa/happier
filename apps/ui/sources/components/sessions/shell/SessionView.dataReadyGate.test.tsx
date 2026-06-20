@@ -226,6 +226,7 @@ installSessionShellCommonModuleMocks({
             useSessionUsage: () => null,
             useSyncError: () => syncErrorState,
             useArtifacts: () => [],
+            useOpenApprovalArtifactsForSession: () => [],
             useLocalSetting: <K extends keyof LocalSettings>(key: K) => localSettingsDefaults[key],
             useLocalSettingMutable: <K extends keyof LocalSettings>(key: K) => [
                 localSettingsDefaults[key],
@@ -243,6 +244,7 @@ installSessionShellCommonModuleMocks({
             useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
             useProfile: () => null,
             useAutomations: () => [],
+            useSessionAutomationsEnabledCount: () => 0,
             useAllMachines: () => [],
             useMachine: () => null,
         }),

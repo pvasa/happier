@@ -129,6 +129,8 @@ installSessionShellCommonModuleMocks({
       useSetting: () => null,
       useSettings: () => ({ experiments: true, featureToggles: {} }),
       useAutomations: () => [],
+      useSessionAutomationsEnabledCount: () => 0,
+      useOpenApprovalArtifactsForSession: () => [],
       useMachine: () => null,
       useLocalSettingMutable: () => [false, vi.fn()],
       useSettingMutable: () => [null, vi.fn()],
@@ -368,6 +370,13 @@ const { SessionView } = await import('./SessionView');
 
 describe('SessionView attachments gating', () => {
   beforeEach(() => {
+    sessionState.session = {
+      id: 's1',
+      metadata: null,
+      accessLevel: 'edit',
+      canApprovePermissions: true,
+      agentState: { controlledByUser: true },
+    } as any;
     executeSessionComposerResolutionMock.mockReset();
     modalAlertSpy.mockReset();
     resolveSessionComposerSendMock.mockReset();
@@ -406,6 +415,7 @@ describe('SessionView attachments gating', () => {
     attachmentsFeatureScopeState.enabledForServerId = 'server-2';
     featureEnabledState['attachments.uploads'] = false;
     attachmentsTransferAvailableState.value = true;
+    sessionState.session = { ...sessionState.session, serverId: 'server-2' };
 
     let tree!: renderer.ReactTestRenderer;
     tree = (await renderScreen(<AppPaneProvider>

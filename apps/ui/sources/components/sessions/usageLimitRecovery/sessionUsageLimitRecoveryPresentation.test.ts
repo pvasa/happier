@@ -94,6 +94,49 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
         expect(presentation?.banner.secondaryActions.map((action) => action.kind)).toEqual(['remember']);
     });
 
+    it('offers an apply-reset action when an available recovery credit exists', () => {
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'failed',
+            issue: usageIssue('codex', null),
+            recovery: null,
+            recoveryCredits: {
+                kind: 'usage_limit_resets',
+                availableCount: 1,
+                totalCount: 1,
+                nextExpiresAtMs: 1_701_000_000_000,
+                source: 'provider_api',
+                confidence: 'exact',
+                credits: [{
+                    providerCreditId: 'reset-credit-1',
+                    kind: 'usage_limit_reset',
+                    status: 'available',
+                    grantedAtMs: 1_699_000_000_000,
+                    expiresAtMs: 1_701_000_000_000,
+                    redeemedAtMs: null,
+                    title: null,
+                    description: null,
+                }],
+            },
+            rememberedMode: 'ask',
+            checkNowSupported: true,
+            nowMs: 1_700_000_000_000,
+            translate: (key, params) => params ? `${key}:${JSON.stringify(params)}` : key,
+            formatTime: (value) => `time:${value}`,
+        });
+
+        expect(presentation?.banner.body).toContain('session.usageLimitRecovery.resetCreditExpiresBody');
+        expect(presentation?.banner.secondaryActions.map((action) => action.kind)).toEqual([
+            'consume_reset_credit',
+            'check_now',
+            'remember',
+        ]);
+        expect(presentation?.banner.secondaryActions[0]).toEqual(expect.objectContaining({
+            label: 'session.usageLimitRecovery.consumeResetCreditAction',
+            testID: 'session-usageLimit-recovery-consumeResetCredit',
+        }));
+    });
+
     it('uses a fallback-switch action for switchable exhausted connected-service groups', () => {
         const presentation = buildSessionUsageLimitRecoveryPresentation({
             featureEnabled: true,
@@ -412,7 +455,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             recovery: null,
             operationStatus: 'waiting',
             operationRetryAtMs: retryAtMs,
-            translate: (key: string, p?: Readonly<{ time: string }>) => (p ? `${key}:${p.time}` : key),
+            translate: (key: string, p?: Readonly<{ time?: string }>) => (p ? `${key}:${p.time}` : key),
             formatTime: (value: number) => `time:${value}`,
         } as const;
 

@@ -8,7 +8,7 @@ import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeFor
 import { Text } from '@/components/ui/text/Text';
 
 const AGENT_CHIP_LOGO_SLOT_SIZE = 16;
-const AGENT_CHIP_LOGO_SIZE = 14;
+const AGENT_CHIP_LOGO_SIZE = 16;
 const AGENT_CHIP_LOGO_SLOT_STYLE = {
     width: AGENT_CHIP_LOGO_SLOT_SIZE,
     height: AGENT_CHIP_LOGO_SLOT_SIZE,

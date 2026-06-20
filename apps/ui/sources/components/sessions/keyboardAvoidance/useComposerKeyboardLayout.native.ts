@@ -89,6 +89,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
     const isInteractiveDismissActive = useSharedValue(false);
     const isKeyboardLiftSuppressed = useSharedValue(keyboardLiftSuppressed);
     const isKeyboardLiftRetained = useSharedValue(false);
+    const ignoreKeyboardFramesUntilComposerFocus = useSharedValue(false);
     const keyboardHeightForInset = useSharedValue(0);
     const keyboardHeightAbsolute = useSharedValue(0);
     const keyboardHeightLive = useSharedValue(0);
@@ -281,13 +282,14 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
 
         const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
             if (keyboardRetentionCountRef.current > 0) return;
+            ignoreKeyboardFramesUntilComposerFocus.value = true;
             applyFinalKeyboardHeightFromJS(0);
         });
 
         return () => {
             hideSubscription.remove();
         };
-    }, [applyFinalKeyboardHeightFromJS]);
+    }, [applyFinalKeyboardHeightFromJS, ignoreKeyboardFramesUntilComposerFocus]);
 
     React.useEffect(() => {
         if (Platform.OS !== 'android') return undefined;
@@ -352,6 +354,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
     useKeyboardHandler({
         onStart: (event) => {
             'worklet';
+            if (ignoreKeyboardFramesUntilComposerFocus.value) return;
             isInteractiveDismissActive.value = false;
             const nextHeight = Math.max(0, Math.abs(event.height));
             const nextProgress = typeof event.progress === 'number' && Number.isFinite(event.progress)
@@ -398,6 +401,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         },
         onMove: (event) => {
             'worklet';
+            if (ignoreKeyboardFramesUntilComposerFocus.value) return;
             const eventHeight = Math.max(0, Math.abs(event.height));
             const eventProgress = typeof event.progress === 'number' && Number.isFinite(event.progress)
                 ? Math.max(0, event.progress)
@@ -448,6 +452,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         },
         onInteractive: (event) => {
             'worklet';
+            if (ignoreKeyboardFramesUntilComposerFocus.value) return;
             const keyboardLiftIsSuppressed = isKeyboardLiftSuppressed.value;
             isInteractiveDismissActive.value = !keyboardLiftIsSuppressed;
             const eventHeight = Math.max(0, Math.abs(event.height));
@@ -488,6 +493,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         },
         onEnd: (event) => {
             'worklet';
+            if (ignoreKeyboardFramesUntilComposerFocus.value) return;
             isInteractiveDismissActive.value = false;
             const nextHeight = Math.max(0, Math.abs(event.height));
             lastKeyboardEventHeightAbsolute.value = nextHeight;
@@ -521,6 +527,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
             runOnJS(notifyAvailablePanelHeight)(nextAvailablePanelHeight);
         },
     }, [
+        ignoreKeyboardFramesUntilComposerFocus,
         keyboardAnimation.height,
         notifyAvailablePanelHeight,
         notifyKeyboardHeight,
@@ -559,6 +566,13 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         recomputeStaticLayout,
     ]);
 
+    const setComposerInputFocused = React.useCallback((focused: boolean) => {
+        if (Platform.OS !== 'ios') return;
+        if (focused) {
+            ignoreKeyboardFramesUntilComposerFocus.value = false;
+        }
+    }, [ignoreKeyboardFramesUntilComposerFocus]);
+
     const setComposerMeasuredHeight = React.useCallback((height: number) => {
         const nextHeight = typeof height === 'number' && Number.isFinite(height) ? Math.max(0, Math.round(height)) : 0;
         if (composerHeight.value === nextHeight) return;
@@ -584,6 +598,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         keyboardProgress,
         listBottomInset,
         retainKeyboardLift,
+        setComposerInputFocused,
         setComposerMeasuredHeight,
         setScaffoldMeasuredHeight,
         subscribeAvailablePanelHeight,
@@ -600,6 +615,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         keyboardProgress,
         listBottomInset,
         retainKeyboardLift,
+        setComposerInputFocused,
         setComposerMeasuredHeight,
         setScaffoldMeasuredHeight,
         subscribeAvailablePanelHeight,

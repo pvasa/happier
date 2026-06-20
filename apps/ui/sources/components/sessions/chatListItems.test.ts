@@ -102,6 +102,99 @@ describe('buildChatListItems', () => {
         expect(items[3]?.kind === 'action-draft' && items[3].draft.id).toBe('d1');
     });
 
+    it('appends pending user-action requests as transcript rows when no transcript tool call exists', () => {
+        const messages: Message[] = [
+            { kind: 'user-text', id: 'm1', localId: 'u1', createdAt: 1, text: 'user' },
+            { kind: 'agent-text', id: 'm2', localId: null, createdAt: 2, text: 'agent' },
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+
+        const items = buildChatListItems({
+            messageIdsOldestFirst: messages.map((m) => m.id),
+            messagesById,
+            pendingMessages: [],
+            pendingUserActionRequests: [
+                {
+                    id: 'resume_choice',
+                    tool: 'AskUserQuestion',
+                    kind: 'user_action',
+                    arguments: { question: 'How should Claude resume this session?' },
+                    createdAt: 3,
+                },
+            ],
+        });
+
+        expect(items.map((item) => item.kind)).toEqual(['message', 'message', 'pending-user-action']);
+        expect(items[2]).toEqual(expect.objectContaining({
+            id: 'pending-user-action:resume_choice',
+            kind: 'pending-user-action',
+            createdAt: 3,
+        }));
+    });
+
+    it('does not duplicate a pending user-action request that already has a transcript tool row', () => {
+        const messages: Message[] = [
+            buildToolCallMessage({
+                id: 'ask',
+                localId: null,
+                createdAt: 3,
+                state: 'running',
+                name: 'AskUserQuestion',
+                requestKind: 'user_action',
+            }),
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+
+        const items = buildChatListItems({
+            messageIdsOldestFirst: messages.map((m) => m.id),
+            messagesById,
+            pendingMessages: [],
+            pendingUserActionRequests: [
+                {
+                    id: 'perm:ask',
+                    tool: 'AskUserQuestion',
+                    kind: 'user_action',
+                    arguments: { question: 'Continue?' },
+                    createdAt: 3,
+                },
+            ],
+        });
+
+        expect(items.map((item) => item.kind)).toEqual(['message']);
+    });
+
+    it('reuses cached committed transcript items when only pending user-action requests are appended', () => {
+        const messages: Message[] = [
+            { kind: 'user-text', id: 'm1', localId: 'u1', createdAt: 1, text: 'user' },
+            { kind: 'agent-text', id: 'm2', localId: null, createdAt: 2, text: 'agent' },
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+        const base = buildChatListItemsCached({
+            cache: null,
+            messageIdsOldestFirst: messages.map((m) => m.id),
+            messagesById,
+            pendingMessages: [],
+        });
+
+        const next = buildChatListItemsCached({
+            cache: base.cache,
+            messageIdsOldestFirst: messages.map((m) => m.id),
+            messagesById,
+            pendingMessages: [],
+            pendingUserActionRequests: [
+                {
+                    id: 'resume_choice',
+                    tool: 'AskUserQuestion',
+                    kind: 'user_action',
+                    arguments: { question: 'How should Claude resume this session?' },
+                    createdAt: 3,
+                },
+            ],
+        });
+
+        expect(next.items.map((item) => item.kind)).toEqual(['message', 'message', 'pending-user-action']);
+    });
+
     it('appends pending messages after transcript messages', () => {
         const messages: Message[] = [
             { kind: 'user-text', id: 'm1', localId: 'u1', createdAt: 1, text: 'user' },
@@ -143,6 +236,8 @@ describe('buildChatListItems', () => {
             switch (item.kind) {
                 case 'pending-queue':
                     return item.pendingMessages.map((p) => p.localId);
+                case 'pending-user-action':
+                    return item.request.id;
                 case 'message':
                     return item.messageId;
                 case 'action-draft':
@@ -729,6 +824,8 @@ describe('buildChatListItemsCached', () => {
             switch (item.kind) {
                 case 'pending-queue':
                     return item.pendingMessages.map((p) => p.localId);
+                case 'pending-user-action':
+                    return item.request.id;
                 case 'message':
                     return item.messageId;
                 case 'action-draft':
@@ -760,6 +857,8 @@ describe('buildChatListItemsCached', () => {
             switch (item.kind) {
                 case 'pending-queue':
                     return item.pendingMessages.map((p) => p.localId);
+                case 'pending-user-action':
+                    return item.request.id;
                 case 'message':
                     return item.messageId;
                 case 'action-draft':

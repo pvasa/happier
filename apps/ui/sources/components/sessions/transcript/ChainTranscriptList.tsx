@@ -17,6 +17,7 @@ import { MessageViewWithSessionCommon } from '@/components/sessions/transcript/M
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { useSetting } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
+import { useSessionCatchingUpNewer } from '@/sync/store/hooks';
 import { resolveActiveThinkingMessageId } from '@/components/sessions/transcript/thinking/resolveActiveThinkingMessageId';
 import { ToolCallsGroupRowWithSessionCommon } from '@/components/sessions/transcript/toolCalls/ToolCallsGroupRow';
 import { ToolCallsGroupUnitHeaderRowWithSessionCommon } from '@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitHeaderRow';
@@ -41,7 +42,9 @@ import {
     TRANSCRIPT_NATIVE_SCROLL_EVENT_THROTTLE_MS,
     TRANSCRIPT_VISUAL_UPDATE_FALLBACK_TIMEOUT_MS,
     TRANSCRIPT_WEB_FLASH_LIST_SCROLL_EVENT_THROTTLE_MS,
+    TRANSCRIPT_WEB_GENUINE_TOP_EPSILON_PX,
 } from '@/components/sessions/transcript/_constants';
+import { CatchUpProgressOverlay } from '@/components/sessions/transcript/CatchUpProgressOverlay';
 import { OlderLoadProgressOverlay } from '@/components/sessions/transcript/OlderLoadProgressOverlay';
 import { useTranscriptOlderPagination } from '@/components/sessions/transcript/pagination/useTranscriptOlderPagination';
 import { waitForVisualUpdateWithTimeout } from '@/components/sessions/transcript/pagination/waitForVisualUpdateWithTimeout';
@@ -223,6 +226,11 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
     const syncTuning = sync.getSyncTuning();
     const estimatedItemSize = syncTuning.transcriptFlashListEstimatedItemSize;
     const configuredBackwardPrefetchThresholdPx = syncTuning.transcriptBackwardPrefetchThresholdPx;
+    // §13 catch-up overlay signal. The sidechain list is non-inverted and has no live-tail
+    // pinned-following composer, so there is no pinned-following streaming case to gate OFF and no
+    // composer inset to track — the overlay anchors to the bottom edge (`bottomInset` 0) and shows
+    // whenever sync is catching this session up to newer activity (fail-closed signal).
+    const isCatchingUpNewer = useSessionCatchingUpNewer(props.sessionId);
     const transcriptToolCallsCollapsedPreviewCountSetting = useSetting('transcriptToolCallsCollapsedPreviewCount');
 
     // Tool-group expansion state is keyed by anchor message ids (declared before the
@@ -968,16 +976,38 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
                 if (typeof yRaw !== 'number' || !Number.isFinite(yRaw)) return;
 
                 const eventTarget = (e?.nativeEvent as any)?.target ?? (e as any)?.target ?? null;
-                if (isWebScrollElementLike(eventTarget)) {
+                const isWebScrollElement = isWebScrollElementLike(eventTarget);
+                if (isWebScrollElement) {
                     webScrollElementRef.current = eventTarget;
                 }
+
+                // Mirror of the main ChatList genuine-top closer (ChatList.tsx:9645): the continuous
+                // web DOM-scroll path reports the genuine top as a near-zero `scrollTop`. The browser
+                // rounds `scrollTop` to an integer (dpr=1) or leaves a sub-pixel residue (Retina), so a
+                // viewport resting at the very top is rarely EXACTLY 0 — a strict `=== 0` test mis-fires
+                // and the genuine-top frame never re-arms. A plain 'scroll' trigger SUSPENDS the
+                // older-pagination machine within the genuine-top band (offsetSuspended), so a viewport
+                // parked inside the threshold (e.g. when the top rendered row is a tall tool group whose
+                // height keeps the offset off zero until the genuine top is reached) never re-arms after
+                // its cooldown. Classify only the genuine-top frame as 'edge-reached' so it satisfies
+                // the machine's existing `allowsExactEdge` (-> `exactEdgeRetryEligible`) re-arm. Strictly
+                // gated on web + within the `TRANSCRIPT_WEB_GENUINE_TOP_EPSILON_PX` band (the machine
+                // uses the SAME epsilon) so the band cannot widen and a mid-band frame cannot re-arm
+                // (anti-burst preserved). The sidechain FlashList is always non-inverted (no
+                // `listOrientation` machinery / scaleY transform), so the main fix's non-inverted guard
+                // is satisfied here by construction.
+                const isGenuineWebTopFrame =
+                    Platform.OS === 'web' &&
+                    isWebScrollElement &&
+                    eventTarget.scrollTop >= 0 &&
+                    eventTarget.scrollTop <= TRANSCRIPT_WEB_GENUINE_TOP_EPSILON_PX;
 
                 // FlashList's `onStartReached` is not reliably fired on all platforms (notably web),
                 // so the pagination machine observes every scroll position.
                 observeOlderPaginationScroll({
                     offsetY: yRaw,
-                    trigger: 'scroll',
-                    webMetrics: isWebScrollElementLike(eventTarget)
+                    trigger: isGenuineWebTopFrame ? 'edge-reached' : 'scroll',
+                    webMetrics: isWebScrollElement
                         ? {
                             element: eventTarget,
                             scrollTop: eventTarget.scrollTop,
@@ -1036,6 +1066,11 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
             }
         />
         {olderPagination.isLoadingOlder ? <OlderLoadProgressOverlay /> : null}
+        <CatchUpProgressOverlay
+            isCatchingUp={isCatchingUpNewer}
+            bottomInset={0}
+            spinnerDelayMs={syncTuning.transcriptOlderLoadSpinnerDelayMs}
+        />
         </View>
     );
 });

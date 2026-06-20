@@ -730,6 +730,81 @@ describe('SessionsList web virtualization', () => {
         expect(omittedMountedActiveOnlyRow.props.rowAttentionAnimationEnabled).toBe(false);
     });
 
+    it('keeps mounted web working rows subscribed when viewability omits them', async () => {
+        const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+        syncPerformanceTelemetry.configure({
+            enabled: true,
+            slowThresholdMs: 1_000_000,
+            flushIntervalMs: 60_000,
+        });
+        syncPerformanceTelemetry.reset();
+
+        try {
+            const items: SessionListViewItem[] = [
+                {
+                    type: 'header',
+                    title: 'Today',
+                    headerKind: 'date',
+                    groupKey,
+                    serverId: 'server_a',
+                    serverName: 'Server A',
+                } as SessionListViewItem,
+            ];
+            for (let index = 0; index < 130; index += 1) {
+                const isWorkingRow = index === 2;
+                const isAttentionRow = index === 3;
+                items.push({
+                    type: 'session',
+                    session: makeSession(
+                        isWorkingRow
+                            ? 'long_working'
+                            : isAttentionRow
+                                ? 'long_attention'
+                                : `long_${index}`,
+                        {
+                            active: isWorkingRow,
+                            thinking: isWorkingRow,
+                            latestTurnStatus: isWorkingRow ? 'in_progress' : undefined,
+                        },
+                    ),
+                    groupKey,
+                    groupKind: 'date',
+                    serverId: 'server_a',
+                    serverName: 'Server A',
+                    attentionPromotionReason: isAttentionRow ? 'ready' : undefined,
+                    workingPlacementReason: isWorkingRow ? 'working' : undefined,
+                } as SessionListViewItem);
+            }
+            mockVisibleSessionListViewData = items;
+
+            const screen = await renderSessionsList();
+            const firstSessionItem = capturedWebFlatListProps!.data.find((item: any) => item?.session?.id === 'long_0');
+            syncPerformanceTelemetry.reset();
+            await act(async () => {
+                capturedWebFlatListProps!.onViewableItemsChanged?.({
+                    viewableItems: [{ isViewable: true, item: firstSessionItem }],
+                });
+            });
+
+            expect(screen.root.findByProps({ testID: 'session-list-session:long_working' }).props.rowAttentionAnimationEnabled).toBe(true);
+            expect(screen.root.findByProps({ testID: 'session-list-session:long_attention' }).props.rowAttentionAnimationEnabled).toBe(true);
+
+            const subscriptionEvent = syncPerformanceTelemetry.snapshot().events
+                .filter((event) => event.name === 'ui.sessionsList.rowStoreSubscriptions')
+                .at(-1);
+            expect(subscriptionEvent?.fields).toEqual(expect.objectContaining({
+                priorityAttentionRows: 1,
+                prioritySubscribedRows: 2,
+                priorityWorkingPlacementRows: 1,
+                subscribedRows: 3,
+                visibleRows: 1,
+            }));
+        } finally {
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+        }
+    });
+
     it('keeps all small-web-list row attention animations live when viewability omits a mounted row', async () => {
         mockVisibleSessionListViewData = [
             {

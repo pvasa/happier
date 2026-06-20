@@ -30,7 +30,9 @@ import { insertForkDividersIntoTranscriptItems, type ForkDividerTranscriptItem }
 import { ForkDividerRow } from '@/components/sessions/transcript/forkContext/ForkDividerRow';
 import { PendingMessagesTranscriptBlock, type PendingMessageEditRequest } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
 import { SessionActionDraftCard } from '@/components/sessions/actions/SessionActionDraftCard';
+import { UserActionPromptCard } from '@/components/tools/shell/userActions/UserActionPromptCard';
 import { sync, type SessionViewportAnchorSnapshot } from '@/sync/sync';
+import { useSessionCatchingUpNewer } from '@/sync/store/hooks';
 import { jumpToTranscriptSeq } from '@/utils/sessions/jumpToTranscriptSeq';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { buildTranscriptTurnsCached, type TranscriptTurnsBuildCache } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurns';
@@ -129,6 +131,7 @@ import {
 import { resolveActiveThinkingMessageId } from '@/components/sessions/transcript/thinking/resolveActiveThinkingMessageId';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { deriveTranscriptInteractionFromSession, type TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
+import { listPendingUserActionRequests } from '@/utils/sessions/sessionUtils';
 import { buildChatListNativeId } from './chatListNativeId';
 import { useWebFlashListCrashFallback } from '@/components/ui/lists/useWebFlashListCrashFallback';
 import {
@@ -198,7 +201,9 @@ import {
     TRANSCRIPT_TOP_GUTTER_PX,
     TRANSCRIPT_VISUAL_UPDATE_FALLBACK_TIMEOUT_MS,
     TRANSCRIPT_WEB_FLASH_LIST_SCROLL_EVENT_THROTTLE_MS,
+    TRANSCRIPT_WEB_GENUINE_TOP_EPSILON_PX,
 } from '@/components/sessions/transcript/_constants';
+import { CatchUpProgressOverlay } from '@/components/sessions/transcript/CatchUpProgressOverlay';
 import { OlderLoadProgressOverlay } from '@/components/sessions/transcript/OlderLoadProgressOverlay';
 import {
     useTranscriptOlderPagination,
@@ -226,6 +231,7 @@ import {
 } from '@/components/sessions/transcript/measurement/transcriptItemHeightCache';
 import {
     createTranscriptMeasurementReconciler,
+    isStructuralSignatureDelta,
     type TranscriptMeasurementReconciler,
 } from '@/components/sessions/transcript/measurement/transcriptMeasurementReconciler';
 import {
@@ -818,6 +824,15 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
         }
         return swrFallbackMessagesById;
     }, [forkAwareMessageDescriptors, swrFallbackMessagesById]);
+    const committedMessagesForPendingRequests = React.useMemo(() => (
+        messageIdsOldestFirst
+            .map((messageId) => messagesById[messageId])
+            .filter((message): message is Message => Boolean(message))
+    ), [messageIdsOldestFirst, messagesById]);
+    const pendingUserActionRequests = React.useMemo(
+        () => listPendingUserActionRequests(props.session, committedMessagesForPendingRequests),
+        [committedMessagesForPendingRequests, props.session],
+    );
     const sessionMetadataSignature = React.useMemo(
         () => buildStableJsonSignature(buildSessionMetadataStabilitySignatureValue(props.session.metadata ?? null)),
         [props.session.metadata],
@@ -878,6 +893,7 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
             groupToolCalls: groupToolCalls ? 1 : 0,
             messageCount: messageIdsOldestFirst.length,
             pendingCount: pendingMessages.length,
+            pendingUserActionCount: pendingUserActionRequests.length,
         }), () => {
             return buildChatListItemsCached({
                 cache: derivedItemsCacheEntry.linearItemsCache,
@@ -885,6 +901,7 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
                 messagesById,
                 pendingMessages,
                 discardedMessages: discardedPendingMessages,
+                pendingUserActionRequests,
                 actionDrafts,
                 groupConsecutiveToolCalls: groupToolCalls,
                 forkBoundaryBeforeMessageIds: forkAwareMessageDescriptors?.forkBoundaryBeforeMessageIds,
@@ -892,7 +909,7 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
                 forkMetadataByMessageId: forkAwareMessageDescriptors?.metadataByMessageId,
             });
         });
-    }, [actionDrafts, forkAwareMessageDescriptors, groupingMode, groupToolCalls, messageIdsOldestFirst, messagesById, pendingMessages, discardedPendingMessages]);
+    }, [actionDrafts, forkAwareMessageDescriptors, groupingMode, groupToolCalls, messageIdsOldestFirst, messagesById, pendingMessages, discardedPendingMessages, pendingUserActionRequests]);
 
     React.useEffect(() => {
         if (groupingMode === 'turns' || !linearCache) return;
@@ -908,9 +925,10 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
             messageCount: messageIdsOldestFirst.length,
             modeTurns: groupingMode === 'turns' ? 1 : 0,
             pendingCount: pendingMessages.length + (discardedPendingMessages?.length ?? 0),
+            pendingUserActionCount: pendingUserActionRequests.length,
         }), () => {
             if (groupingMode !== 'turns') {
-                const base = linearCache?.items ?? buildChatListItems({ messageIdsOldestFirst, messagesById, pendingMessages, discardedMessages: discardedPendingMessages, actionDrafts });
+                const base = linearCache?.items ?? buildChatListItems({ messageIdsOldestFirst, messagesById, pendingMessages, discardedMessages: discardedPendingMessages, pendingUserActionRequests, actionDrafts });
                 if (!forkedTranscriptEnabled || !fork) return base;
                 return insertForkDividersIntoTranscriptItems({ items: base, fork }) as ChatTranscriptListItem[];
             }
@@ -920,6 +938,7 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
                 messagesById,
                 pendingMessages,
                 discardedMessages: discardedPendingMessages,
+                pendingUserActionRequests,
                 actionDrafts,
                 includeCommittedMessages: false,
             });
@@ -932,7 +951,7 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
             if (!forkedTranscriptEnabled || !fork) return base;
             return insertForkDividersIntoTranscriptItems({ items: base, fork }) as ChatTranscriptListItem[];
         });
-    }, [actionDrafts, fork, forkedTranscriptEnabled, groupingMode, linearCache, messageIdsOldestFirst, messagesById, pendingMessages, discardedPendingMessages, turnsCache]);
+    }, [actionDrafts, fork, forkedTranscriptEnabled, groupingMode, linearCache, messageIdsOldestFirst, messagesById, pendingMessages, discardedPendingMessages, pendingUserActionRequests, turnsCache]);
 
     const latestCommittedActivityKey =
         messageIdsOldestFirst.length > 0 ? messageIdsOldestFirst[messageIdsOldestFirst.length - 1]! : null;
@@ -1274,19 +1293,6 @@ const TranscriptRowShell = React.memo(function TranscriptRowShell(props: Readonl
  * streaming, only the content revision grew) is NOT structural — the per-row onLayout channel absorbs
  * growth. This generalizes (and replaces) the old streaming-specific suppression band-aid.
  */
-function isStructuralSignatureDelta(
-    previous: TranscriptItemHeightValiditySignature,
-    next: TranscriptItemHeightValiditySignature,
-): boolean {
-    if (previous.rowState === 'streaming' && next.rowState === 'streaming') return false;
-    if (previous.rowState !== next.rowState) return true;
-    if (previous.kind !== next.kind) return true;
-    if (previous.expansionKey !== next.expansionKey) return true;
-    if (previous.widthBucket !== next.widthBucket) return true;
-    if (previous.fontScaleKey !== next.fontScaleKey) return true;
-    return false;
-}
-
 const ChatListInternal = React.memo((props: {
     metadata: Metadata | null,
     sessionId: string,
@@ -1498,9 +1504,16 @@ const ChatListInternal = React.memo((props: {
     const resetOlderPaginationRef = React.useRef<() => void>(() => {});
     const pendingWebPrependIndexRecoveryRef = React.useRef(false);
     const scheduledWebPrependIndexRecoveryRef = React.useRef<{ kind: 'raf' | 'timeout'; ids: any[] } | null>(null);
+    const webPrependRestoreWindowExpiryTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const [webPrependRangeReservePx, setWebPrependRangeReservePx] = React.useState(0);
     const clearWebPrependRangeReserve = React.useCallback(() => {
         setWebPrependRangeReservePx((previous) => previous === 0 ? previous : 0);
+    }, []);
+    const cancelWebPrependRestoreWindowExpiry = React.useCallback(() => {
+        const timeoutId = webPrependRestoreWindowExpiryTimeoutRef.current;
+        if (timeoutId === null) return;
+        webPrependRestoreWindowExpiryTimeoutRef.current = null;
+        clearTimeout(timeoutId);
     }, []);
     const cancelScheduledWebPrependIndexRecovery = React.useCallback(() => {
         const scheduledRecovery = scheduledWebPrependIndexRecoveryRef.current;
@@ -1519,9 +1532,10 @@ const ChatListInternal = React.memo((props: {
     const clearWebPrependRestoreWindowState = React.useCallback(() => {
         pendingWebPrependAnchorRef.current = null;
         pendingWebPrependIndexRecoveryRef.current = false;
+        cancelWebPrependRestoreWindowExpiry();
         cancelScheduledWebPrependIndexRecovery();
         clearWebPrependRangeReserve();
-    }, [cancelScheduledWebPrependIndexRecovery, clearWebPrependRangeReserve]);
+    }, [cancelScheduledWebPrependIndexRecovery, cancelWebPrependRestoreWindowExpiry, clearWebPrependRangeReserve]);
     const closeWebPrependViewportOwnership = React.useCallback((
         outcome: TranscriptViewportTransactionOutcome,
     ) => {
@@ -1611,6 +1625,11 @@ const ChatListInternal = React.memo((props: {
     const finishEntryRestoreTransactionRef = React.useRef<(transaction: EntryRestoreTransaction) => void>(() => {});
     const legacyEntryRestoreAppliedRef = React.useRef<{ sessionId: string; offsetY: number } | null>(null);
     const composerInsetHeightRef = React.useRef(0);
+    // Render-visible mirror of `composerInsetHeightRef` (the single source of truth). Bottom-anchored
+    // overlays that live OUTSIDE the scroll geometry (e.g. the catch-up overlay) must re-position when
+    // the composer inset changes, which a ref alone cannot drive. Committed from
+    // `handleComposerInsetHeightChange` so it stays in lockstep with the ref.
+    const [composerInsetHeight, setComposerInsetHeight] = React.useState(0);
     // Rendered height of the native hot-tail block (live-tail rows carved into the inverted
     // visual-bottom edge slot). Folded into the inverted bottom command's viewOffset so the
     // live tail lands fully above the composer. 0 when the native split is OFF/empty.
@@ -2791,6 +2810,18 @@ const ChatListInternal = React.memo((props: {
     }, [jumpRevealOffsetThresholdPx]);
     const showJumpToBottom = jumpEnabled && !scrollPin.isPinned && jumpToBottomDistanceFromBottom >= jumpRevealOffsetThresholdPx;
     const jumpAnimateScroll = transcriptScrollJumpToBottomAnimateScroll !== false;
+    // §13 catch-up overlay gate. `useSessionCatchingUpNewer` is the canonical UI-observable per-session
+    // "sync is catching the transcript up to newer activity" signal (fail-closed). The signal is
+    // catch-up-only by construction — sync brackets it ONLY around resume catch-up
+    // (`catchUpDirectSessionMessages`), the deferred-newer backlog drain (`loadNewerMessages`, fired
+    // only when a missed-while-away backlog exists), and socket-reconnect catch-up
+    // (`invalidateMessagesForSession`); ordinary realtime live streaming applies messages straight
+    // through the socket path and never raises it. So it cannot nag during normal pinned streaming and
+    // needs NO pin gate. A `!scrollPin.isPinned` gate would in fact suppress the overlay in its
+    // primary scenario: reopening a background-working session restores the user PINNED at the live
+    // tail while sync silently catches up, which is exactly when the surface must show.
+    const isCatchingUpNewer = useSessionCatchingUpNewer(props.sessionId);
+    const showCatchUpOverlay = isCatchingUpNewer;
     const transcriptListExtraData = React.useMemo(() => ({
         selectionVersion: transcriptMessageSelection.selectionVersion,
     }), [transcriptMessageSelection.selectionVersion]);
@@ -3568,6 +3599,37 @@ const ChatListInternal = React.memo((props: {
         resolveViewportTelemetryMode,
         resolveWebScrollMetrics,
         resolveWebViewportTelemetryDiagnostics,
+    ]);
+
+    const scheduleWebPrependRestoreWindowExpiry = React.useCallback((anchor: WebTranscriptPrependAnchor | null) => {
+        cancelWebPrependRestoreWindowExpiry();
+        if (Platform.OS !== 'web' || listImplementation !== 'flash_v2' || anchor === null) return;
+
+        const arm = (target: WebTranscriptPrependAnchor) => {
+            const delayMs = Math.max(0, Math.ceil(target.expiresAtMs - Date.now())) + 1;
+            webPrependRestoreWindowExpiryTimeoutRef.current = setTimeout(() => {
+                webPrependRestoreWindowExpiryTimeoutRef.current = null;
+                const pendingAnchor = pendingWebPrependAnchorRef.current;
+                if (!pendingAnchor) return;
+                if (Date.now() <= pendingAnchor.expiresAtMs) {
+                    arm(pendingAnchor);
+                    return;
+                }
+                clearWebPrependRestoreWindow('abandoned-identity');
+                recordRestoreDecisionTelemetry('skipped', {
+                    mode: 'restore-anchor',
+                    programmaticWebWrite: false,
+                    webTrigger: 'prepend-restore',
+                });
+            }, delayMs);
+        };
+
+        arm(anchor);
+    }, [
+        cancelWebPrependRestoreWindowExpiry,
+        clearWebPrependRestoreWindow,
+        listImplementation,
+        recordRestoreDecisionTelemetry,
     ]);
 
     const recordScrollObservedTelemetry = React.useCallback((
@@ -5649,7 +5711,7 @@ const ChatListInternal = React.memo((props: {
         recordWebPrependRestoreOutcome(retryRestoreResult);
         const retryMetrics = resolveWebScrollMetrics();
         if (!retryMetrics) {
-            clearWebPrependRestoreWindowState();
+            clearWebPrependRestoreWindow('confirmed');
             return true;
         }
         updateWebPrependRangeReserve(retryAnchor, retryMetrics);
@@ -5658,6 +5720,7 @@ const ChatListInternal = React.memo((props: {
             retryMetrics,
             resolvePendingWebPrependRefreshOptions(retryRestoreResult.strategy),
         );
+        scheduleWebPrependRestoreWindowExpiry(pendingWebPrependAnchorRef.current);
         if (
             (retryRestoreResult.strategy === 'growth' || retryRestoreResult.strategy === 'none') &&
             pendingWebPrependAnchorRef.current &&
@@ -5669,16 +5732,16 @@ const ChatListInternal = React.memo((props: {
         return true;
         }, [
             clearWebPrependRestoreWindow,
-            clearWebPrependRestoreWindowState,
             listImplementation,
             recordRestoreDecisionTelemetry,
             recordWebPrependRestoreOutcome,
             resolvePendingWebPrependRefreshOptions,
             resolveWebScrollMetrics,
+            scheduleWebPrependRestoreWindowExpiry,
             restoreWebPrependAnchorThroughViewportCommand,
             tryScrollPendingWebPrependItemIntoView,
             updateWebPrependRangeReserve,
-    ]);
+        ]);
 
     const schedulePendingWebPrependIndexRecovery = React.useCallback(() => {
         if (Platform.OS !== 'web' || listImplementation !== 'flash_v2') return;
@@ -5734,6 +5797,25 @@ const ChatListInternal = React.memo((props: {
                         pendingMessages={item.pendingMessages}
                         discardedMessages={item.discardedMessages}
                         onEditPendingMessage={props.onEditPendingMessage}
+                    />
+                </TranscriptEnterWrapper>
+            ));
+        }
+        if (item.kind === 'pending-user-action') {
+            return wrapTranscriptItemForAnchor(item, (
+                <TranscriptEnterWrapper id={item.id} createdAt={item.createdAt}>
+                    <UserActionPromptCard
+                        chrome="card"
+                        request={item.request}
+                        location={null}
+                        sessionId={props.sessionId}
+                        metadata={props.metadata}
+                        canApprovePermissions={props.interaction.permissionDisabledReason === 'inactive'
+                            ? true
+                            : props.interaction.canApprovePermissions}
+                        disabledReason={props.interaction.permissionDisabledReason === 'inactive'
+                            ? undefined
+                            : props.interaction.permissionDisabledReason}
                     />
                 </TranscriptEnterWrapper>
             ));
@@ -6040,6 +6122,7 @@ const ChatListInternal = React.memo((props: {
                     );
                 }
                 pendingWebPrependIndexRecoveryRef.current = restoreResult.strategy === 'growth';
+                scheduleWebPrependRestoreWindowExpiry(pendingWebPrependAnchorRef.current);
                 if (restoreResult.strategy === 'growth') {
                     schedulePendingWebPrependIndexRecovery();
                 }
@@ -6103,6 +6186,7 @@ const ChatListInternal = React.memo((props: {
         recordWebPrependRestoreOutcome,
         resolveSyncLoadOlderOptions,
         resolveWebScrollMetrics,
+        scheduleWebPrependRestoreWindowExpiry,
         restoreWebPrependAnchorThroughViewportCommand,
         showOlderLoadSpinner,
     ]);
@@ -6240,7 +6324,7 @@ const ChatListInternal = React.memo((props: {
         if (pendingAnchor.userIntentAtMs !== lastUserScrollIntentAtMsRef.current) {
             const metrics = resolveWebScrollMetrics();
             if (!metrics || !isWebTranscriptScrollable(metrics, 1)) {
-                clearWebPrependRestoreWindowState();
+                clearWebPrependRestoreWindow('abandoned-identity');
                 // Plan E2: the scroller went away/unscrollable — the restore window is disposed.
                 recordRestoreDecisionTelemetry('skipped', {
                     mode: 'restore-anchor',
@@ -6272,7 +6356,7 @@ const ChatListInternal = React.memo((props: {
         recordWebPrependRestoreOutcome(restoreResult);
         const metrics = resolveWebScrollMetrics();
         if (!metrics) {
-            clearWebPrependRestoreWindowState();
+            clearWebPrependRestoreWindow(restoreResult.didAdjustScroll ? 'confirmed' : 'abandoned-identity');
             return;
         }
         updateWebPrependRangeReserve(pendingAnchor, metrics);
@@ -6281,12 +6365,13 @@ const ChatListInternal = React.memo((props: {
             metrics,
             resolvePendingWebPrependRefreshOptions(restoreResult.strategy),
         );
+        scheduleWebPrependRestoreWindowExpiry(pendingWebPrependAnchorRef.current);
         pendingWebPrependIndexRecoveryRef.current =
             pendingWebPrependIndexRecoveryRef.current || restoreResult.strategy === 'growth';
         if (pendingWebPrependIndexRecoveryRef.current && pendingWebPrependAnchorRef.current) {
             attemptPendingWebPrependIndexRecovery();
         }
-    }, [attemptPendingWebPrependIndexRecovery, clearWebPrependRestoreWindow, clearWebPrependRestoreWindowState, listContentHeight, listData.length, listImplementation, props.sessionId, recordRestoreDecisionTelemetry, recordWebPrependRestoreOutcome, resolvePendingWebPrependRefreshOptions, resolveWebScrollMetrics, restoreWebPrependAnchorThroughViewportCommand, updateWebPrependRangeReserve]);
+    }, [attemptPendingWebPrependIndexRecovery, clearWebPrependRestoreWindow, listContentHeight, listData.length, listImplementation, props.sessionId, recordRestoreDecisionTelemetry, recordWebPrependRestoreOutcome, resolvePendingWebPrependRefreshOptions, resolveWebScrollMetrics, restoreWebPrependAnchorThroughViewportCommand, scheduleWebPrependRestoreWindowExpiry, updateWebPrependRangeReserve]);
 
         const tryPinToBottomDom = React.useCallback((reason: TranscriptViewportTelemetryScrollReason = 'initial-open'): boolean => {
             if (reason === 'jump-to-bottom') {
@@ -8218,6 +8303,7 @@ const ChatListInternal = React.memo((props: {
         const previousHeight = composerInsetHeightRef.current;
         if (previousHeight === nextHeight) return;
         composerInsetHeightRef.current = nextHeight;
+        setComposerInsetHeight(nextHeight);
         observeMountSettleMetrics();
 
         if (Platform.OS !== 'web' && listImplementation === 'flash_v2') {
@@ -9632,20 +9718,26 @@ const ChatListInternal = React.memo((props: {
                                 // Decisions below read the observed distance as-is.
                                 const effectiveDistanceFromBottom = distanceFromBottom;
                                 const effectiveScrollOffset = liveWebMetrics ? liveWebMetrics.scrollTop : y;
-                                // The continuous web DOM-scroll path reports the genuine top as
-                                // `effectiveScrollOffset === 0`. A plain 'scroll' trigger SUSPENDS the
-                                // older-pagination machine at exact zero (offsetSuspended), so a viewport
-                                // parked inside the threshold (e.g. when the top rendered row is a tall tool
-                                // group whose height keeps the offset off zero until the genuine top is
-                                // reached) never re-arms after its cooldown. Classify only the genuine-top
-                                // frame as 'edge-reached' so it satisfies the machine's existing
-                                // `allowsExactEdge` (-> `exactEdgeRetryEligible`) re-arm. Strictly gated on
-                                // web/standard (non-inverted) + exact zero so the 800px band cannot widen
-                                // and a mid-band frame cannot re-arm (anti-burst preserved).
+                                // The continuous web DOM-scroll path reports the genuine top as a
+                                // near-zero `effectiveScrollOffset`. The browser rounds `scrollTop` to an
+                                // integer (dpr=1) or leaves a sub-pixel residue (Retina), so a viewport
+                                // resting at the very top is rarely EXACTLY 0 — a strict `=== 0` test
+                                // mis-fires and the genuine-top frame never re-arms. A plain 'scroll'
+                                // trigger SUSPENDS the older-pagination machine within the genuine-top band
+                                // (offsetSuspended), so a viewport parked inside the threshold (e.g. when
+                                // the top rendered row is a tall tool group whose height keeps the offset
+                                // off zero until the genuine top is reached) never re-arms after its
+                                // cooldown. Classify only the genuine-top frame as 'edge-reached' so it
+                                // satisfies the machine's existing `allowsExactEdge` (-> `exactEdgeRetryEligible`)
+                                // re-arm. Strictly gated on web/standard (non-inverted) + within the
+                                // `TRANSCRIPT_WEB_GENUINE_TOP_EPSILON_PX` band (the machine uses the SAME
+                                // epsilon) so the 800px band cannot widen and a mid-band frame cannot
+                                // re-arm (anti-burst preserved).
                                 const isGenuineWebTopFrame =
                                     Platform.OS === 'web' &&
                                     listOrientationRef.current !== 'inverted' &&
-                                    effectiveScrollOffset === 0;
+                                    effectiveScrollOffset >= 0 &&
+                                    effectiveScrollOffset <= TRANSCRIPT_WEB_GENUINE_TOP_EPSILON_PX;
                                 observeOlderPaginationScroll({
                                     offsetY: effectiveScrollOffset,
                                     layoutHeight: layoutH,
@@ -9954,6 +10046,11 @@ const ChatListInternal = React.memo((props: {
                     />
                 </ComposerKeyboardFloatingInset>
             ) : null}
+              <CatchUpProgressOverlay
+                  isCatchingUp={showCatchUpOverlay}
+                  bottomInset={composerInsetHeight}
+                  spinnerDelayMs={sync.getSyncTuning().transcriptOlderLoadSpinnerDelayMs}
+              />
             </View>
         </TranscriptMotionProvider>
     )

@@ -1,8 +1,7 @@
 import * as React from 'react';
-import { View, Pressable, StyleProp, ViewStyle, TextStyle, Platform, type AccessibilityRole, type TextProps } from 'react-native';
+import { View, Pressable, StyleProp, ViewStyle, TextStyle, Platform, type AccessibilityRole, type AccessibilityState, type TextProps } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Typography } from '@/constants/Typography';
-import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -17,6 +16,8 @@ import {
 } from '@/components/ui/text/webStartEllipsisTextStyles';
 import { useResolvedItemDensity } from '@/components/ui/lists/useResolvedItemDensity';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import {
     ITEM_CHEVRON_SIZE,
     ITEM_ICON_BOX_SIZE,
@@ -24,6 +25,7 @@ import {
     ITEM_SUBTITLE_TEXT_METRICS,
     ITEM_TITLE_TEXT_METRICS,
 } from '@/components/ui/lists/itemDensityMetrics';
+import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 function resizeItemIconForDensity(icon: React.ReactNode, iconSize: number): React.ReactNode {
     if (!React.isValidElement(icon) || icon.type === React.Fragment) {
@@ -68,6 +70,12 @@ export interface ItemProps {
     detailTestID?: string;
     icon?: React.ReactNode;
     leftElement?: React.ReactNode;
+    /**
+     * Override the leading-element box size (width/height). Use when a custom
+     * `leftElement` (e.g. a capacity gauge) is larger than the default icon box,
+     * so the fixed slot doesn't clip its left edge or eat the title gap.
+     */
+    iconBoxSize?: number;
     rightElement?: React.ReactNode;
     onPress?: () => void;
     onDoublePress?: () => void;
@@ -76,6 +84,15 @@ export interface ItemProps {
     onContextMenu?: (event: unknown) => void;
     accessibilityRole?: AccessibilityRole;
     webRole?: React.AriaRole;
+    /**
+     * Optional disclosure/pass-through a11y props forwarded to the inner
+     * Pressable. `accessibilityState` (e.g. `{ expanded }`) also drives a
+     * web-only `aria-expanded` attribute (see render) since RN-Web does not
+     * derive it from `accessibilityState`. All optional and back-compat.
+     */
+    accessibilityState?: AccessibilityState;
+    accessibilityLabel?: string;
+    accessibilityHint?: string;
     disabled?: boolean;
     loading?: boolean;
     selected?: boolean;
@@ -92,6 +109,14 @@ export interface ItemProps {
     subtitleEllipsizeMode?: ItemTextEllipsizeMode;
     detailStyle?: StyleProp<TextStyle>;
     showChevron?: boolean;
+    /**
+     * Keep the navigation chevron visible even when `rightElement` is present.
+     * By default a `rightElement` suppresses the chevron (the accessory owns the
+     * right slot). Opt in for rows that BOTH carry a status accessory AND
+     * navigate (e.g. a branch row with a "Worktree" badge that drills into a
+     * reuse-or-create step), so the further-step affordance stays visible.
+     */
+    keepChevronWithRightElement?: boolean;
     showDivider?: boolean;
     dividerInset?: number;
     pressableStyle?: StyleProp<ViewStyle>;
@@ -249,9 +274,7 @@ export const Item = React.memo<ItemProps>((props) => {
     const isAndroid = Platform.OS === 'android';
     const isWeb = Platform.OS === 'web';
     const hoverBackgroundColor = theme.colors.surface.pressed;
-    
-    // Timer ref for long press copy functionality
-    const longPressTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const copyFeedback = useTemporaryCopyFeedback();
     
     const {
         testID,
@@ -264,6 +287,7 @@ export const Item = React.memo<ItemProps>((props) => {
         detailTestID,
         icon,
         leftElement,
+        iconBoxSize,
         rightElement,
         onPress,
         onDoublePress,
@@ -272,6 +296,9 @@ export const Item = React.memo<ItemProps>((props) => {
         onContextMenu,
         accessibilityRole,
         webRole,
+        accessibilityState,
+        accessibilityLabel,
+        accessibilityHint,
         disabled,
         loading,
         selected,
@@ -285,6 +312,7 @@ export const Item = React.memo<ItemProps>((props) => {
         subtitleEllipsizeMode,
         detailStyle,
         showChevron = true,
+        keepChevronWithRightElement = false,
         showDivider = true,
         dividerInset = isIOS ? 15 : 16,
         pressableStyle,
@@ -297,7 +325,7 @@ export const Item = React.memo<ItemProps>((props) => {
 
     // Handle copy functionality
     const handleCopy = React.useCallback(async () => {
-        if (!copy || isWeb) return;
+        if (!copy) return false;
         
         let textToCopy: string;
         const subtitleText = typeof subtitle === 'string' ? subtitle : null;
@@ -311,40 +339,20 @@ export const Item = React.memo<ItemProps>((props) => {
             textToCopy = detail || subtitleText || titleLabel;
         }
         
-        try {
-            await Clipboard.setStringAsync(textToCopy);
-            Modal.alert(t('common.copied'), t('items.copiedToClipboard', { label: titleLabel }));
-        } catch (error) {
+        const copied = await setClipboardStringSafe(textToCopy);
+        if (!copied) {
             Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
+            return false;
         }
-    }, [copy, detail, isWeb, subtitle, titleLabel]);
+        copyFeedback.markCopied();
+        return true;
+    }, [copy, copyFeedback, detail, subtitle, titleLabel]);
     
     const longPressConsumedRef = React.useRef(false);
 
     // Handle long press for copy functionality
     const handlePressIn = React.useCallback(() => {
         longPressConsumedRef.current = false;
-        if (copy && !isWeb && !onPress) {
-            longPressTimer.current = setTimeout(() => {
-                handleCopy();
-            }, 500); // 500ms delay for long press
-        }
-    }, [copy, isWeb, onPress, handleCopy]);
-    
-    const handlePressOut = React.useCallback(() => {
-        if (longPressTimer.current) {
-            clearTimeout(longPressTimer.current);
-            longPressTimer.current = null;
-        }
-    }, []);
-    
-    // Clean up timer on unmount
-    React.useEffect(() => {
-        return () => {
-            if (longPressTimer.current) {
-                clearTimeout(longPressTimer.current);
-            }
-        };
     }, []);
     
     const webDoublePressHandledAtMsRef = React.useRef<number>(0);
@@ -384,22 +392,39 @@ export const Item = React.memo<ItemProps>((props) => {
                 return;
             }
         }
+        if (copy && isWeb && !onPress) {
+            void handleCopy();
+            return;
+        }
+
         onPress?.();
-    }, [isWeb, onDoublePress, onPress]);
+    }, [copy, handleCopy, isWeb, onDoublePress, onPress]);
 
     const handleLongPress = React.useCallback(() => {
         longPressConsumedRef.current = true;
-        onLongPress?.();
-    }, [onLongPress]);
+        if (onLongPress) {
+            onLongPress();
+            return;
+        }
+        void handleCopy();
+    }, [handleCopy, onLongPress]);
 
     const isInfoMode = mode === 'info';
     const hasPrimaryPressAction = Boolean(onPress || onDoublePress || onLongPress);
     const hasCopyLongPress = Boolean(copy && !isWeb && !onPress);
-    const isInteractive = !isInfoMode && (hasPrimaryPressAction || hasCopyLongPress);
+    const hasCopyPress = Boolean(copy && isWeb && !onPress);
+    const isInteractive = !isInfoMode && (hasPrimaryPressAction || hasCopyLongPress || hasCopyPress);
 
     // Only show the navigation chevron when the row has an actual "tap to do something" affordance.
     // Long-press copy rows (mobile) and long-press-only rows should not look like navigation.
-    const showAccessory = Boolean(!isInfoMode && showChevron && !rightElement && (onPress || onDoublePress));
+    // A `rightElement` normally claims the right slot and hides the chevron, UNLESS the row opts
+    // into `keepChevronWithRightElement` (badge + chevron together).
+    const showAccessory = Boolean(
+        !isInfoMode
+        && showChevron
+        && (keepChevronWithRightElement || !rightElement)
+        && (onPress || onDoublePress),
+    );
     const showSelectedBackground = !!selected && ((selectionContext?.selectableItemCount ?? 2) > 1);
     const groupCornerRadius = Platform.select({ ios: 10, default: 16 });
 
@@ -419,13 +444,16 @@ export const Item = React.memo<ItemProps>((props) => {
             : isCozy
                 ? [styles.container, styles.containerCozy]
             : styles.container;
+    const iconBoxSizeOverride = iconBoxSize != null
+        ? { width: iconBoxSize, height: iconBoxSize }
+        : null;
     const iconContainerStyle = isTight
-        ? [styles.iconContainer, styles.iconContainerTight]
+        ? [styles.iconContainer, styles.iconContainerTight, iconBoxSizeOverride]
         : isCompact
-            ? [styles.iconContainer, styles.iconContainerCompact]
+            ? [styles.iconContainer, styles.iconContainerCompact, iconBoxSizeOverride]
             : isCozy
-                ? [styles.iconContainer, styles.iconContainerCozy]
-            : styles.iconContainer;
+                ? [styles.iconContainer, styles.iconContainerCozy, iconBoxSizeOverride]
+            : [styles.iconContainer, iconBoxSizeOverride];
     const resolvedIconDensity = isTight ? 'tight' : isCompact ? 'compact' : isCozy ? 'cozy' : 'comfortable';
     const chevronSize = ITEM_CHEVRON_SIZE[resolvedIconDensity];
     const resolvedIconBoxSize = ITEM_ICON_BOX_SIZE[resolvedIconDensity];
@@ -469,7 +497,7 @@ export const Item = React.memo<ItemProps>((props) => {
                 {
                     marginLeft: (isAndroid || isWeb)
                         ? 0
-                        : (dividerInset + (icon || leftElement ? (16 + resolvedIconBoxSize + resolvedIconMarginRight) : 16))
+                        : (dividerInset + (icon || leftElement ? (16 + (iconBoxSize ?? resolvedIconBoxSize) + resolvedIconMarginRight) : 16))
                 }
             ]}
         />
@@ -581,7 +609,9 @@ export const Item = React.memo<ItemProps>((props) => {
 
             {/* Right Section */}
             <View style={styles.rightSection}>
-                {detail && (
+                {copyFeedback.isCopied() ? (
+                    <CopiedPill visible testID="item-copy-feedback" />
+                ) : detail ? (
                     <Text
                         testID={detailTestID}
                         style={[
@@ -594,7 +624,7 @@ export const Item = React.memo<ItemProps>((props) => {
                     >
                         {detail}
                     </Text>
-                )}
+                ) : null}
                 {loading && (
                     <ActivitySpinner
                         size="small"
@@ -608,6 +638,7 @@ export const Item = React.memo<ItemProps>((props) => {
         </>
     ), [
         chevronAccessory,
+        copyFeedback,
         detail,
         detailSizeStyle,
         detailStyle,
@@ -706,13 +737,21 @@ export const Item = React.memo<ItemProps>((props) => {
                     onDoublePress();
                 } : undefined}
                 onPressIn={handlePressIn}
-                onPressOut={handlePressOut}
                 onHoverIn={isWeb && !disabled && !loading ? () => setIsHovered(true) : undefined}
                 onHoverOut={isWeb ? () => setIsHovered(false) : undefined}
                 onMouseDownCapture={isWeb ? (onMouseDownCapture as any) : undefined}
                 onContextMenu={isWeb ? (onContextMenu as any) : undefined}
                 {...(isWeb && webRole ? { role: webRole } : undefined)}
                 accessibilityRole={accessibilityRole ?? 'button'}
+                accessibilityState={accessibilityState}
+                accessibilityLabel={accessibilityLabel}
+                accessibilityHint={accessibilityHint}
+                {...(isWeb && accessibilityState != null && accessibilityState.expanded != null
+                    // RN-Web (createDOMProps) derives aria-expanded from an explicit
+                    // aria-expanded/accessibilityExpanded prop, NOT from
+                    // accessibilityState.expanded — bridge it on web only.
+                    ? ({ 'aria-expanded': accessibilityState.expanded } as Record<string, unknown>)
+                    : undefined)}
                 disabled={disabled || loading}
                 style={({ pressed }) => resolveInteractiveRowStyle(pressed)}
                 android_ripple={(isAndroid || isWeb) ? {

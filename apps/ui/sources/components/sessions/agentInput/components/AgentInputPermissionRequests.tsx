@@ -57,7 +57,6 @@ function getAttentionRequestKey(request: AttentionRequest): string {
 export const AgentInputAttentionRequests = React.memo(function AgentInputAttentionRequests(props: Readonly<{
     sessionId: string;
     permissionRequests: readonly PendingPermissionRequest[];
-    userActionRequests?: readonly PendingPermissionRequest[];
     approvalRequests?: readonly OpenApprovalArtifactForSession[];
     permissionLocationsById: ReadonlyMap<string, PermissionToolCallMessageLocation | null>;
     approvalLocationsByArtifactId?: ReadonlyMap<string, PermissionToolCallMessageLocation | null>;
@@ -74,19 +73,21 @@ export const AgentInputAttentionRequests = React.memo(function AgentInputAttenti
     const { theme } = useUnistyles();
 
     const attentionRequests = React.useMemo(() => {
-        if (props.disabledReason === 'inactive') return [];
-
         return [
-            ...props.permissionRequests.map((request): AttentionRequest => ({
-                kind: 'provider_permission',
-                id: request.id,
-                request,
-            })),
-            ...(props.approvalRequests ?? []).map((request): AttentionRequest => ({
-                kind: 'action_approval',
-                id: request.artifact.id,
-                request,
-            })),
+            ...(props.disabledReason === 'inactive'
+                ? []
+                : props.permissionRequests.map((request): AttentionRequest => ({
+                    kind: 'provider_permission',
+                    id: request.id,
+                    request,
+                }))),
+            ...(props.disabledReason === 'inactive'
+                ? []
+                : (props.approvalRequests ?? []).map((request): AttentionRequest => ({
+                    kind: 'action_approval',
+                    id: request.artifact.id,
+                    request,
+                }))),
         ];
     }, [props.approvalRequests, props.disabledReason, props.permissionRequests]);
     const scrollStyle = React.useMemo(() => ({ maxHeight: props.maxHeightPx }), [props.maxHeightPx]);

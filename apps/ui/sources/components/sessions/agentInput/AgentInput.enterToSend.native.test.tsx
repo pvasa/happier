@@ -35,6 +35,24 @@ const keyboardShortcutState = vi.hoisted(() => ({
     useHandlers: vi.fn(),
 }));
 
+type CommandMenuMockProps = {
+    open?: boolean;
+    query?: string;
+    items?: readonly { id: string; label: string }[];
+};
+
+type CommandMenuKeyboardMockInput = {
+    open?: boolean;
+    onMoveUp: () => void;
+    onMoveDown: () => void;
+    onSelect: () => void;
+    onClose: () => void;
+};
+
+const commandMenuState = vi.hoisted(() => ({
+    lastProps: null as null | CommandMenuMockProps,
+}));
+
 installAgentInputCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -104,6 +122,35 @@ vi.mock('@/keyboard/KeyboardShortcutProvider', () => ({
     useKeyboardShortcutHandlers: (handlers: unknown) => keyboardShortcutState.useHandlers(handlers),
 }));
 
+vi.mock('@/components/ui/commandMenu', () => ({
+    CommandMenu: (props: CommandMenuMockProps) => {
+        commandMenuState.lastProps = props;
+        return props.open ? React.createElement('CommandMenu', props, null) : null;
+    },
+    useCommandMenuKeyboard: (input: CommandMenuKeyboardMockInput) => ({
+        handleKey: (event: { key: string; shiftKey?: boolean }) => {
+            if (!input.open) return false;
+            if (event.key === 'ArrowUp') {
+                input.onMoveUp();
+                return true;
+            }
+            if (event.key === 'ArrowDown') {
+                input.onMoveDown();
+                return true;
+            }
+            if (event.key === 'Enter' || (event.key === 'Tab' && !event.shiftKey)) {
+                input.onSelect();
+                return true;
+            }
+            if (event.key === 'Escape') {
+                input.onClose();
+                return true;
+            }
+            return false;
+        },
+    }),
+}));
+
 vi.mock('expo-image', () => ({
     Image: (props: Record<string, unknown>) => React.createElement('Image', props, null),
 }));
@@ -113,6 +160,9 @@ vi.mock('@/components/tools/shell/permissions/PermissionFooter', () => ({
 }));
 
 vi.mock('@/agents/catalog/catalog', () => ({
+    getAgentIconSvgXml: () => null,
+    getAgentIconSource: () => null,
+    getAgentIconTintColor: () => undefined,
     AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],
     DEFAULT_AGENT_ID: 'codex',
     resolveAgentIdFromFlavor: () => null,
@@ -265,6 +315,7 @@ describe('AgentInput (enter to send on native)', () => {
         mocks.activeSuggestionIndex = -1;
         mocks.respectSuggestionQuery = false;
         mocks.lastSuggestionQuery = undefined;
+        commandMenuState.lastProps = null;
         vi.clearAllMocks();
     });
 
@@ -316,7 +367,7 @@ describe('AgentInput (enter to send on native)', () => {
                 placeholder="p"
                 onSend={mocks.onSend}
                 autocompletePrefixes={['/']}
-                autocompleteSuggestions={async () => mocks.activeSuggestions as any}
+                autocompleteSuggestions={async () => mocks.activeSuggestions}
                 isSendDisabled={false}
                 disabled={false}
                 showAbortButton={false}
@@ -353,7 +404,7 @@ describe('AgentInput (enter to send on native)', () => {
                 placeholder="p"
                 onSend={mocks.onSend}
                 autocompletePrefixes={['/']}
-                autocompleteSuggestions={async () => mocks.activeSuggestions as any}
+                autocompleteSuggestions={async () => mocks.activeSuggestions}
                 isSendDisabled={false}
                 disabled={false}
                 showAbortButton={false}
@@ -366,6 +417,49 @@ describe('AgentInput (enter to send on native)', () => {
         });
 
         expect(mocks.lastSuggestionQuery).toBe('/r');
+        expect(commandMenuState.lastProps).toEqual(expect.objectContaining({
+            open: true,
+            query: '/r',
+            items: [expect.objectContaining({ label: '/run' })],
+        }));
+    });
+
+    it('keeps slash autocomplete active after a large native value is restored into an empty composer', async () => {
+        mocks.activeSuggestions = [{ key: 'cmd-run', text: '/run', label: '/run' }];
+        mocks.activeSuggestionIndex = 0;
+        mocks.respectSuggestionQuery = true;
+        const largePrompt = `${'x'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1)} /r`;
+        const { AgentInput } = await import('./AgentInput');
+        const render = (value: string) => (
+            <AgentInput
+                sessionId="session-1"
+                value={value}
+                onChangeText={mocks.onChangeText}
+                placeholder="p"
+                onSend={mocks.onSend}
+                autocompletePrefixes={['/']}
+                autocompleteSuggestions={async () => mocks.activeSuggestions}
+                isSendDisabled={false}
+                disabled={false}
+                showAbortButton={false}
+            />
+        );
+        const screen = await renderScreen(render(''));
+
+        await act(async () => {
+            screen.tree.update(render(largePrompt));
+        });
+        const input = findMultiTextInput(screen);
+        await act(async () => {
+            input.props.onFocus?.();
+        });
+
+        expect(mocks.lastSuggestionQuery).toBe('/r');
+        expect(commandMenuState.lastProps).toEqual(expect.objectContaining({
+            open: true,
+            query: '/r',
+            items: [expect.objectContaining({ label: '/run' })],
+        }));
     });
 
     it('uses a 16 point input text base for existing sessions and new sessions', async () => {

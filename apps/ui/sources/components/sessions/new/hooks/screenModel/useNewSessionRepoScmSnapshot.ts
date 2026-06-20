@@ -7,6 +7,8 @@ import {
 } from '@/scm/scmRepositoryService';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 
+import { pathBelongsToRepo } from './worktreePathComparison';
+
 /**
  * Fetches the SCM snapshot in TWO stages so the worktree picker chip can render
  * within sub-second latency even on repos with many active worktrees:
@@ -62,10 +64,31 @@ export function useNewSessionRepoScmSnapshot(input: Readonly<{
             machineId,
             path,
         });
-        const seededSnapshot = cachedLight && cachedEnrichment
+        const seededFromCache = cachedLight && cachedEnrichment
             ? mergeWorktreesEnrichmentIntoSnapshot(cachedLight, cachedEnrichment)
             : cachedLight;
-        setSnapshot(seededSnapshot);
+        // Seed the snapshot for this path. When the new path has no cache of its
+        // own BUT belongs to the SAME repository as the snapshot we're already
+        // showing (e.g. the user just switched the checkout to a sibling
+        // worktree), keep that snapshot instead of resetting to null: a repo's
+        // `git worktree list` is repo-wide and identical across its worktrees, so
+        // a reset would only flash the chip's worktree list empty for one
+        // round-trip until the new path's light fetch lands. (Honors the UI rule
+        // against flashing empty states for already-hydrated lists.)
+        const applySeed = () => {
+            setSnapshot((previous) => {
+                if (seededFromCache) return seededFromCache;
+                if (previous && pathBelongsToRepo({
+                    candidatePath: path,
+                    repoRootPath: previous.repo.rootPath,
+                    worktreePaths: (previous.repo.worktrees ?? []).map((worktree) => worktree.path),
+                })) {
+                    return previous;
+                }
+                return null;
+            });
+        };
+        applySeed();
 
         void (async () => {
             try {
@@ -95,7 +118,7 @@ export function useNewSessionRepoScmSnapshot(input: Readonly<{
                 setSnapshot(mergeWorktreesEnrichmentIntoSnapshot(lightSnapshot, enrichment));
             } catch (_error) {
                 if (!cancelled) {
-                    setSnapshot(seededSnapshot);
+                    applySeed();
                 }
             }
         })();

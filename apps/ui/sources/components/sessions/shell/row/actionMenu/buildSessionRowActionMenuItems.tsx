@@ -12,7 +12,7 @@ import { t } from '@/text';
 import type { SessionRowMoreMenuBuildParams } from './sessionRowActionMenuTypes';
 
 export function buildSessionRowMoreMenuItems(params: SessionRowMoreMenuBuildParams): DropdownMenuItem[] {
-    const items: DropdownMenuItem[] = [];
+    const items: DropdownMenuItem[] = [...(params.leadingItems ?? [])];
     for (const actionId of listVisibleSessionActionIds({ target: params.target, surface: 'rowMenu' })) {
         if (actionId === SESSION_ACTION_MOVE_TO_FOLDER_ID) {
             const folderMoveMenuItems = params.folderMoveMenuItems ?? [];

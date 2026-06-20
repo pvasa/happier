@@ -7,7 +7,6 @@ import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 const DEFAULT_POPOVER_MAX_HEIGHT = 400;
 const NATIVE_KEYBOARD_VISIBLE_POPOVER_FRACTION = 0.5;
 const DEFAULT_POPOVER_GAP = 8;
-const ANDROID_POPOVER_GAP = 32;
 
 export type AgentInputPopoverLayout = Readonly<{
     maxHeightCap?: number;
@@ -59,6 +58,10 @@ export function useAgentInputPopoverLayout(input: Readonly<{
         maxHeightCap,
         keyboardBottomInset: Platform.OS === 'web' ? 0 : effectiveKeyboardHeight,
         placement: 'top',
-        gap: Platform.OS === 'android' ? ANDROID_POPOVER_GAP : DEFAULT_POPOVER_GAP,
+        // The popover now anchors correctly on every platform (Popover resolves the portal-relative
+        // anchor via window-deltas on Android — see `resolvePortalRelativeAnchorRect`), so the gap is
+        // the same snug value everywhere. Previously Android over-padded (32) to mask an anchor that
+        // was resolved in the wrong coordinate space and overlapped the chip.
+        gap: DEFAULT_POPOVER_GAP,
     };
 }

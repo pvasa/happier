@@ -101,7 +101,7 @@ describe('TranscriptSelectionToolbar', () => {
         await pressByTestId(screen, 'enter-a');
 
         const toolbar = screen.findByTestId('transcript-selection-toolbar');
-        expect(toolbar?.props.style).toContainEqual({ width: '100%', maxWidth: 640, alignSelf: 'center' });
+        expect(toolbar?.props.style).toContainEqual({ maxWidth: 640 });
     });
 
     it('hides Send when send-to-session is disabled and shows it when enabled', async () => {

@@ -1,11 +1,30 @@
 import { ActivityIndicator } from 'react-native';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { rawRecordSchema, type AgentEvent } from '@/sync/typesRaw/schemas';
 import { t } from '@/text';
 
 import { TranscriptEventRow } from './TranscriptEventRow';
+
+const eventRowMocks = vi.hoisted(() => ({
+    actionExecute: vi.fn(),
+    modalAlert: vi.fn(),
+    modalConfirm: vi.fn(),
+}));
+
+vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
+    createDefaultActionExecutor: () => ({
+        execute: (...args: unknown[]) => eventRowMocks.actionExecute(...args),
+    }),
+}));
+
+vi.mock('@/modal', () => ({
+    Modal: {
+        alert: (...args: unknown[]) => eventRowMocks.modalAlert(...args),
+        confirm: (...args: unknown[]) => eventRowMocks.modalConfirm(...args),
+    },
+}));
 
 function parseProtocolValidAgentEvent<T extends AgentEvent>(event: T): T {
     const parsed = rawRecordSchema.safeParse({
@@ -26,6 +45,58 @@ function parseProtocolValidAgentEvent<T extends AgentEvent>(event: T): T {
 }
 
 describe('TranscriptEventRow', () => {
+    beforeEach(() => {
+        eventRowMocks.actionExecute.mockReset();
+        eventRowMocks.actionExecute.mockResolvedValue({ ok: true, result: { ok: true, status: 'cleared' } });
+        eventRowMocks.modalAlert.mockReset();
+        eventRowMocks.modalConfirm.mockReset();
+        eventRowMocks.modalConfirm.mockResolvedValue(true);
+    });
+
+    it('renders typed terminal composer draft blocked events with the clear-composer action', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'terminal-composer-draft-blocked',
+            reason: 'idle_draft_guard',
+            stateAtMs: 1781788925696,
+            message: 'Your queued message is waiting: the terminal composer holds an unsent draft.',
+        });
+
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={event}
+                sessionId="session-1"
+            />,
+        );
+
+        expect(screen.findByProps({ testID: 'transcript-event-terminal-composer-draft-blocked' })).toBeTruthy();
+        expect(screen.findByTestId('transcriptEvent.clearTerminalComposer')).toBeTruthy();
+
+        await screen.pressByTestIdAsync('transcriptEvent.clearTerminalComposer');
+
+        expect(eventRowMocks.modalConfirm).toHaveBeenCalledTimes(1);
+        expect(eventRowMocks.actionExecute).toHaveBeenCalledWith(
+            'session.terminalComposer.clear',
+            { sessionId: 'session-1', expectedStateAtMs: 1781788925696 },
+            expect.objectContaining({ defaultSessionId: 'session-1', surface: 'ui_button' }),
+        );
+    });
+
+    it('renders legacy terminal composer draft session messages with the clear-composer action', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'message',
+            message: 'Your queued message is waiting: the terminal composer holds an unsent draft. Clear the draft in the terminal to deliver it.',
+        });
+
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={event}
+                sessionId="session-1"
+            />,
+        );
+
+        expect(screen.findByTestId('transcriptEvent.clearTerminalComposer')).toBeTruthy();
+    });
+
     it('derives started context compaction loading from the phase', async () => {
         const screen = await renderScreen(
             <TranscriptEventRow
@@ -100,8 +171,11 @@ describe('TranscriptEventRow', () => {
                     type: 'connected-service-account-switch',
                     serviceId: 'openai-codex',
                     groupId: 'codex-main',
+                    groupLabel: 'Happier',
                     fromProfileId: 'work',
                     toProfileId: 'backup',
+                    fromProfileLabel: 'team@happier.dev',
+                    toProfileLabel: 'leeroy.brun@gmail.com',
                     reason: 'usage_limit',
                     mode: 'hot_apply',
                     effectiveRemainingPct: 12,
@@ -109,8 +183,12 @@ describe('TranscriptEventRow', () => {
             />,
         );
 
+        const serialized = JSON.stringify(screen.tree.toJSON());
         expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch' })).toBeTruthy();
         expect(screen.findByProps({ testID: 'session-event-connected-service-account-switch' })).toBeTruthy();
+        expect(serialized).toContain('Switched Codex group Happier from team@happier.dev to leeroy.brun@gmail.com');
+        expect(serialized).not.toContain('from group');
+        expect(serialized).not.toContain('to profile');
     });
 
     it('renders native connected-service account switch endpoints without leaking null labels', async () => {
@@ -508,6 +586,85 @@ describe('TranscriptEventRow', () => {
         expect(serialized).toContain(t('connectedServices.authSwitch.switchFailed'));
         expect(serialized).toContain('hot_apply_failed');
         expect(serialized).not.toContain(t('connectedServices.authSwitch.confirmAction'));
+    });
+
+    it('renders direct live switch attempts as running-session auth switches, not restart or command copy', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'connected-service-account-switch-attempt',
+            ok: true,
+            action: 'hot_applied',
+            attemptedContinuityMode: 'hot_apply',
+            outcome: 'succeeded',
+            outcomeAction: 'hot_applied',
+            groupGeneration: 7,
+            sessionAdoption: 'applied',
+            sessionAdoptedGeneration: 7,
+        });
+
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={event}
+            />,
+        );
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
+        expect(serialized).toContain('Authentication switched in the running session');
+        expect(serialized).not.toContain(t('connectedServices.authSwitch.status.restarting'));
+        expect(serialized).not.toContain(t('connectedServices.authSwitch.confirmAction'));
+    });
+
+    it('renders credential-refresh switch attempts distinctly from restart-resume attempts', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'connected-service-account-switch-attempt',
+            ok: true,
+            action: 'restart_requested',
+            attemptedContinuityMode: 'credential_refresh',
+            outcome: 'observed',
+            outcomeAction: 'credential_refreshed',
+        });
+
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={event}
+            />,
+        );
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
+        expect(serialized).toContain('Authentication refreshed');
+        expect(serialized).not.toContain(t('connectedServices.authSwitch.status.restarting'));
+    });
+
+    it('falls back safely for unknown connected-service switch diagnostics', async () => {
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={{
+                    type: 'connected-service-account-switch-attempt',
+                    ok: false,
+                    action: 'hot_applied',
+                    attemptedContinuityMode: 'hot_apply',
+                    outcome: 'failed',
+                    outcomeAction: 'none',
+                    errorCode: 'future_switch_phase_failed',
+                    diagnostic: {
+                        code: 'future_switch_phase_failed',
+                        failurePhase: 'hot_apply',
+                        source: 'transcript_switch_attempt',
+                        serviceId: 'openai-codex',
+                        agentId: 'codex',
+                        retryable: false,
+                        suggestedActions: ['open_connected_accounts'],
+                    },
+                } as unknown as AgentEvent}
+            />,
+        );
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
+        expect(serialized).toContain(t('connectedServices.authSwitch.switchFailed'));
+        expect(serialized).toContain('future_switch_phase_failed');
+        expect(serialized).not.toContain(t('message.unknownEvent'));
     });
 
     it('renders observed-only switch attempts as neutral observation, not successful adoption', async () => {

@@ -242,18 +242,29 @@ type NewSessionAuthoringDraftParams = Omit<
     windowsTerminalWindowName?: SessionAuthoringDraft['windowsTerminalWindowName'];
 }>;
 
-export function buildNewSessionAuthoringDraft(params: NewSessionAuthoringDraftParams): SessionAuthoringDraft {
+type InternalNewSessionAuthoringDraftParams = Omit<NewSessionAuthoringDraftParams, 'displayText'> & Readonly<{
+    displayText?: string | null;
+}>;
+
+function buildNewSessionAuthoringDraftInternal(
+    params: InternalNewSessionAuthoringDraftParams,
+    options: Readonly<{
+        normalizePromptText: boolean;
+        defaultMissingDisplayTextToPrompt: boolean;
+    }>,
+): SessionAuthoringDraft {
     const codexBackendMode = resolveCanonicalCodexBackendMode({
         codexBackendMode: params.codexBackendMode,
         experimentalCodexAcp: params.experimentalCodexAcp,
     });
+    const displayTextSource = params.displayText ?? (options.defaultMissingDisplayTextToPrompt ? params.prompt : '');
 
     return {
         targetType: 'new_session',
         directory: normalizeRequiredString(params.directory),
         checkoutCreationDraft: params.checkoutCreationDraft,
-        prompt: params.prompt.trim(),
-        displayText: params.displayText.trim(),
+        prompt: options.normalizePromptText ? params.prompt.trim() : params.prompt,
+        displayText: options.normalizePromptText ? displayTextSource.trim() : displayTextSource,
         agentId: normalizeOptionalString(params.agentId),
         backendTarget: params.backendTarget ?? null,
         transcriptStorage: params.transcriptStorage ?? null,
@@ -281,6 +292,13 @@ export function buildNewSessionAuthoringDraft(params: NewSessionAuthoringDraftPa
         sessionEncryptionVariant: null,
         automation: normalizeAutomationDraft(params.automation),
     };
+}
+
+export function buildNewSessionAuthoringDraft(params: NewSessionAuthoringDraftParams): SessionAuthoringDraft {
+    return buildNewSessionAuthoringDraftInternal(params, {
+        normalizePromptText: true,
+        defaultMissingDisplayTextToPrompt: true,
+    });
 }
 
 type ResolvedNewSessionAuthoringDraftInputs = Readonly<{
@@ -315,7 +333,7 @@ type ResolvedNewSessionAuthoringDraftInputs = Readonly<{
 export function buildNewSessionAuthoringDraftFromResolvedInputs(
     params: ResolvedNewSessionAuthoringDraftInputs,
 ): SessionAuthoringDraft {
-    return buildNewSessionAuthoringDraft({
+    return buildNewSessionAuthoringDraftInternal({
         directory: params.directory,
         checkoutCreationDraft: params.checkoutCreationDraft ?? null,
         prompt: params.prompt,
@@ -342,6 +360,45 @@ export function buildNewSessionAuthoringDraftFromResolvedInputs(
         acpSessionModeId: params.acpSessionModeId ?? null,
         sessionConfigOptionOverrides: params.sessionConfigOptionOverrides ?? null,
         automation: params.automation ?? null,
+    }, {
+        normalizePromptText: true,
+        defaultMissingDisplayTextToPrompt: true,
+    });
+}
+
+export function buildLiveNewSessionAuthoringDraftFromResolvedInputs(
+    params: ResolvedNewSessionAuthoringDraftInputs,
+): SessionAuthoringDraft {
+    return buildNewSessionAuthoringDraftInternal({
+        directory: params.directory,
+        checkoutCreationDraft: params.checkoutCreationDraft ?? null,
+        prompt: params.prompt,
+        displayText: params.displayText,
+        agentId: params.agentId ?? null,
+        backendTarget: params.backendTarget ?? null,
+        transcriptStorage: params.transcriptStorage ?? null,
+        profileId: params.profileId ?? null,
+        environmentVariables: params.environmentVariables ?? null,
+        resumeSessionId: params.resumeSessionId ?? null,
+        permissionMode: params.permissionMode ?? null,
+        permissionModeUpdatedAt: params.permissionModeUpdatedAt ?? null,
+        modelId: params.modelId ?? null,
+        modelUpdatedAt: params.modelUpdatedAt ?? null,
+        mcpSelection: params.mcpSelection ?? null,
+        connectedServices: params.connectedServices,
+        connectedServicesUpdatedAt: params.connectedServicesUpdatedAt ?? null,
+        terminal: params.terminal ?? null,
+        windowsRemoteSessionLaunchMode: params.windowsRemoteSessionLaunchMode ?? null,
+        windowsRemoteSessionConsole: params.windowsRemoteSessionConsole ?? null,
+        windowsTerminalWindowName: params.windowsTerminalWindowName ?? null,
+        experimentalCodexAcp: params.experimentalCodexAcp ?? null,
+        codexBackendMode: params.codexBackendMode ?? null,
+        acpSessionModeId: params.acpSessionModeId ?? null,
+        sessionConfigOptionOverrides: params.sessionConfigOptionOverrides ?? null,
+        automation: params.automation ?? null,
+    }, {
+        normalizePromptText: false,
+        defaultMissingDisplayTextToPrompt: false,
     });
 }
 
@@ -800,7 +857,7 @@ export function buildPersistedNewSessionDraftFromAuthoringDraft(params: Readonly
     );
 
     return {
-        input: params.draft.displayText || params.draft.prompt,
+        input: (params.draft.displayText || params.draft.prompt).trim(),
         selectedMachineId: params.machineId,
         selectedPath: params.draft.directory,
         ...(targetServerId ? { targetServerId } : {}),

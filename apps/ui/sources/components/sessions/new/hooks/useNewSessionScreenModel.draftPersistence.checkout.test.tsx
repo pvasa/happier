@@ -85,7 +85,7 @@ describe('useNewSessionScreenModel (draft hydration — checkout)', () => {
             displayName: 'feature/focused-browser-fix',
             baseRef: 'main',
         });
-        expect(getCheckoutChipLabel(model)).toBe('newSession.checkout.newWorktree');
+        expect(getCheckoutChipLabel(model)).toBe('newSession.checkout.newWorktree: feature/focused-browser-fix');
     });
 
     it('persists updated checkout creation draft state after in-memory changes', async () => {
@@ -387,8 +387,9 @@ describe('useNewSessionScreenModel (draft hydration — checkout)', () => {
         workspaceGraphState.workspaceCheckouts = {};
         // Only the current-dir worktree exists; the synthesised remote branch
         // row ("origin/release") must NOT have a matching local worktree, so
-        // the builder routes through `onSelectBranchForNewWorktree` (new
-        // worktree path) rather than `onReuseExistingWorktreeForBranch`.
+        // the builder routes through the "name your worktree" step (new worktree
+        // path, committed via `onCreateWorktreeWithName`) rather than
+        // `onReuseExistingWorktreeForBranch`.
         repoSnapshotState.value = {
             ...repoSnapshotState.value,
             repo: {
@@ -417,21 +418,23 @@ describe('useNewSessionScreenModel (draft hydration — checkout)', () => {
         // production state slot.
         expect(typeof model?.simpleProps?.setCheckoutCreationDraft).toBe('function');
 
-        // The SelectionList drill-down step exposes branch rows whose onSelect fires
-        // the create-worktree path directly. Tests synthesise a remote-branch row via
-        // the builder helper so we don't depend on the live RPC fetch inside the
-        // dynamic section resolver.
+        // The SelectionList drill-down step exposes branch rows. Choosing a branch
+        // with no existing worktree opens the value-mode "name your worktree" step;
+        // committing that step fires the create path. Tests synthesise a remote-branch
+        // row via the builder helper so we don't depend on the live RPC fetch inside
+        // the dynamic section resolver.
         const { buildWorktreeBranchOption } = await import('@/components/sessions/new/hooks/screenModel/buildWorktreeSelectionListSteps');
         const remoteBranchOption = buildWorktreeBranchOption({
             branch: { name: 'origin/release', type: 'remote', upstream: null },
             snapshot: repoSnapshotState.value,
             currentDirPath: '/repo/custom',
             rowIconColor: '#999',
-            onSelectBranchForNewWorktree: (selection) => {
+            worktreeNameSuggestion: 'feature-x',
+            onCreateWorktreeWithName: (selection) => {
                 model?.simpleProps?.setCheckoutCreationDraft?.({
                     kind: 'git_worktree',
-                    displayName: 'feature-x',
-                    baseRef: selection.branchName,
+                    displayName: selection.name,
+                    baseRef: selection.baseRef,
                     branchMode: 'new',
                 });
             },
@@ -439,7 +442,7 @@ describe('useNewSessionScreenModel (draft hydration — checkout)', () => {
         });
 
         await act(async () => {
-            remoteBranchOption.onSelect?.();
+            remoteBranchOption.openStep?.onCommitInputValue?.('feature-x');
             await flushHookEffects({ cycles: 3, turns: 2 });
         });
 

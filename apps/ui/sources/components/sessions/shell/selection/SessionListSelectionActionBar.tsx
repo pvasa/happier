@@ -21,9 +21,11 @@ import {
 import { buildSessionBulkActionResultSummary } from '@/components/sessions/actions/sessionActionResultMessages';
 import {
     OverlayMotionFrame,
+    resolveOverlayExitMs,
     resolveOverlayMotionPreset,
     useOverlayPresence,
 } from '@/components/ui/overlays/motion/overlayMotion';
+import { GlassPanel } from '@/components/ui/glass/GlassPanel';
 import { HorizontalScrollableRow } from '@/components/ui/scroll/HorizontalScrollableRow';
 import { Text } from '@/components/ui/text/Text';
 import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
@@ -34,6 +36,7 @@ import {
     useOptionalSessionListSelectionActions,
     useOptionalSessionListSelectionState,
 } from './SessionListSelectionContext';
+import { resolveSelectionActionBarBottomInset } from './selectionActionBarBottomInset';
 
 type MoveFolderSelection = Readonly<{
     folderId: string | null;
@@ -58,9 +61,8 @@ type ConfirmActionState = Readonly<{
 }>;
 
 const EMPTY_TARGETS: readonly SessionBulkActionTarget[] = Object.freeze([]);
-const ACTION_BAR_WEB_BOTTOM_INSET = 84;
-const ACTION_BAR_NATIVE_BOTTOM_INSET = 12;
 const ACTION_BAR_COMPACT_HEIGHT_THRESHOLD = 760;
+const SELECTION_ACTION_BAR_RADIUS = 16;
 const ZERO_SAFE_AREA_INSETS = Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 });
 
 function safeActionTestId(actionId: string): string {
@@ -159,22 +161,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     hostCompact: {
         alignItems: 'stretch',
     },
+    // Inner content layout. The glass surface (grey-ish fill + rim + inner shadow +
+    // soft cast shadow) is provided by the wrapping `GlassPanel`.
     bar: {
         minHeight: 44,
         minWidth: 180,
         maxWidth: '100%',
-        borderRadius: 8,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.border.default,
-        backgroundColor: theme.colors.surface.elevated,
         paddingHorizontal: 12,
         paddingVertical: 8,
         alignItems: 'stretch',
         justifyContent: 'center',
-        shadowColor: theme.colors.shadow.color,
-        shadowOpacity: 0.18,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 6 },
         gap: 8,
     },
     barCompact: {
@@ -303,7 +299,10 @@ export function SessionListSelectionActionBarHost(props: SessionListSelectionAct
     const visible = selection.isSelectionMode || runningAction !== null || result !== null || confirmAction !== null;
     const presence = useOverlayPresence(
         visible,
-        reducedMotion ? 0 : motionPreset.exitMs,
+        // The glass bar uses `disableTransformOnWeb`, so on web it has no entrance/exit
+        // motion (opacity/transform both isolate its backdrop-filter blur). The exit
+        // window collapses to instant there so it unmounts cleanly instead of lingering.
+        resolveOverlayExitMs({ preset: motionPreset, reducedMotion, disableTransformOnWeb: true }),
     );
     const presentedCountRef = React.useRef(selection.count);
     if (selection.isSelectionMode) {
@@ -311,12 +310,11 @@ export function SessionListSelectionActionBarHost(props: SessionListSelectionAct
     }
     const presentedCount = selection.isSelectionMode ? selection.count : presentedCountRef.current;
     const compactActionLayout = windowDimensions.height < ACTION_BAR_COMPACT_HEIGHT_THRESHOLD;
-    const nativeActionBarBottomInset = bottomChromeHeight > 0
-        ? ACTION_BAR_NATIVE_BOTTOM_INSET
-        : safeAreaInsets.bottom + ACTION_BAR_NATIVE_BOTTOM_INSET;
-    const actionBarBottomInset = Platform.OS === 'web'
-        ? safeAreaInsets.bottom + ACTION_BAR_WEB_BOTTOM_INSET
-        : nativeActionBarBottomInset;
+    const actionBarBottomInset = resolveSelectionActionBarBottomInset({
+        bottomChromeHeight,
+        safeAreaBottom: safeAreaInsets.bottom,
+        isWeb: Platform.OS === 'web',
+    });
     const visibleEligibleKeys = React.useMemo(() => selection.visibleOrderedKeys.filter((key) => (
         selection.eligibleKeys.has(key) && props.targetsByKey?.has(key) === true
     )), [props.targetsByKey, selection.eligibleKeys, selection.visibleOrderedKeys]);
@@ -493,14 +491,13 @@ export function SessionListSelectionActionBarHost(props: SessionListSelectionAct
             pointerEvents={presence.exiting ? 'none' : 'box-none'}
             style={[styles.host, compactActionLayout ? styles.hostCompact : null, { bottom: actionBarBottomInset }]}
         >
-            <OverlayMotionFrame visible={visible} kind="popover" direction="bottom">
-                <View
+            <OverlayMotionFrame visible={visible} kind="popover" direction="bottom" disableTransformOnWeb>
+                <GlassPanel
                     testID={visible ? 'session-list-selection-action-bar' : undefined}
+                    radius={SELECTION_ACTION_BAR_RADIUS}
+                    surfaceColor={theme.colors.glass.panelSurface}
+                    shadowLevel={3}
                     style={[styles.bar, compactActionLayout ? styles.barCompact : null]}
-                    {...({
-                        'data-selected-count': presentedCount,
-                        dataSet: { selectedCount: String(presentedCount) },
-                    } as Record<string, unknown>)}
                 >
                     <View style={styles.headerRow}>
                         <Text
@@ -673,7 +670,7 @@ export function SessionListSelectionActionBarHost(props: SessionListSelectionAct
                             </View>
                         </View>
                     ) : null}
-                </View>
+                </GlassPanel>
             </OverlayMotionFrame>
         </View>
     );

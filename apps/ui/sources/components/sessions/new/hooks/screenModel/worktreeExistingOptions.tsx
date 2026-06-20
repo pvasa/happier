@@ -1,5 +1,7 @@
 import * as React from 'react';
+import { View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useUnistyles } from 'react-native-unistyles';
 
 import {
     type SelectionListOption,
@@ -9,6 +11,8 @@ import { StatusPill as BaseStatusPill, type StatusPillVariant } from '@/componen
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+
+import { buildWorktreeCheckoutOptionId } from '@/components/sessions/new/modules/worktreeCheckoutOptionId';
 
 import { NEW_SESSION_WORKTREE_STALE_THRESHOLD_MS } from './_constants';
 import { pathsAreSameWorktree } from './worktreePathComparison';
@@ -32,8 +36,12 @@ function WorktreeRelativeTimeText(props: Readonly<{
     nowMs: number;
     testID?: string;
 }>): React.ReactElement {
+    const { theme } = useUnistyles();
     return (
-        <Text testID={props.testID} style={Typography.tabular()}>
+        <Text
+            testID={props.testID}
+            style={[Typography.tabular(), { color: theme.colors.text.secondary }]}
+        >
             {formatWorktreeRelativeAge(props.atMs, props.nowMs)}
         </Text>
     );
@@ -119,10 +127,13 @@ export function buildExistingWorktreeOptions(
             const pillLabel = variant === 'dirty'
                 ? t('newSession.worktree.statusPill.changesSuffix', { count: dirtyChangeCount ?? 0 })
                 : variant === 'stale'
-                    ? t('newSession.worktree.statusPill.stale')
+                    ? t('newSession.worktree.statusPill.idle')
                     : t('newSession.worktree.statusPill.clean');
+            // The relative-age text and the status pill sit in a gapped row so
+            // they read as two distinct accessories (the age is secondary text;
+            // the pill carries the status colour) rather than colliding.
             const accessory = (
-                <React.Fragment>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     {worktree.lastActivityAt !== undefined ? (
                         <WorktreeRelativeTimeText
                             atMs={worktree.lastActivityAt}
@@ -138,10 +149,16 @@ export function buildExistingWorktreeOptions(
                             testID={`worktree-row-status:${worktree.path}`}
                         />
                     ) : null}
-                </React.Fragment>
+                </View>
             );
+            // The row id MUST be derived through the shared
+            // `buildWorktreeCheckoutOptionId` owner so it matches the chip
+            // model's `selectedOptionId` byte-for-byte; otherwise a selected
+            // existing worktree fails to highlight / scroll into view on reopen
+            // whenever the raw path needs normalization (trailing slash, mixed
+            // separators).
             return {
-                id: `checkout:${worktree.path}`,
+                id: buildWorktreeCheckoutOptionId(worktree.path),
                 label,
                 subtitle: worktree.path,
                 icon: React.createElement(Ionicons, {

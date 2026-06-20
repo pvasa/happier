@@ -1303,8 +1303,8 @@ describe('AgentInput (modelOptionsOverride)', () => {
 
         const logo = screen.findByTestId('agent-input-agent-chip-logo');
         expect(logo?.type).toBe('SvgXml');
-        expect(logo?.props.width).toBe(14);
-        expect(logo?.props.height).toBe(14);
+        expect(logo?.props.width).toBe(16);
+        expect(logo?.props.height).toBe(16);
     });
 
     it('applies the shared provider picker icon scale to the engine chip logo', async () => {
@@ -1331,8 +1331,8 @@ describe('AgentInput (modelOptionsOverride)', () => {
 
         const logo = screen.findByTestId('agent-input-agent-chip-logo');
         expect(logo?.type).toBe('SvgXml');
-        expect(logo?.props.width).toBe(14);
-        expect(logo?.props.height).toBe(14);
+        expect(logo?.props.width).toBe(16);
+        expect(logo?.props.height).toBe(16);
         expect(logo?.props.style).toEqual({ transform: [{ scale: 0.9 }] });
     });
 
@@ -1360,8 +1360,8 @@ describe('AgentInput (modelOptionsOverride)', () => {
 
         const logo = screen.findByTestId('agent-input-agent-chip-logo');
         expect(logo?.type).toBe('SvgXml');
-        expect(logo?.props.width).toBe(14);
-        expect(logo?.props.height).toBe(14);
+        expect(logo?.props.width).toBe(16);
+        expect(logo?.props.height).toBe(16);
         expect(logo?.props.style).toEqual({ transform: [{ scale: 0.9 }] });
     });
 

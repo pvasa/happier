@@ -55,6 +55,7 @@ export function resolveTranscriptRowItemType(params: Readonly<{
     if (item.kind === 'tool-calls-group') return 'tool-group';
     if (isToolGroupUnitItem(item)) return item.kind;
     if (item.kind === 'pending-queue') return 'pending-action';
+    if (item.kind === 'pending-user-action') return 'pending-action';
     if (item.kind === 'action-draft') return 'pending-action';
     if (item.kind === 'fork-divider') return 'fork-divider';
     if (item.kind === 'turn') {
@@ -246,7 +247,9 @@ export function buildTranscriptRowShellSignature(params: Readonly<{
         ...base,
         structuralKey: buildStableJsonSignature(item),
         expansionKey: 'tools:none|thinking:none',
-        rowState: item.kind === 'pending-queue' || item.kind === 'action-draft' ? 'pending-action' : 'stable',
+        rowState: item.kind === 'pending-queue' || item.kind === 'pending-user-action' || item.kind === 'action-draft'
+            ? 'pending-action'
+            : 'stable',
     };
 }
 

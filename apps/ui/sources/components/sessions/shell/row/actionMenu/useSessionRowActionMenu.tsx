@@ -78,6 +78,8 @@ export function useSessionRowActionMenu(params: Readonly<{
     folderMoveMenuItems?: readonly DropdownMenuItem[];
     onMoveToFolder?: () => void;
     onSelectFolderMoveMenuItem?: (itemId: string) => void;
+    leadingMenuItems?: readonly DropdownMenuItem[];
+    onSelectLeadingMenuItem?: (itemId: string) => void | Promise<void>;
     selectionModeAvailable?: boolean;
     selectionModeActive?: boolean;
     onEnterSelectionMode?: () => void;
@@ -208,6 +210,7 @@ export function useSessionRowActionMenu(params: Readonly<{
         const items = buildSessionRowMoreMenuItems({
             target,
             iconColor: params.iconColor,
+            leadingItems: params.leadingMenuItems,
             folderMoveMenuItems: params.folderMoveMenuItems,
             canMoveToFolder: typeof params.onMoveToFolder === 'function',
         });
@@ -231,6 +234,7 @@ export function useSessionRowActionMenu(params: Readonly<{
         params.folderMoveMenuItems,
         params.iconColor,
         params.isNativeMobile,
+        params.leadingMenuItems,
         params.onEnterSelectionMode,
         params.onMoveToFolder,
         params.selectionModeActive,
@@ -238,9 +242,17 @@ export function useSessionRowActionMenu(params: Readonly<{
         target,
     ]);
 
+    const leadingMenuItemIds = React.useMemo(() => {
+        return new Set((params.leadingMenuItems ?? []).map((item) => item.id));
+    }, [params.leadingMenuItems]);
+
     const handleMoreMenuSelect = React.useCallback(async (itemId: string) => {
         if (itemId === 'selection.select') {
             params.onEnterSelectionMode?.();
+            return;
+        }
+        if (leadingMenuItemIds.has(itemId)) {
+            await params.onSelectLeadingMenuItem?.(itemId);
             return;
         }
         if (itemId.startsWith('move-to-folder:')) {
@@ -275,9 +287,11 @@ export function useSessionRowActionMenu(params: Readonly<{
         confirmStopSession,
         handleReadStateAction,
         handleRenameSession,
+        leadingMenuItemIds,
         target,
         params.onEnterSelectionMode,
         params.onMoveToFolder,
+        params.onSelectLeadingMenuItem,
         params.onSelectFolderMoveMenuItem,
     ]);
 

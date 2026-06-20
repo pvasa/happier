@@ -168,8 +168,12 @@ describe('SessionSubagentRow', () => {
                         kind: 'agent_team_member_delete',
                         teamId: 'qa-team',
                         memberId: 'alpha@qa-team',
+                        memberLabel: 'alpha',
                     }),
                 },
+            }),
+            expect.objectContaining({
+                bypassPendingQueueReason: 'subagent_control_command',
             }),
         );
     });

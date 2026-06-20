@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { StyleSheet } from 'react-native-unistyles';
 
+import { MeterBar, type MeterTone } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
 import { TokenUsageRing, type TokenUsageTone } from '@/components/sessions/usage';
 import { Typography } from '@/constants/Typography';
@@ -18,6 +19,8 @@ type WebHoverablePressableState = Readonly<{
 type AgentInputProviderUsageBadgeProps = Readonly<{
     viewModel: ConnectedServiceQuotaGaugeViewModel;
     marginLeft?: number;
+    onRecoveryCreditPress?: () => void;
+    recoveryCreditActionPending?: boolean;
 }>;
 
 function mapQuotaToneToTokenTone(tone: ConnectedServiceQuotaGaugeViewModel['tone']): TokenUsageTone {
@@ -26,9 +29,14 @@ function mapQuotaToneToTokenTone(tone: ConnectedServiceQuotaGaugeViewModel['tone
     return 'neutral';
 }
 
+function mapGaugeToneToMeterTone(tone: ConnectedServiceQuotaGaugeViewModel['tone']): MeterTone {
+    if (tone === 'critical') return 'danger';
+    if (tone === 'warning') return 'warning';
+    return 'success';
+}
+
 export function AgentInputProviderUsageBadge(props: AgentInputProviderUsageBadgeProps) {
     const styles = stylesheet;
-    const { theme } = useUnistyles();
     const anchorRef = React.useRef<any>(null);
     const [isPinnedOpen, setIsPinnedOpen] = React.useState(false);
     const [isHovered, setIsHovered] = React.useState(false);
@@ -39,6 +47,7 @@ export function AgentInputProviderUsageBadge(props: AgentInputProviderUsageBadge
     const title = props.viewModel.providerDisplayName
         ? t('agentInput.providerUsage.titleForProvider', { provider: props.viewModel.providerDisplayName })
         : t('agentInput.providerUsage.title');
+    const recoveryCreditSummary = props.viewModel.recoveryCreditSummary;
 
     return (
         <>
@@ -111,22 +120,12 @@ export function AgentInputProviderUsageBadge(props: AgentInputProviderUsageBadge
                                         {row.detailRightLabel}
                                     </Text>
                                 </View>
-                                <View style={styles.meterBarTrack}>
-                                    <View
-                                        testID={`agent-input-provider-usage-meter-fill:${row.meterId}`}
-                                        style={[
-                                            styles.meterBarFill,
-                                            {
-                                                width: `${row.remainingPct}%`,
-                                                backgroundColor: row.tone === 'critical'
-                                                    ? theme.colors.state.danger.foreground
-                                                    : row.tone === 'warning'
-                                                        ? theme.colors.state.warning.foreground
-                                                        : theme.colors.state.success.foreground,
-                                            },
-                                        ]}
-                                    />
-                                </View>
+                                <MeterBar
+                                    testID={`agent-input-provider-usage-meter-bar:${row.meterId}`}
+                                    tone={mapGaugeToneToMeterTone(row.tone)}
+                                    value={row.remainingPct / 100}
+                                    height={5}
+                                />
                                 {row.usedLimitLabel ? (
                                     <Text style={styles.meterUsage}>
                                         {row.usedLimitLabel}
@@ -134,6 +133,40 @@ export function AgentInputProviderUsageBadge(props: AgentInputProviderUsageBadge
                                 ) : null}
                             </View>
                         ))}
+                        {recoveryCreditSummary ? (
+                            <View
+                                testID="agent-input-provider-usage-recovery-credit"
+                                style={styles.recoveryCredit}
+                            >
+                                <Text style={styles.recoveryCreditTitle}>
+                                    {t('connectedServices.quota.recoveryCreditTitle', { count: recoveryCreditSummary.availableCount })}
+                                </Text>
+                                <Text style={styles.recoveryCreditSubtitle}>
+                                    {typeof recoveryCreditSummary.nextExpiresAtMs === 'number'
+                                        ? t('connectedServices.quota.recoveryCreditExpires', { time: new Date(recoveryCreditSummary.nextExpiresAtMs).toLocaleString() })
+                                        : t('connectedServices.quota.recoveryCreditSubtitle')}
+                                </Text>
+                                {props.onRecoveryCreditPress ? (
+                                    <Pressable
+                                        testID="agent-input-provider-usage-recovery-credit-action"
+                                        accessibilityRole="button"
+                                        disabled={props.recoveryCreditActionPending === true}
+                                        onPress={props.onRecoveryCreditPress}
+                                        style={({ pressed }) => [
+                                            styles.recoveryCreditAction,
+                                            pressed ? styles.recoveryCreditActionPressed : null,
+                                            props.recoveryCreditActionPending === true ? styles.recoveryCreditActionDisabled : null,
+                                        ]}
+                                    >
+                                        <Text style={styles.recoveryCreditActionText}>
+                                            {props.recoveryCreditActionPending === true
+                                                ? t('connectedServices.quota.recoveryCreditApplying')
+                                                : t('session.usageLimitRecovery.consumeResetCreditAction')}
+                                        </Text>
+                                    </Pressable>
+                                ) : null}
+                            </View>
+                        ) : null}
                     </View>
                 )}
             />
@@ -196,19 +229,42 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
         ...Typography.default(),
     },
-    meterBarTrack: {
-        height: 5,
-        borderRadius: 999,
-        backgroundColor: theme.colors.surface.pressedOverlay,
-        overflow: 'hidden',
-    },
-    meterBarFill: {
-        height: 5,
-        borderRadius: 999,
-    },
     meterUsage: {
         fontSize: 12,
         color: theme.colors.text.secondary,
         ...Typography.default(),
+    },
+    recoveryCredit: {
+        gap: 6,
+        paddingTop: 2,
+    },
+    recoveryCreditTitle: {
+        fontSize: 12,
+        color: theme.colors.text.primary,
+        ...Typography.default('semiBold'),
+    },
+    recoveryCreditSubtitle: {
+        fontSize: 12,
+        color: theme.colors.text.secondary,
+        ...Typography.default(),
+    },
+    recoveryCreditAction: {
+        alignSelf: 'flex-start',
+        minHeight: 28,
+        justifyContent: 'center',
+        borderRadius: 6,
+        paddingHorizontal: 10,
+        backgroundColor: theme.colors.surface.pressedOverlay,
+    },
+    recoveryCreditActionPressed: {
+        opacity: 0.82,
+    },
+    recoveryCreditActionDisabled: {
+        opacity: 0.58,
+    },
+    recoveryCreditActionText: {
+        fontSize: 12,
+        color: theme.colors.text.primary,
+        ...Typography.default('semiBold'),
     },
 }));

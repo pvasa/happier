@@ -78,6 +78,7 @@ vi.mock('@/sync/domains/session/changes/hooks/useDerivedSessionChangeSet', () =>
 
 vi.mock('@/scm/scmStatusSync', () => ({
     scmStatusSync: {
+        invalidateFromAutoRefresh: vi.fn(),
         invalidateFromAutoRefreshAndAwait: vi.fn(),
         invalidateFromMutationAndAwait: vi.fn(),
         invalidateFromUser: vi.fn(),

@@ -175,6 +175,27 @@ describe('Item mode prop', () => {
         uiItemDensitySetting = 'comfortable';
     });
 
+    it('suppresses the chevron when a rightElement is present (default)', async () => {
+        const { Item } = await import('../Item');
+        const screen = await renderScreen(
+            <Item title="Badged" onPress={() => {}} rightElement={React.createElement('Text', null, 'badge')} />,
+        );
+        expect(screen.findAllByProps({ name: 'chevron-forward' })).toHaveLength(0);
+    });
+
+    it('keeps the chevron alongside a rightElement when keepChevronWithRightElement is set', async () => {
+        const { Item } = await import('../Item');
+        const screen = await renderScreen(
+            <Item
+                title="Badged + navigates"
+                onPress={() => {}}
+                rightElement={React.createElement('Text', null, 'badge')}
+                keepChevronWithRightElement
+            />,
+        );
+        expect(screen.findAllByProps({ name: 'chevron-forward' }).length).toBeGreaterThan(0);
+    });
+
     it('applies a hover background on web for interactive items', async () => {
         const { Item } = await import('../Item');
         const screen = await renderScreen(<Item title="Hover Row" testID="item-hover" onPress={() => {}} />);

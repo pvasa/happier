@@ -35,6 +35,12 @@ export type SelectionListInputMode = 'search' | 'value';
 export type SelectionListKeyboardNavParams = Readonly<{
     /** Flat ordered list of currently-visible option ids (skeleton/disabled rows excluded). */
     flatVisibleOptionIds: ReadonlyArray<string>;
+    /**
+     * Preferred visible option to focus before the user explicitly navigates
+     * rows. Selection surfaces use this to align keyboard focus with an
+     * existing selected row on open.
+     */
+    preferredFocusedOptionId?: string | null;
     onActivate: (optionId: string) => void;
     canPopStep: boolean;
     onPopStep: () => void;
@@ -92,6 +98,17 @@ function isCmdOrCtrl(event: SelectionListKeyboardEvent): boolean {
     return Boolean(event.metaKey) || Boolean(event.ctrlKey);
 }
 
+function resolveDefaultFocusedIndex(
+    flatVisibleOptionIds: ReadonlyArray<string>,
+    preferredFocusedOptionId: string | null | undefined,
+): number {
+    if (preferredFocusedOptionId) {
+        const preferredIndex = flatVisibleOptionIds.indexOf(preferredFocusedOptionId);
+        if (preferredIndex >= 0) return preferredIndex;
+    }
+    return flatVisibleOptionIds.length > 0 ? 0 : -1;
+}
+
 /**
  * Keyboard navigation for SelectionList (Phase 1.4 base + Phase 2.5 advanced).
  *
@@ -120,6 +137,7 @@ export function useSelectionListKeyboardNav(
 ): SelectionListKeyboardNavApi {
     const {
         flatVisibleOptionIds,
+        preferredFocusedOptionId,
         onActivate,
         canPopStep,
         onPopStep,
@@ -138,9 +156,15 @@ export function useSelectionListKeyboardNav(
     } = params;
 
     const [focusedIndex, setFocusedIndexRaw] = React.useState<number>(() => (
-        flatVisibleOptionIds.length > 0 ? 0 : -1
+        resolveDefaultFocusedIndex(flatVisibleOptionIds, preferredFocusedOptionId)
     ));
-    const [hasExplicitRowFocus, setHasExplicitRowFocus] = React.useState<boolean>(false);
+    const [hasExplicitRowFocusState, setHasExplicitRowFocusState] = React.useState<boolean>(false);
+    const hasExplicitRowFocusRef = React.useRef(false);
+    const setHasExplicitRowFocus = React.useCallback((next: boolean) => {
+        hasExplicitRowFocusRef.current = next;
+        setHasExplicitRowFocusState(next);
+    }, []);
+    const hasExplicitRowFocus = hasExplicitRowFocusState;
     const flatVisibleOptionIdsKey = React.useMemo(
         () => flatVisibleOptionIds.join('\u0000'),
         [flatVisibleOptionIds],
@@ -153,6 +177,9 @@ export function useSelectionListKeyboardNav(
             return;
         }
         setFocusedIndexRaw((current) => {
+            if (!hasExplicitRowFocusRef.current) {
+                return resolveDefaultFocusedIndex(flatVisibleOptionIds, preferredFocusedOptionId);
+            }
             if (current < 0) return 0;
             if (current >= flatVisibleOptionIds.length) return flatVisibleOptionIds.length - 1;
             return current;
@@ -160,7 +187,13 @@ export function useSelectionListKeyboardNav(
         if (inputMode === 'value') {
             setHasExplicitRowFocus(false);
         }
-    }, [flatVisibleOptionIdsKey, flatVisibleOptionIds.length, inputMode]);
+    }, [
+        flatVisibleOptionIdsKey,
+        flatVisibleOptionIds.length,
+        inputMode,
+        preferredFocusedOptionId,
+        setHasExplicitRowFocus,
+    ]);
 
     const setFocusedIndex = React.useCallback((next: number) => {
         setFocusedIndexRaw(next);

@@ -76,6 +76,24 @@ type SelectionListOptionBase = Readonly<{
     /** Right-side accessory (status pill, relative time, key chip, etc.) */
     rightAccessory?: SelectionListAccessory;
     /**
+     * When `true`, the navigation chevron is kept VISIBLE even though the row
+     * also renders a `rightAccessory`. By default a right accessory suppresses
+     * the chevron (the accessory owns the right slot); set this on rows that
+     * BOTH carry a status badge AND navigate to a sub-step (`openStep`), so the
+     * user still sees there's a further step. No effect without `openStep`.
+     */
+    keepChevronWithAccessory?: boolean;
+    /**
+     * Value-mode affordance: when `true`, activating this row (tap or Enter on a
+     * focused row) does NOT select/commit — instead it asks the SelectionList to
+     * draw attention to the input field (focus + a brief shake). Used by the
+     * "type a name" combobox row while the field is empty, so tapping it prompts
+     * the user to type rather than silently committing a fallback. The row owner
+     * (e.g. `buildInputRow`) sets this only while input is empty and clears it
+     * once a value is typed (at which point its `onSelect` commits normally).
+     */
+    requiresInputValue?: boolean;
+    /**
      * Full input value to substitute when the user accepts the autocomplete
      * (Tab anywhere, or → when caret is at end-of-input AND ghost suffix is
      * present). When set on a dynamic-section row, the row also exposes a
@@ -254,6 +272,53 @@ export type SelectionListStep = Readonly<{
     backLabel?: string;
     /** Optional placeholder for the input on this step (omit to disable input). */
     inputPlaceholder?: string;
+    /**
+     * Per-step input mode. Defaults to the SelectionList-level `inputMode` prop
+     * (which itself defaults to `'search'`). A step can opt into `'value'` so
+     * the input on THAT step is the candidate value (committed via
+     * `onCommitInputValue` on Enter / soft-keyboard return), while sibling steps
+     * stay in `'search'` (filter) mode. Used by the worktree picker's
+     * "name your worktree" step pushed after a base branch is chosen.
+     */
+    inputMode?: SelectionListInputMode;
+    /**
+     * Per-step commit handler for `inputMode: 'value'` steps. Receives the
+     * current raw input value when the user presses Enter (web) or the
+     * soft-keyboard return key (native) without a focused row. Takes precedence
+     * over the SelectionList-level `onCommitInputValue` prop when present, so a
+     * pushed value step can carry its own commit closure (e.g. the base ref it
+     * was opened for) through the otherwise-stateless step tree.
+     */
+    onCommitInputValue?: (input: string) => void;
+    /**
+     * Synthesize a single "act on the current input" row from the live input
+     * value (combobox-create pattern, e.g. "Create worktree '<typed>'"). When
+     * it returns an option, the orchestrator prepends it as a filter-bypassing,
+     * default-focused row that reflects what the user is typing; return `null`
+     * to omit it (e.g. on empty input). Activating the row runs its `onSelect`
+     * and closes through the normal selection path, so it doubles as the
+     * keyboard-navigable commit affordance for value-mode steps.
+     */
+    buildInputRow?: (input: string) => SelectionListOption | null;
+    /**
+     * When `true`, this step's static + dynamic rows are NOT narrowed by the
+     * input value. Use for value-mode steps where the input is the candidate
+     * VALUE rather than a search query, so fixed choices (e.g. the worktree
+     * "name" step's "Use suggested name" row) stay visible while the user types
+     * a custom value. Default `false` preserves the search-filter behavior.
+     */
+    disableInputFilter?: boolean;
+    /**
+     * Resolve the option that should be focused/selected BY DEFAULT for the
+     * current input value, before the user explicitly navigates rows. Returning
+     * a visible option id makes it the keyboard-focused row; returning `null`
+     * falls back to the SelectionList-level `selectedOptionId`, then to the
+     * first row. Re-evaluated as the input changes, so a value step can move the
+     * default highlight as typing begins (e.g. focus the suggested-name row when
+     * empty, then the live "Create …" row once the user types). Explicit arrow
+     * navigation still overrides this until the input crosses the boundary again.
+     */
+    resolveDefaultFocusedOptionId?: (input: string) => string | null;
     /** Override the empty-state copy for this step. */
     emptyStateLabel?: string;
     /** Ordered array of section descriptors; the array order IS the visual order. */

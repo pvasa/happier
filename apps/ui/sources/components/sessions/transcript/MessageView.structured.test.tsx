@@ -130,6 +130,15 @@ const sendMessageSpy = vi.fn<
         metaOverrides?: Record<string, unknown>,
     ) => Promise<void>
 >(async () => undefined);
+const submitMessageSpy = vi.fn<
+    (
+        sessionId: string,
+        text: string,
+        displayText?: string,
+        metaOverrides?: Record<string, unknown>,
+        options?: Readonly<{ callerSurface?: string | null }>,
+    ) => Promise<void>
+>(async () => undefined);
 vi.mock('@/sync/sync', () => ({
     sync: {
         sendMessage: (
@@ -138,7 +147,13 @@ vi.mock('@/sync/sync', () => ({
             displayText?: string,
             metaOverrides?: Record<string, unknown>,
         ) => sendMessageSpy(sessionId, text, displayText, metaOverrides),
-        submitMessage: vi.fn(),
+        submitMessage: (
+            sessionId: string,
+            text: string,
+            displayText?: string,
+            metaOverrides?: Record<string, unknown>,
+            options?: Readonly<{ callerSurface?: string | null }>,
+        ) => submitMessageSpy(sessionId, text, displayText, metaOverrides, options),
     },
 }));
 
@@ -954,7 +969,7 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
     });
 
     it('can adopt a plan by sending a structured user message to the parent session', async () => {
-        sendMessageSpy.mockClear();
+        submitMessageSpy.mockClear();
         const { MessageView } = await import('./MessageView');
 
         const message: any = {
@@ -994,13 +1009,13 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         expect(screen.findByTestId('adopt-plan-button')).not.toBeNull();
         await screen.pressByTestIdAsync('adopt-plan-button');
 
-        expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        expect(sendMessageSpy.mock.calls[0]?.[0]).toBe('s1');
-        expect(String(sendMessageSpy.mock.calls[0]?.[1] ?? '')).toContain('@happier/plan.adopt');
+        expect(submitMessageSpy).toHaveBeenCalledTimes(1);
+        expect(submitMessageSpy.mock.calls[0]?.[0]).toBe('s1');
+        expect(String(submitMessageSpy.mock.calls[0]?.[1] ?? '')).toContain('@happier/plan.adopt');
     });
 
     it('can apply accepted findings by sending a structured user message to the parent session', async () => {
-        sendMessageSpy.mockClear();
+        submitMessageSpy.mockClear();
         const { MessageView } = await import('./MessageView');
 
         const message: any = {
@@ -1054,8 +1069,8 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         expect(screen.findByTestId('review-findings-publish-accepted')).not.toBeNull();
         await screen.pressByTestIdAsync('review-findings-publish-accepted');
 
-        expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        const [sessionId, text, _displayText, metaOverrides] = sendMessageSpy.mock.calls[0] as any[];
+        expect(submitMessageSpy).toHaveBeenCalledTimes(1);
+        const [sessionId, text, _displayText, metaOverrides] = submitMessageSpy.mock.calls[0] as any[];
         expect(sessionId).toBe('s1');
         expect(String(text)).toContain('Please implement the accepted review findings below.');
         expect(metaOverrides).toEqual({

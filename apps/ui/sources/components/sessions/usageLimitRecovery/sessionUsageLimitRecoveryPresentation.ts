@@ -1,10 +1,15 @@
 import type {
+    ConnectedServiceQuotaRecoveryCreditsV1,
     PrimaryTurnStatusV1,
     SessionRuntimeIssueV1,
     SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
 
 import type { AgentInputStatusBadgeTone } from '@/components/sessions/agentInput/agentInputContracts';
+import {
+    summarizeConnectedServiceQuotaRecoveryCredits,
+    type ConnectedServiceQuotaRecoveryCreditSummary,
+} from '@/sync/domains/connectedServices/connectedServiceQuotaRecoveryCreditSummary';
 
 export type UsageLimitRecoveryRememberedMode = 'ask' | 'auto_wait';
 export type UsageLimitRecoveryOperationStatus = 'checking' | 'ready' | 'waiting' | 'resumed' | 'exhausted' | 'inactive';
@@ -13,6 +18,7 @@ export type SessionUsageLimitRecoveryActionKind =
     | 'enable'
     | 'cancel'
     | 'check_now'
+    | 'consume_reset_credit'
     | 'resume_now'
     | 'switch_fallback_now'
     | 'switch_account_now'
@@ -57,6 +63,7 @@ export type SessionUsageLimitRecoveryTranslationKey =
     | 'session.usageLimitRecovery.enableAction'
     | 'session.usageLimitRecovery.cancelAction'
     | 'session.usageLimitRecovery.checkNowAction'
+    | 'session.usageLimitRecovery.consumeResetCreditAction'
     | 'session.usageLimitRecovery.resumeNowAction'
     | 'session.usageLimitRecovery.switchFallbackNowAction'
     | 'session.usageLimitRecovery.switchAccountNowAction'
@@ -70,11 +77,15 @@ export type SessionUsageLimitRecoveryTranslationKey =
     | 'session.usageLimitRecovery.statusWaitingUntil'
     | 'session.usageLimitRecovery.statusChecking'
     | 'session.usageLimitRecovery.statusPaused'
-    | 'session.usageLimitRecovery.statusExhausted';
+    | 'session.usageLimitRecovery.statusExhausted'
+    | 'session.usageLimitRecovery.resetCreditBody'
+    | 'session.usageLimitRecovery.resetCreditExpiresBody';
 
 type SessionUsageLimitRecoveryTimeTranslationKey =
     | 'session.usageLimitRecovery.resetBody'
-    | 'session.usageLimitRecovery.statusWaitingUntil';
+    | 'session.usageLimitRecovery.statusWaitingUntil'
+    | 'session.usageLimitRecovery.resetCreditBody'
+    | 'session.usageLimitRecovery.resetCreditExpiresBody';
 
 type SessionUsageLimitRecoveryStaticTranslationKey = Exclude<
     SessionUsageLimitRecoveryTranslationKey,
@@ -83,7 +94,7 @@ type SessionUsageLimitRecoveryStaticTranslationKey = Exclude<
 
 export type SessionUsageLimitRecoveryTranslate = (
     key: SessionUsageLimitRecoveryTranslationKey,
-    params?: Readonly<{ time: string }>,
+    params?: Readonly<{ count?: number; time?: string }>,
 ) => string;
 
 type PresentationParams = Readonly<{
@@ -91,6 +102,7 @@ type PresentationParams = Readonly<{
     latestTurnStatus?: PrimaryTurnStatusV1 | null;
     issue: SessionRuntimeIssueV1 | null | undefined;
     recovery: SessionUsageLimitRecoveryV1 | null | undefined;
+    recoveryCredits?: ConnectedServiceQuotaRecoveryCreditsV1 | null;
     operationStatus?: UsageLimitRecoveryOperationStatus | null;
     /**
      * Absolute retry-allowed time for a probe rate-limit (`retryAfterMs`)
@@ -175,6 +187,24 @@ function readWaitUntilMs(params: Readonly<{
     return params.operationStatus === 'waiting' && typeof params.operationRetryAtMs === 'number'
         ? params.operationRetryAtMs
         : null;
+}
+
+function appendRecoveryCreditSummaryBody(params: Readonly<{
+    body: string;
+    summary: ConnectedServiceQuotaRecoveryCreditSummary | null;
+    translate: SessionUsageLimitRecoveryTranslate;
+    formatTime: (timeMs: number) => string;
+}>): string {
+    if (!params.summary) return params.body;
+    const creditBody = typeof params.summary.nextExpiresAtMs === 'number'
+        ? params.translate('session.usageLimitRecovery.resetCreditExpiresBody', {
+            count: params.summary.availableCount,
+            time: params.formatTime(params.summary.nextExpiresAtMs),
+        })
+        : params.translate('session.usageLimitRecovery.resetCreditBody', {
+            count: params.summary.availableCount,
+        });
+    return `${params.body}\n${creditBody}`;
 }
 
 function buildIssueFingerprint(issue: SessionRuntimeIssueV1): string {
@@ -346,6 +376,10 @@ export function buildSessionUsageLimitRecoveryPresentation(
     });
     const activeRecovery = isActiveRecovery(params.recovery);
     const checkNowSupported = params.checkNowSupported === true;
+    const recoveryCreditSummary = summarizeConnectedServiceQuotaRecoveryCredits(
+        params.recoveryCredits ?? params.recovery?.recoveryCredits ?? null,
+        params.nowMs,
+    );
     const primaryAction = resolvePrimaryRecoveryAction({
         issue: params.issue,
         recovery: params.recovery,
@@ -366,6 +400,12 @@ export function buildSessionUsageLimitRecoveryPresentation(
             time: params.formatTime(waitUntilMs),
         })
         : params.translate('session.usageLimitRecovery.genericBody');
+    const bodyWithRecoveryCredits = appendRecoveryCreditSummaryBody({
+        body,
+        summary: ready ? null : recoveryCreditSummary,
+        translate: params.translate,
+        formatTime: params.formatTime,
+    });
 
     return {
         issueFingerprint: params.recovery?.issueFingerprint ?? buildIssueFingerprint(params.issue),
@@ -374,9 +414,17 @@ export function buildSessionUsageLimitRecoveryPresentation(
             title: ready
                 ? params.translate('session.usageLimitRecovery.readyTitle')
                 : params.translate('session.usageLimitRecovery.title'),
-            body,
+            body: bodyWithRecoveryCredits,
             primaryAction,
             secondaryActions: [
+                ...(!ready && recoveryCreditSummary && checkNowSupported ? [
+                    buildAction(
+                        'consume_reset_credit',
+                        'session.usageLimitRecovery.consumeResetCreditAction',
+                        'session-usageLimit-recovery-consumeResetCredit',
+                        params.translate,
+                    ),
+                ] : []),
                 ...(shouldOfferCheckNowSecondary({ ready, checkNowSupported, primaryAction }) ? [
                     buildAction('check_now', 'session.usageLimitRecovery.checkNowAction', 'session-usageLimit-recovery-checkNow', params.translate),
                 ] : []),

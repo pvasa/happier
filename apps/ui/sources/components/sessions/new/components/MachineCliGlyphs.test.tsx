@@ -41,18 +41,29 @@ vi.mock('@/agents/catalog/catalog', () => ({
     AGENT_IDS: ['cursor'],
     getAgentCore: () => ({
         cli: { detectKey: 'cursor-agent' },
-        ui: { cliGlyphScale: 1 },
+        ui: {},
     }),
-    getAgentCliGlyph: () => 'C',
+}));
+
+vi.mock('@/agents/registry/registryUi', () => ({
+    getAgentPickerIconScale: () => 1,
+}));
+
+// Stub the provider-logo component so the test does not depend on real SVG assets;
+// it exposes the resolved agentId so we can assert the right logo is rendered.
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: ({ agentId, testID }: { agentId: string; testID?: string }) =>
+        React.createElement('AgentIcon', { testID: testID ?? `machine-cli-logo:${agentId}`, agentId }),
 }));
 
 describe('MachineCliGlyphs', () => {
-    it('renders CLI glyphs from canonical provider capability ids', async () => {
+    it('renders a provider logo for each detected CLI (canonical capability ids)', async () => {
         const tree = await renderScreen(React.createElement(MachineCliGlyphs, {
             machineId: 'machine-1',
             isOnline: true,
         }));
 
-        expect(tree.findAllByType('Text').some((node) => node.props.children === 'C')).toBe(true);
+        const icons = tree.findAllByType('AgentIcon');
+        expect(icons.some((node) => node.props.agentId === 'cursor')).toBe(true);
     });
 });
