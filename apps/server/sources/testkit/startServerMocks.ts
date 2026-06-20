@@ -78,6 +78,12 @@ export function createStartServerDbMocks(options: StartServerDbMockOptions = {})
   const initDbSqlite = vi.fn()
   const shutdownDbPglite = vi.fn()
   const getDbProviderFromEnv = vi.fn<StartServerDbProviderReader>()
+  const simpleCacheFindUnique = vi.fn()
+  const simpleCacheCreate = vi.fn()
+  const simpleCacheUpsert = vi.fn()
+  const isPrismaErrorCode = vi.fn((error: unknown, code: string) => {
+    return !!error && typeof error === 'object' && (error as { code?: unknown }).code === code
+  })
 
   const reset = () => {
     dbConnect.mockReset().mockImplementation(async () => {})
@@ -88,6 +94,10 @@ export function createStartServerDbMocks(options: StartServerDbMockOptions = {})
     initDbSqlite.mockReset().mockImplementation(async () => {})
     shutdownDbPglite.mockReset().mockImplementation(async () => {})
     getDbProviderFromEnv.mockReset().mockImplementation(options.getDbProviderFromEnv ?? ((_env, fallback) => fallback))
+    simpleCacheFindUnique.mockReset().mockResolvedValue(null)
+    simpleCacheCreate.mockReset().mockImplementation(async (args: any) => ({ value: args?.data?.value }))
+    simpleCacheUpsert.mockReset().mockImplementation(async (args: any) => ({ value: args?.create?.value ?? args?.update?.value }))
+    isPrismaErrorCode.mockClear()
   }
 
   reset()
@@ -97,6 +107,11 @@ export function createStartServerDbMocks(options: StartServerDbMockOptions = {})
       db: {
         $connect: (...args: any[]) => dbConnect(...args),
         $disconnect: (...args: any[]) => dbDisconnect(...args),
+        simpleCache: {
+          findUnique: (...args: any[]) => simpleCacheFindUnique(...args),
+          create: (...args: any[]) => simpleCacheCreate(...args),
+          upsert: (...args: any[]) => simpleCacheUpsert(...args),
+        },
       },
       getDbProviderFromEnv: (...args: Parameters<StartServerDbProviderReader>) => getDbProviderFromEnv(...args),
       initDbPostgres: (...args: any[]) => initDbPostgres(...args),
@@ -104,17 +119,22 @@ export function createStartServerDbMocks(options: StartServerDbMockOptions = {})
       initDbMysql: (...args: any[]) => initDbMysql(...args),
       initDbSqlite: (...args: any[]) => initDbSqlite(...args),
       shutdownDbPglite: (...args: any[]) => shutdownDbPglite(...args),
+      isPrismaErrorCode: (...args: [unknown, string]) => isPrismaErrorCode(...args),
     },
     dbConnect,
     dbDisconnect,
     getDbProviderFromEnv,
+    simpleCacheFindUnique,
+    simpleCacheCreate,
+    simpleCacheUpsert,
     initDbPostgres,
     initDbPglite,
     initDbMysql,
     initDbSqlite,
     shutdownDbPglite,
+    isPrismaErrorCode,
     reset,
-    }
+  }
 }
 
 export function installStartServerDbModuleMock(

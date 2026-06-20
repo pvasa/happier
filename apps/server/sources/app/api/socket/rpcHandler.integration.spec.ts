@@ -1,9 +1,24 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { RPC_ERROR_CODES } from "@happier-dev/protocol/rpc";
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
-import { createDbMocks, installDbModuleMock } from "../testkit/dbMocks";
 import { createFakeSocket, getSocketHandler } from "../testkit/socketHarness";
 import { createEnvReset } from "../testkit/env";
+
+const dbMockFns = vi.hoisted(() => ({
+  machineFindFirst: vi.fn(),
+  sessionFindUnique: vi.fn(),
+}));
+
+vi.mock("@/storage/db", () => ({
+  db: {
+    machine: {
+      findFirst: dbMockFns.machineFindFirst,
+    },
+    session: {
+      findUnique: dbMockFns.sessionFindUnique,
+    },
+  },
+}));
 
 describe("rpcHandler", () => {
   const resetRpcAvailabilityEnv = createEnvReset();
@@ -14,16 +29,17 @@ describe("rpcHandler", () => {
     });
   };
 
+  beforeEach(() => {
+    dbMockFns.machineFindFirst.mockReset().mockResolvedValue(null);
+    dbMockFns.sessionFindUnique.mockReset().mockResolvedValue(null);
+  });
+
   it("waits for the owner listener map during delegated permission RPC grace fallback", async () => {
     vi.useFakeTimers();
     vi.resetModules();
     setRpcAvailabilityEnv();
 
-    const dbMocks = createDbMocks({
-      session: ["findUnique"],
-    } as const);
-    dbMocks.db.session.findUnique.mockResolvedValue({ accountId: "owner-1" });
-    installDbModuleMock({ db: dbMocks.db });
+    dbMockFns.sessionFindUnique.mockResolvedValue({ accountId: "owner-1" });
     vi.doMock("@/app/share/accessControl", () => ({
       canApprovePermissions: vi.fn().mockResolvedValue(true),
     }));
@@ -77,7 +93,6 @@ describe("rpcHandler", () => {
         }),
       );
     } finally {
-      vi.doUnmock("@/storage/db");
       vi.doUnmock("@/app/share/accessControl");
       resetRpcAvailabilityEnv();
       vi.useRealTimers();
@@ -203,11 +218,7 @@ describe("rpcHandler", () => {
     vi.doMock("@/storage/redis/redis", () => ({
       getRedisClient: () => ({ hmget, eval: evalFn, multi }),
     }));
-    const dbMocks = createDbMocks({
-      session: ["findUnique"],
-    } as const);
-    dbMocks.db.session.findUnique.mockResolvedValue({ accountId: "owner-1" });
-    installDbModuleMock({ db: dbMocks.db });
+    dbMockFns.sessionFindUnique.mockResolvedValue({ accountId: "owner-1" });
     vi.doMock("@/app/share/accessControl", () => ({
       canApprovePermissions: vi.fn().mockResolvedValue(true),
     }));
@@ -262,7 +273,6 @@ describe("rpcHandler", () => {
       );
     } finally {
       vi.doUnmock("@/storage/redis/redis");
-      vi.doUnmock("@/storage/db");
       vi.doUnmock("@/app/share/accessControl");
       resetRpcAvailabilityEnv();
       vi.useRealTimers();

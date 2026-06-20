@@ -9,7 +9,9 @@ import { getComponentDir, getRootDir, getStackName, resolveExplicitStackEnvFileP
 import { resolveCliHomeDir } from './utils/stack/dirs.mjs';
 import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
 import { resolveLocalServerPortForStack } from './utils/server/resolve_stack_server_port.mjs';
+import { STACK_RESERVED_PORT_KEYS } from './utils/server/port.mjs';
 import { resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { parseEnvToObject } from './utils/env/dotenv.mjs';
 import { applyStackActiveServerScopeEnv, buildStackStableScopeId } from './utils/auth/stable_scope_id.mjs';
 import { resolvePreferredStackServerIdFromCliSettings } from './utils/auth/credentials_paths.mjs';
 import { readCliDistIntegrity } from './utils/cli/cliDistIntegrity.mjs';
@@ -162,6 +164,37 @@ function coerceServerProfileFromSettings(raw) {
   };
 }
 
+function resolveStackScopedWrapperEnv({ env = process.env, stackName }) {
+  const base = { ...(env ?? {}) };
+  const name = String(stackName ?? '').trim() || getStackName(base);
+  const explicitEnvPath = resolveExplicitStackEnvFilePath(base);
+  const implicitEnvPath = resolveStackEnvPath(name, base).envPath;
+  const stackEnvPath = explicitEnvPath || (existsSync(implicitEnvPath) ? implicitEnvPath : '');
+  if (!stackEnvPath || !existsSync(stackEnvPath)) {
+    return { env: base, stackEnvPath: '' };
+  }
+
+  let parsed = {};
+  try {
+    parsed = parseEnvToObject(readFileSync(stackEnvPath, 'utf-8'));
+  } catch {
+    parsed = {};
+  }
+
+  const next = {
+    ...base,
+    ...parsed,
+    HAPPIER_STACK_STACK: name,
+    HAPPIER_STACK_ENV_FILE: stackEnvPath,
+  };
+  for (const key of STACK_RESERVED_PORT_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(parsed, key)) {
+      delete next[key];
+    }
+  }
+  return { env: next, stackEnvPath };
+}
+
 function readActiveServerUrlsFromCliSettings(homeDir) {
   const baseDir = String(homeDir ?? '').trim();
   if (!baseDir) return null;
@@ -295,20 +328,26 @@ async function main() {
 
   const rootDir = getRootDir(import.meta.url);
 
-  const stackName = (process.env.HAPPIER_STACK_STACK ?? '').toString().trim() || getStackName();
-  const runtimeStatePath = join(resolveStackEnvPath(stackName, process.env).baseDir, 'stack.runtime.json');
+  const initialStackName = (process.env.HAPPIER_STACK_STACK ?? '').toString().trim() || getStackName();
+  const stackEnvContext = resolveStackScopedWrapperEnv({ env: process.env, stackName: initialStackName });
+  const baseProcessEnv = stackEnvContext.env;
+  const stackName = (baseProcessEnv.HAPPIER_STACK_STACK ?? '').toString().trim() || initialStackName;
+  const stackBaseDir = stackEnvContext.stackEnvPath
+    ? dirname(stackEnvContext.stackEnvPath)
+    : resolveStackEnvPath(stackName, baseProcessEnv).baseDir;
+  const runtimeStatePath = join(stackBaseDir, 'stack.runtime.json');
   const serverPort = await resolveLocalServerPortForStack({
-    env: process.env,
+    env: baseProcessEnv,
     stackMode: true,
     stackName,
     runtimeStatePath,
     defaultPort: 3005,
   });
   const prefixServerSelection = readPrefixServerSelection(argv);
-  const runtimeLaunchContext = await resolveStackRuntimeLaunchContext({ argv, env: process.env });
+  const runtimeLaunchContext = await resolveStackRuntimeLaunchContext({ argv, env: baseProcessEnv });
 
   const internalServerUrl = `http://127.0.0.1:${serverPort}`;
-  const { publicServerUrl } = getPublicServerUrlEnvOverride({ env: process.env, serverPort, stackName });
+  const { publicServerUrl } = getPublicServerUrlEnvOverride({ env: baseProcessEnv, serverPort, stackName });
 
   const cliLaunchSpec = runtimeLaunchContext.snapshot ? resolveCliRuntimeLaunchSpec({ snapshot: runtimeLaunchContext.snapshot }) : null;
   const cliDir = cliLaunchSpec?.cliDir ?? getComponentDir(rootDir, 'happier-cli');
@@ -337,7 +376,7 @@ async function main() {
     process.exit(1);
   }
 
-  let env = { ...process.env };
+  let env = { ...baseProcessEnv };
   // IMPORTANT:
   // When running under a stack-scoped wrapper (`hstack stack happier <name>` / `hstack <stack> happier`),
   // the user's CLI settings.json may still point at Happier Cloud (or another server). We must not let that
@@ -347,7 +386,7 @@ async function main() {
   // We treat an invocation as "stack-scoped" only when the stack env file actually exists (or when the
   // CLI home dir is explicitly overridden by the stack). This keeps plain `hstack happier` able to
   // reuse the user's CLI settings even when stack helper env vars are present in test/dev harnesses.
-  const stackEnvFilePath = resolveExplicitStackEnvFilePath(env);
+  const stackEnvFilePath = stackEnvContext.stackEnvPath || resolveExplicitStackEnvFilePath(env);
   const isStackScopedInvocation =
     Boolean(String(env.HAPPIER_STACK_CLI_HOME_DIR ?? '').trim()) ||
     Boolean(stackEnvFilePath && existsSync(stackEnvFilePath));
@@ -356,7 +395,7 @@ async function main() {
     (isIdentityScopedCliHomeDir(explicitHomeDir)
       ? explicitHomeDir
       : (String(env.HAPPIER_STACK_CLI_HOME_DIR ?? '').trim() ||
-        join(resolveStackEnvPath(stackName, process.env).baseDir, 'cli')));
+        join(stackBaseDir, 'cli')));
   const cliHomeDir = isStackScopedInvocation
     ? resolveCliHomeDir(
         {
@@ -403,8 +442,13 @@ async function main() {
   }
   // Only set default env vars when no explicit server selection flags are present
   if (!prefixServerSelection.hasExplicitSelection && !settingsDefaults) {
-    env.HAPPIER_SERVER_URL = env.HAPPIER_SERVER_URL || internalServerUrl;
-    env.HAPPIER_WEBAPP_URL = env.HAPPIER_WEBAPP_URL || publicServerUrl;
+    if (isStackScopedInvocation) {
+      env.HAPPIER_SERVER_URL = internalServerUrl;
+      env.HAPPIER_WEBAPP_URL = publicServerUrl;
+    } else {
+      env.HAPPIER_SERVER_URL = env.HAPPIER_SERVER_URL || internalServerUrl;
+      env.HAPPIER_WEBAPP_URL = env.HAPPIER_WEBAPP_URL || publicServerUrl;
+    }
   }
   if (resolvedCli.kind === 'tsx') {
     // TSX resolves path aliases (`@/...`) using the tsconfig it finds. When the CLI runs from arbitrary

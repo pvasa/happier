@@ -31,10 +31,14 @@ export function daemonStatePath(happyHomeDir: string): string {
   return join(happyHomeDir, 'daemon.state.json');
 }
 
-function resolveDaemonCliSnapshotDir(params: { testDir: string }): string {
+function resolveDaemonCliSnapshotDir(params: { testDir: string; env: NodeJS.ProcessEnv }): string {
   const raw = (process.env.HAPPIER_E2E_DAEMON_CLI_SNAPSHOT_MODE ?? '').toString().trim().toLowerCase();
   if (raw === 'testdir' || raw === 'per-test' || raw === 'per_test' || raw === 'pertest') {
     return resolve(params.testDir, 'cli-dist');
+  }
+
+  if (shouldUseCliSourceEntrypoint(params.env)) {
+    return resolve(repoRootDir(), '.project', 'tmp', 'cli-source-snapshot');
   }
 
   // Default to a shared snapshot to avoid paying the node_modules snapshot cost per test (which can
@@ -659,7 +663,7 @@ export async function startTestDaemon(params: {
         },
       },
       {
-        snapshotDir: params.snapshotDir ?? resolveDaemonCliSnapshotDir({ testDir: params.testDir }),
+        snapshotDir: params.snapshotDir ?? resolveDaemonCliSnapshotDir({ testDir: params.testDir, env: params.env }),
         skipDistIntegrityCheck: true,
         skipSourceFreshnessCheck: true,
         buildTimeoutMs: cliDistBuildTimeoutMs,

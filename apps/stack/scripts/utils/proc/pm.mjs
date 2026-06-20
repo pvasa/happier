@@ -44,6 +44,13 @@ function isServiceMode(env = process.env) {
   return process.ppid === 1;
 }
 
+function applyStackInfraProcessKind(env) {
+  const effectiveEnv = env && typeof env === 'object' ? env : {};
+  return (effectiveEnv.HAPPIER_STACK_ENV_FILE ?? '').toString().trim()
+    ? { ...effectiveEnv, HAPPIER_STACK_PROCESS_KIND: 'infra' }
+    : effectiveEnv;
+}
+
 function resolveBuildStatePath({ label, dir }) {
   const homeDir = getHappyStacksHomeDir();
   const key = sha256Hex(resolve(dir));
@@ -996,11 +1003,7 @@ export async function pmSpawnBin(dir, label, bin, args, { env = process.env } = 
   if (pm.name === 'yarn') {
     await ensureYarnReady({ dir: componentDir, env: effectiveEnv, quiet });
   }
-  const kind = (effectiveEnv.HAPPIER_STACK_PROCESS_KIND ?? '').toString().trim();
-  const envForChild =
-    kind || !(effectiveEnv.HAPPIER_STACK_ENV_FILE ?? '').toString().trim()
-      ? effectiveEnv
-      : { ...effectiveEnv, HAPPIER_STACK_PROCESS_KIND: 'infra' };
+  const envForChild = applyStackInfraProcessKind(effectiveEnv);
   return spawnProc(componentLabel, pm.cmd, ['run', componentBin, ...componentArgs], envForChild, { cwd: componentDir, ...options });
 }
 
@@ -1019,10 +1022,6 @@ export async function pmSpawnScript(dir, label, script, args, { env = process.en
   if (pm.name === 'yarn') {
     await ensureYarnReady({ dir: componentDir, env: effectiveEnv, quiet });
   }
-  const kind = (effectiveEnv.HAPPIER_STACK_PROCESS_KIND ?? '').toString().trim();
-  const envForChild =
-    kind || !(effectiveEnv.HAPPIER_STACK_ENV_FILE ?? '').toString().trim()
-      ? effectiveEnv
-      : { ...effectiveEnv, HAPPIER_STACK_PROCESS_KIND: 'infra' };
+  const envForChild = applyStackInfraProcessKind(effectiveEnv);
   return spawnProc(componentLabel, pm.cmd, ['run', componentScript, ...componentArgs], envForChild, { cwd: componentDir, ...options });
 }

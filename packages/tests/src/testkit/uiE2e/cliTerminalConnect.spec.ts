@@ -9,6 +9,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServerUrlComparableKey } from '@happier-dev/protocol';
 
 let stopCalls = 0;
+const terminalConnectUrl = 'https://127.0.0.1:4011/terminal/connect#key=test-key';
+const waitForRegexInFileMock = vi.hoisted(() => vi.fn(async () => {
+    const url = 'https://127.0.0.1:4011/terminal/connect#key=test-key';
+    const match = [url] as RegExpMatchArray;
+    match.index = 0;
+    match.input = `${url}\n`;
+    return match;
+}));
 
 vi.mock('../process/cliLaunchSpec', () => ({
     resolveCliTestLaunchSpec: vi.fn(async (params: { testDir: string }) => ({
@@ -47,6 +55,10 @@ vi.mock('../process/spawnProcess', () => ({
     },
 }));
 
+vi.mock('../waitForRegexInFile', () => ({
+    waitForRegexInFile: waitForRegexInFileMock,
+}));
+
 import {
     resolveCliTerminalConnectOwnershipLeasesDir,
     startCliAuthLoginForTerminalConnect,
@@ -57,6 +69,7 @@ afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     stopCalls = 0;
+    waitForRegexInFileMock.mockClear();
 });
 
 function readProcessStartTime(pid: number): string {
@@ -140,6 +153,33 @@ describe('startCliAuthLoginForTerminalConnect', () => {
                     // ignore
                 }
             }
+            await rm(testDir, { recursive: true, force: true });
+        }
+    });
+
+    it('uses a validation-safe default timeout while waiting for the terminal-connect URL', async () => {
+        const testDir = await mkdtemp(join(tmpdir(), 'happier-cli-terminal-connect-timeout-'));
+        const cliHomeDir = resolve(testDir, 'cli-home');
+
+        try {
+            await mkdir(cliHomeDir, { recursive: true });
+
+            const started = await startCliAuthLoginForTerminalConnect({
+                testDir,
+                cliHomeDir,
+                serverUrl: 'http://127.0.0.1:4011',
+                webappUrl: 'http://127.0.0.1:19006',
+                env: {},
+            });
+
+            expect(started.connectUrl).toBe(terminalConnectUrl);
+            expect(waitForRegexInFileMock).toHaveBeenCalledWith(expect.objectContaining({
+                context: 'CLI terminal connect URL',
+                timeoutMs: 180_000,
+            }));
+
+            await started.stop();
+        } finally {
             await rm(testDir, { recursive: true, force: true });
         }
     });
