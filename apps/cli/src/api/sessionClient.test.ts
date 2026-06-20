@@ -664,6 +664,7 @@ describe('ApiSessionClient connection handling', () => {
                 role: 'user',
                 content: { type: 'text', text: 'wake prompt committed before runner attach' },
             }),
+            { seq: 1 },
         );
     });
 
@@ -788,7 +789,7 @@ describe('ApiSessionClient connection handling', () => {
         }));
     });
 
-    it('delivers exact daemon-initial-prompt catch-up messages for daemon-started respawns', async () => {
+    it('suppresses exact daemon-initial-prompt catch-up messages for daemon-started respawns', async () => {
         const axiosMod = await import('axios');
         const axios = axiosMod.default as any;        const localId = `daemon-initial-prompt:${mockSession.id}`;
 
@@ -819,17 +820,7 @@ describe('ApiSessionClient connection handling', () => {
 
         await waitForNextTick();
         expect(getSessionMessagesGetCalls(getSpy, mockSession.id).length).toBeGreaterThanOrEqual(1);
-        expect(onUserMessage).toHaveBeenCalledWith(
-            expect.objectContaining({
-                role: 'user',
-                content: { type: 'text', text: 'recover daemon prompt after respawn' },
-                localId,
-                meta: expect.objectContaining({
-                    source: 'daemon-initial-prompt',
-                    sentFrom: 'cli',
-                }),
-            }),
-        );
+        expect(onUserMessage).not.toHaveBeenCalled();
     });
 
     it('rejects daemon-initial-prompt catch-up messages without the deterministic localId', async () => {
@@ -904,6 +895,7 @@ describe('ApiSessionClient connection handling', () => {
                     sentFrom: 'cli',
                 }),
             }),
+            { seq: null },
         );
     });
 
@@ -958,6 +950,7 @@ describe('ApiSessionClient connection handling', () => {
                     sentFrom: 'cli',
                 }),
             }),
+            { seq: null },
         );
     });
 
@@ -1421,6 +1414,7 @@ describe('ApiSessionClient connection handling', () => {
                     sentFrom: 'cli',
                 }),
             }),
+            { seq: null },
         );
         expect(sendUserTextMessageSpy).toHaveBeenCalledTimes(1);
         expect(sendUserTextMessageSpy).toHaveBeenCalledWith(
@@ -1470,6 +1464,7 @@ describe('ApiSessionClient connection handling', () => {
                     permissionMode: 'default',
                 }),
             }),
+            { seq: null },
         );
         expect(mockSocket.emitWithAck).toHaveBeenCalledWith(
             'message',
@@ -1509,6 +1504,157 @@ describe('ApiSessionClient connection handling', () => {
         });
     });
 
+    it('updates connected-service auth apply and identity session controls when runtime controls change', async () => {
+        const client = createClient('fake-token', mockSession);
+        const applyConnectedServiceAuthGeneration = vi.fn(async () => ({
+            ok: true,
+            appliedVia: 'direct_live_hot_auth',
+        }));
+        const readConnectedServiceRuntimeIdentity = vi.fn(async () => ({
+            ok: true,
+            serviceId: 'openai-codex',
+            identity: {
+                strategy: 'provider_account_id',
+                proofStrength: 'exact',
+                providerAccountId: 'acct-1',
+                source: 'runtime_loaded_credential',
+            },
+        }));
+
+        client.setSessionRuntimeControls({
+            applyConnectedServiceAuthGeneration,
+            readConnectedServiceRuntimeIdentity,
+        });
+
+        await expect(
+            client.rpcHandlerManager.invokeLocal(
+                SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION,
+                {
+                    serviceId: 'openai-codex',
+                    reason: 'usage_limit',
+                    authGeneration: {
+                        kind: 'connected_service_credential',
+                        profileId: 'profile-new',
+                    },
+                },
+            ),
+        ).resolves.toEqual({
+            ok: true,
+            appliedVia: 'direct_live_hot_auth',
+        });
+        await expect(
+            client.rpcHandlerManager.invokeLocal(
+                SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY,
+                {
+                    serviceId: 'openai-codex',
+                    reason: 'same_provider_account_exhausted',
+                },
+            ),
+        ).resolves.toEqual({
+            ok: true,
+            serviceId: 'openai-codex',
+            identity: {
+                strategy: 'provider_account_id',
+                proofStrength: 'exact',
+                providerAccountId: 'acct-1',
+                source: 'runtime_loaded_credential',
+            },
+        });
+        expect(applyConnectedServiceAuthGeneration).toHaveBeenCalledTimes(1);
+        expect(readConnectedServiceRuntimeIdentity).toHaveBeenCalledTimes(1);
+
+        client.setSessionRuntimeControls(null);
+
+        await expect(
+            client.rpcHandlerManager.invokeLocal(
+                SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION,
+                {
+                    serviceId: 'openai-codex',
+                    reason: 'usage_limit',
+                    authGeneration: {
+                        kind: 'connected_service_credential',
+                        profileId: 'profile-new',
+                    },
+                },
+            ),
+        ).resolves.toEqual({
+            ok: false,
+            errorCode: 'unsupported_session_runtime_method',
+            error: `unsupported_session_runtime_method:${SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION}`,
+        });
+        await expect(
+            client.rpcHandlerManager.invokeLocal(
+                SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY,
+                {
+                    serviceId: 'openai-codex',
+                    reason: 'same_provider_account_exhausted',
+                },
+            ),
+        ).resolves.toEqual({
+            ok: false,
+            errorCode: 'unsupported_session_runtime_method',
+            error: `unsupported_session_runtime_method:${SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY}`,
+        });
+    });
+
+    it('registers terminal composer runtime controls without clobbering existing controls', async () => {
+        const client = createClient('fake-token', mockSession);
+        const invalidateConnectedServiceAuthTransports = vi.fn(async () => undefined);
+        const clearTerminalComposer = vi.fn(async () => ({
+            ok: true,
+            status: 'cleared',
+            sessionId: mockSession.id,
+        }));
+        const composerClearMethod = SESSION_RPC_METHODS.SESSION_TERMINAL_COMPOSER_CLEAR;
+
+        client.setSessionRuntimeControls({ invalidateConnectedServiceAuthTransports });
+        const unregisterComposerControls = client.registerSessionRuntimeControls({
+            clearTerminalComposer,
+        });
+
+        await expect(
+            client.rpcHandlerManager.invokeLocal(composerClearMethod, {
+                sessionId: mockSession.id,
+                expectedStateAtMs: 1_700_000_000_000,
+            }),
+        ).resolves.toEqual({
+            ok: true,
+            status: 'cleared',
+            sessionId: mockSession.id,
+        });
+        await expect(
+            client.rpcHandlerManager.invokeLocal(
+                SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS,
+                {},
+            ),
+        ).resolves.toEqual({ ok: true });
+
+        expect(clearTerminalComposer).toHaveBeenCalledWith({
+            sessionId: mockSession.id,
+            expectedStateAtMs: 1_700_000_000_000,
+        });
+        expect(invalidateConnectedServiceAuthTransports).toHaveBeenCalledTimes(1);
+
+        unregisterComposerControls();
+
+        await expect(
+            client.rpcHandlerManager.invokeLocal(composerClearMethod, { sessionId: mockSession.id }),
+        ).resolves.toEqual({
+            ok: false,
+            status: 'unsupported',
+            sessionId: mockSession.id,
+            errorCode: 'unsupported_session_runtime_method',
+            error: `unsupported_session_runtime_method:${composerClearMethod}`,
+        });
+        await expect(
+            client.rpcHandlerManager.invokeLocal(
+                SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS,
+                {},
+            ),
+        ).resolves.toEqual({ ok: true });
+        expect(invalidateConnectedServiceAuthTransports).toHaveBeenCalledTimes(2);
+    });
+
     it('reuses one generated localId for queued RPC user messages and their transcript echo suppression', async () => {
         configureCommittedMessageAck(mockSocket, {
             ok: true,
@@ -1538,6 +1684,7 @@ describe('ApiSessionClient connection handling', () => {
                 localId: emittedLocalId,
                 content: { type: 'text', text: 'hello without explicit local id' },
             }),
+            { seq: null },
         );
 
         const updateHandler = expectSocketHandler(mockSocket, 'update');
@@ -1588,6 +1735,7 @@ describe('ApiSessionClient connection handling', () => {
                 localId: 'rpc-local-3',
                 content: { type: 'text', text },
             }),
+            { seq: null },
         );
     });
 
@@ -2212,6 +2360,7 @@ describe('ApiSessionClient connection handling', () => {
 		                content: expect.objectContaining({ text: 'hello' }),
 		                localId: 'local-1',
 		            }),
+                    { seq: 1 },
 		        );
 		    });
 
@@ -2240,6 +2389,7 @@ describe('ApiSessionClient connection handling', () => {
                     content: expect.objectContaining({ text: 'hello from ui' }),
                     localId: 'local-ui-1',
                 }),
+                { seq: 1 },
             );
         });
 
@@ -2290,6 +2440,7 @@ describe('ApiSessionClient connection handling', () => {
                     content: expect.objectContaining({ text: 'hello from cli' }),
                     localId: 'local-2',
                 }),
+                { seq: 2 },
             );
         });
 
