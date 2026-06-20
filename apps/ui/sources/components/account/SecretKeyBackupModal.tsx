@@ -2,7 +2,6 @@ import React from 'react';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
 
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -10,7 +9,10 @@ import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { formatSecretKeyForBackup } from '@/auth/recovery/secretKeyBackup';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { Text } from '@/components/ui/text/Text';
+import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -66,6 +68,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'space-between',
         marginTop: 4,
     },
+    copyControls: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
     link: {
         fontSize: 14,
         color: theme.colors.text.secondary,
@@ -82,18 +89,19 @@ export function SecretKeyBackupModal(props: Props) {
     const styles = stylesheet;
 
     const [revealed, setRevealed] = React.useState(false);
+    const copyFeedback = useTemporaryCopyFeedback();
 
     const formattedSecret = React.useMemo(() => formatSecretKeyForBackup(props.secret), [props.secret]);
     const maskedSecret = React.useMemo(() => formattedSecret.replace(/[A-Za-z0-9]/g, '•'), [formattedSecret]);
 
     const handleCopy = React.useCallback(async () => {
-        try {
-            await Clipboard.setStringAsync(formattedSecret);
-            Modal.alert(t('common.success'), t('settingsAccount.secretKeyCopied'));
-        } catch {
-            Modal.alert(t('common.error'), t('settingsAccount.secretKeyCopyFailed'));
+        const copied = await setClipboardStringSafe(formattedSecret);
+        if (copied) {
+            copyFeedback.markCopied('secretKey');
+            return;
         }
-    }, [formattedSecret]);
+        Modal.alert(t('common.error'), t('settingsAccount.secretKeyCopyFailed'));
+    }, [copyFeedback, formattedSecret]);
 
     const footer = React.useMemo(() => (
         <View style={styles.footerContent}>
@@ -136,7 +144,13 @@ export function SecretKeyBackupModal(props: Props) {
                             {revealed ? t('settingsAccount.tapToHide') : t('settingsAccount.tapToReveal')}
                         </Text>
                     </Pressable>
-                    <RoundButton title={t('common.copy')} onPress={handleCopy} size="normal" />
+                    <View style={styles.copyControls}>
+                        <RoundButton title={t('common.copy')} onPress={handleCopy} size="normal" />
+                        <CopiedPill
+                            visible={copyFeedback.isCopied('secretKey')}
+                            testID="secret-key-backup-copy-copied"
+                        />
+                    </View>
                 </View>
             </View>
         </View>

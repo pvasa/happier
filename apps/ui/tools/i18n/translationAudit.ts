@@ -123,6 +123,17 @@ const ALLOW_SAME_STRING_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<stri
     // Italian/Portuguese: Windows "Console" label is correct and matches English.
     'windowsRemoteSessionLaunchMode.console': new Set(['it', 'pt']),
     'windowsRemoteSessionLaunchMode.shortConsole': new Set(['it', 'pt']),
+    // Connected Services "Pool"/"Pools" loanwords. The "Accounts | Pools"
+    // redesign keeps "Pool"/"Pools" verbatim in these locales as an intentional
+    // borrowed term, so an exact match with English is correct, not untranslated.
+    // (Italian renders most as the singular "Pool", so only the keys whose
+    // localized value is genuinely identical to English are listed per locale.)
+    'connectedServices.account.poolsLabel': new Set(['es', 'pt', 'ca']),
+    'connectedServices.detail.groupDetail.routeTitle': new Set(['es', 'it', 'pt', 'ca']),
+    'connectedServices.detail.groups.title': new Set(['es', 'pt', 'ca']),
+    'connectedServices.detail.segments.pools': new Set(['es', 'pt', 'ca']),
+    'connectedServices.pools.title': new Set(['es', 'pt', 'ca']),
+    'connectedServices.profile.poolsGroupTitle': new Set(['es', 'pt', 'ca']),
 };
 
 function isProviderPluginTitleKey(key: string): boolean {

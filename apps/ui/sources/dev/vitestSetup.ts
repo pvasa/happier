@@ -633,12 +633,19 @@ vi.mock('react-native-unistyles', () => {
                 pressed: '#f0f0f2',
                 selected: '#f2f2f2',
                 pressedOverlay: '#f0f0f2',
+                sectionTint: 'rgba(0,0,0,0.022)',
             },
             border: {
                 default: '#eaeaea',
                 surface: 'transparent',
                 strong: '#d6d6d6',
                 modal: 'rgba(0, 0, 0, 0.1)',
+            },
+            glass: {
+                border: 'rgba(255, 255, 255, 0.92)',
+                innerShadow: 'inset 0px 8px 14px -10px rgba(0, 0, 0, 0.036)',
+                castShadow: '0px 4px 28px rgba(0, 0, 0, 0.07)',
+                composerSurface: '#ffffff',
             },
             effect: { surfaceHighlight: 'transparent' },
             chrome: {

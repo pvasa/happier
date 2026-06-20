@@ -1,6 +1,8 @@
 import { MMKV } from 'react-native-mmkv';
 import { Platform } from 'react-native';
 import * as Sentry from '@sentry/react-native';
+import Constants from 'expo-constants';
+import * as Application from 'expo-application';
 import type { ComponentType } from 'react';
 import { parseOptionalBooleanEnv, type FeatureId } from '@happier-dev/protocol';
 import { config } from '@/config';
@@ -132,6 +134,74 @@ function resolveSentryEnv() {
     };
 }
 
+function readStringValue(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readBooleanValue(value: unknown): boolean | undefined {
+    return typeof value === 'boolean' ? value : undefined;
+}
+
+function readRuntimeContext(): Record<string, string | boolean> {
+    const constants = Constants as unknown as Record<string, unknown>;
+    const expoConfig = (
+        constants.expoConfig && typeof constants.expoConfig === 'object' && !Array.isArray(constants.expoConfig)
+            ? constants.expoConfig
+            : {}
+    ) as Record<string, unknown>;
+    const identityVariant = readStringValue((config as { identityVariant?: unknown }).identityVariant);
+
+    return {
+        ...(readStringValue(config.variant) ? { variant: readStringValue(config.variant)! } : {}),
+        ...(identityVariant ? { identityVariant } : {}),
+        ...(readStringValue(Application.applicationId) ? { applicationId: readStringValue(Application.applicationId)! } : {}),
+        ...(readStringValue(Application.nativeApplicationVersion)
+            ? { nativeApplicationVersion: readStringValue(Application.nativeApplicationVersion)! }
+            : {}),
+        ...(readStringValue(Application.nativeBuildVersion) ? { nativeBuildVersion: readStringValue(Application.nativeBuildVersion)! } : {}),
+        ...(readStringValue(constants.appOwnership) ? { appOwnership: readStringValue(constants.appOwnership)! } : {}),
+        ...(readStringValue(constants.executionEnvironment)
+            ? { executionEnvironment: readStringValue(constants.executionEnvironment)! }
+            : {}),
+        ...(readBooleanValue(constants.isDevice) !== undefined ? { isDevice: readBooleanValue(constants.isDevice)! } : {}),
+        ...(readBooleanValue(constants.debugMode) !== undefined ? { debugMode: readBooleanValue(constants.debugMode)! } : {}),
+        ...(readStringValue(expoConfig.version) ? { expoVersion: readStringValue(expoConfig.version)! } : {}),
+        ...(readStringValue(expoConfig.runtimeVersion) ? { runtimeVersion: readStringValue(expoConfig.runtimeVersion)! } : {}),
+        ...(readStringValue(expoConfig.sdkVersion) ? { sdkVersion: readStringValue(expoConfig.sdkVersion)! } : {}),
+        platform: Platform.OS,
+        platformVersion: String(Platform.Version),
+    };
+}
+
+function setSentryTag(key: string, value: unknown): void {
+    const tagValue = readStringValue(value);
+    if (!tagValue) return;
+    try {
+        Sentry.setTag(key, tagValue);
+    } catch {
+        // ignore reporting failures
+    }
+}
+
+function applySentryRuntimeContext(): void {
+    const context = readRuntimeContext();
+
+    setSentryTag('happier.variant', context.variant);
+    setSentryTag('happier.identity_variant', context.identityVariant);
+    setSentryTag('happier.app_ownership', context.appOwnership);
+    setSentryTag('happier.execution_environment', context.executionEnvironment);
+    setSentryTag('happier.platform', context.platform);
+    setSentryTag('happier.native_build', context.nativeBuildVersion);
+
+    try {
+        Sentry.setContext('happier.runtime', context);
+    } catch {
+        // ignore reporting failures
+    }
+}
+
 export function initializeSentryOnce(): void {
     if (globalThis.__HAPPIER_SENTRY_INIT__) return;
     if (getFeatureBuildPolicyDecision(CRASH_REPORTS_FEATURE_ID) === 'deny') return;
@@ -172,6 +242,7 @@ export function initializeSentryOnce(): void {
             : null),
         spotlight: __DEV__ && resolved.spotlight,
     });
+    applySentryRuntimeContext();
 
     if (cachedReplayIntegration && typeof cachedReplayIntegration.startBuffering === 'function') {
         // Prefer privacy-preserving buffered mode when sessions aren't sampled.
