@@ -13,6 +13,10 @@ import {
     ReviewStartInputSchema,
     type SessionMediaItemV1,
     type SessionInitialGoalRequestV1,
+    type SessionConnectedServiceAuthApplyGenerationRequestV1,
+    type SessionConnectedServiceAuthApplyGenerationResponseV1,
+    type SessionConnectedServiceAuthReadRuntimeIdentityRequestV1,
+    type SessionConnectedServiceAuthReadRuntimeIdentityResponseV1,
     SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
     type SessionRuntimeIssueV1,
     type SessionRuntimeUsageLimitDetailsV1,
@@ -44,7 +48,10 @@ import {
     normalizeCodexRequestUserInputQuestionsToAskUserQuestionInput,
 } from '../runtime/codexRequestUserInputQuestions';
 import { canonicalizeCodexMcpToolName } from '../utils/canonicalizeCodexMcpToolName';
-import { readCodexEnvironmentAuthState } from '../cli/auth/readCodexEnvironmentAuthState';
+import {
+    readCodexEnvironmentAuthState,
+    readCodexEnvironmentAuthTokens,
+} from '../cli/auth/readCodexEnvironmentAuthState';
 import { resolveTrustedSessionAttachmentLocalImagePaths } from '@/session/attachments/resolveTrustedSessionAttachmentLocalImagePaths';
 
 import {
@@ -98,6 +105,8 @@ import {
     readCodexRateLimitPlanType,
     readEarliestCodexRateLimitResetAtMs,
 } from './rateLimitSnapshot';
+import { mapCodexRateLimitResetCreditsToQuotaRecoveryCredits } from '../quota/codexQuotaRecoveryCredits';
+import { fetchCodexRateLimitResetCredits } from '../quota/codexRateLimitResetCreditsClient';
 import { buildCodexNativeReviewFindingsV2Payload } from '@/agent/reviews/normalize/codex/buildCodexNativeReviewFindingsV2Payload';
 import { resolveCodexAppServerNativeReviewRequest } from './reviews/resolveCodexAppServerNativeReviewRequest';
 import { createCodexAppServerSessionTurnTracker } from './turns/codexAppServerSessionTurnTracker';
@@ -107,9 +116,20 @@ import {
 } from '../connectedServices/classifyCodexConnectedServiceAuthFailure';
 import {
     readCodexLiveAccountIdentityFromClient,
+    readCodexLiveAccountIdentity,
     type CodexLiveAccountIdentity,
 } from '../connectedServices/codexLiveAccountIdentity';
 import type { CodexChatGptTokensRefreshBridgeResponse } from '../connectedServices/refreshCodexChatGptTokensForBridge';
+import { applyCodexConnectedServiceAuthGeneration } from '../connectedServices/applyCodexConnectedServiceAuthGeneration';
+import { writeCodexAuthStoreFile } from '../connectedServices/writeCodexAuthStoreFile';
+import type {
+    CodexConnectedServiceRefreshSelection,
+    CodexConnectedServiceRuntimeIdentitySeed,
+} from '../connectedServices/authApplication/types';
+import {
+    parseCodexConnectedServiceRuntimeAuthApplyRequest,
+    readCodexConnectedServiceRuntimeAuthExpected,
+} from '../connectedServices/codexConnectedServiceRuntimeAuthContract';
 import {
     resolveConnectedServiceRuntimeAuthContextFromEnv,
 } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
@@ -123,6 +143,7 @@ import {
 } from './recovery/resolveCodexUsageLimitSwitchProgress';
 import { resolveCodexUsageLimitProbeFailureWait } from './recovery/resolveCodexUsageLimitProbeFailureWait';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveConfiguredCodexHome } from '../utils/resolveConfiguredCodexHome';
 import { deriveUsageLimitRecoveryTiming } from '@/session/usageLimitRecoveryControls/deriveUsageLimitRecoveryTiming';
 
 type CodexAppServerStartOrLoadOptions = Readonly<{
@@ -144,7 +165,22 @@ type CodexAppServerTurnResponse = Readonly<{
     turn?: Readonly<{ id?: unknown; turnId?: unknown }> | null;
 }>;
 
-type CodexRateLimitSnapshotPublishContext = CodexLiveAccountIdentity;
+type CodexRateLimitSnapshotPublishContext = CodexLiveAccountIdentity & Readonly<{
+    rawResetCredits?: unknown;
+}>;
+
+type CodexConnectedServiceRuntimeAppliedIdentity = Readonly<{
+    serviceId: 'openai-codex';
+    activeAccountId: string;
+    accountLabel: string | null;
+    profileId: string;
+    groupId?: string;
+    generation?: string | number;
+    source: CodexConnectedServiceRuntimeIdentitySeed['source'];
+}>;
+
+type CodexConnectedServiceAuthApplyGenerationResult = SessionConnectedServiceAuthApplyGenerationResponseV1;
+type CodexConnectedServiceAuthReadRuntimeIdentityResult = SessionConnectedServiceAuthReadRuntimeIdentityResponseV1;
 
 type UnsupportedSessionRuntimeMethodResult = Readonly<{
     ok: false;
@@ -254,15 +290,18 @@ type CodexAppServerPermissionSupport = 'unknown' | 'supported' | 'legacy';
 type CodexAppServerPromptOptions = Readonly<{
     metadata?: unknown;
     localId?: string | null;
+    localIds?: readonly string[] | null;
     trustedLocalImagePaths?: ReadonlySet<string>;
     userMessageSeq?: number | null;
 }>;
 
 type CodexAppServerPromptAcceptedCallback = (input: Readonly<{
+    localIds?: readonly string[] | null;
     userMessageSeq: number | null;
 }>) => void;
 
 type CodexAppServerUndeliverablePrompt = Readonly<{
+    localIds?: readonly string[] | null;
     text: string;
     userMessageSeq: number | null;
 }>;
@@ -274,6 +313,28 @@ type CodexAppServerPendingProviderPrompt = CodexAppServerUndeliverablePrompt & {
 type CodexAppServerUndeliverablePromptsCallback = (
     prompts: ReadonlyArray<CodexAppServerUndeliverablePrompt>,
 ) => void;
+
+function normalizeCodexAppServerPromptLocalIds(options: CodexAppServerPromptOptions | undefined): string[] {
+    const values = [
+        ...(typeof options?.localId === 'string' ? [options.localId] : []),
+        ...(options?.localIds ?? []),
+    ];
+    const seen = new Set<string>();
+    const localIds: string[] = [];
+    for (const value of values) {
+        const localId = typeof value === 'string' ? value.trim() : '';
+        if (!localId || seen.has(localId)) continue;
+        seen.add(localId);
+        localIds.push(localId);
+    }
+    return localIds;
+}
+
+function codexAppServerPromptLocalIdPayload(localIds: readonly string[] | null | undefined): {
+    localIds?: readonly string[];
+} {
+    return localIds && localIds.length > 0 ? { localIds } : {};
+}
 
 async function buildCodexTurnInputForPrompt(
     prompt: string,
@@ -991,7 +1052,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
         sessionId: string;
         classification: CodexConnectedServiceRuntimeFailureClassification;
     }>) => Promise<unknown> | unknown;
+    initialConnectedServiceRuntimeIdentity?: CodexConnectedServiceRuntimeIdentitySeed | null;
     onChatGptAuthTokensRefresh?: (params: unknown) => Promise<CodexChatGptTokensRefreshBridgeResponse>;
+    onConnectedServiceAuthGenerationApplied?: (params: Readonly<{
+        selection: CodexConnectedServiceRefreshSelection;
+    }>) => Promise<(() => Promise<void> | void) | void> | (() => Promise<void> | void) | void;
     sessionMedia?: Readonly<{
         persist: (message: RuntimeSessionMediaMessage) => Promise<RuntimeSessionMediaPersistResult> | RuntimeSessionMediaPersistResult;
     }>;
@@ -1021,6 +1086,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
         localId?: string;
         meta: Record<string, unknown>;
     }>) => Promise<Readonly<{ handled: false }> | Readonly<{ handled: true; result: unknown }>>;
+    applyConnectedServiceAuthGeneration: (
+        _request: Readonly<SessionConnectedServiceAuthApplyGenerationRequestV1>,
+    ) => Promise<CodexConnectedServiceAuthApplyGenerationResult>;
+    readConnectedServiceRuntimeIdentity: (
+        _request: Readonly<SessionConnectedServiceAuthReadRuntimeIdentityRequestV1>,
+    ) => Promise<CodexConnectedServiceAuthReadRuntimeIdentityResult>;
     invalidateConnectedServiceAuthTransports: () => Promise<Readonly<{ ok: true }> | UnsupportedSessionRuntimeMethodResult>;
     flushTurn: () => Promise<void>;
     setGoal: (_objective: string | undefined, _options?: Readonly<{ status?: string; tokenBudget?: number | null }>) => Promise<void | UnsupportedSessionRuntimeMethodResult | GoalControlNotFoundResult | InvalidGoalStatusResult>;
@@ -1039,6 +1110,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     checkUsageLimitRecoveryNow: (_request: Readonly<{
         sessionId: string;
         provider?: string;
+        operation?: 'check_now' | 'switch_account_now' | 'consume_reset_credit';
         resumePromptMode?: 'standard' | 'off' | 'custom';
     }>) => Promise<Readonly<{ ok: true; status: string }> | UnsupportedSessionRuntimeMethodResult>;
     listVendorPlugins: (_options?: Readonly<{ cwd?: string }>) => ReturnType<typeof listCodexVendorPlugins>;
@@ -1085,6 +1157,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
     let lastPublishedInFlightSteerAvailability: boolean | null = null;
     let activeTurnHasMeaningfulContextWindowRecoveryActivity = false;
     const activeProviderTurnItemIds = new Set<string>();
+    let latestConnectedServiceRuntimeIdentity: CodexConnectedServiceRuntimeAppliedIdentity | null =
+        params.initialConnectedServiceRuntimeIdentity ?? null;
     const completedProviderTurnItemKeys = new Set<string>();
     const terminalProviderTurnIdsByThreadId = new Map<string, string[]>();
     const streamEventBridge = createCodexAppServerStreamEventBridge();
@@ -1114,30 +1188,67 @@ export function createCodexAppServerRuntime(params: Readonly<{
         });
     };
 
+    const isProviderTurnInFlight = (): boolean => (
+        turnInFlight || pendingTurn !== null || activeProviderTurnItemIds.size > 0
+    );
+
+    const readRateLimitResetCreditsRaw = async (): Promise<unknown | null> => {
+        const tokens = readCodexEnvironmentAuthTokens(runtimeEnv);
+        const accessToken = tokens.accessToken ?? tokens.idToken;
+        if (!accessToken) return null;
+        const result = await fetchCodexRateLimitResetCredits({
+            accessToken,
+            accountId: tokens.accountId,
+        });
+        return result.ok ? result.response : null;
+    };
+
+    const readRateLimitRecoveryCredits = async (): Promise<ReturnType<typeof mapCodexRateLimitResetCreditsToQuotaRecoveryCredits>> => {
+        const rawResetCredits = await readRateLimitResetCreditsRaw();
+        return mapCodexRateLimitResetCreditsToQuotaRecoveryCredits(rawResetCredits);
+    };
+
     const publishRateLimitSnapshot = async (
         rawSnapshot: unknown,
         options?: Readonly<{
             mergeWithLast?: boolean;
             includeLiveAccountIdentity?: boolean;
+            rawResetCredits?: unknown;
         }>,
     ): Promise<void> => {
         const snapshot = options?.mergeWithLast === true
             ? mergeSparseCodexSnapshotUpdate(lastRateLimitSnapshot, rawSnapshot)
             : rawSnapshot;
         lastRateLimitSnapshot = snapshot;
+        const runtimeIdentity = latestConnectedServiceRuntimeIdentity;
+        let liveIdentity: CodexLiveAccountIdentity | null = null;
         if (options?.includeLiveAccountIdentity === true) {
-            let identity: CodexLiveAccountIdentity | null = null;
             try {
-                identity = await readLiveAccountIdentity();
+                liveIdentity = await readLiveAccountIdentity();
             } catch (error) {
                 logger.debug('[codex-app-server] Failed to read live account identity for rate-limit snapshot (non-fatal)', error);
             }
-            if (identity?.activeAccountId || identity?.accountLabel) {
-                await params.onRateLimitSnapshot?.(snapshot, identity);
-                return;
-            }
         }
-        await params.onRateLimitSnapshot?.(snapshot);
+        if (
+            runtimeIdentity
+            || liveIdentity?.activeAccountId
+            || liveIdentity?.accountLabel
+            || options?.rawResetCredits !== undefined
+        ) {
+            await params.onRateLimitSnapshot?.(snapshot, {
+                activeAccountId: liveIdentity?.activeAccountId ?? runtimeIdentity?.activeAccountId ?? null,
+                accountLabel: liveIdentity?.accountLabel ?? runtimeIdentity?.accountLabel ?? null,
+                ...(options?.rawResetCredits === undefined ? {} : { rawResetCredits: options.rawResetCredits ?? null }),
+            });
+            return;
+        }
+        await params.onRateLimitSnapshot?.(snapshot, options?.rawResetCredits === undefined
+            ? undefined
+            : {
+                activeAccountId: null,
+                accountLabel: null,
+                rawResetCredits: options.rawResetCredits,
+            });
     };
 
     const trackPendingProviderPrompt = (
@@ -1145,6 +1256,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         options?: CodexAppServerPromptOptions,
     ): CodexAppServerPendingProviderPrompt => {
         const pending: CodexAppServerPendingProviderPrompt = {
+            ...codexAppServerPromptLocalIdPayload(normalizeCodexAppServerPromptLocalIds(options)),
             text,
             userMessageSeq: typeof options?.userMessageSeq === 'number' ? options.userMessageSeq : null,
             accepted: false,
@@ -1157,7 +1269,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
         if (!pending || pending.accepted || !pendingProviderPrompts.has(pending)) return;
         pending.accepted = true;
         pendingProviderPrompts.delete(pending);
-        onPromptAcceptedByProvider?.({ userMessageSeq: pending.userMessageSeq });
+        onPromptAcceptedByProvider?.({
+            ...codexAppServerPromptLocalIdPayload(pending.localIds),
+            userMessageSeq: pending.userMessageSeq,
+        });
     };
 
     const clearPendingProviderPrompt = (pending: CodexAppServerPendingProviderPrompt | null | undefined): void => {
@@ -1171,6 +1286,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         if (!pending || pending.accepted || !pendingProviderPrompts.has(pending)) return;
         pendingProviderPrompts.delete(pending);
         onUndeliverablePrompts?.([{
+            ...codexAppServerPromptLocalIdPayload(pending.localIds),
             text: pending.text,
             userMessageSeq: pending.userMessageSeq,
         }]);
@@ -1182,6 +1298,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         const undeliverable = prompts
             .filter((pending) => !pending.accepted)
             .map((pending) => ({
+                ...codexAppServerPromptLocalIdPayload(pending.localIds),
                 text: pending.text,
                 userMessageSeq: pending.userMessageSeq,
             }));
@@ -1215,8 +1332,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 const rawSnapshot = await readCodexRateLimitsSnapshot({
                     request: async (_method, params) => await client.request('account/rateLimits/read', params),
                 });
+                const rawResetCredits = await readRateLimitResetCreditsRaw();
+                const recoveryCredits = mapCodexRateLimitResetCreditsToQuotaRecoveryCredits(rawResetCredits)
+                    ?? intent.recoveryCredits;
                 await publishRateLimitSnapshot(rawSnapshot, {
                     includeLiveAccountIdentity: intent.selectedAuth.kind === 'group',
+                    rawResetCredits,
                 });
                 if (isCodexRateLimitSnapshotExhausted(rawSnapshot)) {
                     const resetAtMs = readEarliestCodexRateLimitResetAtMs(rawSnapshot) ?? intent.nextCheckAtMs ?? intent.resetAtMs ?? null;
@@ -1251,7 +1372,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                 errorCode: trimStringValue(switchAttemptResult?.errorCode),
                             });
                             if (progress.kind === 'exhausted') {
-                                return { status: 'exhausted' as const, lastProbeError: progress.reason };
+                                return {
+                                    status: 'exhausted' as const,
+                                    lastProbeError: progress.reason,
+                                    ...(recoveryCredits ? { recoveryCredits } : {}),
+                                };
                             }
                             if (progress.kind === 'retry') {
                                 // A fresh, different candidate was selected: probe the new account
@@ -1265,24 +1390,34 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                         ...intent.selectedAuth,
                                         profileId: selectedProfileId ?? intent.selectedAuth.profileId,
                                     },
+                                    ...(recoveryCredits ? { recoveryCredits } : {}),
                                 };
                             }
-                            return { status: 'wait' as const, nextCheckAtMs: progress.nextCheckAtMs };
+                            return {
+                                status: 'wait' as const,
+                                nextCheckAtMs: progress.nextCheckAtMs,
+                                ...(recoveryCredits ? { recoveryCredits } : {}),
+                            };
                         } catch (error) {
                             logger.debug('[codex-app-server] Failed to request connected-service group recovery during usage-limit wait/resume', error);
                             return {
                                 status: 'wait' as const,
                                 nextCheckAtMs,
                                 lastProbeError: 'connected_service_group_recovery_request_failed',
+                                ...(recoveryCredits ? { recoveryCredits } : {}),
                             };
                         }
                     }
                     return {
                         status: 'wait' as const,
                         nextCheckAtMs,
+                        ...(recoveryCredits ? { recoveryCredits } : {}),
                     };
                 }
-                return { status: 'ready' as const };
+                return {
+                    status: 'ready' as const,
+                    ...(recoveryCredits ? { recoveryCredits } : {}),
+                };
             } catch (error) {
                 // RD-CDX-8: a failed probe is never an authoritative provider verdict. Transient
                 // transport/RPC failures (timeouts, conn resets, probes racing the hot-swap
@@ -2492,27 +2627,34 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 usageLimit: latestUsageLimit,
             })
             : null;
-        if (latestUsageLimitIssue && selectedAuth?.kind === 'group') {
+        if (latestUsageLimitIssue && selectedAuth) {
             try {
                 const client = await ensureClient();
                 const rawSnapshot = await readCodexRateLimitsSnapshot({
                     request: async (_method, params) => await client.request('account/rateLimits/read', params),
                 });
+                const rawResetCredits = await readRateLimitResetCreditsRaw();
                 await publishRateLimitSnapshot(rawSnapshot, {
                     includeLiveAccountIdentity: true,
+                    rawResetCredits,
                 });
             } catch (error) {
-                logger.debug('[codex-app-server] Failed to publish immediate group usage-limit quota snapshot (non-fatal)', error);
+                logger.debug('[codex-app-server] Failed to publish immediate usage-limit quota snapshot (non-fatal)', error);
             }
         }
         if (latestUsageLimitIssue && latestUsageLimit && selectedAuth && shouldAutoArmUsageLimitRecovery()) {
             const timing = deriveCodexUsageLimitRecoveryTiming(latestUsageLimitIssue);
+            const recoveryCredits = await readRateLimitRecoveryCredits().catch((error) => {
+                logger.debug('[codex-app-server] Failed to read usage-limit recovery reset credits while auto-arming (non-fatal)', error);
+                return null;
+            });
             await usageLimitRecoveryScheduler.enable({
                 sessionId: params.session.sessionId,
                 issueFingerprint: buildUsageLimitIssueFingerprint(latestUsageLimitIssue),
                 resetAtMs: timing.resetAtMs,
                 nextCheckAtMs: timing.nextCheckAtMs,
                 selectedAuth,
+                ...(recoveryCredits ? { recoveryCredits } : {}),
             }).catch((error) => {
                 logger.debug('[codex-app-server] Failed to auto-arm usage-limit recovery intent (non-fatal)', error);
             });
@@ -3559,6 +3701,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             currentReasoningEffort = null;
             currentServiceTier = null;
             permissionSupport = 'unknown';
+            latestConnectedServiceRuntimeIdentity = null;
             await disposeClient();
             turnInFlight = false;
             clearActiveTurnSteerability();
@@ -3930,6 +4073,214 @@ export function createCodexAppServerRuntime(params: Readonly<{
         flushTurn: async () => {
             await finishPendingTurn({ flushReason: 'turn-end' });
         },
+        // K5:fsm_switch app-server runtime applies auth generations through the session-auth FSM;
+        // callers only supply the provider-owned direct-live hook surface here.
+        applyConnectedServiceAuthGeneration: async (rawRequest) => {
+            const request = parseCodexConnectedServiceRuntimeAuthApplyRequest(rawRequest);
+            if (!request) {
+                return {
+                    ok: false,
+                    errorCode: 'invalid_request',
+                    error: 'invalid_request',
+                };
+            }
+            const buildAppliedRuntimeIdentity = (
+                activeAccountId: string,
+                accountLabel: string | null,
+            ): CodexConnectedServiceRuntimeAppliedIdentity => ({
+                serviceId: 'openai-codex',
+                activeAccountId,
+                accountLabel,
+                profileId: request.selection?.kind === 'group'
+                    ? request.selection.activeProfileId
+                    : request.selection?.kind === 'profile'
+                        ? request.selection.profileId
+                        : request.expected?.profileId ?? request.candidate.profileId,
+                ...(request.selection?.kind === 'group'
+                    ? {
+                        groupId: request.selection.groupId,
+                        generation: request.selection.generation,
+                    }
+                    : {
+                        ...(request.expected?.groupId ? { groupId: request.expected.groupId } : {}),
+                        ...(request.expected?.generation === undefined ? {} : { generation: request.expected.generation }),
+                    }),
+                source: 'applied_credential',
+            });
+            const buildDirectLiveExactVerification = (
+                activeAccountId: string,
+                accountLabel?: string | null,
+            ) => ({
+                activeAccountId,
+                proofStrength: 'exact' as const,
+                source: 'applied_credential',
+                reason: 'direct_live_exact_proof_accepted',
+                ...(accountLabel ? { accountLabel } : {}),
+            });
+
+            const client = await ensureClient();
+            const applied = await applyCodexConnectedServiceAuthGeneration({
+                client,
+                candidate: request.candidate,
+                forcedWorkspaceId: request.forcedWorkspaceId ?? null,
+                forcedLoginMethod: request.forcedLoginMethod ?? null,
+                persistAuthStore: async () => {
+                    await writeCodexAuthStoreFile({
+                        codexHome: resolveConfiguredCodexHome(runtimeEnv),
+                        record: request.candidate,
+                    });
+                },
+                refreshSelection: request.selection ?? undefined,
+                updateRefreshSelection: request.selection
+                    ? async (selection) => {
+                        if (typeof params.onConnectedServiceAuthGenerationApplied !== 'function') {
+                            throw new Error('connected_service_refresh_selection_update_unavailable');
+                        }
+                        return await params.onConnectedServiceAuthGenerationApplied({ selection });
+                    }
+                    : null,
+            });
+            if (!applied.applied) {
+                if (applied.appliedVia === 'direct_live_hot_auth' && applied.activeAccountId) {
+                    latestConnectedServiceRuntimeIdentity = buildAppliedRuntimeIdentity(applied.activeAccountId, null);
+                }
+                return {
+                    ok: false,
+                    errorCode: applied.reason,
+                    error: applied.reason,
+                    ...(applied.appliedVia ? { appliedVia: applied.appliedVia } : {}),
+                    ...(applied.activeAccountId ? { activeAccountId: applied.activeAccountId } : {}),
+                    ...(applied.appliedVia === 'direct_live_hot_auth' && applied.activeAccountId
+                        ? {
+                            partialState: 'runtime_auth_applied',
+                            verification: buildDirectLiveExactVerification(applied.activeAccountId),
+                        }
+                        : {}),
+                    ...(applied.recovery ? { recovery: applied.recovery } : {}),
+                };
+            }
+            latestConnectedServiceRuntimeIdentity = buildAppliedRuntimeIdentity(applied.activeAccountId, null);
+            if (applied.durability.persisted === false) {
+                const errorCode = applied.durability.errorCode;
+                return {
+                    ok: false,
+                    errorCode,
+                    error: errorCode,
+                    appliedVia: applied.appliedVia,
+                    activeAccountId: applied.activeAccountId,
+                    partialState: 'runtime_auth_applied',
+                    recovery: 'restart_resume',
+                    verification: buildDirectLiveExactVerification(applied.activeAccountId),
+                    durability: applied.durability,
+                };
+            }
+
+            let accountLabel: string | null = null;
+            let diagnostics: Readonly<{
+                accountRead: Readonly<{
+                    status: 'failed';
+                    reason: 'account_read_diagnostics_failed';
+                }>;
+            }> | undefined;
+            try {
+                accountLabel = (await readCodexLiveAccountIdentityFromClient({
+                    request: async (_method, params) => await client.request('account/read', params),
+                })).accountLabel;
+                latestConnectedServiceRuntimeIdentity = {
+                    ...latestConnectedServiceRuntimeIdentity,
+                    accountLabel,
+                };
+            } catch (error) {
+                logger.debug('[codex-app-server] Failed to read account diagnostics after connected-service auth apply (non-fatal)', error);
+                diagnostics = {
+                    accountRead: {
+                        status: 'failed',
+                        reason: 'account_read_diagnostics_failed',
+                    },
+                };
+            }
+
+            try {
+                const rawSnapshot = await readCodexRateLimitsSnapshot({
+                    request: async (_method, params) => await client.request('account/rateLimits/read', params),
+                });
+                await params.onRateLimitSnapshot?.(rawSnapshot, {
+                    activeAccountId: applied.activeAccountId,
+                    accountLabel,
+                });
+            } catch (error) {
+                logger.debug('[codex-app-server] Failed to publish quota snapshot after connected-service auth apply', error);
+                return {
+                    ok: true,
+                    appliedVia: applied.appliedVia,
+                    activeAccountId: applied.activeAccountId,
+                    verification: buildDirectLiveExactVerification(applied.activeAccountId),
+                    durability: applied.durability,
+                    ...(diagnostics ? { diagnostics } : {}),
+                    quotaSnapshotDelivery: {
+                        delivered: false,
+                        errorCode: 'post_apply_quota_probe_failed',
+                    },
+                };
+            }
+
+            return {
+                ok: true,
+                appliedVia: applied.appliedVia,
+                activeAccountId: applied.activeAccountId,
+                verification: {
+                    ...buildDirectLiveExactVerification(applied.activeAccountId, accountLabel),
+                    durability: applied.durability,
+                },
+                durability: applied.durability,
+                ...(diagnostics ? { diagnostics } : {}),
+                accountLabel,
+            };
+        },
+        readConnectedServiceRuntimeIdentity: async (request) => {
+            if (request.serviceId !== 'openai-codex') {
+                return {
+                    ok: false,
+                    errorCode: 'runtime_identity_probe_account_mismatch',
+                    error: 'runtime_identity_probe_account_mismatch',
+                };
+            }
+            const identity = latestConnectedServiceRuntimeIdentity;
+            if (!identity) {
+                return {
+                    ok: false,
+                    errorCode: 'runtime_identity_probe_missing_exact_identity',
+                    error: 'runtime_identity_probe_missing_exact_identity',
+                };
+            }
+            const expected = readCodexConnectedServiceRuntimeAuthExpected(request.expected);
+            if (expected?.groupId && expected.groupId !== identity.groupId) {
+                return {
+                    ok: false,
+                    errorCode: 'runtime_identity_probe_account_mismatch',
+                    error: 'runtime_identity_probe_account_mismatch',
+                };
+            }
+            return {
+                ok: true,
+                serviceId: 'openai-codex',
+                identity: {
+                    strategy: 'provider_account_id',
+                    proofStrength: 'exact',
+                    providerAccountId: identity.activeAccountId,
+                    ...(identity.accountLabel ? { accountLabel: identity.accountLabel } : {}),
+                    source: identity.source,
+                },
+                runtime: {
+                    safeToProbe: true,
+                    safeToApply: !isProviderTurnInFlight(),
+                    inProviderTurn: isProviderTurnInFlight(),
+                    profileId: identity.profileId,
+                    ...(identity.groupId ? { groupId: identity.groupId } : {}),
+                    ...(identity.generation === undefined ? {} : { generation: identity.generation }),
+                },
+            };
+        },
         invalidateConnectedServiceAuthTransports: async () => {
             const activeThreadId = threadId;
             if (!activeThreadId) {
@@ -3964,6 +4315,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 await params.rememberUsageLimitRecoveryPreference?.();
             }
             const timing = deriveCodexUsageLimitRecoveryTiming(issue);
+            const recoveryCredits = await readRateLimitRecoveryCredits().catch((error) => {
+                logger.debug('[codex-app-server] Failed to read usage-limit recovery reset credits while enabling (non-fatal)', error);
+                return null;
+            });
             const intent = await usageLimitRecoveryScheduler.enable({
                 sessionId: request.sessionId,
                 issueFingerprint: request.issueFingerprint ?? buildUsageLimitIssueFingerprint(issue),
@@ -3974,6 +4329,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     runtimeEnv,
                     usageLimit: issue.usageLimit,
                 }),
+                ...(recoveryCredits ? { recoveryCredits } : {}),
             });
             return { ok: true, recovery: intent };
         },
@@ -3984,6 +4340,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
         checkUsageLimitRecoveryNow: async (request) => {
             const activeThreadId = threadId;
             if (!activeThreadId) {
+                return unsupportedSessionRuntimeMethod(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW);
+            }
+            if (request.operation === 'consume_reset_credit') {
                 return unsupportedSessionRuntimeMethod(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW);
             }
             const currentIntent = usageLimitRecoveryScheduler.read(request.sessionId);
@@ -4005,6 +4364,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 const issue = latestUsageLimitIssue;
                 if (issue?.usageLimit) {
                     const timing = deriveCodexUsageLimitRecoveryTiming(issue);
+                    const recoveryCredits = await readRateLimitRecoveryCredits().catch((error) => {
+                        logger.debug('[codex-app-server] Failed to read usage-limit recovery reset credits while checking (non-fatal)', error);
+                        return null;
+                    });
                     await usageLimitRecoveryScheduler.enable({
                         sessionId: request.sessionId,
                         issueFingerprint: buildUsageLimitIssueFingerprint(issue),
@@ -4015,6 +4378,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             runtimeEnv,
                             usageLimit: issue.usageLimit,
                         }),
+                        ...(recoveryCredits ? { recoveryCredits } : {}),
                     });
                 }
             }

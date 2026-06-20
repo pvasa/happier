@@ -499,6 +499,99 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     })).resolves.toMatchObject({ status: 'scheduled', retryable: true });
   });
 
+  it('classifies missing resume-state continuity as retryable until durable reconstruction is exhausted', async () => {
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({ status: 'noop' }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+
+    await expect(scheduler.enqueueApplyFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 0,
+      classification: classification(),
+      result: {
+        status: 'generation_apply_failed',
+        errorCode: 'provider_session_state_unavailable_for_resume',
+        diagnostics: {
+          failurePhase: 'continuity',
+          durableContinuity: {
+            trackedSession: null,
+            trackedSpawnOptions: null,
+            persistedSessionMetadata: null,
+            vendorResumeId: null,
+            candidatePersistedSessionFile: null,
+            materializationIdentity: null,
+          },
+        },
+      },
+    })).resolves.toMatchObject({ status: 'scheduled', retryable: true });
+
+    expect(scheduler.readByKey(buildRuntimeAuthRecoveryKey({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team',
+    }))).toMatchObject({
+      status: 'waiting',
+      failurePhase: 'apply',
+      failureReason: 'durable_continuity_reconstruction_retrying',
+      lastError: 'provider_session_state_unavailable_for_resume',
+      lastErrorClassification: { kind: 'dependency_unavailable', retryable: true },
+    });
+    const events = diagnostics.map((event) => event.event);
+    expect(events).not.toContain('runtime_auth_recovery_terminal');
+    expect(events).not.toContain('runtime_auth_recovery_dead_letter');
+  });
+
+  it('terminalizes missing resume-state continuity only when durable reconstruction is exhausted', async () => {
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover: async () => ({ status: 'noop' }),
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+
+    await expect(scheduler.enqueueApplyFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 0,
+      classification: classification(),
+      result: {
+        status: 'generation_apply_failed',
+        errorCode: 'provider_session_state_unavailable_for_resume',
+        diagnostics: {
+          failurePhase: 'continuity',
+          durableContinuity: {
+            status: 'exhausted',
+            trackedSession: null,
+            trackedSpawnOptions: null,
+            persistedSessionMetadata: null,
+            vendorResumeId: null,
+            candidatePersistedSessionFile: null,
+            materializationIdentity: null,
+          },
+        },
+      },
+    })).resolves.toMatchObject({ status: 'terminal_non_retry', retryable: false });
+
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'runtime_auth_recovery_terminal',
+      reason: 'provider_session_state_unavailable_after_reconstruction',
+      failurePhase: 'apply',
+    }));
+  });
+
   it('arms a durable wait (not terminal) for a non-group recovery_action_required with a known future reset (F0 extension)', async () => {
     // Incident Jun-11 F-NEW-1 / FIX-4: profile-pinned/native selections have no switch target, but a
     // usage limit with a computable reset is a WAIT, not a terminal recovery_action_required.

@@ -54,6 +54,41 @@ describe('createClaudeInFlightSteerCapabilityPublisher (lane P, O-design Seam A)
 
     expect(captured.state.capabilities?.inFlightSteerAvailable).toBe(false);
     expect(captured.state.capabilities?.inFlightSteerUnavailableReason).toBe('user_terminal_draft');
+    expect(captured.state.capabilities?.terminalComposerClearSupported).toBe(true);
+    expect(captured.state.capabilities?.terminalComposerDraftPresent).toBe(true);
+    publisher.dispose();
+  });
+
+  it('publishes terminal composer clear support and clears draft presence when steering becomes available', () => {
+    const captured = capture();
+    const publisher = createClaudeInFlightSteerCapabilityPublisher({
+      session: captured.session,
+      isCanonicalTurnActive: () => true,
+      nowMs: () => 1234,
+      minPublishIntervalMs: 0,
+    });
+
+    publisher.publish({ available: false, reason: 'user_terminal_draft' });
+    publisher.publish({ available: true, reason: null });
+
+    expect(captured.state.capabilities?.terminalComposerClearSupported).toBe(true);
+    expect(captured.state.capabilities?.terminalComposerDraftPresent).toBe(false);
+    publisher.dispose();
+  });
+
+  it('publishes draft presence from the raw terminal-draft snapshot even when unavailable maps to turn_settling', () => {
+    const captured = capture();
+    const publisher = createClaudeInFlightSteerCapabilityPublisher({
+      session: captured.session,
+      isCanonicalTurnActive: () => false,
+      nowMs: () => 1234,
+    });
+
+    publisher.publish({ available: false, reason: 'user_terminal_draft' });
+
+    expect(captured.state.capabilities?.inFlightSteerUnavailableReason).toBe('turn_settling');
+    expect(captured.state.capabilities?.terminalComposerClearSupported).toBe(true);
+    expect(captured.state.capabilities?.terminalComposerDraftPresent).toBe(true);
     publisher.dispose();
   });
 

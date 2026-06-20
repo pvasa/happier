@@ -1568,7 +1568,7 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
     ]);
   });
 
-  it('lets waiting pre-turn sessions apply a committed generation when the owner session apply fails', async () => {
+  it('does not surface a failed switch when a predictive pre-turn hot apply is temporarily unavailable', async () => {
     const quotaReadyState = (activeProfileId: string, generation: number): ConnectedServiceAuthGroupSwitchState => ({
       ...state(activeProfileId, generation),
       policy: { ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, strategy: 'least_limited', autoSwitch: true },
@@ -1589,6 +1589,7 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
     });
     let current = quotaReadyState('primary', 1);
     const applied: string[] = [];
+    const events: unknown[] = [];
     const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
       leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
       nowMs: () => 1_000,
@@ -1605,6 +1606,7 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
           throw new Error('connected_service_auth_generation_apply_failed:hot_apply_failed');
         }
       },
+      emitEvent: (event) => events.push(event),
     });
 
     const first = coordinator.switchBeforeTurn({
@@ -1621,12 +1623,15 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
     });
 
     await expect(first).resolves.toMatchObject({
-      status: 'generation_apply_failed',
+      status: 'predictive_apply_unavailable',
       activeProfileId: 'backup',
       generation: 2,
       errorCode: 'hot_apply_failed',
     });
     await expect(second).resolves.toMatchObject({ status: 'observed_generation', activeProfileId: 'backup', generation: 2 });
+    expect(events).not.toContainEqual(expect.objectContaining({
+      resultStatus: 'generation_apply_failed',
+    }));
     expect(applied.sort()).toEqual([
       'session-1:backup:2',
       'session-2:backup:2',

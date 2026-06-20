@@ -390,6 +390,47 @@ function resolveSoftSwitchRemainingPercent(policy: ConnectedServiceAuthGroupPoli
   return value === null ? null : Math.max(0, Math.min(100, value));
 }
 
+export function isConnectedServiceAuthGroupSoftSwitchCandidateMeaningfullyBetter(input: Readonly<{
+  activeProfileId: string | null;
+  candidate: ConnectedServiceAuthGroupCandidate;
+  policy: ConnectedServiceAuthGroupPolicyV1;
+}>): boolean {
+  if (input.activeProfileId && input.candidate.profileId === input.activeProfileId) return false;
+  const threshold = resolveSoftSwitchRemainingPercent(input.policy);
+  if (threshold === null) return false;
+  const candidateScore = input.candidate.leastLimitedScore;
+  return candidateScore !== null && candidateScore > threshold;
+}
+
+export type ConnectedServiceAuthGroupSoftSwitchSourceEvidence = Readonly<
+  | { status: 'at_or_below_threshold'; remainingPercent: number; thresholdPercent: number }
+  | { status: 'above_threshold'; remainingPercent: number; thresholdPercent: number }
+  | { status: 'unknown'; reason: 'missing_active_profile' | 'missing_fresh_quota_snapshot' | 'missing_remaining_percent' | 'missing_soft_switch_threshold' }
+>;
+
+export function resolveConnectedServiceAuthGroupSoftSwitchSourceEvidence(input: Readonly<{
+  activeProfileId: string | null;
+  policy: ConnectedServiceAuthGroupPolicyV1;
+  memberStatesByProfileId: ReadonlyMap<string, ConnectedServiceAuthGroupMemberRuntimeState>;
+  nowMs: number;
+  quotaFreshnessMs: number;
+}>): ConnectedServiceAuthGroupSoftSwitchSourceEvidence {
+  const activeProfileId = input.activeProfileId?.trim() ?? '';
+  if (!activeProfileId) return { status: 'unknown', reason: 'missing_active_profile' };
+  const threshold = resolveSoftSwitchRemainingPercent(input.policy);
+  if (threshold === null) return { status: 'unknown', reason: 'missing_soft_switch_threshold' };
+  const state = input.memberStatesByProfileId.get(activeProfileId) ?? null;
+  const quotaSnapshot = isFreshQuotaSnapshot(state?.quotaSnapshot, input.nowMs, input.quotaFreshnessMs)
+    ? state?.quotaSnapshot ?? null
+    : null;
+  if (!quotaSnapshot) return { status: 'unknown', reason: 'missing_fresh_quota_snapshot' };
+  const remainingPercent = resolveLeastLimitedScore(quotaSnapshot);
+  if (remainingPercent === null) return { status: 'unknown', reason: 'missing_remaining_percent' };
+  return remainingPercent <= threshold
+    ? { status: 'at_or_below_threshold', remainingPercent, thresholdPercent: threshold }
+    : { status: 'above_threshold', remainingPercent, thresholdPercent: threshold };
+}
+
 function resolveCurrentCandidate(
   candidates: ReadonlyArray<ConnectedServiceAuthGroupCandidate>,
   activeProfileId: string | null,

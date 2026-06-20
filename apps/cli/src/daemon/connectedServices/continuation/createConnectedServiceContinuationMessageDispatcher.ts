@@ -32,7 +32,13 @@ export function createConnectedServiceContinuationMessageDispatcher(
     if (!shouldNudgePendingQueue(input)) {
       return;
     }
-    await deps.nudgePendingQueue({ sessionId: input.sessionId });
+    try {
+      await deps.nudgePendingQueue({ sessionId: input.sessionId });
+    } catch {
+      // The message is already socket-committed. A wake/nudge failure must not
+      // consume the continuation attempt as a send failure; production nudges
+      // run their own bounded retry loop.
+    }
   }
 
   return {

@@ -10,6 +10,10 @@ import type {
   TerminalInputState,
   TerminalPromptInput,
 } from '../terminalHost/_types';
+import {
+  createTerminalHostDeadline,
+  remainingTerminalHostDeadlineMs,
+} from '../terminalHost/deadline';
 import { TerminalHostStartupError, isTerminalHostStartupError } from '../terminalHost/errors';
 import {
   defaultZellijActions,
@@ -21,6 +25,7 @@ import {
   type ZellijPane,
 } from './actions';
 import { sanitizeTerminalHostDiagnosticText } from '../terminalHost/sanitizeTerminalHostDiagnosticText';
+import { resolvePromptSubmitTimeoutMs } from '../terminalHost/promptSubmitTimeout';
 import { createZellijTerminalControlPort } from './control';
 import { prepareZellijSocketDir, resolveZellijSocketDir } from './socketDir';
 
@@ -299,6 +304,14 @@ function scheduledDeferral(input: TerminalPromptInput): Extract<TerminalInputInj
   };
 }
 
+function paneInitializingDeferral(input: TerminalPromptInput): Extract<TerminalInputInjectionResult, { status: 'deferred' }> {
+  return {
+    status: 'deferred',
+    reason: 'pane_initializing',
+    ...(input.scheduling.retryAfterMs !== undefined ? { retryAfterMs: input.scheduling.retryAfterMs } : {}),
+  };
+}
+
 function failedInjectionResult(params: Readonly<{
   reason: Extract<TerminalInputInjectionResult, { status: 'failed' }>['reason'];
   phase: TerminalInjectionFailurePhase;
@@ -312,15 +325,6 @@ function failedInjectionResult(params: Readonly<{
     duplicateRisk: params.duplicateRisk,
     recoverable: params.recoverable,
   };
-}
-
-function createDeadline(timeoutMs: number | undefined): number | undefined {
-  return timeoutMs !== undefined && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
-}
-
-function remainingTimeoutMs(deadline: number | undefined): number | undefined {
-  if (deadline === undefined) return undefined;
-  return Math.max(0, deadline - Date.now());
 }
 
 function createZellijStartupTimeoutError(params: Readonly<{
@@ -375,10 +379,10 @@ async function waitForListedZellijSession(params: Readonly<{
 }>): Promise<void> {
   if (!params.actions.listSessions) return;
 
-  const deadline = createDeadline(params.actionTimeoutMs);
+  const deadline = createTerminalHostDeadline(params.actionTimeoutMs);
   let lastError: unknown;
   while (true) {
-    const remainingMs = remainingTimeoutMs(deadline);
+    const remainingMs = remainingTerminalHostDeadlineMs(deadline);
     if (remainingMs !== undefined && remainingMs <= 0) {
       const message = lastError instanceof Error ? lastError.message : String(lastError ?? `zellij session "${params.sessionName}" was not listed`);
       throw createZellijStartupTimeoutError({
@@ -412,7 +416,7 @@ async function waitForListedZellijSession(params: Readonly<{
       lastError = error;
     }
 
-    const nextRemainingMs = remainingTimeoutMs(deadline);
+    const nextRemainingMs = remainingTerminalHostDeadlineMs(deadline);
     if (nextRemainingMs !== undefined && nextRemainingMs <= 0) {
       continue;
     }
@@ -628,7 +632,7 @@ async function closeBootstrapTerminalPanesUntilStable(params: Readonly<{
   expectedCommandFragments: readonly string[];
   actionTimeoutMs: number;
 }>): Promise<Readonly<{ panes: readonly ZellijPane[]; closedPaneIds: ReadonlySet<string> }>> {
-  const deadline = createDeadline(params.actionTimeoutMs);
+  const deadline = createTerminalHostDeadline(params.actionTimeoutMs);
   const closedPaneIds = new Set<string>();
   let panesAfterLaunch = params.initialPanes;
 
@@ -646,7 +650,7 @@ async function closeBootstrapTerminalPanesUntilStable(params: Readonly<{
   }
 
   while (true) {
-    const remainingMs = remainingTimeoutMs(deadline);
+    const remainingMs = remainingTerminalHostDeadlineMs(deadline);
     if (remainingMs !== undefined && remainingMs <= 0) {
       throwBootstrapCleanupDidNotConverge();
     }
@@ -662,7 +666,7 @@ async function closeBootstrapTerminalPanesUntilStable(params: Readonly<{
       actionTimeoutMs: params.actionTimeoutMs,
     });
     for (const paneId of closedThisPass) closedPaneIds.add(paneId);
-    const listTimeoutMs = remainingTimeoutMs(deadline);
+    const listTimeoutMs = remainingTerminalHostDeadlineMs(deadline);
     if (listTimeoutMs !== undefined && listTimeoutMs <= 0) {
       throwBootstrapCleanupDidNotConverge();
     }
@@ -679,7 +683,7 @@ async function closeBootstrapTerminalPanesUntilStable(params: Readonly<{
       panes: panesAfterLaunch,
     });
     if (remainingBootstrapPaneIds.size === 0) return { panes: panesAfterLaunch, closedPaneIds };
-    const waitMs = remainingTimeoutMs(deadline);
+    const waitMs = remainingTerminalHostDeadlineMs(deadline);
     if (waitMs !== undefined && waitMs <= 0) {
       throwBootstrapCleanupDidNotConverge();
     }
@@ -696,9 +700,9 @@ async function waitForLaunchedTerminalPane(params: Readonly<{
   preExistingPaneIds: ReadonlySet<string>;
   actionTimeoutMs: number;
 }>): Promise<{ paneId: string; panes: readonly ZellijPane[] }> {
-  const deadline = createDeadline(params.actionTimeoutMs);
+  const deadline = createTerminalHostDeadline(params.actionTimeoutMs);
   while (true) {
-    const timeoutMs = remainingTimeoutMs(deadline);
+    const timeoutMs = remainingTerminalHostDeadlineMs(deadline);
     const panes = await params.actions.listPanes({
       zellijBinary: params.zellijBinary,
       env: sessionEnv(params.env, params.sessionName),
@@ -711,7 +715,7 @@ async function waitForLaunchedTerminalPane(params: Readonly<{
     });
     if (paneId !== null) return { paneId, panes };
 
-    const remainingMs = remainingTimeoutMs(deadline);
+    const remainingMs = remainingTerminalHostDeadlineMs(deadline);
     if (remainingMs === undefined || remainingMs <= 0) {
       throw createZellijStartupTimeoutError({
         action: 'pane_discovery',
@@ -733,10 +737,10 @@ async function waitForAddressableZellijSession(params: Readonly<{
 }>): Promise<readonly ZellijPane[]> {
   await waitForListedZellijSession(params);
 
-  const deadline = createDeadline(params.actionTimeoutMs);
+  const deadline = createTerminalHostDeadline(params.actionTimeoutMs);
   let lastError: unknown;
   while (true) {
-    const timeoutMs = remainingTimeoutMs(deadline);
+    const timeoutMs = remainingTerminalHostDeadlineMs(deadline);
     try {
       return await params.actions.listPanes({
         zellijBinary: params.zellijBinary,
@@ -747,7 +751,7 @@ async function waitForAddressableZellijSession(params: Readonly<{
       lastError = error;
     }
 
-    const remainingMs = remainingTimeoutMs(deadline);
+    const remainingMs = remainingTerminalHostDeadlineMs(deadline);
     if (remainingMs === undefined || remainingMs <= 0) {
       const message = lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown error');
       throw createZellijStartupTimeoutError({
@@ -1125,14 +1129,12 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
           paneId = handle.paneId;
         }
       } catch {
-        return failedInjectionResult({
-          reason: 'host_unreachable',
-          phase: 'liveness',
-          duplicateRisk: 'none',
-          recoverable: true,
-        });
+        return paneInitializingDeferral(input);
       }
       if (!liveness.paneAlive || !trustedTargetPaneId) {
+        if (paneDeadRecoverable) {
+          return paneInitializingDeferral(input);
+        }
         return failedInjectionResult({
           reason: 'pane_dead',
           phase: 'liveness',
@@ -1163,7 +1165,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
       }
 
       const injectionTimeoutMs = input.scheduling.timeoutMs ?? actionTimeoutMs;
-      const deadline = createDeadline(injectionTimeoutMs);
+      const deadline = createTerminalHostDeadline(injectionTimeoutMs);
       const textToWrite = input.text;
       let failurePhase: TerminalInjectionFailurePhase = 'during_write';
       let duplicateRisk: TerminalInjectionDuplicateRisk = 'possible';
@@ -1177,15 +1179,10 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
           timeoutMs: injectionTimeoutMs,
         });
         failurePhase = 'after_write_before_enter';
-        const submitTimeoutMs = remainingTimeoutMs(deadline);
-        if (submitTimeoutMs === 0) {
-          return failedInjectionResult({
-            reason: 'timeout',
-            phase: failurePhase,
-            duplicateRisk,
-            recoverable: true,
-          });
-        }
+        const submitTimeoutMs = resolvePromptSubmitTimeoutMs({
+          remainingTimeoutMs: remainingTerminalHostDeadlineMs(deadline),
+          fallbackTimeoutMs: actionTimeoutMs,
+        });
         failurePhase = 'after_enter_unknown';
         duplicateRisk = 'likely';
         await actions.sendEnter({

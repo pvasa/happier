@@ -1,12 +1,11 @@
 import { readSessionMetadataRuntimeDescriptor } from '@happier-dev/agents';
-import { SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema } from '@happier-dev/protocol';
+import { SessionConnectedServiceAuthApplyGenerationResponseV1Schema } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import type { ConnectedServiceRuntimeAuthSelectionMaterializer } from '@/daemon/connectedServices/sessionAuthSwitch/runtimeAuthSelectionMaterializerTypes';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 
-import { withCodexAppServerControlClient } from '../appServer/control/withCodexAppServerControlClient';
 import { readCodexAuthStoreProviderAccountId } from './readCodexAuthStoreProviderAccountId';
 import { writeCodexAuthStoreFile } from './writeCodexAuthStoreFile';
 
@@ -29,31 +28,26 @@ export const materializeCodexConnectedServiceRuntimeAuthSelection: ConnectedServ
   const codexHome = typeof runtimeDescriptor?.homePath === 'string' && runtimeDescriptor.homePath.trim().length > 0
     ? runtimeDescriptor.homePath.trim()
     : null;
-  const controlClientSupported = await withCodexAppServerControlClient({
-    cwd,
-    metadata,
-    accountSettings: params.accountSettings ?? null,
-    processEnv: params.processEnv,
-    run: async () => undefined,
-  });
-  if (!controlClientSupported.ok) return params.baseSelection;
-
   return {
     ...params.baseSelection,
-    client: {
-      request: async (method: string, request: unknown) => {
-        const result = await withCodexAppServerControlClient({
-          cwd,
-          metadata,
-          accountSettings: params.accountSettings ?? null,
-          processEnv: params.processEnv,
-          run: async (client) => await client.request(method, request),
-        });
-        if (!result.ok) {
-          throw new Error(result.error);
-        }
-        return result.value;
-      },
+    applyReason: params.input.applyReason ?? 'manual',
+    requireDirectLiveHotApply: params.input.requireDirectLiveHotApply === true,
+    // K5:fsm_switch this materializer only wires the provider-owned direct-live apply callback
+    // into the session-auth FSM/runtime-auth owners; restart/hot-apply policy still lives there.
+    applyConnectedServiceAuthGeneration: async (request: unknown) => {
+      const rawResponse = await callSessionRpc({
+        token: params.credentials.token,
+        sessionId: transport.sessionId,
+        ctx: transport.ctx,
+        mode: transport.mode,
+        method: `${transport.sessionId}:${SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION}`,
+        request,
+      });
+      const parsedResponse = SessionConnectedServiceAuthApplyGenerationResponseV1Schema.safeParse(rawResponse);
+      if (!parsedResponse.success) {
+        throw new Error('invalid_connected_service_auth_apply_generation_response');
+      }
+      return parsedResponse.data;
     },
     ...(codexHome
       ? {
@@ -71,26 +65,5 @@ export const materializeCodexConnectedServiceRuntimeAuthSelection: ConnectedServ
           },
         }
       : {}),
-    invalidateTransports: async () => {
-      const rawResponse = await callSessionRpc({
-        token: params.credentials.token,
-        sessionId: transport.sessionId,
-        ctx: transport.ctx,
-        mode: transport.mode,
-        method: `${transport.sessionId}:${SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS}`,
-        request: {},
-      });
-      const parsedResponse = SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema.safeParse(rawResponse);
-      if (!parsedResponse.success) {
-        throw new Error('invalid_connected_service_auth_invalidate_transports_response');
-      }
-      if (parsedResponse.data.ok !== true) {
-        throw new Error(
-          typeof parsedResponse.data.errorCode === 'string'
-            ? parsedResponse.data.errorCode
-            : parsedResponse.data.error,
-        );
-      }
-    },
   };
 };

@@ -49,10 +49,12 @@ export function createConnectedServiceQuotaFetchers(env: NodeJS.ProcessEnv): Arr
   // The per-call usageUrl override takes precedence over the kill-switch: if a custom
   // URL is configured, the kill-switch is ignored and the custom URL is used as-is.
   const codexUsageUrl = parseNonEmptyStringEnv(env.HAPPIER_CONNECTED_SERVICES_OPENAI_CODEX_USAGE_URL);
+  const codexResetCreditsUrl = parseNonEmptyStringEnv(env.HAPPIER_CONNECTED_SERVICES_OPENAI_CODEX_RESET_CREDITS_URL);
 
   return [
     createOpenAiCodexQuotaFetcher({
       usageUrl: codexUsageUrl,
+      resetCreditsUrl: codexResetCreditsUrl,
       staleAfterMs,
       userAgent: parseNonEmptyStringEnv(env.HAPPIER_CONNECTED_SERVICES_QUOTAS_USER_AGENT),
       disablePrivateEndpoint: disableCodexQuotaEndpoint,

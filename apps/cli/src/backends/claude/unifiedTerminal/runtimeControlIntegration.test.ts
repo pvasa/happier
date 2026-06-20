@@ -28,6 +28,7 @@ const ACCEPT = ['╭─────╮', '│ >   │', '╰─────╯',
 const MODEL_OK = ['Set model to Sonnet 4.6 and saved as your default', '╭─────╮', '│ >   │', '╰─────╯'].join('\n');
 const PLAN = ['╭─╮', '│ >│', '╰─╯', '  ⏸ plan mode on (shift+tab to cycle)'].join('\n');
 const GENERATING = ['● working', '✶ Forging… (10s · esc to interrupt)'].join('\n');
+const USER_DRAFT = ['╭─────╮', '│ > unsent terminal draft', '╰─────╯'].join('\n');
 
 async function makeGuard(): Promise<SettingsGuard> {
   const dir = await mkdtemp(join(tmpdir(), 'claude-runtime-bridge-'));
@@ -98,20 +99,23 @@ describe('resolveBlockedApplyRetryMs (L5(a) bounded backoff)', () => {
 
 describe('createBlockedApplyStarvationTracker (F2 stuck-unsafe-window honesty)', () => {
   it('fires ONCE per starvation episode after the bounded threshold of consecutive blocked applies', () => {
-    const calls: number[] = [];
+    const calls: Array<Readonly<{ consecutiveBlockedApplies: number; blockedReason: string | null }>> = [];
     const tracker = createBlockedApplyStarvationTracker({
       threshold: 3,
-      onStarvation: (info) => calls.push(info.consecutiveBlockedApplies),
+      onStarvation: (info) => calls.push({
+        consecutiveBlockedApplies: info.consecutiveBlockedApplies,
+        blockedReason: info.blockedReason ?? null,
+      }),
     });
-    expect(tracker.recordBlocked()).toBe(1);
-    expect(tracker.recordBlocked()).toBe(2);
+    expect(tracker.recordBlocked('user_draft')).toBe(1);
+    expect(tracker.recordBlocked('user_draft')).toBe(2);
     expect(calls).toEqual([]);
-    expect(tracker.recordBlocked()).toBe(3);
-    expect(calls).toEqual([3]);
+    expect(tracker.recordBlocked('user_draft')).toBe(3);
+    expect(calls).toEqual([{ consecutiveBlockedApplies: 3, blockedReason: 'user_draft' }]);
     // Continued starvation never re-fires within the same episode (no notice loop).
-    tracker.recordBlocked();
-    tracker.recordBlocked();
-    expect(calls).toEqual([3]);
+    tracker.recordBlocked('user_draft');
+    tracker.recordBlocked('user_draft');
+    expect(calls).toEqual([{ consecutiveBlockedApplies: 3, blockedReason: 'user_draft' }]);
   });
 
   it('resets the episode on a successful apply so a NEW starvation episode escalates again', () => {
@@ -408,7 +412,11 @@ describe('createClaudeUnifiedRuntimeControlBridge', () => {
 
     const result = await bridge.applyBeforePrompt(mode({ model: 'opus' }));
 
-    expect(result).toEqual({ promptMayProceed: false, attempted: true });
+    expect(result).toEqual({
+      promptMayProceed: false,
+      attempted: true,
+      blockedReason: 'delivered_unverified',
+    });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       status: 'applied',
@@ -436,6 +444,59 @@ describe('createClaudeUnifiedRuntimeControlBridge', () => {
     expect(events[0].changes.map((c) => c.key)).toEqual(['permissionMode']);
   });
 
+  it('preserves the user-draft blocker reason when a before-prompt mode change cannot apply', async () => {
+    const port = createFakeControlPort({ captures: [USER_DRAFT] });
+    const controller = await makeController(port);
+    const events: ClaudeUnifiedRuntimeConfigOutcomeEvent[] = [];
+    const bridge = createClaudeUnifiedRuntimeControlBridge({
+      controller,
+      emitRuntimeConfigOutcome: (event) => events.push(event),
+      startupMode: mode({ permissionMode: 'default' }),
+    });
+
+    const result = await bridge.applyBeforePrompt(mode({ permissionMode: 'acceptEdits' }));
+
+    expect(result).toEqual({
+      promptMayProceed: false,
+      attempted: true,
+      blockedReason: 'user_draft',
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      status: 'applied',
+      timing: 'queued_until_safe_window',
+      changes: [expect.objectContaining({ key: 'permissionMode', reason: 'user_draft' })],
+    });
+  });
+
+  it('preserves the root user-draft blocker reason after stuck unsafe-window escalation', async () => {
+    const port = createFakeControlPort({ captures: [USER_DRAFT, USER_DRAFT, USER_DRAFT, USER_DRAFT] });
+    const controller = await makeController(port);
+    const events: ClaudeUnifiedRuntimeConfigOutcomeEvent[] = [];
+    const bridge = createClaudeUnifiedRuntimeControlBridge({
+      controller,
+      emitRuntimeConfigOutcome: (event) => events.push(event),
+      startupMode: mode({ permissionMode: 'default' }),
+    });
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await bridge.applyBeforePrompt(mode({ permissionMode: 'acceptEdits' }));
+      expect(result).toMatchObject({ promptMayProceed: false, blockedReason: 'user_draft' });
+    }
+
+    const escalated = await bridge.applyBeforePrompt(mode({ permissionMode: 'acceptEdits' }));
+
+    expect(escalated).toEqual({
+      promptMayProceed: false,
+      attempted: true,
+      blockedReason: 'user_draft',
+    });
+    expect(events.at(-1)).toMatchObject({
+      status: 'requires_interactive_control',
+      changes: [expect.objectContaining({ key: 'permissionMode', reason: 'stuck_unsafe_window:user_draft' })],
+    });
+  });
+
   it('falls back to restart-only outcomes when the feature gate is disabled', async () => {
     const port = createFakeControlPort({ captures: [IDLE] });
     const controller = await makeController(port, false);
@@ -453,6 +514,83 @@ describe('createClaudeUnifiedRuntimeControlBridge', () => {
     expect(port.sentLiteral).toHaveLength(0);
     expect(events).toHaveLength(1);
     expect(events[0].status).toBe('requires_restart');
+  });
+
+  it('applies metadata-only permission mode changes out of band and commits the runtime baseline', async () => {
+    const port = createFakeControlPort({ captures: [IDLE, ACCEPT] });
+    const events: ClaudeUnifiedRuntimeConfigOutcomeEvent[] = [];
+    const bridge = createClaudeUnifiedRuntimeControlBridge({
+      controller: await makeController(port),
+      emitRuntimeConfigOutcome: (event) => events.push(event),
+      startupMode: mode({ permissionMode: 'default' }),
+    });
+
+    const result = await bridge.applyOutOfBand(mode({ permissionMode: 'acceptEdits' }));
+
+    expect(result).toEqual({ promptMayProceed: true, attempted: true });
+    expect(port.sentKeys).toEqual(['ShiftTab']);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      status: 'applied',
+      changes: [expect.objectContaining({ key: 'permissionMode', requested: 'acceptEdits' })],
+    });
+
+    const beforePrompt = await bridge.applyBeforePrompt(mode({ permissionMode: 'acceptEdits' }));
+    expect(beforePrompt).toEqual({ promptMayProceed: true, attempted: false });
+  });
+
+  it('applies metadata-only permission mode changes during generation with the mode-cycle window', async () => {
+    const GENERATING_ACCEPT = ['● working', '✶ Forging… (12s · esc to interrupt)', '  ⏵⏵ accept edits on (shift+tab to cycle)'].join('\n');
+    const port = createFakeControlPort({ captures: [GENERATING, GENERATING_ACCEPT] });
+    const events: ClaudeUnifiedRuntimeConfigOutcomeEvent[] = [];
+    const bridge = createClaudeUnifiedRuntimeControlBridge({
+      controller: await makeController(port),
+      emitRuntimeConfigOutcome: (event) => events.push(event),
+      startupMode: mode({ permissionMode: 'default' }),
+    });
+
+    const result = await bridge.applyOutOfBand(mode({ permissionMode: 'acceptEdits' }));
+
+    expect(result).toEqual({ promptMayProceed: true, attempted: true });
+    expect(port.sentKeys).toEqual(['ShiftTab']);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      status: 'applied',
+      changes: [expect.objectContaining({
+        key: 'permissionMode',
+        requested: 'acceptEdits',
+        effective: 'acceptEdits',
+      })],
+    });
+    expect((events[0]?.changes[0] as { timing?: unknown } | undefined)?.timing ?? null).toBeNull();
+
+    const beforePrompt = await bridge.applyBeforePrompt(mode({ permissionMode: 'acceptEdits' }));
+    expect(beforePrompt).toEqual({ promptMayProceed: true, attempted: false });
+  });
+
+  it('surfaces structured restart outcomes for metadata-only changes when the runtime-control gate is disabled', async () => {
+    const port = createFakeControlPort({ captures: [IDLE] });
+    const events: ClaudeUnifiedRuntimeConfigOutcomeEvent[] = [];
+    const bridge = createClaudeUnifiedRuntimeControlBridge({
+      controller: await makeController(port, false),
+      emitRuntimeConfigOutcome: (event) => events.push(event),
+      startupMode: mode({ permissionMode: 'default' }),
+    });
+
+    const result = await bridge.applyOutOfBand(mode({ permissionMode: 'acceptEdits' }));
+
+    expect(result).toEqual({ promptMayProceed: true, attempted: true });
+    expect(port.sentKeys).toHaveLength(0);
+    expect(port.sentLiteral).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      status: 'requires_restart',
+      changes: [expect.objectContaining({
+        key: 'permissionMode',
+        requested: 'acceptEdits',
+        reason: 'tui_runtime_control_disabled',
+      })],
+    });
   });
 
   // L5(b) (incident cmq8y3nlx hot loop): a re-attempted blocked apply with the SAME per-change
@@ -600,8 +738,12 @@ describe('applyPermissionModeForInFlightSteer (lane Q)', () => {
   });
 
   it('reports failed (and does not commit) when the steer-safe window is blocked', async () => {
-    const PERMISSION_PROMPT = ['✶ Forging… (10s · esc to interrupt)', 'Do you want to proceed?', '1. Yes'].join('\n');
-    const port = createFakeControlPort({ captures: [PERMISSION_PROMPT] });
+    const TRUST_PROMPT = [
+      '✶ Forging… (10s · esc to interrupt)',
+      'Do you trust the files in this folder?',
+      '1. Yes',
+    ].join('\n');
+    const port = createFakeControlPort({ captures: [TRUST_PROMPT] });
     const bridge = createClaudeUnifiedRuntimeControlBridge({
       controller: await makeController(port),
       emitRuntimeConfigOutcome: () => undefined,

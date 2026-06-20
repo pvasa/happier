@@ -269,6 +269,38 @@ describe('TemporaryThrottleRecoveryScheduler', () => {
     });
   });
 
+  it('honors Retry-After returned by a throttle probe before exponential backoff', async () => {
+    const { TemporaryThrottleRecoveryScheduler } = await loadTemporaryThrottleModule();
+    let nowMs = 1_000;
+    const retry = vi.fn(async () => ({
+      status: 'wait' as const,
+      retryAfterMs: 10_000,
+      lastError: 'provider_retry_after',
+    }));
+    const scheduler = new TemporaryThrottleRecoveryScheduler({
+      nowMs: () => nowMs,
+      baseBackoffMs: 1_000,
+      maxBackoffMs: 60_000,
+      retry,
+    });
+
+    await scheduler.enable({
+      sessionId: 'session-1',
+      issueFingerprint: 'temporary-throttle:codex:1',
+      retryAfterMs: null,
+      maxAttempts: 3,
+    });
+
+    nowMs = 2_000;
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'timer' })).resolves.toEqual({ status: 'waiting' });
+    expect(scheduler.read('session-1')).toMatchObject({
+      status: 'waiting',
+      attemptCount: 1,
+      nextRetryAtMs: 12_000,
+      lastError: 'provider_retry_after',
+    });
+  });
+
   it('reschedules instead of cancelling when resume fails after a ready probe', async () => {
     const { TemporaryThrottleRecoveryScheduler } = await loadTemporaryThrottleModule();
     let nowMs = 1_000;

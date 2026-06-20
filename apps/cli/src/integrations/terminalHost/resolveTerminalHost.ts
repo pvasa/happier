@@ -38,6 +38,9 @@ export function resolveTerminalHost(params: Readonly<{
 
   if (preference === 'zellij') {
     if (!params.zellijAvailable || !adapters.zellij) {
+      if (platform.os !== 'win32' && params.tmuxAvailable && adapters.tmux) {
+        return { status: 'resolved', adapter: adapters.tmux, reason: 'zellij_unavailable_tmux_fallback' };
+      }
       return { status: 'disabled', reason: 'zellij_unavailable', message: 'Bundled zellij is unavailable.' };
     }
     return { status: 'resolved', adapter: adapters.zellij, reason: 'zellij_forced' };

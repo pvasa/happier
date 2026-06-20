@@ -15,6 +15,7 @@ import {
   parseClaudeScreenState,
   resolveClaudeScreenInFlightSteerVeto,
 } from './tuiControls/screenState';
+import { isClaudeComposerCaptureStyleUnavailablePlaceholderCandidate } from './tuiControls/composerCaptureClassification';
 import type { EnhancedMode } from '../loop';
 import { mapToClaudeMode } from '../utils/permissionMode';
 
@@ -184,11 +185,25 @@ export function createClaudeUnifiedInFlightSteerEvaluator<Mode extends EnhancedM
   async function handleUserDraftVeto(
     batch: ClaudeUnifiedPromptBatch<Mode>,
     screen: ClaudeScreenState,
+    rawText: string,
   ): Promise<ClaudeUnifiedInFlightSteerDecision | null> {
     const captureInputState = opts.hostAdapter.captureInputState;
     let current = screen;
+    let currentRawText = rawText;
     let ownLeftover = (current.composerContent ?? '').length > 0
       && opts.ownComposerTexts?.matches(current.composerContent ?? '') === true;
+    if (!ownLeftover && isClaudeComposerCaptureStyleUnavailablePlaceholderCandidate(currentRawText, current)) {
+      const draftLength = (current.composerContent ?? '').length;
+      emitClaudeUnifiedSteerDecision(opts.telemetry, {
+        decision: 'vetoed',
+        reason: 'capture_style_unavailable',
+        originKind: batch.origin.kind,
+        draftLength,
+        ownDraft: false,
+      });
+      teeAvailabilitySnapshot(false, 'unsafe_window');
+      return { steer: false, reason: 'capture_style_unavailable' };
+    }
 
     if (ownLeftover && opts.clearOwnLeftoverDraft && captureInputState && !current.generating) {
       for (let attempt = 0; attempt < MAX_OWN_LEFTOVER_DRAFT_CLEAR_ATTEMPTS; attempt += 1) {
@@ -198,13 +213,14 @@ export function createClaudeUnifiedInFlightSteerEvaluator<Mode extends EnhancedM
           break;
         }
         await wait(draftClearSettleMs);
-        let recaptured: string;
+        let recaptured: Awaited<ReturnType<NonNullable<typeof captureInputState>>>;
         try {
-          recaptured = (await captureInputState(opts.handle)).currentInput;
+          recaptured = await captureInputState(opts.handle);
         } catch {
           break;
         }
-        current = parseClaudeScreenState(recaptured);
+        currentRawText = recaptured.currentInput;
+        current = parseClaudeScreenState(recaptured.currentInput, { cursor: recaptured.cursor });
         emitClaudeUnifiedSteerDecision(opts.telemetry, {
           decision: 'own_draft_clear_attempted',
           reason: 'user_draft',
@@ -217,6 +233,18 @@ export function createClaudeUnifiedInFlightSteerEvaluator<Mode extends EnhancedM
           return null;
         }
         ownLeftover = opts.ownComposerTexts?.matches(current.composerContent ?? '') === true;
+        if (!ownLeftover && isClaudeComposerCaptureStyleUnavailablePlaceholderCandidate(currentRawText, current)) {
+          const draftLength = (current.composerContent ?? '').length;
+          emitClaudeUnifiedSteerDecision(opts.telemetry, {
+            decision: 'vetoed',
+            reason: 'capture_style_unavailable',
+            originKind: batch.origin.kind,
+            draftLength,
+            ownDraft: false,
+          });
+          teeAvailabilitySnapshot(false, 'unsafe_window');
+          return { steer: false, reason: 'capture_style_unavailable' };
+        }
         if (!ownLeftover) break;
       }
     }
@@ -286,7 +314,8 @@ export function createClaudeUnifiedInFlightSteerEvaluator<Mode extends EnhancedM
           // arbiter's stale-turn recovery drain this prompt instead of starving it forever.
           if (captureInputState) {
             try {
-              const screen = parseClaudeScreenState((await captureInputState(opts.handle)).currentInput);
+              const inputState = await captureInputState(opts.handle);
+              const screen = parseClaudeScreenState(inputState.currentInput, { cursor: inputState.cursor });
               if (isClaudeScreenReadyForInput(screen)) {
                 return veto(batch, 'permission_mode_change', true);
               }
@@ -302,16 +331,17 @@ export function createClaudeUnifiedInFlightSteerEvaluator<Mode extends EnhancedM
       }
       // Two passes at most: a successful own-leftover clear (lane X) re-evaluates the fresh screen.
       for (let pass = 0; pass < 2; pass += 1) {
-        let screenText: string;
+        let inputState: Awaited<ReturnType<NonNullable<typeof captureInputState>>>;
         try {
-          screenText = (await captureInputState(opts.handle)).currentInput;
+          inputState = await captureInputState(opts.handle);
         } catch {
           return veto(batch, 'screen_capture_failed');
         }
-        const screen = parseClaudeScreenState(screenText);
+        const screenText = inputState.currentInput;
+        const screen = parseClaudeScreenState(screenText, { cursor: inputState.cursor });
         const vetoReason = resolveClaudeScreenInFlightSteerVeto(screen);
         if (vetoReason === 'user_draft') {
-          const decision = await handleUserDraftVeto(batch, screen);
+          const decision = await handleUserDraftVeto(batch, screen, screenText);
           if (decision !== null) return decision;
           continue;
         }
@@ -358,7 +388,8 @@ export function createClaudeUnifiedInFlightSteerEvaluator<Mode extends EnhancedM
         void (async () => {
           if (disposed) return;
           try {
-            const screen = parseClaudeScreenState((await captureInputState(opts.handle)).currentInput);
+            const inputState = await captureInputState(opts.handle);
+            const screen = parseClaudeScreenState(inputState.currentInput, { cursor: inputState.cursor });
             emitClaudeUnifiedSteerDecision(opts.telemetry, {
               decision: 'queued_banner_check',
               originKind: batch.origin.kind,

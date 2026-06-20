@@ -32,7 +32,11 @@ describe('createTmuxTerminalHostAdapter', () => {
       const tmux = new TmuxUtilities();
       vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => ({
         returncode: 0,
-        stdout: args[0] === 'capture-pane' ? `${fullPane}\n` : '',
+        stdout: args[0] === 'capture-pane'
+          ? `${fullPane}\n`
+          : args[0] === 'display-message'
+            ? '4\t6\n'
+            : '',
         stderr: '',
         command: [...args],
       }));
@@ -40,8 +44,9 @@ describe('createTmuxTerminalHostAdapter', () => {
 
       const inputState = await adapter.captureInputState?.(TMUX_HANDLE);
       expect(inputState).toBeDefined();
+      expect(inputState?.cursor).toEqual({ x: 4, y: 6 });
 
-      const screen = parseClaudeScreenState(inputState!.currentInput);
+      const screen = parseClaudeScreenState(inputState!.currentInput, { cursor: inputState!.cursor });
       // The permission prompt is several lines above the bottom; a last-line-only capture cannot see it.
       expect(screen.permissionPromptVisible).toBe(true);
       expect(resolveClaudeScreenInFlightSteerVeto(screen)).toBe('permission_prompt');
@@ -108,6 +113,8 @@ describe('createTmuxTerminalHostAdapter', () => {
 
     expect(executeTmuxCommand.mock.calls.map((call) => call[0])).toEqual([
       ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}\t#{pane_pid}\t#{pane_current_command}'],
+      ['display-message', '-p', '#{cursor_x}\t#{cursor_y}'],
+      ['display-message', '-p', '#{cursor_x}\t#{cursor_y}'],
       ['send-keys', '-t', 'happy:claude.1', '-l', '--', 'queued prompt'],
       ['send-keys', '-t', 'happy:claude.1', 'C-m'],
     ]);
@@ -309,6 +316,40 @@ describe('createTmuxTerminalHostAdapter', () => {
     expect(executeTmuxCommand).toHaveBeenCalledTimes(1);
   });
 
+  it('defers instead of failing when tmux liveness probe is inconclusive', async () => {
+    const tmux = new TmuxUtilities();
+    const executeTmuxCommand = vi.spyOn(tmux, 'executeTmuxCommand').mockResolvedValue({
+      returncode: 1,
+      stdout: '',
+      stderr: 'display-message timed out',
+      command: [],
+    });
+    const adapter = createTmuxTerminalHostAdapter({ tmux });
+
+    await expect(
+      adapter.injectUserPrompt(
+        {
+          kind: 'tmux',
+          sessionName: 'happy',
+          paneId: 'claude.1',
+          attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' },
+        },
+        {
+          text: 'queued prompt',
+          multiline: false,
+          origin: { kind: 'ui_pending', nonce: 'nonce-a' },
+          scheduling: { retryAfterMs: 250 },
+        },
+      ),
+    ).resolves.toEqual({
+      status: 'deferred',
+      reason: 'pane_initializing',
+      retryAfterMs: 250,
+    });
+
+    expect(executeTmuxCommand).toHaveBeenCalledTimes(1);
+  });
+
   it('fails with host_unreachable when typed tmux injection fails', async () => {
     const tmux = new TmuxUtilities();
     vi.spyOn(tmux, 'executeTmuxCommand').mockImplementation(async (args) => ({
@@ -418,16 +459,12 @@ describe('createTmuxTerminalHostAdapter', () => {
     expect(settled).toBe(false);
 
     finishWrite?.({ returncode: 0, stdout: '', stderr: '', command: [] });
-    await expect(injection).resolves.toEqual({
-      status: 'failed',
-      reason: 'timeout',
-      phase: 'after_write_before_enter',
-      duplicateRisk: 'possible',
-      recoverable: true,
-    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(injection).resolves.toMatchObject({ status: 'injected' });
     expect(calls).toEqual([
       ['display-message', '-p', '-t', 'happy:claude.1', '#{pane_dead}\t#{pane_pid}\t#{pane_current_command}'],
       ['send-keys', '-t', 'happy:claude.1', '-l', '--', 'queued prompt'],
+      ['send-keys', '-t', 'happy:claude.1', 'C-m'],
     ]);
   });
 
@@ -463,7 +500,7 @@ describe('createTmuxTerminalHostAdapter', () => {
       ),
     ).resolves.toEqual({ status: 'deferred', reason: 'user_typing', retryAfterMs: 250 });
 
-    expect(executeTmuxCommand).toHaveBeenCalledTimes(1);
+    expect(executeTmuxCommand).toHaveBeenCalledTimes(3);
     expect(captureCurrentInput).toHaveBeenCalledTimes(2);
     expect(captureCurrentInput).toHaveBeenNthCalledWith(1, 'happy:claude.1');
     expect(captureCurrentInput).toHaveBeenNthCalledWith(2, 'happy:claude.1');

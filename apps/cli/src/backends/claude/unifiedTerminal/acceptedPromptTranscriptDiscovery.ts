@@ -28,13 +28,40 @@ function readCommandNamePromptText(content: string): string | null {
   return commandName && commandName.startsWith('/') ? commandName : null;
 }
 
+function readContentTextParts(content: unknown): readonly string[] {
+  if (typeof content === 'string') return content.length > 0 ? [content] : [];
+  if (!Array.isArray(content)) return [];
+  const parts: string[] = [];
+  for (const part of content) {
+    if (typeof part === 'string') {
+      if (part.length > 0) parts.push(part);
+      continue;
+    }
+    const record = readObject(part);
+    const text = record?.text;
+    if (typeof text === 'string' && text.length > 0) {
+      parts.push(text);
+    }
+  }
+  return parts;
+}
+
+function expandPromptText(contentText: string): readonly string[] {
+  const commandName = readCommandNamePromptText(contentText);
+  return commandName ? [contentText, commandName] : [contentText];
+}
+
 function readUserPromptTexts(message: RawJSONLines): readonly string[] {
   if (message.type !== 'user') return [];
   if ((message as Record<string, unknown>).isMeta === true) return [];
   const content = message.message?.content;
-  if (typeof content !== 'string' || content.length === 0) return [];
-  const commandName = readCommandNamePromptText(content);
-  return commandName ? [content, commandName] : [content];
+  const textParts = readContentTextParts(content);
+  if (textParts.length === 0) return [];
+  const joinedText = textParts.length > 1 ? textParts.join('') : null;
+  const candidates = joinedText && !textParts.includes(joinedText)
+    ? [joinedText, ...textParts]
+    : textParts;
+  return candidates.flatMap(expandPromptText);
 }
 
 function readQueuedCommandPromptTexts(value: unknown): readonly string[] {

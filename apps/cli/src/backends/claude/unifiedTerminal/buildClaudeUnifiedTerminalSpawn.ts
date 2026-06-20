@@ -136,6 +136,7 @@ const managedClaudeArgFlagsWithValue = new Set([
 
 const managedClaudeArgFlagsWithoutValue = new Set([
   '--strict-mcp-config',
+  '--allow-dangerously-skip-permissions',
 ]);
 
 function appendClaudeArgsWithoutManagedPromptAndSpawnMode(
@@ -333,6 +334,8 @@ function buildClaudeArgs<Mode extends EnhancedMode>(
   if (typeof input.happierMcpConfigJson === 'string' && input.happierMcpConfigJson.trim().length > 0) {
     args.push('--mcp-config', input.happierMcpConfigJson.trim());
   }
+
+  args.push('--allow-dangerously-skip-permissions');
 
   const permissionMode = resolveClaudeSdkPermissionModeFromEnhancedMode(input.first.mode);
   if (permissionMode !== 'default') {

@@ -14,6 +14,7 @@ describe('Claude connected-service credential lifecycle descriptor', () => {
         mode: 'unsupported',
         liveSessionRequirement: { kind: 'none' },
       },
+      runtimeAuthApply: { directLiveHotAuth: 'unsupported' },
     });
   });
 });

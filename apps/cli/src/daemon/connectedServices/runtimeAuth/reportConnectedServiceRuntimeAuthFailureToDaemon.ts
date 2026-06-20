@@ -4,7 +4,10 @@ import {
 } from '@happier-dev/protocol';
 import { notifyDaemonConnectedServiceRuntimeAuthFailure } from '@/daemon/controlClient';
 import { logger as defaultLogger } from '@/ui/logger';
-import { resolveConnectedServiceRuntimeAuthFailureStatusMessage } from './resolveConnectedServiceRuntimeAuthFailureStatusMessage';
+import {
+  isRetryableConnectedServiceRuntimeAuthFailureReportDelivery,
+  resolveConnectedServiceRuntimeAuthFailureStatusMessage,
+} from './resolveConnectedServiceRuntimeAuthFailureStatusMessage';
 import {
   normalizeConnectedServiceRuntimeAuthRecoveryProjection,
   type ConnectedServiceRuntimeAuthRecoveryProjection,
@@ -122,14 +125,6 @@ function pruneStaleRuntimeAuthFailureReportDedupeEntries(nowMs: number): void {
   }
 }
 
-function isUnhandledLocalControlErrorReport(report: unknown): boolean {
-  const record = readRecord(report);
-  if (!record) return false;
-  if (record.ok === false || record.success === false) return true;
-  if (typeof record.error === 'string' && record.error.trim().length > 0) return true;
-  return typeof record.errorCode === 'string' && record.errorCode.trim().length > 0 && record.ok !== true;
-}
-
 export async function reportConnectedServiceRuntimeAuthFailureToDaemon(input: Readonly<{
 	  sessionId: string;
 	  switchesThisTurn?: number;
@@ -189,7 +184,7 @@ export async function reportConnectedServiceRuntimeAuthFailureToDaemon(input: Re
       });
       if (projection.handled) {
         await removeOutboxBestEffort();
-      } else if (isUnhandledLocalControlErrorReport(report)) {
+      } else if (isRetryableConnectedServiceRuntimeAuthFailureReportDelivery(report)) {
         await enqueueOutboxBestEffort();
       }
 	      return {

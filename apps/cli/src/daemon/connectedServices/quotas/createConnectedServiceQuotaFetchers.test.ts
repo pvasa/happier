@@ -128,8 +128,10 @@ describe('createConnectedServiceQuotaFetchers', () => {
       signal: new AbortController().signal,
     });
 
-    const codexHeaders = fetchMock.mock.calls[0]?.[1] as { headers?: Record<string, string> } | undefined;
-    const claudeHeaders = fetchMock.mock.calls[1]?.[1] as { headers?: Record<string, string> } | undefined;
+    const codexHeaders = fetchMock.mock.calls.find((call) => String(call[0]).includes('/wham/usage'))
+      ?.[1] as { headers?: Record<string, string> } | undefined;
+    const claudeHeaders = fetchMock.mock.calls.find((call) => String(call[0]).includes('/api/oauth/usage'))
+      ?.[1] as { headers?: Record<string, string> } | undefined;
     expect(codexHeaders?.headers?.['User-Agent']).toBe('codex-specific-agent/1.0');
     expect(claudeHeaders?.headers?.['User-Agent']).toMatch(/^claude-code\//u);
   });

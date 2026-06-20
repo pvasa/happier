@@ -78,6 +78,7 @@ describe('claudeRemoteAgentSdk work-state projection', () => {
       v: 1,
       resetAtMs: 1_768_100_000_000,
       retryAfterMs: null,
+      limitCategory: 'usage_limit',
       quotaScope: 'account',
       recoverability: 'wait',
       providerLimitId: 'five_hour',

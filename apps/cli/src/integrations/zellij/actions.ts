@@ -2,6 +2,11 @@ import { spawn } from 'child_process';
 import type { StdioOptions } from 'child_process';
 
 import { isAllowedExactEnvKey } from '@/utils/env/isAllowedExactEnvKey';
+import { splitBufferByBytes } from '../terminalHost/chunks';
+import {
+  createTerminalHostDeadline,
+  remainingTerminalHostDeadlineMs,
+} from '../terminalHost/deadline';
 
 export type ZellijCommandResult = Readonly<{ exitCode: number; stdout: string; stderr: string }>;
 
@@ -205,30 +210,10 @@ function buildRunCommandArgs(params: ZellijRunCommandParams): string[] {
   return args;
 }
 
-function splitByteChunks(text: string, chunkSize: number): Buffer[] {
-  const bytes = Buffer.from(text, 'utf8');
-  if (bytes.length === 0) return [];
-  const normalizedChunkSize = Math.max(1, Math.trunc(chunkSize));
-  const chunks: Buffer[] = [];
-  for (let offset = 0; offset < bytes.length; offset += normalizedChunkSize) {
-    chunks.push(bytes.subarray(offset, offset + normalizedChunkSize));
-  }
-  return chunks;
-}
-
 async function requireSuccess(result: ZellijCommandResult, action: string): Promise<void> {
   if (result.exitCode !== 0) {
     throw new Error(`zellij ${action} failed: ${result.stderr || result.stdout}`);
   }
-}
-
-function createDeadline(timeoutMs: number | undefined): number | undefined {
-  return timeoutMs !== undefined && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
-}
-
-function remainingTimeoutMs(deadline: number | undefined): number | undefined {
-  if (deadline === undefined) return undefined;
-  return Math.max(0, deadline - Date.now());
 }
 
 export async function attachCreateBackground(
@@ -324,9 +309,9 @@ export async function writeBytesChunked(params: ZellijPaneActionParams & Readonl
   timeoutMs?: number;
 }>): Promise<void> {
   const chunkSize = params.chunkSize ?? DEFAULT_ZELLIJ_WRITE_BYTES_CHUNK_SIZE;
-  const deadline = createDeadline(params.timeoutMs);
-  for (const chunk of splitByteChunks(params.text, chunkSize)) {
-    const timeoutMs = remainingTimeoutMs(deadline);
+  const deadline = createTerminalHostDeadline(params.timeoutMs);
+  for (const chunk of splitBufferByBytes(Buffer.from(params.text, 'utf8'), chunkSize)) {
+    const timeoutMs = remainingTerminalHostDeadlineMs(deadline);
     if (timeoutMs === 0) throw new ZellijActionTimeoutError('write');
     await requireSuccess(
       await runZellij(

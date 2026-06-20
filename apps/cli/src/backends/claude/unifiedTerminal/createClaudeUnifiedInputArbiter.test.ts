@@ -188,7 +188,7 @@ describe('createClaudeUnifiedInputArbiter', () => {
 
     nowMs += 1_000;
     arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(5);
 
     expect(injectPrompt).toHaveBeenCalledTimes(1);
     expect(failures).toEqual([]);
@@ -201,6 +201,60 @@ describe('createClaudeUnifiedInputArbiter', () => {
     await expect(arbiter.confirmPromptAcceptedByProvider()).resolves.toBe(true);
     expect(accepted).toEqual(['queued in Claude TUI']);
     expect(arbiter.snapshot()).toMatchObject({ queuedCount: 0, headInputState: 'submitted' });
+
+    arbiter.dispose();
+    expect(handedBack).toEqual([]);
+  });
+
+  it('terminalizes a terminal-custody prompt when provider acceptance is lost after turn end', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const batch = { message: 'queued in Claude TUI without acceptance proof', origin: { kind: 'ui_pending' as const } };
+    const injectPrompt = vi.fn().mockResolvedValue({ status: 'injected', at: nowMs, bytesWritten: batch.message.length });
+    const onInjectionFailure = vi.fn();
+    const accepted: string[] = [];
+    const handedBack: string[] = [];
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 10,
+      injectPrompt,
+      evaluateInFlightSteer: async () => ({ steer: true }),
+      onInjectionFailure,
+      onPromptAccepted: async (acceptedBatch) => {
+        accepted.push(acceptedBatch.message);
+      },
+      onUndeliverableBatches: (batches) => handedBack.push(...batches.map((item) => item.message)),
+    });
+
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+    await arbiter.enqueueUiMessage(batch);
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+    await expect(arbiter.observePromptCustodyByTerminal(batch)).resolves.toBe(true);
+
+    nowMs += 1_000;
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(onInjectionFailure).toHaveBeenCalledWith(expect.objectContaining({
+      failureState: 'failed_terminal',
+      batch,
+      result: expect.objectContaining({
+        reason: 'timeout',
+        phase: 'after_enter_unknown',
+        duplicateRisk: 'likely',
+        recoverable: true,
+      }),
+    }));
+    expect(accepted).toEqual([]);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 0,
+      terminalCustodyCount: 0,
+      providerAcceptancePendingCount: 0,
+      lastFailureReason: 'timeout',
+      headInputState: 'failed_terminal',
+    });
 
     arbiter.dispose();
     expect(handedBack).toEqual([]);
@@ -273,7 +327,7 @@ describe('createClaudeUnifiedInputArbiter', () => {
 
     nowMs += 1_000;
     arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(5);
 
     await expect(arbiter.confirmPromptAcceptedByProvider()).resolves.toBe(true);
     await expect(arbiter.confirmPromptAcceptedByProvider()).resolves.toBe(true);
@@ -289,6 +343,72 @@ describe('createClaudeUnifiedInputArbiter', () => {
 
     arbiter.dispose();
     expect(handedBack).toEqual([]);
+  });
+
+  it('does not arm a later terminal-custody timeout when an earlier custody prompt is accepted during a running turn', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const first = { message: 'first queued in Claude TUI', origin: { kind: 'ui_pending' as const } };
+    const second = { message: 'second queued in Claude TUI', origin: { kind: 'ui_pending' as const } };
+    const injected: string[] = [];
+    const accepted: string[] = [];
+    const failures: string[] = [];
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 10,
+      injectPrompt: async (batch) => {
+        injected.push(batch.message);
+        return { status: 'injected', at: nowMs, bytesWritten: batch.message.length };
+      },
+      evaluateInFlightSteer: async () => ({ steer: true }),
+      onPromptAccepted: async (batch) => {
+        accepted.push(batch.message);
+      },
+      onInjectionFailure: (failure) => {
+        failures.push(failure.batch.message);
+      },
+    });
+
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+    await arbiter.enqueueUiMessage(first);
+    await arbiter.drainWhenSafe();
+    await expect(arbiter.observePromptCustodyByTerminal(first)).resolves.toBe(true);
+
+    await arbiter.enqueueUiMessage(second);
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+    await expect(arbiter.observePromptCustodyByTerminal(second)).resolves.toBe(true);
+
+    expect(injected).toEqual(['first queued in Claude TUI', 'second queued in Claude TUI']);
+    expect(arbiter.snapshot()).toMatchObject({
+      terminalCustodyCount: 2,
+      providerAcceptancePendingCount: 2,
+    });
+
+    await expect(arbiter.confirmPromptAcceptedByProvider()).resolves.toBe(true);
+    expect(accepted).toEqual(['first queued in Claude TUI']);
+    expect(arbiter.snapshot()).toMatchObject({
+      terminalCustodyCount: 1,
+      providerAcceptancePendingCount: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(failures).toEqual([]);
+    expect(arbiter.snapshot()).toMatchObject({
+      terminalCustodyCount: 1,
+      providerAcceptancePendingCount: 1,
+    });
+
+    nowMs += 1_000;
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(failures).toEqual(['second queued in Claude TUI']);
+    expect(arbiter.snapshot()).toMatchObject({
+      terminalCustodyCount: 0,
+      providerAcceptancePendingCount: 0,
+      headInputState: 'failed_terminal',
+    });
   });
 
   it('keeps a later injected prompt awaiting acceptance when an earlier terminal-custody prompt is confirmed first', async () => {
@@ -411,6 +531,51 @@ describe('createClaudeUnifiedInputArbiter', () => {
 
     expect(injectPrompt).not.toHaveBeenCalled();
     expect(arbiter.snapshot()).toMatchObject({ queuedCount: 1, lastDeferredReason: 'user_typing' });
+  });
+
+  it('wakes a user-typing deferred prompt immediately after the terminal composer is cleared', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const injectPrompt = vi.fn().mockImplementation(async (batch) => ({
+      status: 'injected' as const,
+      at: nowMs,
+      bytesWritten: batch.message.length,
+    }));
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      maxWaitMs: 60_000,
+      injectPrompt,
+    });
+
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    arbiter.observeUserTypingState({ userTyping: true, observedAtMs: nowMs });
+    await arbiter.enqueueUiMessage({ message: 'deliver after clear', origin: { kind: 'ui_pending' } });
+    nowMs += 1;
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).not.toHaveBeenCalled();
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      lastDeferredReason: 'user_typing',
+      headInputState: 'waiting_for_readiness',
+    });
+
+    arbiter.notifyTerminalComposerCleared();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+    expect(injectPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'deliver after clear' }),
+      undefined,
+    );
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      lastDeferredReason: null,
+      headInputState: 'awaiting_provider_acceptance',
+    });
+
+    arbiter.dispose();
   });
 
   it('retries and injects after a stale user-typing startup observation expires', async () => {
@@ -1348,7 +1513,7 @@ describe('createClaudeUnifiedInputArbiter', () => {
       arbiter.dispose();
     });
 
-    it('never steers slash-command prompts mid-turn', async () => {
+    it('keeps side-effecting Happier slash commands deferred until idle', async () => {
       vi.useFakeTimers();
       let nowMs = 10_000;
       const injectPrompt = vi.fn(async (batch: { message: string }) => ({
@@ -1377,6 +1542,38 @@ describe('createClaudeUnifiedInputArbiter', () => {
         lastDeferredReason: 'terminal_busy',
         headInputState: 'waiting_for_readiness',
       });
+
+      arbiter.dispose();
+    });
+
+    it('allows non-side-effecting Claude slash commands to enter native in-flight custody', async () => {
+      vi.useFakeTimers();
+      let nowMs = 10_000;
+      const injectPrompt = vi.fn(async (batch: { message: string }) => ({
+        status: 'injected' as const,
+        at: nowMs,
+        bytesWritten: batch.message.length,
+      }));
+      const evaluateInFlightSteer = vi.fn(async () => ({ steer: true as const }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        providerAcceptanceTimeoutMs: 40,
+        injectPrompt,
+        evaluateInFlightSteer,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: '/model', origin: { kind: 'ui_pending' } });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+
+      expect(evaluateInFlightSteer).toHaveBeenCalledTimes(1);
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+      expect(injectPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ message: '/model' }),
+        { inFlightSteer: true },
+      );
 
       arbiter.dispose();
     });

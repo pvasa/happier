@@ -18,6 +18,7 @@ const claudeConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCrede
   refreshedCredentialApplication: { mode: 'restart_required' },
   predictiveSoftSwitch: { mode: 'unsupported', liveSessionRequirement: { kind: 'none' } },
   sameAccountFanoutStrategy: 'shared_group_auth_surface',
+  runtimeAuthApply: { directLiveHotAuth: 'unsupported' },
 };
 
 export const agent = {

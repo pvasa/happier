@@ -23,6 +23,11 @@ export type ClaudeUnifiedPromptBatch<Mode = unknown> = Readonly<{
    * watermark only at provider acceptance.
    */
   maxUserMessageSeq?: number | null;
+  /**
+   * Local ids for the same user rows. Used when provider acceptance happens before the server
+   * socket echo provides a durable seq.
+   */
+  userMessageLocalIds?: readonly string[];
 }>;
 
 export type ClaudeUnifiedPromptAcceptance = Readonly<{
@@ -84,6 +89,11 @@ export type ClaudeUnifiedInputArbiter<Mode = unknown> = Readonly<{
   enqueueUiMessage(batch: ClaudeUnifiedPromptBatch<Mode>): Promise<void>;
   observeLifecycle(observation: TerminalLifecycleObservation): void;
   observeUserTypingState(state: Readonly<{ userTyping: boolean; observedAtMs?: number | undefined }>): void;
+  /**
+   * External terminal-control evidence that the interactive composer no longer contains a user
+   * draft. Wakes the existing deferred-drain owner without bypassing readiness checks.
+   */
+  notifyTerminalComposerCleared(state?: Readonly<{ observedAtMs?: number | undefined }>): void;
   observePromptCustodyByTerminal(batch: ClaudeUnifiedPromptBatch<Mode>): Promise<boolean>;
   confirmPromptAcceptedByProvider(): Promise<boolean>;
   confirmPromptAcceptedByProviderIf(matcher: (batch: ClaudeUnifiedPromptBatch<Mode>) => boolean): Promise<boolean>;

@@ -89,6 +89,34 @@ describe('createClaudeUnifiedAcceptedPromptTranscriptDiscovery', () => {
     } satisfies RawJSONLines])).toBe(true);
   });
 
+  it('consumes attachment-bearing typed user rows whose content is stored as text parts', () => {
+    const prompt = [
+      'Please review the attached screenshots.',
+      '',
+      'Focus on the pool detail layout.',
+    ].join('\n');
+    const discovery = createClaudeUnifiedAcceptedPromptTranscriptDiscovery({
+      acceptedPromptWindowMs: 5_000,
+      nowMs: () => 10_000,
+    });
+
+    discovery.recordAcceptedPrompt({ message: prompt, acceptedAtMs: 10_000 });
+
+    expect(discovery.consumeMatchingTranscript([{
+      type: 'user',
+      uuid: 'provider-visible-attachment-prompt',
+      timestamp: new Date(10_200).toISOString(),
+      promptSource: 'typed',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image', source: { type: 'file', path: '/tmp/screenshot.png' } },
+        ],
+      },
+    } satisfies RawJSONLines])).toBe(true);
+  });
+
   it('does not consume command-name-only slash evidence when multiple accepted prompts share the command', () => {
     const discovery = createClaudeUnifiedAcceptedPromptTranscriptDiscovery({
       acceptedPromptWindowMs: 5_000,

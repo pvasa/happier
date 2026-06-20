@@ -212,14 +212,18 @@ const CLAUDE_2_1_174_FRESH_PLACEHOLDER = [
 ].join('\n');
 
 describe('parseClaudeScreenState — empty-composer placeholder hint (2.1.174 fresh session)', () => {
-  it('treats the Try "<hint>" placeholder as an EMPTY composer, not a user draft', () => {
+  it('keeps the Try "<hint>" text fail-closed as a draft without style or cursor evidence', () => {
     const state = parseClaudeScreenState(CLAUDE_2_1_174_FRESH_PLACEHOLDER);
-    expect(state.composerContent).toBe('');
-    expect(state.userDraftPresent).toBe(false);
+    expect(state.composerContent).toBe('Try "refactor <filepath>"');
+    expect(state.userDraftPresent).toBe(true);
   });
 
-  it('keeps the placeholder screen ready for input and safe for controls/steering', () => {
-    const state = parseClaudeScreenState(CLAUDE_2_1_174_FRESH_PLACEHOLDER);
+  it('treats the Try "<hint>" placeholder as an EMPTY composer when cursor proves the input is empty', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_174_FRESH_PLACEHOLDER, {
+      cursor: { x: 2, y: 6 },
+    });
+    expect(state.composerContent).toBe('');
+    expect(state.userDraftPresent).toBe(false);
     expect(isClaudeScreenReadyForInput(state)).toBe(true);
     expect(isSafeWindowForSlashControl(state)).toBe(true);
     expect(resolveClaudeScreenInFlightSteerVeto(state)).toBeNull();
@@ -234,12 +238,12 @@ describe('parseClaudeScreenState — empty-composer placeholder hint (2.1.174 fr
     expect(state.userDraftPresent).toBe(true);
   });
 
-  it('treats the typographic-quote placeholder variant as empty as well', () => {
+  it('treats the typographic-quote placeholder variant as empty when cursor proves it', () => {
     const curly = CLAUDE_2_1_174_FRESH_PLACEHOLDER.replace(
       '❯ Try "refactor <filepath>"',
       '❯ Try “fix typecheck errors”',
     );
-    const state = parseClaudeScreenState(curly);
+    const state = parseClaudeScreenState(curly, { cursor: { x: 2, y: 6 } });
     expect(state.userDraftPresent).toBe(false);
     expect(state.composerContent).toBe('');
   });
@@ -307,6 +311,67 @@ describe('parseClaudeScreenState — dim contextual suggestion placeholder (2.1.
       `${ESC}[2m${ESC}[22mcheck the output`,
     );
     const state = parseClaudeScreenState(cancelled);
+    expect(state.userDraftPresent).toBe(true);
+  });
+});
+
+// Live Lima/tmux capture 2026-06-19 (Claude Code 2.1.179-class): tmux `capture-pane -p -e`
+// returned the contextual suggestion with no SGR styling, but `#{cursor_x},#{cursor_y}` showed the
+// cursor at the start of the visual suggestion text. That cursor location is the host-owned proof
+// that the composer input buffer is empty; without cursor evidence, plain captures still fail
+// closed as drafts.
+const CLAUDE_2_1_179_TMUX_PLAIN_CONTEXTUAL_SUGGESTION = [
+  '  Called happier (ctrl+o to expand)',
+  '',
+  '● Hi! How can I help you today?',
+  '',
+  '✻ Brewed for 7s',
+  '',
+  '────────────────────────────────────────────────',
+  '❯ what can you help me with',
+  '────────────────────────────────────────────────',
+  '  Sonnet 4.6',
+  '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
+].join('\n');
+
+describe('parseClaudeScreenState — plain contextual suggestion with cursor proof (tmux)', () => {
+  it('treats a plain visible suggestion as an EMPTY composer when the cursor is at the text start', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_179_TMUX_PLAIN_CONTEXTUAL_SUGGESTION, {
+      cursor: { x: 2, y: 7 },
+    });
+    expect(state.composerContent).toBe('');
+    expect(state.userDraftPresent).toBe(false);
+    expect(isClaudeScreenReadyForInput(state)).toBe(true);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBeNull();
+  });
+
+  it('keeps long plain composer content as a draft even when the cursor is at the text start', () => {
+    const longDraft = `❯ ${'real user draft '.repeat(12)}`;
+    const state = parseClaudeScreenState(longDraft, { cursor: { x: 2, y: 0 } });
+
+    expect(state.composerContent).toBe(longDraft.slice(2).trim());
+    expect(state.userDraftPresent).toBe(true);
+  });
+
+  it('keeps the same plain text fail-closed as a draft without cursor evidence', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_179_TMUX_PLAIN_CONTEXTUAL_SUGGESTION);
+    expect(state.composerContent).toBe('what can you help me with');
+    expect(state.userDraftPresent).toBe(true);
+  });
+
+  it('still trusts cursor proof when unrelated border styling exists outside the composer line', () => {
+    const styledChrome = CLAUDE_2_1_179_TMUX_PLAIN_CONTEXTUAL_SUGGESTION
+      .replaceAll('────────────────────────────────────────────────', `${ESC}[38;2;136;136;136m────────────────────────────────────────────────${ESC}[m`);
+    const state = parseClaudeScreenState(styledChrome, { cursor: { x: 2, y: 7 } });
+    expect(state.composerContent).toBe('');
+    expect(state.userDraftPresent).toBe(false);
+  });
+
+  it('keeps the same plain text a draft when the cursor is after the visible content', () => {
+    const state = parseClaudeScreenState(CLAUDE_2_1_179_TMUX_PLAIN_CONTEXTUAL_SUGGESTION, {
+      cursor: { x: 27, y: 7 },
+    });
+    expect(state.composerContent).toBe('what can you help me with');
     expect(state.userDraftPresent).toBe(true);
   });
 });
@@ -409,6 +474,46 @@ describe('parseClaudeScreenState — effort change confirmation dialog (incident
   it('vetoes in-flight steering while the effort dialog is visible (typed text would answer it)', () => {
     expect(resolveClaudeScreenInFlightSteerVeto(parseClaudeScreenState(CLAUDE_2_1_173.effortChangeDialog)))
       .toBe('effort_change_dialog');
+  });
+});
+
+// Supplied live incident shape (Claude Code 2.1.179-class heavy-session resume interstitial):
+// startup can stop on this numbered selection before the composer becomes interactive. It is a
+// known blocking startup dialog, not a generic unknown confirmation.
+const CLAUDE_HEAVY_SESSION_RESUME_DIALOG = [
+  'This session is 18h 2m old and 560.4k tokens.',
+  'To reduce startup time, Claude can resume from the saved summary or load the full session.',
+  '',
+  '❯ 1. Resume from summary',
+  '  2. Resume full session',
+].join('\n');
+
+describe('parseClaudeScreenState — heavy-session resume choice dialog', () => {
+  it('recognizes the resume-choice interstitial and maps its selectable options', () => {
+    const state = parseClaudeScreenState(CLAUDE_HEAVY_SESSION_RESUME_DIALOG);
+    expect(state.resumeChoiceDialogVisible).toBe(true);
+    expect(state.resumeChoiceDialogOptions).toEqual(['resume_from_summary', 'resume_full_session']);
+    expect(state.unrecognizedConfirmationDialogVisible).toBe(false);
+  });
+
+  it('keeps the resume-choice interstitial blocking until it is answered', () => {
+    const state = parseClaudeScreenState(CLAUDE_HEAVY_SESSION_RESUME_DIALOG);
+    expect(state.inputBoxInteractive).toBe(false);
+    expect(isClaudeScreenReadyForInput(state)).toBe(false);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+    expect(isSafeWindowForModeCycle(state)).toBe(false);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('resume_choice_dialog');
+  });
+
+  it('keeps similar numbered dialogs fail-closed when the resume wording is not proven', () => {
+    const state = parseClaudeScreenState([
+      'This session is large.',
+      '',
+      '❯ 1. Use the fast path',
+      '  2. Use all context',
+    ].join('\n'));
+    expect(state.resumeChoiceDialogVisible).toBe(false);
+    expect(state.unrecognizedConfirmationDialogVisible).toBe(true);
   });
 });
 
@@ -589,6 +694,7 @@ describe('parseClaudeScreenState — unrecognized confirmation dialogs (P-B fail
   it('does not flag RECOGNIZED dialogs (switch model / effort change) as unrecognized', () => {
     expect(parseClaudeScreenState(CLAUDE_2_1_170.switchModelDialog).unrecognizedConfirmationDialogVisible).toBe(false);
     expect(parseClaudeScreenState(CLAUDE_2_1_173.effortChangeDialog).unrecognizedConfirmationDialogVisible).toBe(false);
+    expect(parseClaudeScreenState(CLAUDE_HEAVY_SESSION_RESUME_DIALOG).unrecognizedConfirmationDialogVisible).toBe(false);
   });
 
   it('does not flag RECOGNIZED permission/trust prompts (owned by the permission flow, not controls)', () => {

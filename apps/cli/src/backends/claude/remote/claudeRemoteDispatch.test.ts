@@ -83,6 +83,47 @@ describe('claudeRemoteDispatch', () => {
         expect(mockLegacy).toHaveBeenCalledTimes(0);
     });
 
+    it('passes the explicit --resume session id into the unified terminal runner before SessionStart', async () => {
+        const mockLegacy = vi.fn(async () => {});
+        const mockAgentSdk = vi.fn(async () => {});
+        const mockUnified = vi.fn(async () => {});
+
+        let sent = false;
+        await claudeRemoteDispatch(
+            {
+                sessionId: null,
+                transcriptPath: null,
+                path: '/tmp/workspace',
+                claudeArgs: ['--resume', 'resume-123'],
+                nextMessage: async () => {
+                    if (sent) return null;
+                    sent = true;
+                    return {
+                        message: 'hello',
+                        mode: {
+                            permissionMode: 'default',
+                            claudeUnifiedTerminalEnabled: true,
+                            claudeUnifiedTerminalHost: 'auto',
+                        } as any,
+                    };
+                },
+            } as any,
+            {
+                claudeRemote: mockLegacy,
+                claudeRemoteAgentSdk: mockAgentSdk,
+                claudeUnifiedTerminal: mockUnified,
+                resolveClaudeUnifiedTerminalFeatureDecision: () => ({ state: 'enabled' }),
+            } as any,
+        );
+
+        expect(mockUnified).toHaveBeenCalledTimes(1);
+        expect(mockUnified).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: 'resume-123',
+            transcriptPath: null,
+            allowFirstInputBeforeSessionStart: true,
+        }));
+    });
+
     it('defaults missing Agent SDK flag to the Agent SDK runner', async () => {
         const mockLegacy = vi.fn(async () => {});
         const mockAgentSdk = vi.fn(async () => {});

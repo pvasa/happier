@@ -18,6 +18,8 @@ import type { AgentState } from '@/api/types';
 import type { SessionProviderInputConsumerOptions } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
 import { ClaudeUnifiedTerminalReadinessTimeoutError } from './unifiedTerminal/createClaudeUnifiedTerminalReadinessBridge';
 import { ClaudeUnifiedTerminalInjectionFailureError } from './unifiedTerminal/terminalInjectionFailureError';
+import { createFakeControlPort } from './unifiedTerminal/tuiControls/fakeControlPort';
+import { parseClaudeScreenState } from './unifiedTerminal/tuiControls/screenState';
 
 vi.mock('@/agent/runtime/createHappierMcpBridge', () => ({
   createHappierMcpBridge: vi.fn(async () => ({
@@ -58,6 +60,20 @@ const mockClaudeRemoteDispatch = vi.fn<(opts: unknown, deps?: unknown) => Promis
 vi.mock('./remote/claudeRemoteDispatch', () => ({
   claudeRemoteDispatch: mockClaudeRemoteDispatch,
 }));
+
+const RESUME_CHOICE_DIALOG = [
+  'This session is 18h 2m old and 560.4k tokens.',
+  'To reduce startup time, Claude can resume from the saved summary or load the full session.',
+  '',
+  '❯ 1. Resume from summary',
+  '  2. Resume full session',
+].join('\n');
+
+const IDLE_COMPOSER = [
+  '──────────────────────────────',
+  '❯ ',
+  '──────────────────────────────',
+].join('\n');
 
 const createSessionProviderInputConsumerSpy = vi.hoisted(() => vi.fn());
 vi.mock('@/agent/runtime/sessionInput/SessionProviderInputConsumer', async (importOriginal) => {
@@ -233,6 +249,7 @@ function createRemoteHarness(options?: {
     sendClaudeSessionMessage,
     deferDeliveredUserMessageWatermarkToProviderAcceptance: vi.fn(),
     confirmUserMessageDeliveredToProvider: vi.fn(),
+    registerSessionRuntimeControls: vi.fn(() => vi.fn()),
     fetchRecentTranscriptTextItemsForAcpImport: vi.fn(async () => []),
     sendSessionEvent: vi.fn(),
     getMetadataSnapshot: () => metadataState,
@@ -764,18 +781,36 @@ function createRemoteHarness(options?: {
       claudeUnifiedTerminalEnabled: true,
       claudeUnifiedTerminalHost: 'auto',
     } satisfies EnhancedMode;
-    harness.session.queue.push('watermarked remote prompt', mode, { userMessageSeq: 31 });
+    harness.session.queue.push('watermarked remote prompt', mode, {
+      userMessageSeq: 31,
+      userMessageLocalId: 'remote-local-31',
+    });
     const runnerCompleted = createDeferred<void>();
 
     const runClaudeUnifiedTerminalSession = vi.fn(async (opts: {
-      nextMessage?: () => Promise<{ message: string; mode: EnhancedMode; maxUserMessageSeq: number | null } | null>;
-      returnUnconsumedMessage?: (input: { message: string; mode: EnhancedMode; maxUserMessageSeq?: number | null }) => void;
-      onPromptAcceptedByProvider?: (input: { message: string; maxUserMessageSeq: number | null }) => void;
+      nextMessage?: () => Promise<{
+        message: string;
+        mode: EnhancedMode;
+        maxUserMessageSeq: number | null;
+        userMessageLocalIds?: readonly string[] | null;
+      } | null>;
+      returnUnconsumedMessage?: (input: {
+        message: string;
+        mode: EnhancedMode;
+        maxUserMessageSeq?: number | null;
+        userMessageLocalIds?: readonly string[] | null;
+      }) => void;
+      onPromptAcceptedByProvider?: (input: {
+        message: string;
+        maxUserMessageSeq: number | null;
+        userMessageLocalIds: readonly string[];
+      }) => void;
     }) => {
       const batch = await opts.nextMessage?.();
       expect(batch).toMatchObject({
         message: 'watermarked remote prompt',
         maxUserMessageSeq: 31,
+        userMessageLocalIds: ['remote-local-31'],
       });
       expect(harness.client.confirmUserMessageDeliveredToProvider).not.toHaveBeenCalled();
 
@@ -783,12 +818,14 @@ function createRemoteHarness(options?: {
         message: 'watermarked remote prompt',
         mode,
         maxUserMessageSeq: batch?.maxUserMessageSeq ?? null,
+        userMessageLocalIds: batch?.userMessageLocalIds ?? [],
       });
       expect(harness.client.confirmUserMessageDeliveredToProvider).not.toHaveBeenCalled();
 
       opts.onPromptAcceptedByProvider?.({
         message: 'watermarked remote prompt',
         maxUserMessageSeq: batch?.maxUserMessageSeq ?? null,
+        userMessageLocalIds: batch?.userMessageLocalIds ?? [],
       });
       runnerCompleted.resolve(undefined);
     });
@@ -811,10 +848,176 @@ function createRemoteHarness(options?: {
     expect(harness.session.queue.queue[0]).toMatchObject({
       message: 'watermarked remote prompt',
       userMessageSeq: 31,
+      userMessageLocalIds: ['remote-local-31'],
     });
     expect(harness.client.confirmUserMessageDeliveredToProvider).toHaveBeenCalledTimes(1);
-    expect(harness.client.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(31);
+    expect(harness.client.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(31, {
+      localIds: ['remote-local-31'],
+    });
 
+    const switchHandler = await harness.switchHandlerReady;
+    await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  });
+
+  it('registers remote unified terminal composer clear through additive session runtime controls', async () => {
+    const harness = createRemoteHarness({ sessionId: 'sess_unified_composer_clear' });
+    const mode = {
+      permissionMode: 'default',
+      claudeUnifiedTerminalEnabled: true,
+      claudeUnifiedTerminalHost: 'auto',
+    } satisfies EnhancedMode;
+    harness.session.queue.push('clearable remote prompt', mode);
+    const unregister = vi.fn();
+    const registerSessionRuntimeControls = harness.client.registerSessionRuntimeControls as ReturnType<typeof vi.fn>;
+    registerSessionRuntimeControls.mockReturnValueOnce(unregister);
+    const runnerCompleted = createDeferred<void>();
+
+    const runClaudeUnifiedTerminalSession = vi.fn(async (opts: {
+      registerTerminalComposerClearRuntimeControl?: (
+        handler: (request: Readonly<{ sessionId: string }>) => Promise<unknown>,
+      ) => (() => void) | void;
+    }) => {
+      expect(typeof opts.registerTerminalComposerClearRuntimeControl).toBe('function');
+      const handler = vi.fn(async () => ({ ok: true, status: 'already_empty', sessionId: 'happy_sess_1' }));
+      const dispose = opts.registerTerminalComposerClearRuntimeControl?.(handler);
+
+      expect(registerSessionRuntimeControls).toHaveBeenCalledWith({
+        clearTerminalComposer: handler,
+      });
+      dispose?.();
+      expect(unregister).toHaveBeenCalledTimes(1);
+      runnerCompleted.resolve(undefined);
+    });
+    vi.doMock('./unifiedTerminal/runClaudeUnifiedTerminalSession', () => ({
+      runClaudeUnifiedTerminalSession,
+    }));
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown, deps?: unknown) => {
+      const dispatchDeps = deps as UnifiedTerminalDispatchDeps | undefined;
+      expect(dispatchDeps?.claudeUnifiedTerminal).toEqual(expect.any(Function));
+      await dispatchDeps?.claudeUnifiedTerminal?.(opts);
+      await waitForAbort((opts as UnifiedTerminalDispatchMockOptions).signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(harness.session);
+    vi.doUnmock('./unifiedTerminal/runClaudeUnifiedTerminalSession');
+
+    await runnerCompleted.promise;
+    const switchHandler = await harness.switchHandlerReady;
+    await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  });
+
+  it('surfaces remote blocked-apply user drafts as clearable terminal composer events', async () => {
+    const harness = createRemoteHarness({ sessionId: 'sess_unified_blocked_apply_draft' });
+    const mode = {
+      permissionMode: 'default',
+      claudeUnifiedTerminalEnabled: true,
+      claudeUnifiedTerminalHost: 'auto',
+    } satisfies EnhancedMode;
+    harness.session.queue.push('runtime control draft blocker', mode);
+    const runnerCompleted = createDeferred<void>();
+
+    const runClaudeUnifiedTerminalSession = vi.fn(async (opts: {
+      tuiRuntimeControl?: {
+        onBlockedApplyStarvation?: (info: {
+          consecutiveBlockedApplies: number;
+          blockedReason?: string | null;
+        }) => void;
+      };
+    }) => {
+      opts.tuiRuntimeControl?.onBlockedApplyStarvation?.({
+        consecutiveBlockedApplies: 6,
+        blockedReason: 'stuck_unsafe_window:user_draft',
+      });
+      runnerCompleted.resolve(undefined);
+    });
+    vi.doMock('./unifiedTerminal/runClaudeUnifiedTerminalSession', () => ({
+      runClaudeUnifiedTerminalSession,
+    }));
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown, deps?: unknown) => {
+      const dispatchDeps = deps as UnifiedTerminalDispatchDeps | undefined;
+      expect(dispatchDeps?.claudeUnifiedTerminal).toEqual(expect.any(Function));
+      await dispatchDeps?.claudeUnifiedTerminal?.(opts);
+      await waitForAbort((opts as UnifiedTerminalDispatchMockOptions).signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(harness.session);
+    vi.doUnmock('./unifiedTerminal/runClaudeUnifiedTerminalSession');
+
+    await runnerCompleted.promise;
+    expect(harness.client.sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'terminal-composer-draft-blocked',
+      reason: 'idle_draft_guard',
+    }));
+    expect(harness.client.getAgentStateSnapshot()?.capabilities).toMatchObject({
+      terminalComposerDraftPresent: true,
+      terminalComposerClearSupported: true,
+    });
+
+    const switchHandler = await harness.switchHandlerReady;
+    await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  });
+
+  it('passes a startup resume-choice resolver to the remote unified terminal runner', async () => {
+    const harness = createRemoteHarness({ sessionId: 'sess_unified_resume_choice_resolver' });
+    const mode = {
+      permissionMode: 'default',
+      claudeUnifiedTerminalEnabled: true,
+      claudeUnifiedTerminalHost: 'auto',
+      claudeUnifiedTerminalResumeChoice: 'resume_full_session',
+    } satisfies EnhancedMode;
+    harness.session.queue.push('resume-choice prompt', mode);
+    const runnerCompleted = createDeferred<void>();
+
+    const runClaudeUnifiedTerminalSession = vi.fn(async (opts: {
+      nextMessage?: () => Promise<{ message: string; mode: EnhancedMode } | null>;
+      createStartupDialogResolver?: (params: {
+        controlPort: ReturnType<typeof createFakeControlPort>;
+        startupMode: EnhancedMode;
+      }) => ((input: {
+        screenState: ReturnType<typeof parseClaudeScreenState>;
+        observedAtMs: number;
+        abortSignal: AbortSignal;
+      }) => Promise<{ status: string }> | { status: string }) | null | undefined;
+    }) => {
+      const batch = await opts.nextMessage?.();
+      expect(batch?.mode.claudeUnifiedTerminalResumeChoice).toBe('resume_full_session');
+      expect(opts.createStartupDialogResolver).toEqual(expect.any(Function));
+
+      const port = createFakeControlPort({ captures: [RESUME_CHOICE_DIALOG, IDLE_COMPOSER] });
+      const resolver = opts.createStartupDialogResolver?.({
+        controlPort: port,
+        startupMode: batch?.mode ?? mode,
+      });
+      expect(resolver).toEqual(expect.any(Function));
+      await resolver?.({
+        screenState: parseClaudeScreenState(RESUME_CHOICE_DIALOG),
+        observedAtMs: 1,
+        abortSignal: new AbortController().signal,
+      });
+      expect(port.sentLiteral).toEqual(['2']);
+      expect(port.sentKeys).toEqual(['Enter']);
+      runnerCompleted.resolve(undefined);
+    });
+    vi.doMock('./unifiedTerminal/runClaudeUnifiedTerminalSession', () => ({
+      runClaudeUnifiedTerminalSession,
+    }));
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown, deps?: unknown) => {
+      const dispatchDeps = deps as UnifiedTerminalDispatchDeps | undefined;
+      expect(dispatchDeps?.claudeUnifiedTerminal).toEqual(expect.any(Function));
+      await dispatchDeps?.claudeUnifiedTerminal?.(opts);
+      await waitForAbort((opts as UnifiedTerminalDispatchMockOptions).signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(harness.session);
+    vi.doUnmock('./unifiedTerminal/runClaudeUnifiedTerminalSession');
+
+    await runnerCompleted.promise;
     const switchHandler = await harness.switchHandlerReady;
     await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
     await expect(launcherPromise).resolves.toBe('switch');
@@ -1335,6 +1538,7 @@ function createRemoteHarness(options?: {
     const consumerOptions = createSessionProviderInputConsumerSpy.mock.calls.at(-1)?.[0] as
       | SessionProviderInputConsumerOptions<EnhancedMode, string>
       | undefined;
+    expect(consumerOptions?.resolveActiveTurnDeliveryPolicy?.()).toBe('allow_live_delivery');
     expect(consumerOptions?.session.materializeNextPendingMessageSafely).toEqual(expect.any(Function));
 
     await expect(consumerOptions?.session.popPendingMessage()).resolves.toBe(true);
@@ -1920,14 +2124,15 @@ function createRemoteHarness(options?: {
 
     await waitWithin(dispatchObserved.promise, 'remote dispatch mock did not run');
     await waitWithin(pendingPermissionObserved.promise, 'pending permission was not observed');
-    expect(harness.client.getAgentStateSnapshot().requests?.['perm-abort-1']).toBeTruthy();
+    expect(harness.client.getAgentStateSnapshot()?.requests?.['perm-abort-1']).toBeTruthy();
 
     const abortHandler = await waitWithin(harness.abortHandlerReady, 'abort handler was not registered');
     await abortHandler();
     await waitWithin(interruptObserved.promise, 'turn interrupt was not invoked during abort');
 
-    expect(harness.client.getAgentStateSnapshot().requests?.['perm-abort-1']).toBeUndefined();
-    expect(harness.client.getAgentStateSnapshot().completedRequests?.['perm-abort-1']).toMatchObject({
+    const stateAfterAbort = harness.client.getAgentStateSnapshot();
+    expect(stateAfterAbort?.requests?.['perm-abort-1']).toBeUndefined();
+    expect(stateAfterAbort?.completedRequests?.['perm-abort-1']).toMatchObject({
       status: 'canceled',
       reason: 'Aborted by user',
       decision: 'abort',

@@ -87,6 +87,147 @@ describe('createSessionConnectedServiceAuthHotApply', () => {
     });
   });
 
+  it('returns exact accepted verification from provider runtime hot-apply proof', async () => {
+    const adapter = {
+      classifyRuntimeAuthFailure: () => null,
+      materializeActiveProfile: async () => ({}),
+      canHotApply: () => ({ supported: true }),
+      hotApply: async () => ({
+        applied: true,
+        verification: {
+          activeAccountId: 'acct_work',
+          proofStrength: 'exact',
+          source: 'applied_credential',
+        },
+      }),
+      recoverAfterRuntimeAuthSwitch: async () => ({}),
+      probeQuota: async () => ({}),
+      refreshActiveProfile: async () => ({}),
+    } satisfies ConnectedServiceProviderRuntimeAuthAdapter;
+    const apply = createSessionConnectedServiceAuthHotApply({
+      resolveRuntimeAuthAdapter: async () => adapter,
+    });
+
+    await expect(apply({
+      tracked: {
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        },
+      },
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' },
+        },
+      },
+    })).resolves.toEqual({
+      ok: true,
+      verificationByServiceId: {
+        'openai-codex': {
+          status: 'verified',
+          activeAccountId: 'acct_work',
+          proofStrength: 'exact',
+          source: 'applied_credential',
+        },
+      },
+    });
+  });
+
+  it('returns exact accepted verification from shared auth-surface hot-apply proof', async () => {
+    const adapter = {
+      classifyRuntimeAuthFailure: () => null,
+      materializeActiveProfile: async () => ({}),
+      canHotApply: () => ({ supported: true }),
+      hotApply: async () => ({
+        applied: true,
+        verification: {
+          status: 'verified',
+          sharedAuthSurfaceId: 'claude-team',
+          proofStrength: 'exact',
+          source: 'runtime_identity_probe',
+        },
+      }),
+      recoverAfterRuntimeAuthSwitch: async () => ({}),
+      probeQuota: async () => ({}),
+      refreshActiveProfile: async () => ({}),
+    } satisfies ConnectedServiceProviderRuntimeAuthAdapter;
+    const apply = createSessionConnectedServiceAuthHotApply({
+      resolveRuntimeAuthAdapter: async () => adapter,
+    });
+
+    await expect(apply({
+      tracked: {
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        },
+      },
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'claude-subscription': { source: 'connected', selection: 'group', groupId: 'claude-team' },
+        },
+      },
+    })).resolves.toEqual({
+      ok: true,
+      verificationByServiceId: {
+        'claude-subscription': {
+          status: 'verified',
+          sharedAuthSurfaceId: 'claude-team',
+          proofStrength: 'exact',
+          source: 'runtime_identity_probe',
+        },
+      },
+    });
+  });
+
+  it('does not accept exact hot-apply proof without provider account identity material', async () => {
+    const adapter = {
+      classifyRuntimeAuthFailure: () => null,
+      materializeActiveProfile: async () => ({}),
+      canHotApply: () => ({ supported: true }),
+      hotApply: async () => ({
+        applied: true,
+        verification: {
+          status: 'verified',
+          proofStrength: 'exact',
+          source: 'applied_credential',
+        },
+      }),
+      recoverAfterRuntimeAuthSwitch: async () => ({}),
+      probeQuota: async () => ({}),
+      refreshActiveProfile: async () => ({}),
+    } satisfies ConnectedServiceProviderRuntimeAuthAdapter;
+    const apply = createSessionConnectedServiceAuthHotApply({
+      resolveRuntimeAuthAdapter: async () => adapter,
+    });
+
+    await expect(apply({
+      tracked: {
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        },
+      },
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' },
+        },
+      },
+    })).resolves.toEqual({ ok: true });
+  });
+
   it('returns restart-required when the provider can recover a hot-apply miss by restart', async () => {
     const adapter = {
       classifyRuntimeAuthFailure: () => null,

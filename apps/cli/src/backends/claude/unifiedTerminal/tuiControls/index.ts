@@ -21,6 +21,11 @@ export {
 export { resolveTargetModeMarker } from './permissionMode';
 export type { ControlAttemptResult } from './outcome';
 export {
+  clearUserAuthorizedClaudeComposerDraft,
+  type ClaudeComposerClearRefusalReason,
+  type ClaudeUserAuthorizedComposerClearResult,
+} from './composerClear';
+export {
   CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL_FEATURE_ID,
   CLAUDE_TUI_MODE_MARKERS,
   DEFAULT_CLAUDE_TUI_CONTROL_TIMINGS,

@@ -2,12 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
 
 import { logger } from '@/ui/logger';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { createDaemonControlApp, startDaemonControlServer } from './controlServer';
 import { buildRuntimeAuthRecoveryKey } from './connectedServices/runtimeAuth/recoveryKey/runtimeAuthRecoveryKey';
 import {
   RuntimeAuthRecoveryScheduler,
   type RuntimeAuthRecoveryDiagnostic,
 } from './connectedServices/runtimeAuth/RuntimeAuthRecoveryScheduler';
+import {
+  reportConnectedServiceRuntimeAuthFailureToDaemon,
+  resetConnectedServiceRuntimeAuthFailureReportDedupeForTests,
+} from './connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
+import { readRuntimeAuthFailureReportOutboxItems } from './connectedServices/runtimeAuth/reportOutbox/runtimeAuthFailureReportOutbox';
 import type { ConnectedServiceRuntimeFailureClassification } from './connectedServices/runtimeAuth/types';
 
 describe('createDaemonControlApp connected-service runtime auth handling', () => {
@@ -288,6 +294,163 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
       });
       expect(handleConnectedServiceRuntimeAuthFailure).toHaveBeenCalledOnce();
       expect(calls).toEqual(['begin', 'handler']);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('routes temporary throttles without creating broad runtime-auth recovery intake', async () => {
+    const beginClassifiedFailure = vi.fn(async () => {
+      throw new Error('temporary throttle must not arm broad runtime-auth recovery');
+    });
+    const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'temporary_retry_armed' as const,
+      serviceId: 'claude-subscription',
+      profileId: 'primary',
+      groupId: 'claude',
+      retryAfterMs: 1_250,
+      resetAtMs: null,
+      recovery: {
+        status: 'scheduled',
+        nextRetryAtMs: 2_250,
+        attemptCount: 0,
+      },
+    }));
+    const runtimeAuthRecoveryScheduler = {
+      beginClassifiedFailure,
+    } as unknown as NonNullable<Parameters<typeof createDaemonControlApp>[0]['runtimeAuthRecoveryScheduler']>;
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceRuntimeAuthFailure,
+      runtimeAuthRecoveryScheduler,
+    });
+
+    try {
+      const classification = {
+        kind: 'temporary_throttle',
+        limitCategory: 'rate_limit',
+        serviceId: 'claude-subscription',
+        profileId: 'primary',
+        groupId: 'claude',
+        resetsAtMs: null,
+        retryAfterMs: 1_250,
+        quotaScope: 'provider',
+        providerLimitId: 'transient',
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      };
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-runtime-auth/failure',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          sessionId: 'sess_claude_temp_throttle',
+          switchesThisTurn: 0,
+          classification,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        ok: true,
+        result: expect.objectContaining({
+          status: 'temporary_retry_armed',
+          serviceId: 'claude-subscription',
+          profileId: 'primary',
+          groupId: 'claude',
+        }),
+      });
+      expect(beginClassifiedFailure).not.toHaveBeenCalled();
+      expect(handleConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith({
+        sessionId: 'sess_claude_temp_throttle',
+        switchesThisTurn: 0,
+        classification: expect.objectContaining(classification),
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('routes provider capacity temporary retries without broad runtime-auth recovery intake', async () => {
+    const beginClassifiedFailure = vi.fn(async () => {
+      throw new Error('provider capacity retry must not arm broad runtime-auth recovery');
+    });
+    const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'temporary_retry_armed' as const,
+      serviceId: 'claude-subscription',
+      profileId: 'primary',
+      groupId: 'claude',
+      retryAfterMs: 2_000,
+      resetAtMs: null,
+      recovery: {
+        status: 'scheduled',
+        nextRetryAtMs: 3_000,
+        attemptCount: 0,
+      },
+    }));
+    const runtimeAuthRecoveryScheduler = {
+      beginClassifiedFailure,
+    } as unknown as NonNullable<Parameters<typeof createDaemonControlApp>[0]['runtimeAuthRecoveryScheduler']>;
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceRuntimeAuthFailure,
+      runtimeAuthRecoveryScheduler,
+    });
+
+    try {
+      const classification = {
+        kind: 'capacity',
+        limitCategory: 'capacity',
+        serviceId: 'claude-subscription',
+        profileId: 'primary',
+        groupId: 'claude',
+        resetsAtMs: null,
+        retryAfterMs: 2_000,
+        quotaScope: 'provider',
+        providerLimitId: 'server_overloaded',
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      };
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-runtime-auth/failure',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          sessionId: 'sess_claude_capacity',
+          switchesThisTurn: 0,
+          classification,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(beginClassifiedFailure).not.toHaveBeenCalled();
+      expect(handleConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith({
+        sessionId: 'sess_claude_capacity',
+        switchesThisTurn: 0,
+        classification: expect.objectContaining(classification),
+      });
     } finally {
       await app.close();
     }
@@ -1778,6 +1941,136 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
     }
   });
 
+  it('dispatches connected-service recovery credit consume requests to the daemon handler', async () => {
+    const handleConnectedServiceQuotaRecoveryCreditConsume = vi.fn(async () => ({
+      ok: true,
+      snapshot: null,
+      receipt: {
+        idempotencyKey: 'reset-req-1',
+        providerCreditId: 'credit-1',
+        status: 'consumed',
+      },
+    }));
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceQuotaRecoveryCreditConsume,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-quota-recovery-credit/consume',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          serviceId: 'openai-codex',
+          profileId: 'primary',
+          idempotencyKey: 'reset-req-1',
+          providerCreditId: 'credit-1',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        ok: true,
+        result: {
+          ok: true,
+          snapshot: null,
+          receipt: {
+            idempotencyKey: 'reset-req-1',
+            providerCreditId: 'credit-1',
+            status: 'consumed',
+          },
+        },
+      });
+      expect(handleConnectedServiceQuotaRecoveryCreditConsume).toHaveBeenCalledWith({
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        idempotencyKey: 'reset-req-1',
+        providerCreditId: 'credit-1',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects in-band quota producers while the daemon is shutting down', async () => {
+    const handleConnectedServiceQuotaSnapshot = vi.fn(async () => ({ status: 'recorded' }));
+    const handleConnectedServiceQuotaRecoveryCreditConsume = vi.fn(async () => ({ ok: true, snapshot: null }));
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      isShuttingDown: () => true,
+      handleConnectedServiceQuotaSnapshot,
+      handleConnectedServiceQuotaRecoveryCreditConsume,
+    });
+
+    try {
+      const snapshotResponse = await app.inject({
+        method: 'POST',
+        url: '/connected-service-quota-snapshot',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          sessionId: 'sess_1',
+          serviceId: 'openai-codex',
+          snapshot: {
+            v: 1,
+            serviceId: 'openai-codex',
+            profileId: 'primary',
+            fetchedAt: 1_000,
+            staleAfterMs: 300_000,
+            planLabel: 'pro',
+            accountLabel: null,
+            meters: [],
+          },
+        },
+      });
+      const consumeResponse = await app.inject({
+        method: 'POST',
+        url: '/connected-service-quota-recovery-credit/consume',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          serviceId: 'openai-codex',
+          profileId: 'primary',
+          idempotencyKey: 'reset-req-1',
+        },
+      });
+
+      expect(snapshotResponse.statusCode).toBe(503);
+      expect(snapshotResponse.json()).toEqual({
+        ok: false,
+        errorCode: 'daemon_shutting_down',
+      });
+      expect(consumeResponse.statusCode).toBe(503);
+      expect(consumeResponse.json()).toEqual({
+        ok: false,
+        errorCode: 'daemon_shutting_down',
+      });
+      expect(handleConnectedServiceQuotaSnapshot).not.toHaveBeenCalled();
+      expect(handleConnectedServiceQuotaRecoveryCreditConsume).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
   it('rejects in-band quota snapshots with mismatched service ids before dispatching', async () => {
     const handleConnectedServiceQuotaSnapshot = vi.fn(async () => ({
       status: 'recorded',
@@ -2373,7 +2666,7 @@ describe('startDaemonControlServer connected-service runtime wiring', () => {
     }
   });
 
-  it('creates durable runtime-auth recovery intake before shutdown deferral', async () => {
+  it('does not create durable runtime-auth recovery intake before shutdown deferral', async () => {
     const beginClassifiedFailure = vi.fn(async () => ({ status: 'scheduled', retryable: true }));
     const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
       status: 'switch_attempted',
@@ -2429,14 +2722,101 @@ describe('startDaemonControlServer connected-service runtime wiring', () => {
           reason: 'recovery_deferred_shutdown',
         },
       });
-      expect(beginClassifiedFailure).toHaveBeenCalledWith({
-        sessionId: 'sess_1',
-        switchesThisTurn: 0,
-        classification: expect.objectContaining(classification),
-      });
+      expect(beginClassifiedFailure).not.toHaveBeenCalled();
       expect(handleConnectedServiceRuntimeAuthFailure).not.toHaveBeenCalled();
     } finally {
       await app.close();
+    }
+  });
+
+  it('preserves shutdown deferrals in the session-side runtime-auth report outbox', async () => {
+    resetConnectedServiceRuntimeAuthFailureReportDedupeForTests();
+    const outboxDir = await createTempDir('happier-runtime-auth-control-shutdown-deferral-');
+    const beginClassifiedFailure = vi.fn(async () => ({ status: 'scheduled', retryable: true }));
+    const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'switch_attempted',
+      result: { status: 'switched', activeProfileId: 'backup', generation: 2 },
+    }));
+    const runtimeAuthRecoveryScheduler = {
+      beginClassifiedFailure,
+    } as unknown as NonNullable<Parameters<typeof createDaemonControlApp>[0]['runtimeAuthRecoveryScheduler']>;
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceRuntimeAuthFailure,
+      runtimeAuthRecoveryScheduler,
+      isShuttingDown: () => true,
+    });
+
+    try {
+      const classification = {
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        resetsAtMs: null,
+        providerLimitId: 'refresh-token-secret',
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+        accessToken: 'secret-access-token',
+      };
+      await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+        sessionId: 'sess_shutdown_route_report',
+        switchesThisTurn: 0,
+        classification,
+        notify: async (body) => {
+          const response = await app.inject({
+            method: 'POST',
+            url: '/connected-service-runtime-auth/failure',
+            headers: { 'x-happier-daemon-token': 'token' },
+            payload: body,
+          });
+          expect(response.statusCode).toBe(200);
+          return response.json();
+        },
+        logger: { debug: vi.fn() },
+        reportOutboxDir: outboxDir,
+        nowMs: () => 1_700_000_000_000,
+      })).resolves.toMatchObject({
+        handled: false,
+        report: {
+          ok: true,
+          result: {
+            status: 'daemon_lifecycle_unavailable',
+            reason: 'recovery_deferred_shutdown',
+          },
+        },
+      });
+
+      expect(beginClassifiedFailure).not.toHaveBeenCalled();
+      expect(handleConnectedServiceRuntimeAuthFailure).not.toHaveBeenCalled();
+      const items = await readRuntimeAuthFailureReportOutboxItems({ outboxDir });
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        sessionId: 'sess_shutdown_route_report',
+        classification: expect.objectContaining({
+          kind: 'usage_limit',
+          serviceId: 'openai-codex',
+          profileId: 'primary',
+          groupId: 'main',
+          providerLimitId: null,
+        }),
+      });
+      expect(JSON.stringify(items[0])).not.toContain('secret-access-token');
+      expect(JSON.stringify(items[0])).not.toContain('refresh-token-secret');
+    } finally {
+      await app.close();
+      await removeTempDir(outboxDir);
     }
   });
 });

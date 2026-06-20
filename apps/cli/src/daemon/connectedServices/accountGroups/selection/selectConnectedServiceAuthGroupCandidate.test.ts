@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+  isConnectedServiceAuthGroupSoftSwitchCandidateMeaningfullyBetter,
   selectConnectedServiceAuthGroupCandidate,
   type ConnectedServiceAuthGroupMemberRuntimeState,
 } from './selectConnectedServiceAuthGroupCandidate';
@@ -18,6 +19,20 @@ function member(profileId: string, priority: number, createdAtMs: number) {
 }
 
 describe('selectConnectedServiceAuthGroupCandidate', () => {
+  it('does not treat the active profile as a meaningfully better soft-switch target', () => {
+    expect(isConnectedServiceAuthGroupSoftSwitchCandidateMeaningfullyBetter({
+      activeProfileId: 'active',
+      candidate: {
+        ...member('active', 1, 1),
+        leastLimitedScore: 95,
+      },
+      policy: {
+        ...basePolicy,
+        softSwitchRemainingPercent: 20,
+      },
+    })).toBe(false);
+  });
+
   it('selects the next eligible member by priority', () => {
     const result = selectConnectedServiceAuthGroupCandidate({
       nowMs: 1_000,

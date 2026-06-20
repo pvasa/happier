@@ -76,6 +76,61 @@ describe('buildClaudeUnifiedTerminalSpawn', () => {
     }
   });
 
+  it('always allows later dangerous permission bypass without starting default sessions in bypass mode', async () => {
+    const spawn = await buildClaudeUnifiedTerminalSpawn({
+      path: '/workspace/project',
+      first: {
+        message: 'hello',
+        mode: {
+          permissionMode: 'default',
+        },
+      },
+      deps: {
+        resolveClaudeCliPath: () => '/usr/local/bin/claude',
+        isClaudeCliJavaScriptFile: () => false,
+        ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+        claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+        terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+        resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+      },
+    });
+
+    const launchSpec = await readLaunchSpecFromSpawn(spawn);
+    const launchArgs = launchSpec.args ?? [];
+    expect(launchArgs.filter((arg) => arg === '--allow-dangerously-skip-permissions')).toHaveLength(1);
+    expect(launchArgs).not.toContain('--dangerously-skip-permissions');
+    expect(launchArgs).not.toContain('bypassPermissions');
+  });
+
+  it('starts yolo sessions in bypass mode while still deduping the managed allow flag', async () => {
+    const spawn = await buildClaudeUnifiedTerminalSpawn({
+      path: '/workspace/project',
+      first: {
+        message: 'hello',
+        mode: {
+          permissionMode: 'yolo',
+        },
+      },
+      claudeArgs: ['--allow-dangerously-skip-permissions'],
+      deps: {
+        resolveClaudeCliPath: () => '/usr/local/bin/claude',
+        isClaudeCliJavaScriptFile: () => false,
+        ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+        claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+        terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+        resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+      },
+    });
+
+    const launchSpec = await readLaunchSpecFromSpawn(spawn);
+    const launchArgs = launchSpec.args ?? [];
+    expect(launchArgs.filter((arg) => arg === '--allow-dangerously-skip-permissions')).toHaveLength(1);
+    expect(launchArgs.slice(launchArgs.indexOf('--permission-mode'), launchArgs.indexOf('--permission-mode') + 2)).toEqual([
+      '--permission-mode',
+      'bypassPermissions',
+    ]);
+  });
+
   it('uses the managed JavaScript runtime wrapper when the resolved Claude CLI is a JavaScript file', async () => {
     const spawn = await buildClaudeUnifiedTerminalSpawn({
       path: '/workspace/project',

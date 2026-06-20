@@ -59,6 +59,7 @@ const queuedBannerScreenWithDraft = [
 
 function createHarness(opts?: Readonly<{
   screen?: string | (() => string);
+  cursor?: Readonly<{ x: number; y: number }> | undefined;
   captureInputState?: ((handle: TerminalHostHandle) => Promise<TerminalInputState>) | undefined | 'absent';
   initialPermissionMode?: EnhancedMode['permissionMode'] | undefined;
   queuedBannerCheckDelayMs?: number | undefined;
@@ -71,6 +72,7 @@ function createHarness(opts?: Readonly<{
     : opts?.captureInputState ?? vi.fn(async (): Promise<TerminalInputState> => ({
       stable: true,
       currentInput: typeof screen === 'function' ? screen() : screen,
+      cursor: opts?.cursor,
       observedAt: Date.now(),
     }));
   const wiring = createClaudeUnifiedInFlightSteerEvaluator<EnhancedMode>({
@@ -108,13 +110,18 @@ describe('createClaudeUnifiedInFlightSteerEvaluator', () => {
   });
 
   it.each([
-    ['user draft on a generating screen', generatingScreenWithDraft, 'user_draft'],
-    ['permission prompt', 'Do you want to proceed?\n❯ 1. Yes\n  2. No', 'permission_prompt'],
-    ['trust folder prompt', 'Do you trust the files in this folder?\n❯ 1. Yes, proceed', 'trust_prompt'],
-    ['switch model dialog', 'Switch model?\n❯ 1. Sonnet\n  2. Opus', 'switch_model_dialog'],
-    ['slash picker', '╭──╮\n│ > /mod │\n╰──╮\n  /model — switch the active model', 'slash_picker'],
-  ])('vetoes steering when the screen shows a %s', async (_label, screen, reason) => {
-    const { telemetry, wiring } = createHarness({ screen });
+    {
+      label: 'user draft on a generating screen',
+      screen: generatingScreenWithDraft,
+      cursor: { x: 27, y: 2 },
+      reason: 'user_draft',
+    },
+    { label: 'permission prompt', screen: 'Do you want to proceed?\n❯ 1. Yes\n  2. No', reason: 'permission_prompt' },
+    { label: 'trust folder prompt', screen: 'Do you trust the files in this folder?\n❯ 1. Yes, proceed', reason: 'trust_prompt' },
+    { label: 'switch model dialog', screen: 'Switch model?\n❯ 1. Sonnet\n  2. Opus', reason: 'switch_model_dialog' },
+    { label: 'slash picker', screen: '╭──╮\n│ > /mod │\n╰──╮\n  /model — switch the active model', reason: 'slash_picker' },
+  ])('vetoes steering when the screen shows a $label', async ({ screen, cursor, reason }) => {
+    const { telemetry, wiring } = createHarness({ screen, cursor });
 
     const decision = await wiring.evaluateInFlightSteer(pendingBatch('steer me'));
 
@@ -430,12 +437,14 @@ describe('createClaudeUnifiedInFlightSteerEvaluator — user_draft starvation (l
 
   function starvationHarness(opts: Readonly<{
     initialScreen: string;
+    initialCursor?: Readonly<{ x: number; y: number }> | undefined;
     ownTexts?: readonly string[];
     onClear?: (() => void) | undefined;
     escalationThreshold?: number | undefined;
   }>) {
     const telemetry = { emit: vi.fn() };
     let screen = opts.initialScreen;
+    let cursor = opts.initialCursor;
     const snapshots: Array<{ available: boolean; reason: string | null }> = [];
     const starvations: Array<{ consecutiveVetoes: number; ownLeftover: boolean; draftLength: number }> = [];
     const ownTexts = new Set((opts.ownTexts ?? []).map((text) => text.trim()));
@@ -447,6 +456,7 @@ describe('createClaudeUnifiedInFlightSteerEvaluator — user_draft starvation (l
         captureInputState: async (): Promise<TerminalInputState> => ({
           stable: true,
           currentInput: screen,
+          cursor,
           observedAt: Date.now(),
         }),
       },
@@ -467,7 +477,10 @@ describe('createClaudeUnifiedInFlightSteerEvaluator — user_draft starvation (l
       snapshots,
       starvations,
       clearOwnLeftoverDraft,
-      setScreen: (next: string) => { screen = next; },
+      setScreen: (next: string, nextCursor?: Readonly<{ x: number; y: number }>) => {
+        screen = next;
+        cursor = nextCursor;
+      },
     };
   }
 
@@ -512,6 +525,7 @@ describe('createClaudeUnifiedInFlightSteerEvaluator — user_draft starvation (l
   it('NEVER clears a genuine user draft', async () => {
     const harness = starvationHarness({
       initialScreen: idleScreenWithDraft('my half-typed thought'),
+      initialCursor: { x: 25, y: 1 },
       ownTexts: [ownLeftoverText],
     });
 
@@ -521,9 +535,30 @@ describe('createClaudeUnifiedInFlightSteerEvaluator — user_draft starvation (l
     expect(decision).toMatchObject({ steer: false, reason: 'user_draft' });
   });
 
+  it('classifies contextual placeholder-looking plain captures as style-unavailable, not proven user drafts', async () => {
+    const harness = starvationHarness({
+      initialScreen: generatingScreenWithDraftText('read the current file'),
+      ownTexts: [ownLeftoverText],
+    });
+
+    const decision = await harness.wiring.evaluateInFlightSteer(pendingBatch('steer me'));
+
+    expect(harness.clearOwnLeftoverDraft).not.toHaveBeenCalled();
+    expect(decision).toMatchObject({ steer: false, reason: 'capture_style_unavailable' });
+    expect(harness.telemetry.emit).toHaveBeenCalledWith({
+      name: 'unified.steer.decision',
+      properties: expect.objectContaining({
+        decision: 'vetoed',
+        reason: 'capture_style_unavailable',
+        draftLength: 'read the current file'.length,
+      }),
+    });
+  });
+
   it('escalates ONCE after N consecutive user_draft vetoes: honest published reason + one notification', async () => {
     const harness = starvationHarness({
       initialScreen: generatingScreenWithDraftText('my half-typed thought'),
+      initialCursor: { x: 25, y: 2 },
       escalationThreshold: 3,
     });
     const batch = pendingBatch('steer me');
@@ -555,6 +590,7 @@ describe('createClaudeUnifiedInFlightSteerEvaluator — user_draft starvation (l
   it('a safe steer resets the starvation episode; a later episode escalates again', async () => {
     const harness = starvationHarness({
       initialScreen: generatingScreenWithDraftText('my half-typed thought'),
+      initialCursor: { x: 25, y: 2 },
       escalationThreshold: 2,
     });
     const batch = pendingBatch('steer me');
@@ -566,7 +602,7 @@ describe('createClaudeUnifiedInFlightSteerEvaluator — user_draft starvation (l
     harness.setScreen(generatingScreen);
     await expect(harness.wiring.evaluateInFlightSteer(batch)).resolves.toEqual({ steer: true });
 
-    harness.setScreen(generatingScreenWithDraftText('another thought'));
+    harness.setScreen(generatingScreenWithDraftText('another thought'), { x: 19, y: 2 });
     await harness.wiring.evaluateInFlightSteer(batch);
     await harness.wiring.evaluateInFlightSteer(batch);
     expect(harness.starvations).toHaveLength(2);

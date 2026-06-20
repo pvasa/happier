@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICE_REQUEST_SOURCE } from '@happier-dev/agents';
 
 import type { SDKAssistantMessage } from '../sdk';
 import type { EnhancedMode } from '../loop';
@@ -187,5 +188,67 @@ describe('permission RPC routing', () => {
     await expect(localPermission).resolves.toMatchObject({
       hookSpecificOutput: { hookEventName: 'PermissionRequest' },
     });
+  });
+
+  it('does not let the remote permission handler consume resume-choice user-action answers from agent-state fallback', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('s1');
+    client.updateAgentState((state) => ({
+      ...state,
+      requests: {
+        ...state.requests,
+        claude_resume_choice_1: {
+          toolName: 'AskUserQuestion',
+          toolInput: { questions: [{ question: 'How should Claude resume this session?' }] },
+          createdAt: 1,
+          kind: 'user_action',
+          source: CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICE_REQUEST_SOURCE,
+        },
+      },
+    }));
+
+    const { PermissionHandler } = await import('./permissionHandler');
+    const remoteHandler = new PermissionHandler(session);
+    const permissionRpc = client.rpcHandlerManager.getHandler('permission');
+    expect(permissionRpc).toBeDefined();
+
+    await expect(permissionRpc?.({
+      id: 'claude_resume_choice_1',
+      approved: true,
+      answers: { 'How should Claude resume this session?': 'Resume from summary' },
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'permission_request_not_found',
+      errorMessage: 'permission_request_not_found',
+      requestId: 'claude_resume_choice_1',
+    });
+
+    expect(client.getAgentStateSnapshot().requests.claude_resume_choice_1).toBeDefined();
+    expect(client.getAgentStateSnapshot().completedRequests.claude_resume_choice_1).toBeUndefined();
+    remoteHandler.dispose();
+  });
+
+  it('does not let remote permission cleanup cancel resume-choice user-action requests', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('s1');
+    client.updateAgentState((state) => ({
+      ...state,
+      requests: {
+        ...state.requests,
+        claude_resume_choice_1: {
+          toolName: 'AskUserQuestion',
+          toolInput: { questions: [{ question: 'How should Claude resume this session?' }] },
+          createdAt: 1,
+          kind: 'user_action',
+          source: CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICE_REQUEST_SOURCE,
+        },
+      },
+    }));
+
+    const { PermissionHandler } = await import('./permissionHandler');
+    const remoteHandler = new PermissionHandler(session);
+    await remoteHandler.abortPendingRequestsAndFlush('Remote session ended');
+
+    expect(client.getAgentStateSnapshot().requests.claude_resume_choice_1).toBeDefined();
+    expect(client.getAgentStateSnapshot().completedRequests.claude_resume_choice_1).toBeUndefined();
+    remoteHandler.dispose();
   });
 });

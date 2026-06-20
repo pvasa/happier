@@ -66,6 +66,7 @@ type ConnectedServiceRuntimeSwitchAttemptSessionEvent = Readonly<{
   type: 'connected_service_account_switch_attempt';
   ok: boolean;
   action: 'restart_requested' | 'hot_applied' | 'metadata_updated';
+  reason?: TranscriptSwitchReason;
   attemptedContinuityMode?: ConnectedServiceSwitchAttemptedContinuityModeV1;
   outcome?: ConnectedServiceSwitchAttemptOutcomeV1;
   outcomeAction?: ConnectedServiceSwitchAttemptOutcomeActionV1;
@@ -77,6 +78,11 @@ type ConnectedServiceRuntimeSwitchAttemptSessionEvent = Readonly<{
   partialState: 'metadata_may_reference_new_binding' | 'runtime_auth_applied' | 'runtime_auth_partially_applied' | null;
   verificationByServiceId?: Readonly<Record<string, Readonly<{
     status: 'verified' | 'weakly_verified';
+    providerAccountId?: string | null;
+    activeAccountId?: string | null;
+    sharedAuthSurfaceId?: string | null;
+    proofStrength?: 'exact' | 'weak' | 'diagnostic';
+    source?: string;
     reason?: string;
   }>>>;
 }>;
@@ -162,6 +168,18 @@ function parseRuntimeSwitchEvent(value: unknown): ConnectedServiceRuntimeSwitchS
   };
 }
 
+function isSameProfileRuntimeSwitchEvent(event: ConnectedServiceRuntimeSwitchSessionEvent): boolean {
+  return Boolean(
+    event.fromProfileId
+    && event.toProfileId
+    && event.fromProfileId === event.toProfileId,
+  );
+}
+
+function isBackgroundMaintenanceSwitchReason(reason: TranscriptSwitchReason): boolean {
+  return reason === 'soft_threshold';
+}
+
 function parseDeferralPolicy(value: unknown): 'defer_until_turn_boundary' | 'defer_until_idle' | null {
   return value === 'defer_until_turn_boundary' || value === 'defer_until_idle' ? value : null;
 }
@@ -236,11 +254,13 @@ function parseRuntimeSwitchAttemptEvent(value: unknown): ConnectedServiceRuntime
     || record.partialState === 'runtime_auth_partially_applied'
       ? record.partialState
       : null;
+  const reason = typeof record.reason === 'string' ? mapSwitchReason(record.reason) : null;
   const verificationByServiceId = parseSwitchAttemptVerificationByServiceId(record.verificationByServiceId);
   return {
     type: 'connected_service_account_switch_attempt',
     ok: record.ok,
     action,
+    ...(reason ? { reason } : {}),
     ...(attemptedContinuityMode.success ? { attemptedContinuityMode: attemptedContinuityMode.data } : {}),
     ...(outcome.success ? { outcome: outcome.data } : {}),
     ...(outcomeAction.success ? { outcomeAction: outcomeAction.data } : {}),
@@ -259,7 +279,15 @@ function parseRuntimeSwitchAttemptEvent(value: unknown): ConnectedServiceRuntime
 function parseSwitchAttemptVerificationByServiceId(value: unknown): ConnectedServiceRuntimeSwitchAttemptSessionEvent['verificationByServiceId'] | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
-  const parsed: Record<string, { status: 'verified' | 'weakly_verified'; reason?: string }> = {};
+  const parsed: Record<string, {
+    status: 'verified' | 'weakly_verified';
+    providerAccountId?: string | null;
+    activeAccountId?: string | null;
+    sharedAuthSurfaceId?: string | null;
+    proofStrength?: 'exact' | 'weak' | 'diagnostic';
+    source?: string;
+    reason?: string;
+  }> = {};
   for (const [serviceId, rawVerification] of Object.entries(record)) {
     const trimmedServiceId = serviceId.trim();
     if (!trimmedServiceId) continue;
@@ -271,8 +299,43 @@ function parseSwitchAttemptVerificationByServiceId(value: unknown): ConnectedSer
     const reason = typeof verification?.reason === 'string' && verification.reason.trim().length > 0
       ? verification.reason.trim()
       : undefined;
+    const providerAccountId = typeof verification?.providerAccountId === 'string' && verification.providerAccountId.trim().length > 0
+      ? verification.providerAccountId.trim()
+      : verification?.providerAccountId === null
+        ? null
+        : undefined;
+    const activeAccountId = typeof verification?.activeAccountId === 'string' && verification.activeAccountId.trim().length > 0
+      ? verification.activeAccountId.trim()
+      : verification?.activeAccountId === null
+        ? null
+        : undefined;
+    const sharedAuthSurfaceId = typeof verification?.sharedAuthSurfaceId === 'string' && verification.sharedAuthSurfaceId.trim().length > 0
+      ? verification.sharedAuthSurfaceId.trim()
+      : verification?.sharedAuthSurfaceId === null
+        ? null
+        : undefined;
+    const proofStrength = verification?.proofStrength === 'exact'
+      || verification?.proofStrength === 'weak'
+      || verification?.proofStrength === 'diagnostic'
+      ? verification.proofStrength
+      : undefined;
+    const source = typeof verification?.source === 'string' && verification.source.trim().length > 0
+      ? verification.source.trim()
+      : undefined;
+    const preserveExactProofDetails = status === 'verified'
+      && proofStrength === 'exact'
+      && (
+        typeof providerAccountId === 'string'
+        || typeof activeAccountId === 'string'
+        || typeof sharedAuthSurfaceId === 'string'
+      );
     parsed[trimmedServiceId] = {
       status,
+      ...(preserveExactProofDetails && providerAccountId !== undefined ? { providerAccountId } : {}),
+      ...(preserveExactProofDetails && activeAccountId !== undefined ? { activeAccountId } : {}),
+      ...(preserveExactProofDetails && sharedAuthSurfaceId !== undefined ? { sharedAuthSurfaceId } : {}),
+      ...(preserveExactProofDetails ? { proofStrength } : {}),
+      ...(preserveExactProofDetails && source ? { source } : {}),
       ...(reason ? { reason } : {}),
     };
   }
@@ -476,6 +539,7 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
 
   const attempt = parseRuntimeSwitchAttemptEvent(params.event);
   if (attempt) {
+    if (attempt.reason && isBackgroundMaintenanceSwitchReason(attempt.reason)) return;
     const rawSession = await fetchSessionById({
       token: params.credentials.token,
       sessionId: params.sessionId,
@@ -503,6 +567,7 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
               type: 'connected-service-account-switch-attempt',
               ok: attempt.ok,
               action: attempt.action,
+              ...(attempt.reason ? { reason: attempt.reason } : {}),
               ...(attempt.attemptedContinuityMode ? { attemptedContinuityMode: attempt.attemptedContinuityMode } : {}),
               ...(attempt.outcome ? { outcome: attempt.outcome } : {}),
               ...(attempt.outcomeAction ? { outcomeAction: attempt.outcomeAction } : {}),
@@ -568,6 +633,8 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
   const parsed = parseRuntimeSwitchEvent(params.event);
   const reason = parsed ? mapSwitchReason(parsed.reason) : null;
   if (!parsed || !reason) return;
+  if (isSameProfileRuntimeSwitchEvent(parsed)) return;
+  if (isBackgroundMaintenanceSwitchReason(reason)) return;
 
   const rawSession = await fetchSessionById({
     token: params.credentials.token,

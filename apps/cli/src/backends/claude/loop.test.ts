@@ -104,6 +104,37 @@ describe.sequential('loop', () => {
     }
   }, 15_000);
 
+  it('installs the Claude-owned provider echo classifier on the session client', async () => {
+    mockClaudeLocalLauncher.mockResolvedValueOnce({ type: 'exit', code: 0 });
+    const setProviderOwnedUserMessageEchoClassifier = vi.fn();
+
+    const result = await runLoop({
+      session: createLoopClient({ setProviderOwnedUserMessageEchoClassifier }),
+    });
+    try {
+      expect(result.code).toBe(0);
+      expect(setProviderOwnedUserMessageEchoClassifier).toHaveBeenCalledTimes(1);
+      const classifier = setProviderOwnedUserMessageEchoClassifier.mock.calls[0]?.[0];
+      expect(classifier).toBeTypeOf('function');
+      expect(classifier(
+        {
+          role: 'user',
+          content: { type: 'text', text: 'typed directly in Claude' },
+          localId: 'claude-jsonl:main:user:u1',
+          meta: { source: 'cli' },
+        },
+        {
+          body: {
+            t: 'new-message',
+            message: { localId: 'claude-jsonl:main:user:u1' },
+          },
+        },
+      )).toBe(true);
+    } finally {
+      result.capturedSession?.cleanup();
+    }
+  }, 15_000);
+
   it('updates Session.mode so keepAlive reports correct mode', async () => {
     mockClaudeLocalLauncher.mockResolvedValueOnce({ type: 'switch' });
     mockClaudeRemoteLauncher.mockResolvedValueOnce('exit');

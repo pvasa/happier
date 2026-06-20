@@ -34,6 +34,60 @@ describe('resolveRuntimeAuthRecoveryProof', () => {
     expect(resolveRuntimeAuthRecoveryProof(result)).toBe('account_adoption_verified');
   });
 
+  it('rejects exact verified account adoption without identity material', () => {
+    const result = {
+      status: 'observed_generation',
+      activeProfileId: 'backup',
+      generation: 3,
+      verificationByServiceId: {
+        'openai-codex': {
+          status: 'verified',
+          proofStrength: 'exact',
+          source: 'applied_credential',
+        },
+      },
+    };
+    expect(resolveRuntimeAuthRecoveryProof(result)).toBeNull();
+    expect(isProvenRuntimeAuthRecoverySuccess(result)).toBe(false);
+  });
+
+  it('does not let explicit account-adoption proof bypass malformed exact verification', () => {
+    const result = {
+      status: 'observed_generation',
+      proofKind: 'account_adoption_verified',
+      activeProfileId: 'backup',
+      generation: 3,
+      verificationByServiceId: {
+        'openai-codex': {
+          status: 'verified',
+          proofStrength: 'exact',
+          source: 'applied_credential',
+        },
+      },
+    };
+
+    expect(resolveRuntimeAuthRecoveryProof(result)).toBeNull();
+    expect(isProvenRuntimeAuthRecoverySuccess(result)).toBe(false);
+  });
+
+  it('accepts exact verified account adoption when identity material is present', () => {
+    const result = {
+      status: 'observed_generation',
+      activeProfileId: 'backup',
+      generation: 3,
+      verificationByServiceId: {
+        'openai-codex': {
+          status: 'verified',
+          providerAccountId: 'acct_backup',
+          proofStrength: 'exact',
+          source: 'applied_credential',
+        },
+      },
+    };
+    expect(resolveRuntimeAuthRecoveryProof(result)).toBe('account_adoption_verified');
+    expect(isProvenRuntimeAuthRecoverySuccess(result)).toBe(true);
+  });
+
   it('accepts explicit recovered proof kinds from provider-owned recovery results', () => {
     expect(resolveRuntimeAuthRecoveryProof({
       status: 'native_resume_accepted',
@@ -104,6 +158,24 @@ describe('resolveRuntimeAuthRecoveryProof', () => {
       status: 'switch_attempted',
       result: { ok: true, action: 'restart_requested' },
     };
+    expect(isProvenRuntimeAuthRecoverySuccess(result)).toBe(false);
+  });
+
+  it('rejects direct live auth metadata unless it carries an accepted proof taxonomy kind', () => {
+    const result = {
+      status: 'switch_attempted',
+      result: {
+        status: 'switched',
+        appliedVia: 'direct_live_hot_auth',
+        proofKind: 'direct_live_hot_auth',
+        directLiveProof: {
+          loginStarted: true,
+          activeAccountId: 'acct_123',
+        },
+      },
+    };
+
+    expect(resolveRuntimeAuthRecoveryProof(result)).toBeNull();
     expect(isProvenRuntimeAuthRecoverySuccess(result)).toBe(false);
   });
 

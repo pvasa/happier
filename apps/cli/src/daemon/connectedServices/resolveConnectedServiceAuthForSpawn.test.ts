@@ -799,6 +799,19 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       profileId: 'backup',
     });
     expect(connectedServiceAuth).not.toBeNull();
+    const authWithIdentitySelections = connectedServiceAuth as typeof connectedServiceAuth & Readonly<{
+      runtimeAccountIdentitySelections?: ReadonlyArray<unknown>;
+    }>;
+    expect(authWithIdentitySelections.runtimeAccountIdentitySelections).toEqual([
+      expect.objectContaining({
+        serviceId: 'openai-codex',
+        profileId: 'backup',
+        groupId: 'main',
+        groupGeneration: 8,
+        source: 'spawn_selection',
+        record: backupRecord,
+      }),
+    ]);
     const auth = JSON.parse(await readFile(join(connectedServiceAuth!.env.CODEX_HOME, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('backup-access');
   });
@@ -1206,6 +1219,275 @@ describe('resolveConnectedServiceAuthForSpawn', () => {
       activeProfileId: 'leeroy',
       status: 'switch_reason_disabled',
     });
+  });
+
+  it('observes a newer group active profile when spawn fallback reports no eligible member from stale state', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const now = 1_000_000;
+
+    const limitedRecord = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'limited',
+      kind: 'oauth',
+      expiresAt: now - 1_000,
+      oauth: {
+        accessToken: 'limited-expired-access',
+        refreshToken: 'limited-refresh',
+        idToken: 'limited-id',
+        scope: CLAUDE_SUBSCRIPTION_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'limited-acct',
+        providerEmail: null,
+      },
+    });
+    const exhaustedRecord = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'already-exhausted',
+      kind: 'oauth',
+      expiresAt: now + 3_600_000,
+      oauth: {
+        accessToken: 'exhausted-access',
+        refreshToken: 'exhausted-refresh',
+        idToken: 'exhausted-id',
+        scope: CLAUDE_SUBSCRIPTION_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'exhausted-acct',
+        providerEmail: null,
+      },
+    });
+    const eligibleRecord = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'eligible',
+      kind: 'oauth',
+      expiresAt: now + 3_600_000,
+      oauth: {
+        accessToken: 'eligible-access',
+        refreshToken: 'eligible-refresh',
+        idToken: 'eligible-id',
+        scope: CLAUDE_SUBSCRIPTION_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'eligible-acct',
+        providerEmail: null,
+      },
+    });
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) },
+    };
+    if (credentials.encryption.type !== 'legacy') {
+      throw new Error('test fixture expected legacy encryption');
+    }
+    const legacyEncryption = credentials.encryption;
+    const seal = (payload: typeof limitedRecord) => sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: legacyEncryption.secret },
+      payload,
+      randomBytes: (length) => randomBytes(length),
+    });
+    const recordsByProfileId = new Map([
+      ['limited', limitedRecord],
+      ['already-exhausted', exhaustedRecord],
+      ['eligible', eligibleRecord],
+    ]);
+    const ciphertextByProfileId = new Map([
+      ['limited', seal(limitedRecord)],
+      ['already-exhausted', seal(exhaustedRecord)],
+      ['eligible', seal(eligibleRecord)],
+    ]);
+
+    let activeProfileId = 'limited';
+    let generation = 7;
+    const groupPolicy = {
+      v: 1 as const,
+      strategy: 'priority' as const,
+      autoSwitch: true,
+      switchOn: {
+        usageLimit: true,
+        authExpired: true,
+        accountChanged: true,
+        refreshFailure: true,
+      },
+    };
+    const groupMembers = () => [
+      {
+        v: 1 as const,
+        serviceId: 'openai-codex' as const,
+        groupId: 'codex-divergence',
+        profileId: 'limited',
+        enabled: true,
+        priority: 1,
+        state: { v: 1 as const },
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        v: 1 as const,
+        serviceId: 'openai-codex' as const,
+        groupId: 'codex-divergence',
+        profileId: 'already-exhausted',
+        enabled: true,
+        priority: 2,
+        state: { v: 1 as const, quotaExhaustedUntilMs: now + 60_000 },
+        createdAt: 2,
+        updatedAt: 2,
+      },
+      {
+        v: 1 as const,
+        serviceId: 'openai-codex' as const,
+        groupId: 'codex-divergence',
+        profileId: 'eligible',
+        enabled: true,
+        priority: 3,
+        state: { v: 1 as const },
+        createdAt: 3,
+        updatedAt: 3,
+      },
+    ];
+    const getConnectedServiceAuthGroup = vi.fn(async () => ({
+      v: 1 as const,
+      serviceId: 'openai-codex' as const,
+      groupId: 'codex-divergence',
+      displayName: null,
+      activeProfileId,
+      generation,
+      policy: groupPolicy,
+      state: { v: 1 as const },
+      members: groupMembers(),
+      createdAt: 1,
+      updatedAt: 1,
+    }));
+    const getConnectedServiceCredentialSealed = vi.fn(async (params: { serviceId: string; profileId: string }) => {
+      const ciphertext = ciphertextByProfileId.get(params.profileId);
+      const record = recordsByProfileId.get(params.profileId);
+      if (params.serviceId !== 'openai-codex' || !ciphertext || !record) return null;
+      return {
+        sealed: { format: 'account_scoped_v1' as const, ciphertext },
+        metadata: {
+          kind: 'oauth' as const,
+          providerEmail: null,
+          providerAccountId: `${params.profileId}-acct`,
+          expiresAt: record.expiresAt,
+        },
+      };
+    });
+    const switchBeforeTurn = vi.fn(async () => ({ status: 'session_not_found' as const }));
+    const switchAfterClassifiedFailure = vi.fn(async () => {
+      activeProfileId = 'eligible';
+      generation = 8;
+      return {
+        status: 'no_eligible_member' as const,
+        generation,
+        retryAtMs: null,
+        excluded: [
+          { profileId: 'already-exhausted', reason: 'quota_exhausted', retryAtMs: now + 60_000 },
+        ],
+      };
+    });
+    const refreshConnectedServiceCredentialForSpawnPreflight = vi.fn(async (
+      params: { serviceId: 'openai-codex'; profileId: string },
+    ) => {
+      const record = recordsByProfileId.get(params.profileId) ?? null;
+      if (params.profileId === 'limited') {
+        return {
+          status: 'refresh_failed' as const,
+          credential: null,
+          diagnostic: {
+            serviceId: 'openai-codex' as const,
+            profileId: 'limited',
+            reason: 'spawn_preflight' as const,
+            status: 'refresh_failed' as const,
+            category: 'provider_401' as const,
+            expiresAt: limitedRecord.expiresAt,
+            expiryAgeMs: now - (limitedRecord.expiresAt ?? now),
+            refreshWindowMs: 60_000,
+          },
+        };
+      }
+      return {
+        status: 'not_needed' as const,
+        credential: null,
+        diagnostic: {
+          serviceId: 'openai-codex' as const,
+          profileId: params.profileId,
+          reason: 'spawn_preflight' as const,
+          status: 'not_needed' as const,
+          expiresAt: record?.expiresAt ?? null,
+          expiryAgeMs: typeof record?.expiresAt === 'number' ? now - record.expiresAt : null,
+          refreshWindowMs: 60_000,
+        },
+      };
+    });
+    const api = {
+      getConnectedServiceAuthGroup,
+      getConnectedServiceCredentialSealed,
+    } as unknown as ApiClient;
+
+    const connectedServiceAuth = await resolveConnectedServiceAuthForSpawn({
+      agentId: 'codex',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'codex-divergence',
+            profileId: 'limited',
+          },
+        },
+      },
+      materializationKey: 'session-1',
+      activeServerDir,
+      baseDir,
+      credentials,
+      api,
+      runtimeQuotaSnapshots: new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore(),
+      quotaFreshnessMs: 60_000,
+      nowMs: () => now,
+      sessionId: 'session-1',
+      authGroupSwitchCoordinator: {
+        switchBeforeTurn,
+        switchAfterClassifiedFailure,
+      },
+      credentialRefreshService: {
+        refreshConnectedServiceCredentialForSpawnPreflight,
+      },
+    });
+
+    expect(switchBeforeTurn).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'codex-divergence',
+      reason: 'soft_threshold',
+    });
+    expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'codex-divergence',
+      reason: 'refresh_failed',
+      observedProfileId: 'limited',
+    }));
+    expect(getConnectedServiceAuthGroup).toHaveBeenCalledTimes(2);
+    expect(getConnectedServiceCredentialSealed).toHaveBeenCalledWith({
+      serviceId: 'openai-codex',
+      profileId: 'eligible',
+    });
+    expect(refreshConnectedServiceCredentialForSpawnPreflight).toHaveBeenCalledWith({
+      serviceId: 'openai-codex',
+      profileId: 'eligible',
+    });
+    expect(connectedServiceAuth?.connectedServicesBindings.bindingsByServiceId['openai-codex']).toMatchObject({
+      source: 'connected',
+      selection: 'group',
+      groupId: 'codex-divergence',
+      profileId: 'eligible',
+    });
+    const auth = JSON.parse(await readFile(join(connectedServiceAuth!.env.CODEX_HOME, 'auth.json'), 'utf8'));
+    expect(auth.access_token).toBe('eligible-access');
   });
 
   it('keeps the real group switch coordinator bound when default auto fallback handles spawn preflight refresh failure', async () => {

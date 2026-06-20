@@ -29,6 +29,7 @@ function createProbeFailureLiveness(
   const message = error instanceof Error ? error.message : String(error);
   return {
     paneAlive: false,
+    probeInconclusive: true,
     paneScreenDumpError: sanitizeTerminalHostDiagnosticText(message),
     observedAt,
   };
@@ -138,7 +139,7 @@ export function createClaudeUnifiedHostLivenessBridge(opts: Readonly<{
           probeFailureStreakStartedAtMs = null;
           continue;
         }
-        if (probeFailed) {
+        if (probeFailed || liveness.probeInconclusive === true) {
           // Inconclusive: the probe itself failed (e.g. zellij CLI timeout under load), so this
           // is not evidence of a dead host. It can neither seed nor confirm the pending-dead
           // escalation; only a sustained, uninterrupted failure streak (a truly unreachable

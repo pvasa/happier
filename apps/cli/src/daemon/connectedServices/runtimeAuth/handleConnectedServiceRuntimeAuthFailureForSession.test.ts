@@ -6,6 +6,7 @@ import {
   InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry,
 } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
+import type { TrackedSession } from '@/daemon/types';
 import { handleConnectedServiceRuntimeAuthFailureForSession } from './handleConnectedServiceRuntimeAuthFailureForSession';
 import { ConnectedServiceRuntimeAuthSwitchAttemptTracker } from './ConnectedServiceRuntimeAuthSwitchAttemptTracker';
 import type {
@@ -181,6 +182,145 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     expect(continueAfterRuntimeAuthSwitch).not.toHaveBeenCalled();
   });
 
+  it('reconstructs an untracked failed session from durable metadata and schedules restart continuation', async () => {
+    const reconstructedTracked: TrackedSession = {
+      startedBy: 'daemon' as const,
+      happySessionId: 'sess_1',
+      pid: 0,
+      vendorResumeId: 'codex-session-1',
+      happySessionMetadataFromLocalWebhook: {
+        path: '/tmp/project',
+        homeDir: '/tmp/home',
+        happyHomeDir: '/tmp/home/.happier',
+        happyLibDir: '/tmp/home/.happier/lib',
+        happyToolsDir: '/tmp/home/.happier/tools',
+        host: 'test-host',
+        flavor: 'codex',
+        connectedServices: {
+          v: 1 as const,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected' as const,
+              selection: 'group' as const,
+              profileId: 'primary',
+              groupId: 'main',
+            },
+          },
+        },
+        connectedServiceMaterializationIdentityV1: {
+          v: 1,
+          id: 'csm_codex_1',
+          createdAtMs: 1_000,
+        },
+        agentRuntimeDescriptorV1: {
+          v: 1,
+          providerId: 'codex',
+          provider: {
+            resumeStrategy: 'vendorSessionId',
+            vendorSessionId: 'codex-session-1',
+          },
+        },
+      },
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent' as const, agentId: 'codex' as const },
+        resume: 'codex-session-1',
+        connectedServices: {
+          v: 1 as const,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected' as const,
+              selection: 'group' as const,
+              profileId: 'primary',
+              groupId: 'main',
+            },
+          },
+        },
+        connectedServiceMaterializationIdentityV1: {
+          v: 1,
+          id: 'csm_codex_1',
+          createdAtMs: 1_000,
+        },
+      },
+    };
+    const resolveDurableSessionForRuntimeAuthRecovery = vi.fn(async () => reconstructedTracked);
+    const restartSession = vi.fn(async () => {});
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
+    const switchAfterClassifiedFailure = vi.fn(async (input: Readonly<{ sessionId?: string }>) => {
+      if (!input.sessionId) {
+        return {
+          status: 'generation_apply_failed' as const,
+          activeProfileId: 'backup',
+          generation: 2,
+          errorCode: 'session_not_found',
+        };
+      }
+      return {
+        status: 'switched' as const,
+        activeProfileId: 'backup',
+        generation: 2,
+        mode: 'spawn_next_turn' as const,
+      };
+    });
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [],
+      resolveDurableSessionForRuntimeAuthRecovery,
+      switchCoordinator: { switchAfterClassifiedFailure },
+      restartSession,
+      continueAfterRuntimeAuthSwitch,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      recoveryInvocationSource: 'scheduler_retry',
+      classification: {
+        kind: 'usage_limit',
+        limitCategory: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        resetsAtMs: null,
+        retryAfterMs: 30_000,
+        quotaScope: 'account',
+        providerLimitId: 'weekly',
+        action: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+    })).resolves.toMatchObject({
+      status: 'switch_attempted',
+      result: {
+        status: 'switched',
+        activeProfileId: 'backup',
+        generation: 2,
+        mode: 'spawn_next_turn',
+      },
+    });
+
+    expect(resolveDurableSessionForRuntimeAuthRecovery).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      classification: expect.objectContaining({
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+      }),
+    });
+    expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      observedProfileId: 'primary',
+    }));
+    expect(restartSession).toHaveBeenCalledWith(reconstructedTracked);
+    expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
+      tracked: reconstructedTracked,
+      sessionId: 'sess_1',
+      action: 'restart_requested',
+      switchReason: 'automatic_runtime_failure',
+    }));
+  });
+
   it('requests a session restart when runtime recovery switches a group account for the next turn', async () => {
     const events: string[] = [];
     const onRuntimeAuthRecoverySuccess = vi.fn(async () => {
@@ -205,8 +345,8 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             v: 1,
             bindingsByServiceId: {
               'openai-codex': {
-                source: 'connected',
-                selection: 'group',
+                source: 'connected' as const,
+                selection: 'group' as const,
                 profileId: 'primary',
                 groupId: 'main',
               },

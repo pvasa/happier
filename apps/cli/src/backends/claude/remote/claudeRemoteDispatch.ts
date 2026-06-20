@@ -7,6 +7,7 @@ import { repairClaudeTranscriptAfterInterrupt } from './agentSdk/repairClaudeTra
 import { isFeatureId } from '@happier-dev/protocol';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import { normalizeClaudeRemoteMode } from './normalizeClaudeRemoteMode';
+import { resolveClaudeRemoteSessionStartPlan } from './sessionStartPlan';
 
 type NextMessage = () => Promise<{ message: string; mode: EnhancedMode } | null>;
 type ClaudeUnifiedTerminalFeatureDecision = Readonly<{ state: 'enabled' | 'disabled' | 'unsupported' | 'unknown' }>;
@@ -88,6 +89,16 @@ function readClaudeRejectedResumeSessionAtAnchor(error: unknown, expectedAnchor:
     return rejectedAnchor === expectedAnchor ? rejectedAnchor : null;
 }
 
+function readOptionalString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+    return Array.isArray(value) && value.every((item) => typeof item === 'string')
+        ? value
+        : undefined;
+}
+
 export async function claudeRemoteDispatch<T extends { nextMessage: NextMessage }>(
     opts: T & {
         onResumeSessionAtRejected?: ResumeSessionAtRejectedHandler | null;
@@ -149,8 +160,16 @@ export async function claudeRemoteDispatch<T extends { nextMessage: NextMessage 
         if (decision.state !== 'enabled') {
             throw new Error('Claude unified terminal runtime is disabled by feature policy');
         }
+        const unifiedStartPlan = resolveClaudeRemoteSessionStartPlan({
+            sessionId: readOptionalString((baseOpts as Record<string, unknown>).sessionId),
+            transcriptPath: readOptionalString((baseOpts as Record<string, unknown>).transcriptPath),
+            path: readOptionalString((baseOpts as Record<string, unknown>).path) ?? process.cwd(),
+            claudeConfigDir: resolveClaudeConfigDirOverride(process.env),
+            claudeArgs: readStringArray((baseOpts as Record<string, unknown>).claudeArgs),
+        });
         await resolvedUnifiedTerminal({
             ...baseOpts,
+            sessionId: unifiedStartPlan.startFrom,
             allowFirstInputBeforeSessionStart: true,
             nextMessage: createNextMessage(),
         });

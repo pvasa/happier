@@ -55,7 +55,10 @@ import {
   summarizeConnectedServiceSwitchApplyError,
 } from './diagnostics/buildSwitchFailureResult';
 import { resolveSwitchUxDiagnosticSource } from './diagnostics/resolveSwitchUxDiagnosticSource';
-import { evaluatePredictiveSoftSwitchSessionApplyPolicy } from '../accountGroups/switching/predictiveSoftSwitchPolicy';
+import {
+  evaluateConnectedServiceSwitchApplyPolicy,
+  evaluatePredictiveSoftSwitchSessionApplyPolicy,
+} from '../accountGroups/switching/predictiveSoftSwitchPolicy';
 import {
   resolveSwitchAttemptEventOutcomeForFailure,
   resolveSwitchAttemptEventOutcomeForSuccess,
@@ -286,6 +289,8 @@ export type SessionConnectedServiceRuntimeAuthSelectionMaterializerInput = Reado
   previousBindings: ConnectedServiceBindingsV1;
   normalizedBindings: ConnectedServiceBindingsV1;
   groupMetadata?: ConnectedServiceGroupRuntimeMetadata;
+  applyReason?: 'usage_limit' | 'same_provider_account_exhausted' | 'soft_threshold' | 'manual' | 'diagnostic';
+  requireDirectLiveHotApply?: boolean;
 }>;
 
 type PostSwitchRecoveryResult =
@@ -371,7 +376,10 @@ export type SwitchSessionConnectedServiceAuthInput = Readonly<{
     serviceIds?: ReadonlySet<ConnectedServiceId>;
     runtimeAuthSelectionsByServiceId?: RuntimeAuthSelectionsByServiceId;
   }>): Promise<
-    | Readonly<{ ok: true }>
+    | Readonly<{
+        ok: true;
+        verificationByServiceId?: AcceptedConnectedServiceAccountVerificationByServiceId;
+      }>
     | Readonly<{
         ok: false;
         errorCode?: string;
@@ -396,7 +404,12 @@ export type SwitchSessionConnectedServiceAuthInput = Readonly<{
     normalizedBindings: ConnectedServiceBindingsV1;
     connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1 | null;
   }>): Promise<void>;
-  registerHotApplyTargets(tracked: TrackedSession): void;
+  registerHotApplyTargets(
+    tracked: TrackedSession,
+    context?: Readonly<{
+      runtimeAuthSelectionsByServiceId?: RuntimeAuthSelectionsByServiceId;
+    }>,
+  ): void;
   emitSessionEvent(sessionId: string, event: unknown): void;
   dryRun?: boolean;
   request: SessionConnectedServiceAuthSwitchRequest;
@@ -469,6 +482,15 @@ function resolveGroupFallbackProfileId(input: Readonly<{
     if (requestedFallbackMember) return requestedFallbackProfileId;
   }
   return input.activeProfileId;
+}
+
+function groupHasEnabledMember(input: Readonly<{
+  group: ConnectedServiceAuthGroupV1;
+  profileId: string;
+}>): boolean {
+  return input.group.members.some((member) =>
+    member.profileId === input.profileId && member.enabled !== false
+  );
 }
 
 function findTrackedSession(children: ReadonlyArray<TrackedSession>, sessionId: string): TrackedSession | null {
@@ -556,6 +578,52 @@ function hotApplyFailureRequiresRestart(input: Readonly<{
     && serviceResults.every((result) => (
       result.status !== 'failed' || result.errorCode === 'hot_apply_failed'
     ));
+}
+
+function normalizeSwitchApplyReason(reason: string | undefined): 'usage_limit' | 'same_provider_account_exhausted' | 'soft_threshold' | 'manual' | 'diagnostic' {
+  return reason === 'usage_limit'
+    || reason === 'same_provider_account_exhausted'
+    || reason === 'soft_threshold'
+    || reason === 'manual'
+    || reason === 'diagnostic'
+    ? reason
+    : 'manual';
+}
+
+function resolveSwitchApplyPolicyContext(reason: string | undefined): Parameters<typeof evaluateConnectedServiceSwitchApplyPolicy>[0]['context'] {
+  if (reason === 'same_provider_account_exhausted') return 'healthy_sibling';
+  if (reason === 'soft_threshold') return 'healthy_live_session';
+  if (reason === 'usage_limit') return 'original_failed_session';
+  return 'manual';
+}
+
+function resolveSwitchApplyPolicy(input: Readonly<{
+  groupSwitchTriggerReason: string | undefined;
+  applyMode?: 'hot_apply' | 'restart_resume' | 'spawn_next_turn' | 'transport_recycle' | 'direct_live_hot_auth' | null;
+}>): ReturnType<typeof evaluateConnectedServiceSwitchApplyPolicy> {
+  const reason = normalizeSwitchApplyReason(input.groupSwitchTriggerReason);
+  return evaluateConnectedServiceSwitchApplyPolicy({
+    context: resolveSwitchApplyPolicyContext(reason),
+    reason,
+    applyMode: input.applyMode,
+  });
+}
+
+function switchPolicyAllowsRestartResumeFallback(groupSwitchTriggerReason: string | undefined): boolean {
+  return resolveSwitchApplyPolicy({
+    groupSwitchTriggerReason,
+    applyMode: 'restart_resume',
+  }).allowRestartResume;
+}
+
+function shouldRequireDirectLiveHotApply(groupSwitchTriggerReason: string | undefined): boolean {
+  const decision = resolveSwitchApplyPolicy({
+    groupSwitchTriggerReason,
+    applyMode: 'hot_apply',
+  });
+  return decision.allowDirectLiveHotApply
+    && !decision.allowRestartResume
+    && !decision.allowTransportRecycle;
 }
 
 function markHotApplyContinuityAsRestart(
@@ -686,6 +754,7 @@ async function normalizeRequestedBindings(input: Readonly<{
   agentId: CatalogAgentId;
   request: SessionConnectedServiceAuthSwitchRequest;
   diagnosticSource: ConnectedServiceUxDiagnosticV1['source'];
+  dryRun?: boolean;
 }>): Promise<
   | Readonly<{
       ok: true;
@@ -736,10 +805,19 @@ async function normalizeRequestedBindings(input: Readonly<{
         return { ok: false, errorCode: 'group_missing', serviceId };
       }
       const expectedGeneration = readExpectedGeneration(input.request.expectedGroupGenerationByServiceId, serviceId);
-      if (expectedGeneration !== null && expectedGeneration !== group.generation) {
+      const currentGeneration = readGroupGeneration(group.generation);
+      const prospectiveProfileId = readNonEmptyString(binding.profileId);
+      const isProspectiveDryRunGeneration = input.dryRun === true
+        && expectedGeneration !== null
+        && expectedGeneration === currentGeneration + 1
+        && prospectiveProfileId.length > 0
+        && groupHasEnabledMember({ group, profileId: prospectiveProfileId });
+      if (expectedGeneration !== null && expectedGeneration !== currentGeneration && !isProspectiveDryRunGeneration) {
         return { ok: false, errorCode: 'group_generation_conflict', serviceId };
       }
-      const activeProfileId = typeof group.activeProfileId === 'string' ? group.activeProfileId.trim() : '';
+      const activeProfileId = isProspectiveDryRunGeneration
+        ? prospectiveProfileId
+        : typeof group.activeProfileId === 'string' ? group.activeProfileId.trim() : '';
       if (!activeProfileId) {
         return { ok: false, errorCode: 'profile_missing', serviceId };
       }
@@ -775,7 +853,9 @@ async function normalizeRequestedBindings(input: Readonly<{
         groupId: binding.groupId,
         activeProfileId,
         fallbackProfileId,
-        generation: readGroupGeneration(group.generation),
+        generation: isProspectiveDryRunGeneration && expectedGeneration !== null
+          ? expectedGeneration
+          : currentGeneration,
       });
       effectiveByServiceId.set(serviceId, {
         source: 'connected',
@@ -886,11 +966,13 @@ function emitManualSwitchEvents(input: Readonly<{
   for (const [serviceId, next] of input.nextByServiceId.entries()) {
     const previous = input.previousByServiceId.get(serviceId) ?? null;
     if (!effectiveBindingChanged(previous, next)) continue;
+    const fromProfileId = input.fromProfileIdOverrideByServiceId?.get(serviceId) ?? previous?.profileId ?? null;
+    if (fromProfileId && next.profileId && fromProfileId === next.profileId) continue;
     input.emitSessionEvent(input.sessionId, {
       type: 'connected_service_account_switch',
       serviceId,
       groupId: next.groupId ?? previous?.groupId ?? null,
-      fromProfileId: input.fromProfileIdOverrideByServiceId?.get(serviceId) ?? previous?.profileId ?? null,
+      fromProfileId,
       toProfileId: next.profileId,
       reason: input.reason,
       mode: input.mode,
@@ -924,14 +1006,18 @@ function emitConnectedServiceSwitchAttemptEvent(input: Readonly<{
   emitSessionEvent: (sessionId: string, event: unknown) => void;
   sessionId: string;
   result: SessionConnectedServiceAuthSwitchResult;
+  groupSwitchTriggerReason?: string;
 }>): void {
+  const reason = normalizeSwitchApplyReason(input.groupSwitchTriggerReason);
   if (input.result.ok) {
     if (input.result.action === 'unchanged') return;
+    if (input.groupSwitchTriggerReason === 'soft_threshold') return;
     const projection = resolveSwitchAttemptEventOutcomeForSuccess({ action: input.result.action });
     input.emitSessionEvent(input.sessionId, {
       type: 'connected_service_account_switch_attempt',
       ok: true,
       action: projection.action,
+      reason,
       attemptedContinuityMode: projection.attemptedContinuityMode,
       outcome: projection.outcome,
       outcomeAction: projection.outcomeAction,
@@ -954,6 +1040,7 @@ function emitConnectedServiceSwitchAttemptEvent(input: Readonly<{
     type: 'connected_service_account_switch_attempt',
     ok: false,
     action: projection.action,
+    reason,
     attemptedContinuityMode: projection.attemptedContinuityMode,
     outcome: projection.outcome,
     outcomeAction: projection.outcomeAction,
@@ -1134,11 +1221,12 @@ async function runPostSwitchVerificationThenContinuation(
   input: SwitchContinuationRecoveryInput & Readonly<{
     recoverAfterRuntimeAuthSwitch: SwitchSessionConnectedServiceAuthInput['recoverAfterRuntimeAuthSwitch'];
 	    continueAfterRuntimeAuthSwitch: SwitchSessionConnectedServiceAuthInput['continueAfterRuntimeAuthSwitch'];
-    verifyProviderAccountAdoption: SwitchSessionConnectedServiceAuthInput['verifyProviderAccountAdoption'];
+  verifyProviderAccountAdoption: SwitchSessionConnectedServiceAuthInput['verifyProviderAccountAdoption'];
     postSwitchVerificationMode: SwitchSessionConnectedServiceAuthInput['postSwitchVerificationMode'];
     diagnosticSource: ConnectedServiceUxDiagnosticV1['source'];
     agentId: CatalogAgentId;
     nextByServiceId: ReadonlyMap<ConnectedServiceId, EffectiveBinding>;
+    acceptedVerificationByServiceId?: AcceptedConnectedServiceAccountVerificationByServiceId;
   }>,
 ): Promise<SessionConnectedServiceAuthSwitchPostSwitchOutcome> {
   if (input.action === 'hot_applied') {
@@ -1154,6 +1242,7 @@ async function runPostSwitchVerificationThenContinuation(
       serviceIds: input.serviceIds,
       action: input.action,
       buildVerificationFailure: verificationFailureResult,
+      ...(input.acceptedVerificationByServiceId ? { acceptedVerificationByServiceId: input.acceptedVerificationByServiceId } : {}),
       ...(input.runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId: input.runtimeAuthSelectionsByServiceId } : {}),
     });
     if (verificationOutcome.failure) return verificationOutcome;
@@ -1312,6 +1401,7 @@ async function maybeMaterializeRuntimeAuthSelection(input: Readonly<{
   normalizedBindings: ConnectedServiceBindingsV1;
   groupMetadataByServiceId?: ReadonlyMap<ConnectedServiceId, ConnectedServiceGroupRuntimeMetadata>;
   mode: SessionConnectedServiceRuntimeAuthSelectionMaterializerMode;
+  groupSwitchTriggerReason?: string;
 }>): Promise<unknown | null> {
   if (!input.materializeRuntimeAuthSelection || input.next.source !== 'connected') return null;
   return await input.materializeRuntimeAuthSelection({
@@ -1325,6 +1415,8 @@ async function maybeMaterializeRuntimeAuthSelection(input: Readonly<{
     previousBindings: input.previousBindings,
     normalizedBindings: input.normalizedBindings,
     groupMetadata: input.groupMetadataByServiceId?.get(input.serviceId),
+    applyReason: normalizeSwitchApplyReason(input.groupSwitchTriggerReason),
+    requireDirectLiveHotApply: shouldRequireDirectLiveHotApply(input.groupSwitchTriggerReason),
   });
 }
 
@@ -1359,7 +1451,9 @@ function hasTrackedRuntimeAlreadyAdoptedExpectedGroupGeneration(input: Readonly<
   tracked: TrackedSession;
   serviceId: ConnectedServiceId;
   next: EffectiveBinding;
+  groupSwitchTriggerReason?: string;
 }>): boolean {
+  if (shouldRequireDirectLiveHotApply(input.groupSwitchTriggerReason)) return false;
   if (input.request.rematerializeServiceId) return false;
   if (input.next.source !== 'connected' || input.next.selection !== 'group') return false;
   const expectedGeneration = readExpectedGroupGenerationForService({
@@ -1448,6 +1542,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
     tracked: input.tracked,
     serviceId,
     next,
+    groupSwitchTriggerReason: input.groupSwitchTriggerReason,
   })) {
     return {
       ok: true,
@@ -1474,6 +1569,7 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
     normalizedBindings: input.normalizedBindings,
     groupMetadataByServiceId: input.groupMetadataByServiceId,
     mode: input.dryRun ? 'preflight' : 'apply',
+    groupSwitchTriggerReason: input.groupSwitchTriggerReason,
   });
   const blockingMaterializationDiagnostics = readRuntimeAuthSelectionBlockingMaterializationDiagnostics(
     runtimeAuthSelection,
@@ -1599,7 +1695,10 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
         };
       }
       if (!hotApplyResult.ok) {
-        if (hotApplyFailureRequiresRestart(hotApplyResult)) {
+        if (
+          hotApplyFailureRequiresRestart(hotApplyResult)
+          && switchPolicyAllowsRestartResumeFallback(input.groupSwitchTriggerReason)
+        ) {
           try {
             await input.restartSession(input.tracked);
 	          } catch (error) {
@@ -1657,7 +1756,10 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
             : {}),
         });
       }
-      input.registerHotApplyTargets(input.tracked);
+      input.registerHotApplyTargets(
+        input.tracked,
+        runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId } : undefined,
+      );
       const continuationOutcome = await runPostSwitchVerificationThenContinuation({
         recoverAfterRuntimeAuthSwitch: input.recoverAfterRuntimeAuthSwitch,
 	        continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch,
@@ -1673,10 +1775,16 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
         serviceIds,
         action: 'hot_applied',
         switchReason: input.switchReason,
+        ...(hotApplyResult.verificationByServiceId
+          ? { acceptedVerificationByServiceId: hotApplyResult.verificationByServiceId }
+          : {}),
         ...(runtimeAuthSelectionsByServiceId ? { runtimeAuthSelectionsByServiceId } : {}),
       });
       if (continuationOutcome.failure) {
-        if (isRetryableHotApplyPostSwitchVerificationFailure(continuationOutcome.failure)) {
+        if (
+          isRetryableHotApplyPostSwitchVerificationFailure(continuationOutcome.failure)
+          && switchPolicyAllowsRestartResumeFallback(input.groupSwitchTriggerReason)
+        ) {
           const restartServiceIds = new Set([serviceId]);
           const restartContinuationAttemptId = buildConnectedServiceSwitchContinuationAttemptId({
             action: 'restart_requested',
@@ -1803,6 +1911,7 @@ export async function switchSessionConnectedServiceAuth(
 	          agentId: inactive.agentId,
 	          request: input.request,
 	          diagnosticSource,
+	          dryRun: input.dryRun === true,
 	        });
         if (!normalized.ok) return normalized;
 
@@ -1911,12 +2020,13 @@ export async function switchSessionConnectedServiceAuth(
         return { ok: false, errorCode: 'agent_mismatch' };
       }
 
-      const normalized = await normalizeRequestedBindings({
-        api: input.api,
-        agentId: trackedAgentId,
-        request: input.request,
-        diagnosticSource,
-      });
+	      const normalized = await normalizeRequestedBindings({
+	        api: input.api,
+	        agentId: trackedAgentId,
+	        request: input.request,
+	        diagnosticSource,
+	        dryRun: input.dryRun === true,
+	      });
       if (!normalized.ok) return normalized;
 
       const previousBindings = readConnectedServiceBindingsOrEmpty(
@@ -1994,11 +2104,12 @@ export async function switchSessionConnectedServiceAuth(
           serviceId,
           previous,
           next,
-          previousBindings,
-          normalizedBindings: normalized.normalized,
-          groupMetadataByServiceId: normalized.groupMetadataByServiceId,
-          mode: input.dryRun ? 'preflight' : 'apply',
-        });
+            previousBindings,
+            normalizedBindings: normalized.normalized,
+            groupMetadataByServiceId: normalized.groupMetadataByServiceId,
+            mode: input.dryRun ? 'preflight' : 'apply',
+            groupSwitchTriggerReason: input.groupSwitchTriggerReason,
+          });
         const blockingMaterializationDiagnostics = readRuntimeAuthSelectionBlockingMaterializationDiagnostics(
           runtimeAuthSelection,
         );
@@ -2127,7 +2238,10 @@ export async function switchSessionConnectedServiceAuth(
             };
           }
           if (!hotApplyResult.ok) {
-            if (hotApplyFailureRequiresRestart(hotApplyResult)) {
+            if (
+              hotApplyFailureRequiresRestart(hotApplyResult)
+              && switchPolicyAllowsRestartResumeFallback(input.groupSwitchTriggerReason)
+            ) {
               try {
                 await input.restartSession(tracked);
               } catch (error) {
@@ -2207,7 +2321,10 @@ export async function switchSessionConnectedServiceAuth(
               });
             }
           } else {
-            input.registerHotApplyTargets(tracked);
+            input.registerHotApplyTargets(
+              tracked,
+              runtimeAuthSelectionsByServiceId.size === 0 ? undefined : { runtimeAuthSelectionsByServiceId },
+            );
             const continuationOutcome = await runPostSwitchVerificationThenContinuation({
               recoverAfterRuntimeAuthSwitch: input.recoverAfterRuntimeAuthSwitch,
               continueAfterRuntimeAuthSwitch: input.continueAfterRuntimeAuthSwitch,
@@ -2223,10 +2340,16 @@ export async function switchSessionConnectedServiceAuth(
               serviceIds: changedServiceIdSet,
               action: 'hot_applied',
               switchReason: input.switchReason,
+              ...(hotApplyResult.verificationByServiceId
+                ? { acceptedVerificationByServiceId: hotApplyResult.verificationByServiceId }
+                : {}),
               ...(runtimeAuthSelectionsByServiceId.size === 0 ? {} : { runtimeAuthSelectionsByServiceId }),
             });
             if (continuationOutcome.failure) {
-              if (isRetryableHotApplyPostSwitchVerificationFailure(continuationOutcome.failure)) {
+              if (
+                isRetryableHotApplyPostSwitchVerificationFailure(continuationOutcome.failure)
+                && switchPolicyAllowsRestartResumeFallback(input.groupSwitchTriggerReason)
+              ) {
                 action = 'restart_requested';
                 Object.assign(continuityByServiceId, markHotApplyContinuityAsRestart(continuityByServiceId));
                 const restartContinuationAttemptId = buildConnectedServiceSwitchContinuationAttemptId({
@@ -2345,12 +2468,12 @@ export async function switchSessionConnectedServiceAuth(
       }
 
       emitManualSwitchEvents({
-        emitSessionEvent: input.emitSessionEvent,
-        sessionId: input.request.sessionId,
-        previousByServiceId,
-        nextByServiceId,
-        fromProfileIdOverrideByServiceId: input.emitFromProfileIdByServiceId,
-        reason: input.sessionEventReason ?? 'manual',
+      emitSessionEvent: input.emitSessionEvent,
+      sessionId: input.request.sessionId,
+      previousByServiceId,
+      nextByServiceId,
+      fromProfileIdOverrideByServiceId: input.emitFromProfileIdByServiceId,
+        reason: input.sessionEventReason ?? input.groupSwitchTriggerReason ?? 'manual',
         mode: action === 'hot_applied'
           ? 'hot_apply'
           : action === 'metadata_updated'
@@ -2380,6 +2503,7 @@ export async function switchSessionConnectedServiceAuth(
       emitSessionEvent: input.emitSessionEvent,
       sessionId: input.request.sessionId,
       result,
+      groupSwitchTriggerReason: input.groupSwitchTriggerReason,
     });
     emitProviderStateSharingDegradedEvents({
       tracked: findTrackedSession(input.getChildren(), input.request.sessionId),

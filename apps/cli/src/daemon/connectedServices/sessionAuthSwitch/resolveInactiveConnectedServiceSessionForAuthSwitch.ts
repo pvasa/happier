@@ -1,4 +1,7 @@
-import { inferAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import {
+  inferAgentIdFromSessionMetadata,
+  resolveVendorResumeIdFromSessionMetadata,
+} from '@happier-dev/agents';
 import {
   ConnectedServiceBindingsV1Schema,
   ConnectedServiceMaterializationIdentityV1Schema,
@@ -71,19 +74,20 @@ export async function resolveInactiveConnectedServiceSessionForAuthSwitch(params
   const metadata = attachContext.metadata;
   if (!metadata) return null;
   const inferredAgentId = inferAgentIdFromSessionMetadata(metadata, params.agentId);
+  const agentId = resolveCatalogAgentId(inferredAgentId);
   const materializationIdentity = readConnectedServiceMaterializationIdentity(
     metadata.connectedServiceMaterializationIdentityV1,
   );
   const cwd = readNonEmptyString(attachContext.sessionPath)
     ?? readNonEmptyString(metadata.path);
+  const vendorResumeId = readNonEmptyString(attachContext.vendorResumeId)
+    ?? resolveVendorResumeIdFromSessionMetadata(agentId, metadata);
   return {
-    agentId: resolveCatalogAgentId(inferredAgentId),
+    agentId,
     connectedServices: readConnectedServiceBindingsOrEmpty(metadata.connectedServices),
     metadata,
     ...(materializationIdentity ? { connectedServiceMaterializationIdentityV1: materializationIdentity } : {}),
-    ...(typeof attachContext.vendorResumeId === 'string' && attachContext.vendorResumeId.trim()
-      ? { vendorResumeId: attachContext.vendorResumeId.trim() }
-      : {}),
+    ...(vendorResumeId ? { vendorResumeId } : {}),
     ...(cwd ? { cwd } : {}),
   };
 }

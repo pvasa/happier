@@ -71,6 +71,7 @@ function buildClaudeUnifiedTerminalLaunchOptionsHashInput(mode: EnhancedMode): R
 
     return {
         claudeUnifiedTerminalHost: mode.claudeUnifiedTerminalHost ?? 'auto',
+        claudeUnifiedTerminalResumeChoice: mode.claudeUnifiedTerminalResumeChoice ?? 'ask_every_time',
         ultracode: resolvedUltracode,
         claudeSdkPermissionMode,
         agentModeId: effectiveAgentModeId || null,

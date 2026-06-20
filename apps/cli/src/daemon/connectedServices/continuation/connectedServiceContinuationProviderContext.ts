@@ -29,13 +29,22 @@ function isCatalogAgentId(value: unknown): value is CatalogAgentId {
   return typeof value === 'string' && (CATALOG_AGENT_IDS as readonly string[]).includes(value);
 }
 
+function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>>
+    : null;
+}
+
 function resolveTrackedCatalogAgentId(
   tracked: Pick<ContinuationContextTrackedSession, 'happySessionMetadataFromLocalWebhook' | 'spawnOptions'>,
+  persistedSessionMetadata?: unknown,
 ): CatalogAgentId | null {
   const target = tracked.spawnOptions?.backendTarget;
   if (target?.kind === 'builtInAgent' && isCatalogAgentId(target.agentId)) return target.agentId;
   const flavor = tracked.happySessionMetadataFromLocalWebhook?.flavor;
-  return isCatalogAgentId(flavor) ? flavor : null;
+  if (isCatalogAgentId(flavor)) return flavor;
+  const persistedFlavor = readRecord(persistedSessionMetadata)?.flavor;
+  return isCatalogAgentId(persistedFlavor) ? persistedFlavor : null;
 }
 
 function hasConnectedServiceBinding(rawBindings: unknown): boolean {
@@ -53,21 +62,38 @@ function readConnectedServiceBindingServiceId(rawBindings: unknown): string | nu
   return null;
 }
 
+function readPersistedConnectedServiceBindingsRaw(persistedSessionMetadata: unknown): unknown {
+  return readRecord(persistedSessionMetadata)?.connectedServices;
+}
+
+function resolveContinuationConnectedServiceBindingsRaw(input: Readonly<{
+  tracked: Pick<ContinuationContextTrackedSession, 'happySessionMetadataFromLocalWebhook' | 'spawnOptions'>;
+  persistedSessionMetadata?: unknown;
+}>): unknown {
+  return resolveTrackedConnectedServiceBindingsRaw(input.tracked)
+    ?? readPersistedConnectedServiceBindingsRaw(input.persistedSessionMetadata);
+}
+
 async function hasExactReachableResumeContext(input: Readonly<{
   tracked: Pick<ContinuationContextTrackedSession, 'happySessionMetadataFromLocalWebhook' | 'spawnOptions' | 'vendorResumeId'>;
   agentId: CatalogAgentId;
+  persistedSessionMetadata?: unknown;
 }>): Promise<boolean> {
   const tracked = input.tracked;
   const continuityContext = resolveTrackedConnectedServiceSwitchContinuityContext({
     agentId: input.agentId,
     baseDir: join(configuration.happyHomeDir, 'daemon', 'connected-services', 'materialized'),
     tracked,
+    persistedSessionMetadata: input.persistedSessionMetadata,
     resolveCandidatePersistedSessionFile: resolveConnectedServiceCandidatePersistedSessionFile,
   });
   if (!continuityContext.vendorResumeId) return false;
   if (!continuityContext.connectedServiceMaterializationIdentityV1) return false;
 
-  const serviceId = readConnectedServiceBindingServiceId(resolveTrackedConnectedServiceBindingsRaw(tracked));
+  const serviceId = readConnectedServiceBindingServiceId(resolveContinuationConnectedServiceBindingsRaw({
+    tracked,
+    persistedSessionMetadata: input.persistedSessionMetadata,
+  }));
   if (!serviceId) return false;
   if (!continuityContext.targetMaterializedEnv || !continuityContext.targetMaterializedRoot || !continuityContext.cwd) {
     return false;
@@ -90,20 +116,30 @@ async function hasExactReachableResumeContext(input: Readonly<{
 
 export async function resolveConnectedServiceContinuationProviderContextAvailability(input: Readonly<{
   tracked: Pick<ContinuationContextTrackedSession, 'happySessionMetadataFromLocalWebhook' | 'spawnOptions' | 'vendorResumeId'>;
+  persistedSessionMetadata?: unknown;
 }>): Promise<boolean> {
-  if (!hasConnectedServiceBinding(resolveTrackedConnectedServiceBindingsRaw(input.tracked))) return true;
+  const connectedServicesRaw = resolveContinuationConnectedServiceBindingsRaw({
+    tracked: input.tracked,
+    persistedSessionMetadata: input.persistedSessionMetadata,
+  });
+  if (!hasConnectedServiceBinding(connectedServicesRaw)) return true;
 
-  const agentId = resolveTrackedCatalogAgentId(input.tracked);
+  const agentId = resolveTrackedCatalogAgentId(input.tracked, input.persistedSessionMetadata);
   if (!agentId) return false;
 
   return await hasExactReachableResumeContext({
     tracked: input.tracked,
     agentId,
+    persistedSessionMetadata: input.persistedSessionMetadata,
   });
 }
 
 export async function replayPendingConnectedServiceContinuationsForTrackedSessions(input: Readonly<{
   trackedSessions: Iterable<ContinuationContextTrackedSession>;
+  resolvePersistedSessionMetadata?: (input: Readonly<{
+    sessionId: string;
+    tracked: ContinuationContextTrackedSession;
+  }>) => Promise<unknown> | unknown;
   resolvePendingContinuation: (input: Readonly<{
     sessionId: string;
     exactProviderContextAvailable: boolean;
@@ -114,9 +150,15 @@ export async function replayPendingConnectedServiceContinuationsForTrackedSessio
     const sessionId = normalizeOptionalString(tracked.happySessionId);
     if (!sessionId) continue;
     attemptedSessionIds.push(sessionId);
+    const persistedSessionMetadata = input.resolvePersistedSessionMetadata
+      ? await input.resolvePersistedSessionMetadata({ sessionId, tracked })
+      : undefined;
     await input.resolvePendingContinuation({
       sessionId,
-      exactProviderContextAvailable: await resolveConnectedServiceContinuationProviderContextAvailability({ tracked }),
+      exactProviderContextAvailable: await resolveConnectedServiceContinuationProviderContextAvailability({
+        tracked,
+        persistedSessionMetadata,
+      }),
     });
   }
   return { attemptedSessionIds };

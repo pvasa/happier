@@ -17,6 +17,15 @@ describe('shouldCommitAutomaticGroupApplySessionEvent', () => {
     }, { commitAccountSwitchEvents: false })).toBe(false);
   });
 
+  it('suppresses no-op account switch rows where the effective profile did not change', () => {
+    expect(shouldCommitAutomaticGroupApplySessionEvent({
+      type: 'connected_service_account_switch',
+      serviceId: 'openai-codex',
+      fromProfileId: 'batiplus',
+      toProfileId: 'batiplus',
+    }, { commitAccountSwitchEvents: true })).toBe(false);
+  });
+
   it('keeps switch attempts and deferral diagnostics owned by the FSM visible', () => {
     expect(shouldCommitAutomaticGroupApplySessionEvent({
       type: 'connected_service_account_switch_attempt',

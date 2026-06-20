@@ -2698,7 +2698,7 @@ describe('createZellijTerminalHostAdapter', () => {
     await expect(adapter.injectUserPrompt(
       handle,
       { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
-    )).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: true });
+    )).resolves.toMatchObject({ status: 'deferred', reason: 'pane_initializing' });
 
     expect(calls).toEqual([]);
   });
@@ -2830,7 +2830,7 @@ describe('createZellijTerminalHostAdapter', () => {
     expect(calls).toEqual([]);
   });
 
-  it('marks a transient missing zellij pane as recoverable before writing', async () => {
+  it('defers a transient missing zellij pane before writing', async () => {
     const actions: ZellijActions = {
       attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
@@ -2857,9 +2857,9 @@ describe('createZellijTerminalHostAdapter', () => {
     await expect(
       adapter.injectUserPrompt(
         { kind: 'zellij', sessionName: 'session-a', paneId: 'missing', attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' } },
-        { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+        { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: { retryAfterMs: 250 } },
       ),
-    ).resolves.toMatchObject({ status: 'failed', reason: 'pane_dead', recoverable: true });
+    ).resolves.toMatchObject({ status: 'deferred', reason: 'pane_initializing', retryAfterMs: 250 });
   });
 
   it('classifies an inactive zellij session as a dead host state', async () => {
@@ -3260,7 +3260,7 @@ describe('createZellijTerminalHostAdapter', () => {
     });
   });
 
-  it('fails with host_unreachable when zellij liveness probing fails', async () => {
+  it('defers when zellij liveness probing is inconclusive', async () => {
     const actions: ZellijActions = {
       attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1', stderr: '' }),
@@ -3289,14 +3289,12 @@ describe('createZellijTerminalHostAdapter', () => {
     await expect(
       adapter.injectUserPrompt(
         { kind: 'zellij', sessionName: 'session-a', paneId: 'terminal_1', attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared' } },
-        { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: {} },
+        { text: 'prompt', multiline: false, origin: { kind: 'ui_pending', nonce: 'nonce-a' }, scheduling: { retryAfterMs: 250 } },
       ),
     ).resolves.toEqual({
-      status: 'failed',
-      reason: 'host_unreachable',
-      phase: 'liveness',
-      duplicateRisk: 'none',
-      recoverable: true,
+      status: 'deferred',
+      reason: 'pane_initializing',
+      retryAfterMs: 250,
     });
   });
 
@@ -3381,14 +3379,8 @@ describe('createZellijTerminalHostAdapter', () => {
     expect(settled).toBe(false);
 
     finishWrite?.();
-    await expect(injection).resolves.toEqual({
-      status: 'failed',
-      reason: 'timeout',
-      phase: 'after_write_before_enter',
-      duplicateRisk: 'possible',
-      recoverable: true,
-    });
-    expect(calls).toEqual(['list', 'write']);
+    await expect(injection).resolves.toMatchObject({ status: 'injected' });
+    expect(calls).toEqual(['list', 'write', 'enter']);
   });
 
   it('reuses a fresh liveness inspection across evaluateLiveness + captureInputState within a tick (R-E2)', async () => {

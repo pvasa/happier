@@ -102,15 +102,30 @@ describe('createTmuxTerminalControlPort', () => {
 
   it('captures the FULL pane (multi-line) and strips ANSI via the shared normalizer', async () => {
     const esc = String.fromCharCode(0x1b);
-    const { executor, calls } = recordingExecutor(ok(`${esc}[32mline1${esc}[0m\nline2\nline3   \n`));
+    const calls: string[][] = [];
+    const executor: TmuxControlCommandExecutor = async (args) => {
+      calls.push([...args]);
+      if (args[0] === 'capture-pane') return ok(`${esc}[32mline1${esc}[0m\nline2\nline3   \n`);
+      if (args[0] === 'display-message') return ok('2\t2\n');
+      return ok();
+    };
     const port = createTmuxTerminalControlPort({ executor, target: TARGET, nowMs: () => 4242 });
 
     const result = await port.captureScreen();
 
-    expect(calls).toEqual([['capture-pane', '-p', '-e', '-t', TARGET]]);
+    expect(calls).toEqual([
+      ['capture-pane', '-p', '-e', '-t', TARGET],
+      ['display-message', '-p', '-t', TARGET, '#{cursor_x}\t#{cursor_y}'],
+    ]);
     expect(result).toEqual({
       status: 'captured',
-      capture: { text: 'line1\nline2\nline3', styledText: `${esc}[32mline1${esc}[0m\nline2\nline3   \n`, capturedAtMs: 4242, hostKind: 'tmux' },
+      capture: {
+        text: 'line1\nline2\nline3',
+        styledText: `${esc}[32mline1${esc}[0m\nline2\nline3   \n`,
+        cursor: { x: 2, y: 2 },
+        capturedAtMs: 4242,
+        hostKind: 'tmux',
+      },
     });
   });
 

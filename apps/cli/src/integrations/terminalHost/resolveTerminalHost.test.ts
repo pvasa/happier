@@ -45,6 +45,18 @@ describe('resolveTerminalHost', () => {
     expect(result).toMatchObject({ status: 'resolved', adapter: { kind: 'zellij' }, reason: 'tmux_unavailable' });
   });
 
+  it('falls back to tmux on POSIX when zellij is selected but unavailable', () => {
+    const result = resolveTerminalHost({
+      preference: 'zellij',
+      platform: { os: 'linux', arch: 'arm64' },
+      adapters: { tmux: adapter('tmux') },
+      tmuxAvailable: true,
+      zellijAvailable: false,
+    });
+
+    expect(result).toMatchObject({ status: 'resolved', adapter: { kind: 'tmux' }, reason: 'zellij_unavailable_tmux_fallback' });
+  });
+
   it('uses zellij on Windows x64 auto and disables Windows arm64', () => {
     const windowsX64 = resolveTerminalHost({
       preference: 'auto',

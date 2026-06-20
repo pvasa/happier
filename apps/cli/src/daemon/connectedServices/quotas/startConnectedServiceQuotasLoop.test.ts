@@ -95,6 +95,44 @@ describe('startConnectedServiceQuotasLoop', () => {
     expect(coordinator.tickOnce).toHaveBeenCalledTimes(1);
   });
 
+  it('waits for an in-flight tick to settle when stopped', async () => {
+    let releaseTick: () => void = () => {
+      throw new Error('fixture: expected tick release callback');
+    };
+    const coordinator: { tickOnce: () => Promise<void> } = {
+      tickOnce: vi.fn(async () => await new Promise<void>((resolve) => {
+        releaseTick = resolve;
+      })),
+    };
+
+    let captured: (() => void) = () => {};
+    const handle = startConnectedServiceQuotasLoop({
+      enabled: true,
+      tickMs: 10,
+      coordinator,
+      onTickError: vi.fn(),
+      setIntervalFn: (fn) => {
+        captured = fn;
+        return 123;
+      },
+      clearIntervalFn: vi.fn(),
+    });
+
+    captured();
+    await Promise.resolve();
+
+    let stopSettled = false;
+    const stopPromise = handle?.stop().then(() => {
+      stopSettled = true;
+    });
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+
+    releaseTick();
+    await stopPromise;
+    expect(stopSettled).toBe(true);
+  });
+
   it('uses deterministic bounded jitter between scheduled wakeups', async () => {
     const coordinator: { tickOnce: () => Promise<void> } = { tickOnce: vi.fn(async () => {}) };
 

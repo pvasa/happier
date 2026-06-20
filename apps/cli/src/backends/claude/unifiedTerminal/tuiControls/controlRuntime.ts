@@ -27,7 +27,10 @@ export async function captureScreenState(port: TerminalControlPort): Promise<Cap
   const result = await port.captureScreen();
   switch (result.status) {
     case 'captured':
-      return { kind: 'state', state: parseClaudeScreenState(result.capture.styledText ?? result.capture.text) };
+      return {
+        kind: 'state',
+        state: parseClaudeScreenState(result.capture.styledText ?? result.capture.text, { cursor: result.capture.cursor }),
+      };
     case 'host_dead':
       return { kind: 'host_dead', recoverable: result.recoverable };
     case 'unsupported':

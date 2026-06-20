@@ -1,10 +1,21 @@
-import type { ConnectedServiceId } from '@happier-dev/protocol';
+import type {
+  ConnectedServiceCredentialRecordV1,
+  ConnectedServiceId,
+} from '@happier-dev/protocol';
 
 export type RuntimeAccountIdentityProofStrength = 'exact' | 'weak';
 
+export type RuntimeAccountIdentityStrategy =
+  | 'provider_account_id'
+  | 'shared_group_auth_surface';
+
 export type RuntimeAccountIdentitySource =
   | 'runtime_quota_snapshot'
-  | 'active_account_verification';
+  | 'active_account_verification'
+  | 'spawn_selection'
+  | 'group_switch_selection'
+  | 'codex_live_auth_apply'
+  | 'runtime_identity_probe';
 
 export type RuntimeAccountIdentityRecordInput = Readonly<{
   sessionId: string;
@@ -18,6 +29,45 @@ export type RuntimeAccountIdentityRecordInput = Readonly<{
   proofStrength: RuntimeAccountIdentityProofStrength;
   groupGeneration: number | null;
 }>;
+
+export type RuntimeAccountIdentitySelectionInput = Readonly<{
+  serviceId: ConnectedServiceId;
+  profileId: string;
+  groupId?: string | null;
+  groupGeneration?: number | null;
+  record: ConnectedServiceCredentialRecordV1;
+  source: Extract<
+    RuntimeAccountIdentitySource,
+    'spawn_selection' | 'group_switch_selection' | 'codex_live_auth_apply'
+  >;
+}>;
+
+export type RuntimeAccountIdentityProbeResult =
+  | Readonly<{
+      status: 'verified';
+      strategy?: RuntimeAccountIdentityStrategy;
+      providerAccountId?: string | null;
+      sharedAuthSurfaceId?: string | null;
+      accountLabel?: string | null;
+      proofStrength?: 'exact' | 'weak';
+      source?: RuntimeAccountIdentitySource;
+      profileId?: string | null;
+      groupId?: string | null;
+      groupGeneration?: number | null;
+      runtime?: Readonly<{
+        safeToApply?: boolean;
+        inProviderTurn?: boolean;
+      }>;
+    }>
+  | Readonly<{
+      status: 'inexact' | 'unavailable';
+      reason?: string;
+      accountLabel?: string | null;
+      runtime?: Readonly<{
+        safeToApply?: boolean;
+        inProviderTurn?: boolean;
+      }>;
+    }>;
 
 export type RuntimeAccountIdentityEntry = Readonly<{
   sessionId: string;

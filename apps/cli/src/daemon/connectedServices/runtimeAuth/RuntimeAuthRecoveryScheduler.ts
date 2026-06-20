@@ -339,6 +339,28 @@ function readApplyFailure(result: unknown): Readonly<{
   };
 }
 
+function isDurableContinuityReconstructionExhausted(
+  diagnostics: Readonly<Record<string, unknown>> | null,
+): boolean {
+  if (!diagnostics) return false;
+  if (diagnostics.durableContinuityReconstructionExhausted === true) return true;
+  const candidates = [
+    diagnostics.durableContinuity,
+    diagnostics.durableContinuityReconstruction,
+    diagnostics.continuity,
+  ];
+  return candidates.some((candidate) => {
+    if (!isRecord(candidate)) return false;
+    const status = readString(candidate.status)
+      ?? readString(candidate.reconstructionStatus)
+      ?? readString(candidate.reconstructionState);
+    return candidate.reconstructionExhausted === true
+      || candidate.durableReconstructionExhausted === true
+      || status === 'exhausted'
+      || status === 'terminal';
+  });
+}
+
 function classifyApplyFailure(result: unknown): RetryDecision | null {
   const failure = readApplyFailure(result);
   if (!failure) return null;
@@ -380,6 +402,31 @@ function classifyApplyFailure(result: unknown): RetryDecision | null {
       classification: explicit ?? { kind: 'dependency_unavailable', retryable: true },
       failurePhase: 'apply',
       failureReason: 'account_settings_unavailable',
+      lastError: failure.errorCode,
+    };
+  }
+  // Missing provider resume state during recovery is a durable-continuity infrastructure gap until
+  // the reconstruction path has explicitly exhausted. Keep arbitrary provider verdicts fail-closed.
+  if (failure.errorCode === 'provider_session_state_unavailable_for_resume') {
+    const explicit = normalizeClassification(failure.diagnostics?.errorClassification);
+    if (
+      failure.diagnostics?.retryable === false
+      || explicit?.retryable === false
+      || isDurableContinuityReconstructionExhausted(failure.diagnostics)
+    ) {
+      return {
+        retryable: false,
+        classification: explicit,
+        reason: 'provider_session_state_unavailable_after_reconstruction',
+        failurePhase: 'apply',
+        lastError: failure.errorCode,
+      };
+    }
+    return {
+      retryable: true,
+      classification: explicit ?? { kind: 'dependency_unavailable', retryable: true },
+      failurePhase: 'apply',
+      failureReason: 'durable_continuity_reconstruction_retrying',
       lastError: failure.errorCode,
     };
   }

@@ -64,9 +64,18 @@ export type ClaudeUnifiedTelemetryEvent =
         // C11: pre-injection composer guard outcome (own leftover cleared / genuine draft deferral).
         name: 'unified.injection.draft_guard';
         properties: Readonly<{
-          status: 'cleared' | 'foreign_draft' | 'generating' | 'capture_failed' | 'clear_failed';
+          status:
+            | 'cleared'
+            | 'foreign_draft'
+            | 'capture_style_unavailable'
+            | 'generating'
+            | 'capture_failed'
+            | 'clear_failed'
+            | 'starvation_escalated';
           attempts?: number | undefined;
           draftLength?: number | undefined;
+          guardStatus?: 'foreign_draft' | 'capture_style_unavailable' | 'clear_failed' | undefined;
+          consecutiveDeferrals?: number | undefined;
           originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
         }>;
       }>

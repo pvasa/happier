@@ -33,6 +33,7 @@ export type TerminalHostHandle = Readonly<{
 
 export type TerminalHostLiveness = Readonly<{
   paneAlive: boolean;
+  probeInconclusive?: boolean;
   paneDead?: boolean;
   panePid?: number;
   paneCurrentCommand?: string;
@@ -46,6 +47,8 @@ export type TerminalHostLiveness = Readonly<{
 export type TerminalInputState = Readonly<{
   stable: boolean;
   currentInput: string;
+  /** Zero-based terminal cursor position when the host can report it. */
+  cursor?: Readonly<{ x: number; y: number }>;
   observedAt: number;
 }>;
 

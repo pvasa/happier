@@ -10,9 +10,12 @@ import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort'
 import type { SessionEventMessage } from '@/api/session/sessionMessageTypes';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 import { projectConnectedServiceRuntimeAuthRecoveryReport } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
+import { isTemporaryRetryOwnedConnectedServiceRuntimeFailure } from '@/daemon/connectedServices/runtimeAuth/ConnectedServiceRecoveryPolicy';
 import { findConnectedServiceChildSelection } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { buildNativeQuotaProfileId } from '@/daemon/connectedServices/quotas/nativeQuotaProfileId';
+import { createConnectedServiceQuotaSnapshotDeliveryOutbox } from '@/daemon/connectedServices/quotas/connectedServiceQuotaSnapshotDeliveryOutbox';
 import { notifyDaemonConnectedServiceQuotaSnapshot } from '@/daemon/controlClient';
+import { logger } from '@/ui/logger';
 import { resolveConfiguredClaudeConfigDir } from '../utils/resolveConfiguredClaudeConfigDir';
 
 import { classifyClaudeConnectedServiceRuntimeAuthFailure } from './classifyClaudeConnectedServiceRuntimeAuthFailure';
@@ -41,6 +44,18 @@ const recentRecoveryProjectionByClient = new WeakMap<
     RuntimeIssueSession['client'],
     RuntimeIssueRecoveryProjectionDeduperState
 >();
+
+const claudeQuotaSnapshotDeliveryOutbox = createConnectedServiceQuotaSnapshotDeliveryOutbox({
+    deliver: async ({ sessionId, serviceId, snapshot }) => await notifyDaemonConnectedServiceQuotaSnapshot({
+        sessionId,
+        serviceId,
+        snapshot,
+    }),
+    retryDelayMs: 1_000,
+    onDiagnostic: (diagnostic) => {
+        logger.debug('[claude] Connected-service quota snapshot delivery diagnostic', diagnostic);
+    },
+});
 
 function normalizeClaudePublicLimitCategory(
     value: NormalizedProviderUsageLimitDetailsV1['limitCategory'] | null | undefined,
@@ -242,6 +257,48 @@ function buildClaudeRuntimeIssueUsageLimit(params: Readonly<{
     };
 }
 
+function buildClaudeRateLimitRuntimeIssue(params: Readonly<{
+    details: NormalizedProviderUsageLimitDetailsV1;
+    classification: NonNullable<ReturnType<typeof classifyClaudeConnectedServiceRuntimeAuthFailure>>;
+    connectedService: RuntimeIssueConnectedService;
+    occurredAt: number;
+}>): SessionRuntimeIssueV1 {
+    if (params.classification.kind === 'temporary_throttle') {
+        return {
+            v: 1,
+            scope: 'primary_session',
+            status: 'failed',
+            code: 'provider_temporary_throttle',
+            source: 'provider_status_error',
+            occurredAt: params.occurredAt,
+            provider: 'claude',
+            sanitizedPreview: 'Provider is temporarily limiting requests',
+            temporaryThrottle: {
+                v: 1,
+                retryAfterMs: params.classification.retryAfterMs ?? params.details.retryAfterMs ?? null,
+                recoverability: 'retry',
+            },
+        };
+    }
+    const isProviderCapacity =
+        params.classification.kind === 'capacity'
+        || params.classification.limitCategory === 'capacity';
+    return {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: isProviderCapacity ? 'provider_status_error' : 'usage_limit',
+        source: isProviderCapacity ? 'provider_status_error' : 'usage_limit',
+        occurredAt: params.occurredAt,
+        provider: 'claude',
+        sanitizedPreview: isProviderCapacity ? 'Provider reported an error' : 'Usage limit reached',
+        usageLimit: buildClaudeRuntimeIssueUsageLimit({
+            details: params.details,
+            connectedService: params.connectedService,
+        }),
+    };
+}
+
 export async function surfaceClaudeRateLimitRuntimeIssue(
     session: RuntimeIssueSession,
     details: NormalizedProviderUsageLimitDetailsV1,
@@ -259,7 +316,6 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
     const connectedServiceId: RuntimeIssueConnectedService['serviceId'] =
         classification.serviceId === 'anthropic' ? 'anthropic' : 'claude-subscription';
     const profileId = classification.profileId ?? (selection ? null : buildNativeClaudeQuotaProfileId());
-    const isProviderCapacity = classification.kind === 'capacity' || classification.limitCategory === 'capacity';
     const connectedService: RuntimeIssueConnectedService = {
         serviceId: connectedServiceId,
         profileId,
@@ -273,20 +329,12 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
     const sidechainSourced = details.sourcedFromSidechain === true;
     const occurredAt = Date.now();
     if (!sidechainSourced) {
-        const issue: SessionRuntimeIssueV1 = {
-            v: 1,
-            scope: 'primary_session',
-            status: 'failed',
-            code: isProviderCapacity ? 'provider_status_error' : 'usage_limit',
-            source: isProviderCapacity ? 'provider_status_error' : 'usage_limit',
+        const issue = buildClaudeRateLimitRuntimeIssue({
+            details,
+            classification,
+            connectedService,
             occurredAt,
-            provider: 'claude',
-            sanitizedPreview: isProviderCapacity ? 'Provider reported an error' : 'Usage limit reached',
-            usageLimit: buildClaudeRuntimeIssueUsageLimit({
-                details,
-                connectedService,
-            }),
-        };
+        });
         await session.client.sessionTurnLifecycle?.failTurn?.({
             provider: 'claude',
             issue,
@@ -296,9 +344,10 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
     // subject. Record it for BOTH the native identity and the selected member (mirroring Codex)
     // so the canonical quota row does not lag behind the background fetcher for group sessions.
     if (profileId) {
-        await notifyDaemonConnectedServiceQuotaSnapshot({
+        await claudeQuotaSnapshotDeliveryOutbox.enqueueAndFlush({
             sessionId: session.client.sessionId,
             serviceId: connectedServiceId,
+            groupId: classification.groupId ?? (selection?.kind === 'group' ? selection.groupId : null),
             snapshot: buildClaudeRuntimeQuotaSnapshot({
                 details,
                 fetchedAt: occurredAt,
@@ -308,7 +357,7 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
         }).catch(() => undefined);
     }
     if (sidechainSourced) return;
-    if (!selection) return;
+    if (!selection && !isTemporaryRetryOwnedConnectedServiceRuntimeFailure(classification)) return;
     const recoveryReport = await reportConnectedServiceRuntimeAuthFailureToDaemon({
         sessionId: session.client.sessionId,
         switchesThisTurn: 0,

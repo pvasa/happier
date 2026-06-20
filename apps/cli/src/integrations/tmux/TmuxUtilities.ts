@@ -32,6 +32,7 @@ import {
   resolveTmuxInlineSpawnMaxChars,
   writeTmuxSpawnScript,
 } from './spawnScript';
+import { parseTmuxCursorPosition, type TmuxCursorPosition } from './cursorPosition';
 
 export interface TmuxSpawnOptions extends Omit<SpawnOptions, 'env'> {
   /** Target tmux session name */
@@ -351,6 +352,19 @@ export class TmuxUtilities {
       return result.stdout;
     }
     return '';
+  }
+
+  async captureCursorPosition(session?: string, window?: string, pane?: string): Promise<TmuxCursorPosition | null> {
+    const result = await this.executeTmuxCommand(
+      ['display-message', '-p', '#{cursor_x}\t#{cursor_y}'],
+      session,
+      window,
+      pane,
+    );
+    if (result && result.returncode === 0) {
+      return parseTmuxCursorPosition(result.stdout);
+    }
+    return null;
   }
 
   /**

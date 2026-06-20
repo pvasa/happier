@@ -269,6 +269,7 @@ describe('createClaudeUnifiedPromptInjector', () => {
     it('guard deferrals carry retryAfterMs so an idle session re-attempts the injection', async () => {
       for (const guard of [
         { status: 'foreign_draft' as const, draftLength: 12 },
+        { status: 'capture_style_unavailable' as const, draftLength: 12 },
         { status: 'clear_failed' as const, draftLength: 35 },
       ]) {
         const injector = createClaudeUnifiedPromptInjector({
@@ -285,6 +286,27 @@ describe('createClaudeUnifiedPromptInjector', () => {
           expect(result.retryAfterMs).toBeGreaterThan(0);
         }
       }
+    });
+
+    it('defers with explicit telemetry when capture style is unavailable for visible composer text', async () => {
+      const injectUserPrompt = vi.fn();
+      const telemetry = { emit: vi.fn() };
+      const injector = createClaudeUnifiedPromptInjector({
+        inputInjection: { hostKind: 'zellij', injectUserPrompt },
+        composerDraftGuard: async () => ({ status: 'capture_style_unavailable', draftLength: 32 }),
+        createNonce: () => 'nonce-1',
+        telemetry,
+      });
+
+      await expect(
+        injector.injectPrompt({ message: 'next prompt', origin: { kind: 'ui_pending', clientId: 'c1' } }),
+      ).resolves.toMatchObject({ status: 'deferred', reason: 'user_typing', retryAfterMs: 2_000 });
+      expect(injectUserPrompt).not.toHaveBeenCalled();
+      expect(telemetry.emit).toHaveBeenCalledWith({
+        name: 'unified.injection.draft_guard',
+        properties: { status: 'capture_style_unavailable', draftLength: 32, originKind: 'ui_pending' },
+      });
+      expect(JSON.stringify(telemetry.emit.mock.calls)).not.toContain('next prompt');
     });
 
     it('backs off sustained guard deferrals instead of polling the terminal every two seconds indefinitely', async () => {
@@ -319,6 +341,77 @@ describe('createClaudeUnifiedPromptInjector', () => {
         retryAfterMs: 30_000,
       });
       expect(injectUserPrompt).not.toHaveBeenCalled();
+    });
+
+    it('fires one structured starvation notice for a persistent idle foreign draft blocker', async () => {
+      let nowMs = 0;
+      const injectUserPrompt = vi.fn();
+      const onDraftGuardStarvation = vi.fn();
+      const telemetry = { emit: vi.fn() };
+      const injectorOptions = {
+        inputInjection: { hostKind: 'zellij' as const, injectUserPrompt },
+        composerDraftGuard: async () => ({ status: 'foreign_draft' as const, draftLength: 32 }),
+        createNonce: () => 'nonce-1',
+        nowMs: () => nowMs,
+        telemetry,
+        onDraftGuardStarvation,
+      };
+      const injector = createClaudeUnifiedPromptInjector(injectorOptions);
+      const batch = { message: 'next prompt', origin: { kind: 'ui_pending' as const, clientId: 'c1' } };
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await injector.injectPrompt(batch);
+      }
+      expect(onDraftGuardStarvation).not.toHaveBeenCalled();
+
+      nowMs = 15_000;
+      await injector.injectPrompt(batch);
+      await injector.injectPrompt(batch);
+
+      expect(onDraftGuardStarvation).toHaveBeenCalledTimes(1);
+      expect(onDraftGuardStarvation).toHaveBeenCalledWith({
+        consecutiveDeferrals: 4,
+        draftLength: 32,
+        guardStatus: 'foreign_draft',
+        originKind: 'ui_pending',
+      });
+      expect(telemetry.emit).toHaveBeenCalledWith({
+        name: 'unified.injection.draft_guard',
+        properties: {
+          status: 'starvation_escalated',
+          consecutiveDeferrals: 4,
+          draftLength: 32,
+          guardStatus: 'foreign_draft',
+          originKind: 'ui_pending',
+        },
+      });
+      expect(injectUserPrompt).not.toHaveBeenCalled();
+    });
+
+    it('fires the starvation notice with capture_style_unavailable as the guard status', async () => {
+      let nowMs = 0;
+      const onDraftGuardStarvation = vi.fn();
+      const injector = createClaudeUnifiedPromptInjector({
+        inputInjection: { hostKind: 'zellij', injectUserPrompt: vi.fn() },
+        composerDraftGuard: async () => ({ status: 'capture_style_unavailable' as const, draftLength: 32 }),
+        createNonce: () => 'nonce-1',
+        nowMs: () => nowMs,
+        onDraftGuardStarvation,
+      });
+      const batch = { message: 'next prompt', origin: { kind: 'ui_pending' as const, clientId: 'c1' } };
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await injector.injectPrompt(batch);
+      }
+      nowMs = 15_000;
+      await injector.injectPrompt(batch);
+
+      expect(onDraftGuardStarvation).toHaveBeenCalledWith({
+        consecutiveDeferrals: 4,
+        draftLength: 32,
+        guardStatus: 'capture_style_unavailable',
+        originKind: 'ui_pending',
+      });
     });
 
     it('defers without writing when the own leftover could not be cleared (never concatenates)', async () => {

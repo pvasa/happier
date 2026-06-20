@@ -93,12 +93,12 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
     );
   });
 
-  it('persists resolved profile labels on connected-service account switch transcript events', async () => {
+  it('skips same-profile connected-service account switch transcript events', async () => {
     process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
     vi.resetModules();
     const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
 
-    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+    const getSpy = vi.spyOn(axios, 'get').mockResolvedValueOnce({
       status: 200,
       data: {
         session: {
@@ -165,26 +165,8 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
       },
     });
 
-    expect(postSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/\/v2\/sessions\/sess-labels\/messages$/),
-      expect.objectContaining({
-        content: expect.objectContaining({
-          t: 'plain',
-          v: expect.objectContaining({
-            content: expect.objectContaining({
-              data: expect.objectContaining({
-                fromProfileId: 'batiplus',
-                toProfileId: 'batiplus',
-                groupLabel: 'Claude pool',
-                fromProfileLabel: 'leeroy',
-                toProfileLabel: 'leeroy',
-              }),
-            }),
-          }),
-        }),
-      }),
-      expect.any(Object),
-    );
+    expect(getSpy).not.toHaveBeenCalled();
+    expect(postSpy).not.toHaveBeenCalled();
   });
 
   it('does not persist provider account ids as public profile labels on transcript events', async () => {
@@ -315,6 +297,7 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
         type: 'connected_service_account_switch_attempt',
         ok: false,
         action: 'hot_applied',
+        reason: 'manual',
         attemptedContinuityMode: 'hot_apply',
         outcome: 'failed',
         outcomeAction: 'none',
@@ -352,6 +335,7 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
                 type: 'connected-service-account-switch-attempt',
                 ok: false,
                 action: 'hot_applied',
+                reason: 'manual',
                 attemptedContinuityMode: 'hot_apply',
                 outcome: 'failed',
                 outcomeAction: 'none',
@@ -371,6 +355,314 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
                   'openai-codex': {
                     status: 'weakly_verified',
                     reason: 'provider_account_email_verified_without_account_id',
+                  },
+                },
+              }),
+            }),
+          }),
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('preserves exact accepted verification proof in switch attempt events', async () => {
+    process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+    vi.resetModules();
+    const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
+
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess-attempt',
+          seq: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          active: true,
+          activeAt: 1,
+          encryptionMode: 'plain',
+          metadata: '{}',
+          metadataVersion: 1,
+          agentState: null,
+          agentStateVersion: 1,
+          dataEncryptionKey: null,
+        },
+      },
+    });
+    const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        didWrite: true,
+        message: { id: 'msg-attempt', seq: 2, localId: 'local-attempt', createdAt: 2 },
+      },
+    });
+
+    await commitConnectedServiceAccountSwitchSessionEvent({
+      credentials: {
+        token: 'token-1',
+        encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
+      },
+      sessionId: 'sess-attempt',
+      event: {
+        type: 'connected_service_account_switch_attempt',
+        ok: true,
+        action: 'hot_applied',
+        attemptedContinuityMode: 'hot_apply',
+        outcome: 'succeeded',
+        outcomeAction: 'hot_applied',
+        errorCode: null,
+        partialState: null,
+        verificationByServiceId: {
+          'openai-codex': {
+            status: 'verified',
+            providerAccountId: 'acct_bot',
+            proofStrength: 'exact',
+            source: 'applied_credential',
+          },
+        },
+      },
+    });
+
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\/v2\/sessions\/sess-attempt\/messages$/),
+      expect.objectContaining({
+        content: expect.objectContaining({
+          t: 'plain',
+          v: expect.objectContaining({
+            content: expect.objectContaining({
+              data: expect.objectContaining({
+                type: 'connected-service-account-switch-attempt',
+                ok: true,
+                action: 'hot_applied',
+                verificationByServiceId: {
+                  'openai-codex': {
+                    status: 'verified',
+                    providerAccountId: 'acct_bot',
+                    proofStrength: 'exact',
+                    source: 'applied_credential',
+                  },
+                },
+              }),
+            }),
+          }),
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('suppresses background soft-threshold switch attempt transcript events', async () => {
+    process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+    vi.resetModules();
+    const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
+
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess-attempt-background',
+          seq: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          active: true,
+          activeAt: 1,
+          encryptionMode: 'plain',
+          metadata: '{}',
+          metadataVersion: 1,
+          agentState: null,
+          agentStateVersion: 1,
+          dataEncryptionKey: null,
+        },
+      },
+    });
+    const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        didWrite: true,
+        message: { id: 'msg-attempt', seq: 2, localId: 'local-attempt', createdAt: 2 },
+      },
+    });
+
+    await commitConnectedServiceAccountSwitchSessionEvent({
+      credentials: {
+        token: 'token-1',
+        encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
+      },
+      sessionId: 'sess-attempt-background',
+      event: {
+        type: 'connected_service_account_switch_attempt',
+        ok: true,
+        action: 'hot_applied',
+        attemptedContinuityMode: 'hot_apply',
+        outcome: 'succeeded',
+        outcomeAction: 'hot_applied',
+        errorCode: null,
+        partialState: null,
+        reason: 'soft_threshold',
+      },
+    });
+
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('drops exact switch verification proof details without identity material', async () => {
+    process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+    vi.resetModules();
+    const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
+
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess-attempt',
+          seq: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          active: true,
+          activeAt: 1,
+          encryptionMode: 'plain',
+          metadata: '{}',
+          metadataVersion: 1,
+          agentState: null,
+          agentStateVersion: 1,
+          dataEncryptionKey: null,
+        },
+      },
+    });
+    const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        didWrite: true,
+        message: { id: 'msg-attempt', seq: 2, localId: 'local-attempt', createdAt: 2 },
+      },
+    });
+
+    await commitConnectedServiceAccountSwitchSessionEvent({
+      credentials: {
+        token: 'token-1',
+        encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
+      },
+      sessionId: 'sess-attempt',
+      event: {
+        type: 'connected_service_account_switch_attempt',
+        ok: true,
+        action: 'hot_applied',
+        attemptedContinuityMode: 'hot_apply',
+        outcome: 'succeeded',
+        outcomeAction: 'hot_applied',
+        errorCode: null,
+        partialState: null,
+        verificationByServiceId: {
+          'openai-codex': {
+            status: 'verified',
+            proofStrength: 'exact',
+            source: 'applied_credential',
+          },
+        },
+      },
+    });
+
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\/v2\/sessions\/sess-attempt\/messages$/),
+      expect.objectContaining({
+        content: expect.objectContaining({
+          t: 'plain',
+          v: expect.objectContaining({
+            content: expect.objectContaining({
+              data: expect.objectContaining({
+                type: 'connected-service-account-switch-attempt',
+                ok: true,
+                action: 'hot_applied',
+                verificationByServiceId: {
+                  'openai-codex': {
+                    status: 'verified',
+                  },
+                },
+              }),
+            }),
+          }),
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('preserves exact shared-auth-surface switch verification proof details', async () => {
+    process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+    vi.resetModules();
+    const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
+
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess-attempt',
+          seq: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          active: true,
+          activeAt: 1,
+          encryptionMode: 'plain',
+          metadata: '{}',
+          metadataVersion: 1,
+          agentState: null,
+          agentStateVersion: 1,
+          dataEncryptionKey: null,
+        },
+      },
+    });
+    const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        didWrite: true,
+        message: { id: 'msg-attempt', seq: 2, localId: 'local-attempt', createdAt: 2 },
+      },
+    });
+
+    await commitConnectedServiceAccountSwitchSessionEvent({
+      credentials: {
+        token: 'token-1',
+        encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
+      },
+      sessionId: 'sess-attempt',
+      event: {
+        type: 'connected_service_account_switch_attempt',
+        ok: true,
+        action: 'hot_applied',
+        attemptedContinuityMode: 'hot_apply',
+        outcome: 'succeeded',
+        outcomeAction: 'hot_applied',
+        errorCode: null,
+        partialState: null,
+        verificationByServiceId: {
+          'claude-subscription': {
+            status: 'verified',
+            sharedAuthSurfaceId: 'claude-team',
+            proofStrength: 'exact',
+            source: 'runtime_identity_probe',
+          },
+        },
+      },
+    });
+
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\/v2\/sessions\/sess-attempt\/messages$/),
+      expect.objectContaining({
+        content: expect.objectContaining({
+          t: 'plain',
+          v: expect.objectContaining({
+            content: expect.objectContaining({
+              data: expect.objectContaining({
+                type: 'connected-service-account-switch-attempt',
+                ok: true,
+                action: 'hot_applied',
+                verificationByServiceId: {
+                  'claude-subscription': {
+                    status: 'verified',
+                    sharedAuthSurfaceId: 'claude-team',
+                    proofStrength: 'exact',
+                    source: 'runtime_identity_probe',
                   },
                 },
               }),
@@ -456,12 +748,12 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
     expect(JSON.stringify(postedBody)).not.toContain('entryName');
   });
 
-  it('commits preventive soft-threshold switches as transcript events', async () => {
+  it('suppresses preventive soft-threshold switches as background maintenance transcript events', async () => {
     process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
     vi.resetModules();
     const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
 
-    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+    const getSpy = vi.spyOn(axios, 'get').mockResolvedValueOnce({
       status: 200,
       data: {
         session: {
@@ -505,27 +797,8 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
       },
     });
 
-    expect(postSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/\/v2\/sessions\/sess-2\/messages$/),
-      expect.objectContaining({
-        localId: 'connected-service-account-switch:openai-codex:codex-main:4',
-        content: expect.objectContaining({
-          t: 'plain',
-          v: expect.objectContaining({
-            content: expect.objectContaining({
-              data: expect.objectContaining({
-                serviceId: 'openai-codex',
-                groupId: 'codex-main',
-                fromProfileId: 'primary',
-                toProfileId: 'backup',
-                reason: 'soft_threshold',
-              }),
-            }),
-          }),
-        }),
-      }),
-      expect.any(Object),
-    );
+    expect(getSpy).not.toHaveBeenCalled();
+    expect(postSpy).not.toHaveBeenCalled();
   });
 
   it('commits the actual switch mode from runtime auth events', async () => {
@@ -595,12 +868,12 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
     );
   });
 
-  it('commits pre-turn auth-group soft-threshold switch coordinator events', async () => {
+  it('suppresses pre-turn auth-group soft-threshold switch coordinator events', async () => {
     process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
     vi.resetModules();
     const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
 
-    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+    const getSpy = vi.spyOn(axios, 'get').mockResolvedValueOnce({
       status: 200,
       data: {
         session: {
@@ -648,27 +921,8 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
       },
     });
 
-    expect(postSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/\/v2\/sessions\/sess-3\/messages$/),
-      expect.objectContaining({
-        localId: 'connected-service-account-switch:openai-codex:codex-main:4',
-        content: expect.objectContaining({
-          t: 'plain',
-          v: expect.objectContaining({
-            content: expect.objectContaining({
-              data: expect.objectContaining({
-                serviceId: 'openai-codex',
-                groupId: 'codex-main',
-                fromProfileId: 'primary',
-                toProfileId: 'backup',
-                reason: 'soft_threshold',
-              }),
-            }),
-          }),
-        }),
-      }),
-      expect.any(Object),
-    );
+    expect(getSpy).not.toHaveBeenCalled();
+    expect(postSpy).not.toHaveBeenCalled();
   });
 
   it('commits auth-disabled switch coordinator events as auth-expired transcript events', async () => {

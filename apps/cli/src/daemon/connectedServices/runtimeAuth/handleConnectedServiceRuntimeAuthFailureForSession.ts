@@ -84,6 +84,11 @@ type RuntimeAuthRecoverySuccessObserver = (input: Readonly<{
   fromProfileId?: string | null;
 }>) => Promise<void> | void;
 
+type RuntimeAuthRecoveryDurableSessionResolver = (input: Readonly<{
+  sessionId: string;
+  classification: ConnectedServiceRuntimeFailureClassification;
+}>) => Promise<TrackedSession | null> | TrackedSession | null;
+
 type RuntimeAuthRestartFailureObserver = (input: Readonly<{
   sessionId: string;
   tracked: TrackedSession;
@@ -183,6 +188,25 @@ function findTrackedSession(
   const normalized = normalizeSessionId(sessionId);
   if (!normalized) return null;
   return children.find((child) => normalizeSessionId(child.happySessionId) === normalized) ?? null;
+}
+
+async function resolveRuntimeAuthRecoveryTrackedSession(input: Readonly<{
+  children: ReadonlyArray<TrackedSession>;
+  sessionId: string;
+  classification: ConnectedServiceRuntimeFailureClassification | null;
+  resolveDurableSessionForRuntimeAuthRecovery?: RuntimeAuthRecoveryDurableSessionResolver | null;
+}>): Promise<TrackedSession | null> {
+  const tracked = findTrackedSession(input.children, input.sessionId);
+  if (tracked) return tracked;
+  if (!input.classification || !input.resolveDurableSessionForRuntimeAuthRecovery) return null;
+  const durableTracked = await input.resolveDurableSessionForRuntimeAuthRecovery({
+    sessionId: input.sessionId,
+    classification: input.classification,
+  });
+  if (!durableTracked) return null;
+  return normalizeSessionId(durableTracked.happySessionId) === normalizeSessionId(input.sessionId)
+    ? durableTracked
+    : null;
 }
 
 function isRuntimeCredentialFailure(classification: ConnectedServiceRuntimeFailureClassification): boolean {
@@ -620,6 +644,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
   switchAttemptTracker?: SwitchAttemptTrackerLike | null;
   switchCore?: ConnectedServiceSessionAuthSwitchCore | null;
   runtimeAuthRecovery?: RuntimeAuthRecoveryReaderLike | null;
+  resolveDurableSessionForRuntimeAuthRecovery?: RuntimeAuthRecoveryDurableSessionResolver | null;
   temporaryThrottleRecovery?: TemporaryThrottleRecoveryLike | null;
   credentialRefreshService?: RuntimeCredentialRefreshService | null;
   restartSession?: ((tracked: TrackedSession) => Promise<void> | void) | null;
@@ -646,7 +671,12 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
       blocker: 'CLI has no connected-service auth-group load/commit API in this branch.';
     }>
 > {
-  const tracked = findTrackedSession(input.getChildren(), input.sessionId);
+  const tracked = await resolveRuntimeAuthRecoveryTrackedSession({
+    children: input.getChildren(),
+    sessionId: input.sessionId,
+    classification: input.classification,
+    resolveDurableSessionForRuntimeAuthRecovery: input.resolveDurableSessionForRuntimeAuthRecovery ?? null,
+  });
   if (!tracked) {
     const classification = input.classification;
     const { selection } = classification

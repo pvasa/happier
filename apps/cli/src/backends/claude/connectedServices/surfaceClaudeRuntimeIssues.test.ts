@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY } from '@happier-dev/protocol';
+import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol';
 
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { resetConnectedServiceRuntimeAuthFailureReportDedupeForTests } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
@@ -15,6 +16,12 @@ vi.mock('@/daemon/controlClient', () => ({
   notifyDaemonConnectedServiceRuntimeAuthFailure: mockNotifyDaemonConnectedServiceRuntimeAuthFailure,
   notifyDaemonConnectedServiceQuotaSnapshot: mockNotifyDaemonConnectedServiceQuotaSnapshot,
 }));
+
+type ClaudeFailTurn = (params: { provider: 'claude'; issue: SessionRuntimeIssueV1 }) => Promise<void>;
+
+function createClaudeFailTurnSpy() {
+  return vi.fn<ClaudeFailTurn>(async () => undefined);
+}
 
 function createScheduledRuntimeAuthRecoveryReport(input: Readonly<{ includeTranscriptEvent?: boolean }> = {}) {
   const diagnostic = {
@@ -91,7 +98,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     // limit is still real account-level signal, so the quota snapshot is still recorded.
     const previousSelectionEnv = installClaudeSelectionEnv();
     const sendSessionEvent = vi.fn();
-    const failTurn = vi.fn(async () => {});
+    const failTurn = createClaudeFailTurnSpy();
     try {
       await surfaceClaudeRateLimitRuntimeIssue({
         client: {
@@ -142,7 +149,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     // fail the parent turn nor produce a runtime-auth failure report.
     const previousSelectionEnv = installClaudeSelectionEnv();
     const sendSessionEvent = vi.fn();
-    const failTurn = vi.fn(async () => {});
+    const failTurn = createClaudeFailTurnSpy();
     try {
       const surfaced = await surfaceClaudeConnectedServiceRuntimeAuthFailure({
         client: {
@@ -174,7 +181,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
   it('keeps SDK-stream subagent (parent_tool_use_id) 401 auth evidence out of turn failure and recovery', async () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     const sendSessionEvent = vi.fn();
-    const failTurn = vi.fn(async () => {});
+    const failTurn = createClaudeFailTurnSpy();
     try {
       const surfaced = await surfaceClaudeConnectedServiceRuntimeAuthFailure({
         client: {
@@ -205,7 +212,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
     const sendSessionEvent = vi.fn();
-    const failTurn = vi.fn(async () => {});
+    const failTurn = createClaudeFailTurnSpy();
     try {
       const surfaced = await surfaceClaudeConnectedServiceRuntimeAuthFailure({
         client: {
@@ -239,7 +246,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
     const sendSessionEvent = vi.fn();
-    const failTurn = vi.fn(async () => undefined);
+    const failTurn = createClaudeFailTurnSpy();
     try {
       await surfaceClaudeConnectedServiceRuntimeAuthFailure({
         client: {
@@ -344,12 +351,103 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     }
   });
 
+  it('surfaces temporary provider throttles outside usage-limit issue fields', async () => {
+    const previousSelectionEnv = installClaudeSelectionEnv();
+    mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
+    const failTurn = createClaudeFailTurnSpy();
+    try {
+      await surfaceClaudeRateLimitRuntimeIssue({
+        client: {
+          sessionId: 'sess_claude_temporary_throttle',
+          sendSessionEvent: vi.fn(),
+          sessionTurnLifecycle: { failTurn },
+        },
+      } as any, {
+        v: 1,
+        resetAtMs: null,
+        retryAfterMs: 1_250,
+        limitCategory: 'rate_limit',
+        quotaScope: 'provider',
+        recoverability: 'wait',
+        providerLimitId: 'transient',
+        planType: null,
+        utilization: null,
+        overage: null,
+        action: null,
+        connectedService: null,
+      }, '[claude-test]');
+
+      expect(failTurn).toHaveBeenCalledWith({
+        provider: 'claude',
+        issue: expect.objectContaining({
+          code: 'provider_temporary_throttle',
+          source: 'provider_status_error',
+          provider: 'claude',
+          temporaryThrottle: {
+            v: 1,
+            retryAfterMs: 1_250,
+            recoverability: 'retry',
+          },
+        }),
+      });
+      const issue = (failTurn.mock.calls[0]?.[0] as { issue?: Record<string, unknown> } | undefined)?.issue;
+      expect(issue).not.toHaveProperty('usageLimit');
+    } finally {
+      restoreClaudeSelectionEnv(previousSelectionEnv);
+    }
+  });
+
+  it('surfaces provider capacity as a provider status issue with structured limit details', async () => {
+    const previousSelectionEnv = installClaudeSelectionEnv();
+    mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
+    const failTurn = createClaudeFailTurnSpy();
+    try {
+      await surfaceClaudeRateLimitRuntimeIssue({
+        client: {
+          sessionId: 'sess_claude_capacity',
+          sendSessionEvent: vi.fn(),
+          sessionTurnLifecycle: { failTurn },
+        },
+      } as any, {
+        v: 1,
+        resetAtMs: null,
+        retryAfterMs: 2_000,
+        limitCategory: 'capacity',
+        quotaScope: 'provider',
+        recoverability: 'wait',
+        providerLimitId: 'server_overloaded',
+        planType: null,
+        utilization: null,
+        overage: null,
+        action: null,
+        connectedService: null,
+      }, '[claude-test]');
+
+      expect(failTurn).toHaveBeenCalledWith({
+        provider: 'claude',
+        issue: expect.objectContaining({
+          code: 'provider_status_error',
+          source: 'provider_status_error',
+          provider: 'claude',
+          sanitizedPreview: 'Provider reported an error',
+          usageLimit: expect.objectContaining({
+            limitCategory: 'capacity',
+            providerLimitId: 'server_overloaded',
+            retryAfterMs: 2_000,
+          }),
+        }),
+      });
+    } finally {
+      restoreClaudeSelectionEnv(previousSelectionEnv);
+    }
+  });
+
   it('records native Claude usage-limit evidence without connected-service recovery when no connected selection exists', async () => {
     const previousSelectionEnv = process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
     delete process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
     const previousHome = process.env.HOME;
     process.env.HOME = '/tmp/happier-claude-native-home';
-    const failTurn = vi.fn(async () => {});
+    const failTurn = createClaudeFailTurnSpy();
     try {
       await surfaceClaudeRateLimitRuntimeIssue({
         client: {
@@ -426,13 +524,80 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     }
   });
 
+  it('reports native Claude temporary throttles so the daemon can arm retry recovery', async () => {
+    const previousSelectionEnv = process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
+    delete process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
+    const previousHome = process.env.HOME;
+    process.env.HOME = '/tmp/happier-claude-native-throttle-home';
+    const failTurn = createClaudeFailTurnSpy();
+    try {
+      await surfaceClaudeRateLimitRuntimeIssue({
+        client: {
+          sessionId: 'sess_native_claude_throttle',
+          sessionTurnLifecycle: { failTurn },
+        },
+      } as any, {
+        v: 1,
+        resetAtMs: null,
+        retryAfterMs: 1_250,
+        limitCategory: 'rate_limit',
+        quotaScope: 'provider',
+        recoverability: 'wait',
+        providerLimitId: 'transient',
+        planType: null,
+        utilization: null,
+        overage: null,
+        action: null,
+        connectedService: null,
+      }, '[claude-test]');
+
+      expect(failTurn).toHaveBeenCalledWith({
+        provider: 'claude',
+        issue: expect.objectContaining({
+          code: 'provider_temporary_throttle',
+          source: 'provider_status_error',
+          temporaryThrottle: {
+            v: 1,
+            retryAfterMs: 1_250,
+            recoverability: 'retry',
+          },
+        }),
+      });
+      const issue = (failTurn.mock.calls[0]?.[0] as { issue?: Record<string, unknown> } | undefined)?.issue;
+      expect(issue).not.toHaveProperty('usageLimit');
+      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith({
+        sessionId: 'sess_native_claude_throttle',
+        switchesThisTurn: 0,
+        classification: expect.objectContaining({
+          kind: 'temporary_throttle',
+          serviceId: 'claude-subscription',
+          profileId: null,
+          groupId: null,
+          retryAfterMs: 1_250,
+          providerLimitId: 'transient',
+        }),
+      }, expect.anything());
+    } finally {
+      if (previousSelectionEnv === undefined) {
+        delete process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
+      } else {
+        process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] = previousSelectionEnv;
+      }
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
+  });
+
   it('emits a generic recovery message when the daemon report has a typed diagnostic but no transcript event', async () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(
       createScheduledRuntimeAuthRecoveryReport({ includeTranscriptEvent: false }),
     );
     const sendSessionEvent = vi.fn();
-    const failTurn = vi.fn(async () => undefined);
+    const failTurn = createClaudeFailTurnSpy();
     try {
       await surfaceClaudeConnectedServiceRuntimeAuthFailure({
         client: {

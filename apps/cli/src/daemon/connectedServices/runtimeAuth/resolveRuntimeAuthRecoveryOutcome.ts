@@ -50,6 +50,21 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+function hasExactVerificationIdentityMaterial(verification: Readonly<Record<string, unknown>>): boolean {
+  return readString(verification.providerAccountId) !== null
+    || readString(verification.activeAccountId) !== null
+    || readString(verification.sharedAuthSurfaceId) !== null;
+}
+
+function hasAcceptedVerificationProof(verification: unknown): boolean {
+  if (!isRecord(verification)) return false;
+  if (verification.status === 'weakly_verified') return true;
+  if (verification.status !== 'verified') return false;
+  return verification.proofStrength === 'exact'
+    ? hasExactVerificationIdentityMaterial(verification)
+    : true;
+}
+
 /**
  * Unwrap the `{ status: 'switch_attempted', result }` envelope to the inner
  * connected-service auth-group switch result, mirroring the runtime-auth
@@ -66,10 +81,7 @@ export function readRuntimeAuthRecoverySwitchResult(
 function hasAcceptedPostSwitchVerification(switchResult: Readonly<Record<string, unknown>>): boolean {
   const verificationByServiceId = switchResult.verificationByServiceId;
   if (!isRecord(verificationByServiceId)) return false;
-  return Object.values(verificationByServiceId).some((verification) => (
-    isRecord(verification)
-    && (verification.status === 'verified' || verification.status === 'weakly_verified')
-  ));
+  return Object.values(verificationByServiceId).some(hasAcceptedVerificationProof);
 }
 
 function hasFreshCandidateSelected(switchResult: Readonly<Record<string, unknown>>): boolean {
@@ -86,6 +98,9 @@ function hasFreshCandidateSelected(switchResult: Readonly<Record<string, unknown
 // evidence from switch results. Provider/runtime owners may also pass through an explicit
 // `proofKind` from the shared provider-outcome contract when they own stronger
 // evidence such as native resume, quota probe, provider activity, or terminal proof.
+// Account-adoption proof is deliberately derived from verificationByServiceId so
+// malformed exact verification cannot bypass the identity-material gate by setting
+// proofKind directly.
 export type RuntimeAuthRecoveryProofKind = ProviderOutcomeProofKind;
 
 /**
@@ -96,7 +111,10 @@ export type RuntimeAuthRecoveryProofKind = ProviderOutcomeProofKind;
 export function resolveRuntimeAuthRecoveryProof(result: unknown): RuntimeAuthRecoveryProofKind | null {
   const switchResult = readRuntimeAuthRecoverySwitchResult(result);
   if (!switchResult) return null;
-  if (isProviderOutcomeProofKind(switchResult.proofKind)) return switchResult.proofKind;
+  if (
+    isProviderOutcomeProofKind(switchResult.proofKind)
+    && switchResult.proofKind !== 'account_adoption_verified'
+  ) return switchResult.proofKind;
   if (hasAcceptedPostSwitchVerification(switchResult)) return 'account_adoption_verified';
   if (hasFreshCandidateSelected(switchResult)) return 'fresh_candidate_selected';
   return null;

@@ -1,6 +1,11 @@
 import { ConnectedServiceQuotaFetchError, type ConnectedServiceQuotaFetcher } from '../types';
 import type { ConnectedServiceCredentialRecordV1, ConnectedServiceQuotaMeterV1 } from '@happier-dev/protocol';
 
+import { mapCodexRateLimitResetCreditsToQuotaRecoveryCredits } from '@/backends/codex/quota/codexQuotaRecoveryCredits';
+import {
+  consumeCodexRateLimitResetCredit,
+  DEFAULT_CODEX_RATE_LIMIT_RESET_CREDITS_URL,
+} from '@/backends/codex/quota/codexRateLimitResetCreditsClient';
 import { isRecord, normalizeNonEmptyString, normalizePct, resolveConnectedServiceQuotaAccountLabel } from '../quotaNormalization';
 import { parseRetryAfterHeader } from '../normalization';
 
@@ -66,9 +71,9 @@ function buildQuotaUnknownMeter(meterId: string, label: string): ConnectedServic
 }
 
 const DEFAULT_OPENAI_CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
-
 export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
   usageUrl?: string;
+  resetCreditsUrl?: string | null;
   staleAfterMs?: number;
   userAgent?: string;
   /**
@@ -81,6 +86,12 @@ export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
   const usageUrl = typeof params?.usageUrl === 'string' && params.usageUrl.trim()
     ? params.usageUrl.trim()
     : DEFAULT_OPENAI_CODEX_USAGE_URL;
+  const usingDefaultUsageUrl = usageUrl === DEFAULT_OPENAI_CODEX_USAGE_URL;
+  const resetCreditsUrl = typeof params?.resetCreditsUrl === 'string' && params.resetCreditsUrl.trim()
+    ? params.resetCreditsUrl.trim()
+    : usingDefaultUsageUrl
+      ? DEFAULT_CODEX_RATE_LIMIT_RESET_CREDITS_URL
+      : null;
   const disablePrivateEndpoint = params?.disablePrivateEndpoint === true
     && usageUrl === DEFAULT_OPENAI_CODEX_USAGE_URL;
   const staleAfterMs = typeof params?.staleAfterMs === 'number' && Number.isFinite(params.staleAfterMs) ? Math.max(1, Math.trunc(params.staleAfterMs)) : 300_000;
@@ -90,6 +101,33 @@ export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
     serviceId: 'openai-codex',
     pollPolicy: {
       minPollIntervalMs: 5 * 60_000,
+    },
+    consumeRecoveryCredit: async ({ record, idempotencyKey, signal }) => {
+      if (record.kind !== 'oauth') {
+        throw new ConnectedServiceQuotaFetchError(
+          'OpenAI Codex reset-credit consume requires an OAuth credential record',
+          { quotaFetchErrorCode: 'missing_auth' },
+        );
+      }
+      const result = await consumeCodexRateLimitResetCredit({
+        accessToken: record.oauth.accessToken,
+        accountId: record.oauth.providerAccountId,
+        idempotencyKey,
+        signal,
+      });
+      if (!result.ok) {
+        throw new ConnectedServiceQuotaFetchError(
+          `OpenAI reset-credit consume failed${typeof result.status === 'number' ? ` (${result.status})` : ''}`,
+          {
+            status: result.status,
+            quotaFetchErrorCode: result.errorCode === 'codex_reset_credit_consume_network_error'
+              ? 'network'
+              : 'provider_backoff',
+            providerCode: result.providerCode ?? result.errorCode,
+          },
+        );
+      }
+      return result.response;
     },
     fetch: async ({ record, now, signal }) => {
       if (record.kind !== 'oauth') {
@@ -118,16 +156,17 @@ export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
         };
       }
 
+      const headers = {
+        'Authorization': `Bearer ${record.oauth.accessToken}`,
+        ...(record.oauth.providerAccountId ? { 'ChatGPT-Account-Id': record.oauth.providerAccountId } : {}),
+        'Accept': 'application/json',
+        'User-Agent': userAgent,
+      };
       let response: Response;
       try {
         response = await fetch(usageUrl, {
           method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${record.oauth.accessToken}`,
-            ...(record.oauth.providerAccountId ? { 'ChatGPT-Account-Id': record.oauth.providerAccountId } : {}),
-            'Accept': 'application/json',
-            'User-Agent': userAgent,
-          },
+          headers,
           signal,
         });
       } catch (fetchErr) {
@@ -172,6 +211,23 @@ export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
       }
 
       const data = isRecord(json) ? json : {};
+      let rawResetCredits: unknown = data.rate_limit_reset_credits;
+      if (resetCreditsUrl) {
+        try {
+          const resetCreditsResponse = await fetch(resetCreditsUrl, {
+            method: 'GET',
+            headers,
+            signal,
+          });
+          if (resetCreditsResponse.ok) {
+            rawResetCredits = await resetCreditsResponse.json();
+          }
+        } catch (error) {
+          if (error instanceof Error && error.name === 'AbortError') {
+            throw error;
+          }
+        }
+      }
 
       const planLabel = normalizeNonEmptyString(data.plan_type);
       const rateLimit = isRecord(data.rate_limit) ? data.rate_limit : null;
@@ -180,6 +236,7 @@ export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
 
       const sessionPct = normalizePct(primary?.used_percent);
       const weeklyPct = normalizePct(secondary?.used_percent);
+      const recoveryCredits = mapCodexRateLimitResetCreditsToQuotaRecoveryCredits(rawResetCredits);
 
       return {
         v: 1,
@@ -189,6 +246,7 @@ export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
         staleAfterMs,
         planLabel,
         accountLabel: resolveAccountLabel(record),
+        ...(recoveryCredits ? { recoveryCredits } : {}),
         meters: [
           {
             meterId: 'session',
