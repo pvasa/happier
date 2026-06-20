@@ -20,6 +20,12 @@ import { recoverSessionHandoffPrepareTargetJobsAfterRestart } from '@/session/ha
 import type { TrackedSession } from '../types';
 import { cleanupPidSessionResources } from '../sessions/cleanupPidSessionResources';
 import { createOnChildExited } from '../sessions/onChildExited';
+import {
+  isValidProcessCommandHash,
+  readSessionRunnerProcessIdentity as readSessionRunnerProcessIdentityDefault,
+  storedProcessHashProvesPidReuse,
+  type SessionRunnerProcessIdentity,
+} from '../sessionRunnerProcessIdentity';
 
 function parsePositiveInt(rawValue: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(rawValue ?? '', 10);
@@ -41,6 +47,34 @@ function isPidAliveBestEffort(pid: number): boolean {
     if (code === 'ESRCH') return false;
     return true;
   }
+}
+
+type TrackedSessionHeartbeatPruneReason = 'process-missing' | 'process-reused';
+type ReadSessionRunnerProcessIdentity = (params: Readonly<{ pid: number }>) => Promise<SessionRunnerProcessIdentity>;
+
+function hasLiveDaemonChildProcessHandle(
+  trackedSession: Pick<TrackedSession, 'startedBy' | 'pid' | 'childProcess'>,
+): boolean {
+  if (trackedSession.startedBy !== 'daemon') return false;
+  const childProcess = trackedSession.childProcess;
+  if (!childProcess || childProcess.pid !== trackedSession.pid) return false;
+  return childProcess.exitCode === null && childProcess.signalCode === null;
+}
+
+export function getTrackedSessionHeartbeatPruneReason(params: Readonly<{
+  isPidAlive: boolean;
+  trackedSession: Pick<TrackedSession, 'startedBy' | 'pid' | 'childProcess' | 'processCommandHash'>;
+  currentIdentity?: SessionRunnerProcessIdentity;
+}>): TrackedSessionHeartbeatPruneReason | null {
+  if (!params.isPidAlive) return 'process-missing';
+  if (!params.currentIdentity) return null;
+  const processHashProvesPidReuse = storedProcessHashProvesPidReuse({
+    storedProcessCommandHash: params.trackedSession.processCommandHash,
+    currentIdentity: params.currentIdentity,
+  });
+  if (!processHashProvesPidReuse) return null;
+  if (hasLiveDaemonChildProcessHandle(params.trackedSession)) return null;
+  return 'process-reused';
 }
 
 async function waitForReplacementDaemon(params: Readonly<{
@@ -76,6 +110,7 @@ export function startDaemonHeartbeatLoop(params: Readonly<{
   currentCliVersion: string;
   requestShutdown: (source: 'happier-app' | 'happier-cli' | 'os-signal' | 'exception', errorMessage?: string) => void;
   isShuttingDown?: () => boolean;
+  readSessionRunnerProcessIdentity?: ReadSessionRunnerProcessIdentity;
 }>): NodeJS.Timeout {
   const {
     pidToTrackedSession,
@@ -88,7 +123,10 @@ export function startDaemonHeartbeatLoop(params: Readonly<{
     currentCliVersion,
     requestShutdown,
     isShuttingDown,
+    readSessionRunnerProcessIdentity,
   } = params;
+  const readSessionRunnerProcessIdentityForHeartbeat =
+    readSessionRunnerProcessIdentity ?? readSessionRunnerProcessIdentityDefault;
 
   const onChildExitedForPrune =
     onChildExited ??
@@ -184,11 +222,23 @@ export function startDaemonHeartbeatLoop(params: Readonly<{
       await ensureSessionHandoffPrepareTargetRecovery();
 
       // Prune stale sessions
-      for (const [pid, _] of pidToTrackedSession.entries()) {
-        if (!isPidAliveBestEffort(pid)) {
-          // Process is dead, remove from tracking
-          logger.debug(`[DAEMON RUN] Removing stale session with PID ${pid} (process no longer exists)`);
-          onChildExitedForPrune(pid, { reason: 'process-missing', code: null, signal: null });
+      for (const [pid, tracked] of pidToTrackedSession.entries()) {
+        const isPidAlive = isPidAliveBestEffort(pid);
+        const currentIdentity = isPidAlive && isValidProcessCommandHash(tracked.processCommandHash)
+          ? await readSessionRunnerProcessIdentityForHeartbeat({ pid }).catch(() => ({ kind: 'unknown' as const }))
+          : undefined;
+        const pruneReason = getTrackedSessionHeartbeatPruneReason({
+          isPidAlive,
+          trackedSession: tracked,
+          currentIdentity,
+        });
+        if (pruneReason) {
+          logger.debug(
+            `[DAEMON RUN] Removing stale session with PID ${pid} (${
+              pruneReason === 'process-missing' ? 'process no longer exists' : 'PID was reused by another process'
+            })`,
+          );
+          onChildExitedForPrune(pid, { reason: pruneReason, code: null, signal: null });
           continue;
         }
       }

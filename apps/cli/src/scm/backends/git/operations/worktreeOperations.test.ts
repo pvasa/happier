@@ -43,6 +43,34 @@ describe('git worktree operations', () => {
         expect(mkdirMock).not.toHaveBeenCalled();
     });
 
+    it('fails closed before invoking git when the display name contains a forbidden ref segment', async () => {
+        const { gitWorktreeCreate } = await import('./worktreeOperations');
+
+        for (const displayName of ['release.lock', 'feature/@']) {
+            const response = await gitWorktreeCreate({
+                context: {
+                    cwd: '/repo',
+                    projectKey: 'project',
+                    detection: { isRepo: true, rootPath: '/repo', mode: '.git' },
+                },
+                request: {
+                    cwd: '/repo',
+                    displayName,
+                    baseRef: 'main',
+                },
+            });
+
+            expect(response).toEqual(expect.objectContaining({
+                success: false,
+                worktreePath: '',
+                branchName: '',
+                error: 'Invalid Git worktree name',
+            }));
+        }
+        expect(runScmCommandMock).not.toHaveBeenCalled();
+        expect(mkdirMock).not.toHaveBeenCalled();
+    });
+
     it('creates a git worktree from the repository root and falls back to a suffixed name when needed', async () => {
         runScmCommandMock
             .mockResolvedValueOnce({ success: true, stdout: '.git\n', stderr: '' })

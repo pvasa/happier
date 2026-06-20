@@ -109,6 +109,7 @@ export function createOnChildExited(params: Readonly<{
       const shouldReportSessionEnd = liveReplacement === null;
       const isUnexpectedBase =
         exit.reason === 'process-missing' ||
+        exit.reason === 'process-reused' ||
         exit.reason === 'process-error' ||
         (typeof exit.code === 'number' && exit.code !== 0) ||
         (typeof exit.signal === 'string' && exit.signal.length > 0 && !['SIGTERM', 'SIGINT'].includes(exit.signal));

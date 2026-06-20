@@ -18,25 +18,28 @@ import {
     runScmRoute,
 } from '@/scm/rpc/dispatch';
 
-import type { ScmHandlerRouteBase } from './scmHandlerRouteBase';
+import type { ScmHandlerRouteBase, ScmMutatingRouteRunner } from './scmHandlerRouteBase';
 
 export function registerScmRepositoryProvisioningHandlers(
     rpcHandlerManager: RpcHandlerRegistrar,
-    routeBase: ScmHandlerRouteBase
+    routeBase: ScmHandlerRouteBase,
+    runMutatingRoute: ScmMutatingRouteRunner
 ): void {
     rpcHandlerManager.registerHandler<ScmRepositoryInitRequest, ScmRepositoryInitResponse>(
         RPC_METHODS.SCM_REPOSITORY_INIT,
         async (request) =>
-            runScmProvisioningRoute<ScmRepositoryInitRequest, ScmRepositoryInitResponse>({
-                request,
-                ...routeBase,
-                runWithBackend: ({ context, selection }) =>
-                    selection.backend.repository?.init({ context, request }) ?? Promise.resolve({
-                        success: false,
-                        errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
-                        error: 'Repository initialization is not supported by the selected source-control backend.',
-                    }),
-            })
+            runMutatingRoute(() =>
+                runScmProvisioningRoute<ScmRepositoryInitRequest, ScmRepositoryInitResponse>({
+                    request,
+                    ...routeBase,
+                    runWithBackend: ({ context, selection }) =>
+                        selection.backend.repository?.init({ context, request }) ?? Promise.resolve({
+                            success: false,
+                            errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
+                            error: 'Repository initialization is not supported by the selected source-control backend.',
+                        }),
+                })
+            )
     );
 
     rpcHandlerManager.registerHandler<
@@ -44,6 +47,7 @@ export function registerScmRepositoryProvisioningHandlers(
         ScmHostingRepositoryDescribePublishTargetsResponse
     >(
         RPC_METHODS.SCM_HOSTING_REPOSITORY_DESCRIBE_PUBLISH_TARGETS,
+        // This route only describes available publish targets; publishing itself is wrapped below.
         async (request) =>
             runScmProvisioningRoute<ScmHostingRepositoryDescribePublishTargetsRequest, ScmHostingRepositoryDescribePublishTargetsResponse>({
                 request,
@@ -60,32 +64,36 @@ export function registerScmRepositoryProvisioningHandlers(
     rpcHandlerManager.registerHandler<ScmHostingRepositoryPublishRequest, ScmHostingRepositoryPublishResponse>(
         RPC_METHODS.SCM_HOSTING_REPOSITORY_PUBLISH,
         async (request) =>
-            runScmRoute<ScmHostingRepositoryPublishRequest, ScmHostingRepositoryPublishResponse>({
-                request,
-                ...routeBase,
-                onNonRepository: async () => notRepositoryResponse<ScmHostingRepositoryPublishResponse>(),
-                runWithBackend: ({ context, selection }) =>
-                    selection.backend.repository?.publishToHostingProvider({ context, request }) ?? Promise.resolve({
-                        success: false,
-                        errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
-                        error: 'Repository publishing is not supported by the selected source-control backend.',
-                    }),
-            })
+            runMutatingRoute(() =>
+                runScmRoute<ScmHostingRepositoryPublishRequest, ScmHostingRepositoryPublishResponse>({
+                    request,
+                    ...routeBase,
+                    onNonRepository: async () => notRepositoryResponse<ScmHostingRepositoryPublishResponse>(),
+                    runWithBackend: ({ context, selection }) =>
+                        selection.backend.repository?.publishToHostingProvider({ context, request }) ?? Promise.resolve({
+                            success: false,
+                            errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
+                            error: 'Repository publishing is not supported by the selected source-control backend.',
+                        }),
+                })
+            )
     );
 
     rpcHandlerManager.registerHandler<ScmRepositoryRemoveIndexLockRequest, ScmRepositoryRemoveIndexLockResponse>(
         RPC_METHODS.SCM_REPOSITORY_REMOVE_INDEX_LOCK,
         async (request) =>
-            runScmRoute<ScmRepositoryRemoveIndexLockRequest, ScmRepositoryRemoveIndexLockResponse>({
-                request,
-                ...routeBase,
-                onNonRepository: async () => notRepositoryResponse<ScmRepositoryRemoveIndexLockResponse>(),
-                runWithBackend: ({ context, selection }) =>
-                    selection.backend.repository?.removeIndexLock({ context, request }) ?? Promise.resolve({
-                        success: false,
-                        errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
-                        error: 'Git index lock recovery is not supported by the selected source-control backend.',
-                    }),
-            })
+            runMutatingRoute(() =>
+                runScmRoute<ScmRepositoryRemoveIndexLockRequest, ScmRepositoryRemoveIndexLockResponse>({
+                    request,
+                    ...routeBase,
+                    onNonRepository: async () => notRepositoryResponse<ScmRepositoryRemoveIndexLockResponse>(),
+                    runWithBackend: ({ context, selection }) =>
+                        selection.backend.repository?.removeIndexLock({ context, request }) ?? Promise.resolve({
+                            success: false,
+                            errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
+                            error: 'Git index lock recovery is not supported by the selected source-control backend.',
+                        }),
+                })
+            )
     );
 }

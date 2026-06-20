@@ -34,6 +34,36 @@ describe('isSessionRunnerActive', () => {
     expect(res).toBe(false);
   });
 
+  it('treats a live lock PID as inactive when its stored hash belongs to a non-Happier process', async () => {
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_1',
+      trackedSessions: [],
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({
+        ok: true,
+        lock: { sessionId: 'sess_1', pid: 123, acquiredAtMs: 1, processCommandHash: 'a'.repeat(64) },
+      }),
+      getProcessCommandHash: async () => null,
+    });
+    expect(res).toBe(false);
+  });
+
+  it('treats a live lock PID as active when process identity cannot be inspected', async () => {
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_1',
+      trackedSessions: [],
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({
+        ok: true,
+        lock: { sessionId: 'sess_1', pid: 123, acquiredAtMs: 1, processCommandHash: 'a'.repeat(64) },
+      }),
+      getProcessCommandHash: async () => {
+        throw new Error('process inspection failed');
+      },
+    });
+    expect(res).toBe(true);
+  });
+
   it('treats a dead lock PID as inactive', async () => {
     const res = await isSessionRunnerActive({
       sessionId: 'sess_1',
@@ -99,6 +129,61 @@ describe('isSessionRunnerActive', () => {
       getProcessCommandHash: async () => 'b'.repeat(64),
     });
     expect(res).toBe(false);
+  });
+
+  it('treats a tracked session PID as inactive when its stored hash belongs to a non-Happier process', async () => {
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 456,
+      happySessionId: 'sess_1',
+      processCommandHash: 'a'.repeat(64),
+    };
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_1',
+      trackedSessions: [tracked],
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({ ok: false, reason: 'not_found' }),
+      getProcessCommandHash: async () => null,
+    });
+    expect(res).toBe(false);
+  });
+
+  it('treats a tracked child-process PID as inactive when its stored hash belongs to a non-Happier process', async () => {
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 456,
+      happySessionId: 'sess_1',
+      processCommandHash: 'a'.repeat(64),
+      // Boundary fixture: only `pid` is read from the ChildProcess handle in this path.
+      childProcess: { pid: 456 } as TrackedSession['childProcess'],
+    };
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_1',
+      trackedSessions: [tracked],
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({ ok: false, reason: 'not_found' }),
+      getProcessCommandHash: async () => null,
+    });
+    expect(res).toBe(false);
+  });
+
+  it('treats a tracked session PID as active when process identity cannot be inspected', async () => {
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 456,
+      happySessionId: 'sess_1',
+      processCommandHash: 'a'.repeat(64),
+    };
+    const res = await isSessionRunnerActive({
+      sessionId: 'sess_1',
+      trackedSessions: [tracked],
+      readProcessRunState: async () => 'servable',
+      readSessionRunnerLockStatus: async () => ({ ok: false, reason: 'not_found' }),
+      getProcessCommandHash: async () => {
+        throw new Error('process inspection failed');
+      },
+    });
+    expect(res).toBe(true);
   });
 
   it('treats a STOPPED tracked session PID as inactive even with a live child handle', async () => {

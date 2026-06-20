@@ -14,6 +14,7 @@ vi.mock('@/persistence', () => ({
 }));
 
 vi.mock('../sessionRegistry', () => ({
+  promoteSessionMarkerConnectedServiceRestartIntent: vi.fn(async () => {}),
   removeSessionMarker: vi.fn(async () => {}),
 }));
 
@@ -92,6 +93,141 @@ describe('startDaemonHeartbeatLoop process-missing delegation', () => {
     expect(onChildExitedMock).toHaveBeenCalledTimes(1);
     expect(onChildExitedMock).toHaveBeenCalledWith(pid, expect.objectContaining({ reason: 'process-missing' }));
     expect(pidToTrackedSession.has(pid)).toBe(false);
+  });
+
+  it('delegates live pids to onChildExited when their stored hash belongs to a non-Happier process', async () => {
+    vi.mocked(readDaemonState).mockResolvedValue({
+      pid: process.pid,
+      httpPort: 4001,
+      startedAt: Date.now(),
+      startedWithCliVersion: '1.0.0',
+      lastHeartbeatAt: Date.now(),
+    });
+
+    const setIntervalSpy = vi.spyOn(global, 'setInterval').mockImplementation(((handler: (...args: any[]) => any) => {
+      (globalThis as any).__tick = handler;
+      return 1 as any;
+    }) as any);
+
+    const pid = 555555;
+    const pidToTrackedSession = new Map<number, any>([[
+      pid,
+      { pid, happySessionId: 'sess-4', processCommandHash: 'a'.repeat(64) },
+    ]]);
+
+    const originalKill = process.kill.bind(process);
+    vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: any) => {
+      if (targetPid === pid && signal === 0) return true;
+      return originalKill(targetPid, signal as any);
+    }) as any);
+
+    const onChildExitedMock = vi.fn();
+    const onChildExited = (targetPid: number, exit: any) => {
+      onChildExitedMock(targetPid, exit);
+      pidToTrackedSession.delete(targetPid);
+    };
+
+    const { startDaemonHeartbeatLoop } = await import('./heartbeat');
+    startDaemonHeartbeatLoop({
+      pidToTrackedSession,
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => null,
+      onChildExited,
+      controlPort: 8765,
+      fileState: {
+        pid: process.pid,
+        httpPort: 8765,
+        startedAt: Date.now(),
+        startedWithCliVersion: '1.0.0',
+        daemonLogPath: '/tmp/daemon.log',
+      },
+      currentCliVersion: '1.0.0',
+      requestShutdown: vi.fn(),
+      readSessionRunnerProcessIdentity: async () => ({ kind: 'not_happy' }),
+    });
+
+    expect(setIntervalSpy).toHaveBeenCalled();
+    const tick: (() => Promise<void>) | undefined = (globalThis as any).__tick;
+    expect(tick).toBeTypeOf('function');
+
+    await tick!();
+
+    expect(onChildExitedMock).toHaveBeenCalledTimes(1);
+    expect(onChildExitedMock).toHaveBeenCalledWith(pid, expect.objectContaining({ reason: 'process-reused' }));
+    expect(pidToTrackedSession.has(pid)).toBe(false);
+  });
+
+  it('does not prune a daemon-owned session while its child process handle is still live', async () => {
+    vi.mocked(readDaemonState).mockResolvedValue({
+      pid: process.pid,
+      httpPort: 4001,
+      startedAt: Date.now(),
+      startedWithCliVersion: '1.0.0',
+      lastHeartbeatAt: Date.now(),
+    });
+
+    const setIntervalSpy = vi.spyOn(global, 'setInterval').mockImplementation(((handler: (...args: any[]) => any) => {
+      (globalThis as any).__tick = handler;
+      return 1 as any;
+    }) as any);
+
+    const pid = 555556;
+    const pidToTrackedSession = new Map<number, any>([[
+      pid,
+      {
+        pid,
+        startedBy: 'daemon',
+        happySessionId: 'sess-live-child',
+        processCommandHash: 'a'.repeat(64),
+        childProcess: {
+          pid,
+          exitCode: null,
+          signalCode: null,
+        },
+      },
+    ]]);
+
+    const originalKill = process.kill.bind(process);
+    vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: any) => {
+      if (targetPid === pid && signal === 0) return true;
+      return originalKill(targetPid, signal as any);
+    }) as any);
+
+    const onChildExitedMock = vi.fn();
+    const onChildExited = (targetPid: number, exit: any) => {
+      onChildExitedMock(targetPid, exit);
+      pidToTrackedSession.delete(targetPid);
+    };
+
+    const { startDaemonHeartbeatLoop } = await import('./heartbeat');
+    startDaemonHeartbeatLoop({
+      pidToTrackedSession,
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => null,
+      onChildExited,
+      controlPort: 8765,
+      fileState: {
+        pid: process.pid,
+        httpPort: 8765,
+        startedAt: Date.now(),
+        startedWithCliVersion: '1.0.0',
+        daemonLogPath: '/tmp/daemon.log',
+      },
+      currentCliVersion: '1.0.0',
+      requestShutdown: vi.fn(),
+      readSessionRunnerProcessIdentity: async () => ({ kind: 'not_happy' }),
+    });
+
+    expect(setIntervalSpy).toHaveBeenCalled();
+    const tick: (() => Promise<void>) | undefined = (globalThis as any).__tick;
+    expect(tick).toBeTypeOf('function');
+
+    await tick!();
+
+    expect(onChildExitedMock).not.toHaveBeenCalled();
+    expect(pidToTrackedSession.has(pid)).toBe(true);
   });
 
   it('removes stale session runner markers when onChildExited is not provided', async () => {

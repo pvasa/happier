@@ -42,6 +42,7 @@ describe('happier session send (integration)', () => {
   let transcriptMessages: Array<Record<string, unknown>> = [];
   let lastActiveSessionRpcLocalId: string | null = null;
   let stageCommittedUserMessageInTranscript = false;
+  let stageAssistantReplyAfterCommittedUser = false;
   let stageVisibleMessageByLocalIdDelayMs: number | null = null;
 
   beforeEach(async () => {
@@ -98,6 +99,7 @@ describe('happier session send (integration)', () => {
     transcriptMessages = [];
     lastActiveSessionRpcLocalId = null;
     stageCommittedUserMessageInTranscript = false;
+    stageAssistantReplyAfterCommittedUser = false;
     stageVisibleMessageByLocalIdDelayMs = null;
 
     server = createServer(async (req, res) => {
@@ -234,6 +236,21 @@ describe('happier session send (integration)', () => {
               createdAt: Date.now(),
               content,
             });
+            if (stageAssistantReplyAfterCommittedUser) {
+              transcriptMessages.push({
+                id: `m${transcriptMessages.length + 1}`,
+                seq: transcriptMessages.length + 1,
+                localId: null,
+                createdAt: Date.now(),
+                content: {
+                  t: 'plain',
+                  v: {
+                    role: 'agent',
+                    content: { type: 'text', text: 'assistant completion' },
+                  },
+                },
+              });
+            }
           }
 
           if (localId && typeof stageVisibleMessageByLocalIdDelayMs === 'number') {
@@ -327,6 +344,9 @@ describe('happier session send (integration)', () => {
   });
 
   it('supports --wait and returns waited=true in JSON mode', async () => {
+    stageCommittedUserMessageInTranscript = true;
+    stageAssistantReplyAfterCommittedUser = true;
+
     const { handleSessionCommand } = await import('./index');
 
     const output = captureConsoleJsonOutput();
@@ -360,7 +380,7 @@ describe('happier session send (integration)', () => {
     }
   });
 
-  it('does not hang waiting for idle when sending to an inactive session that has a pending user turn in the transcript', async () => {
+  it('times out waiting for an inactive session user turn when no assistant output is observed', async () => {
     stageCommittedUserMessageInTranscript = true;
     stageVisibleMessageByLocalIdDelayMs = 50;
 
@@ -383,13 +403,11 @@ describe('happier session send (integration)', () => {
       });
 
       const parsed = output.json();
-      if (parsed.ok !== true) {
-        throw new Error(`Unexpected session_send envelope: ${JSON.stringify(parsed)}`);
-      }
+      expect(parsed.ok).toBe(false);
       expect(parsed.kind).toBe('session_send');
-      expect(parsed.data?.waited).toBe(true);
+      expect(parsed.error?.code).toBe('timeout');
       expect(transcriptLookupRequests).toBeGreaterThan(0);
-      expect(process.exitCode).toBe(0);
+      expect(process.exitCode).toBe(1);
     } finally {
       output.restore();
       process.exitCode = prevExitCode;

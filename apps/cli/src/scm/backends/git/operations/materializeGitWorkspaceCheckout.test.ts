@@ -33,17 +33,21 @@ async function writeTrackedFile(cwd: string, relativePath: string, contents: str
     await runGit(cwd, ['add', relativePath]);
 }
 
+async function initializeGitRepoWithInitialCommit(repoRoot: string): Promise<void> {
+    await runGit(repoRoot, ['init']);
+    await configureGitRepo(repoRoot);
+    await runGit(repoRoot, ['branch', '-M', 'main']);
+    await writeTrackedFile(repoRoot, 'README.md', 'main\n');
+    await runGit(repoRoot, ['commit', '-m', 'initial']);
+}
+
 describe('materializeGitWorkspaceCheckout', () => {
     it('registers a linked worktree into a pre-populated target path without replacing imported files', async () => {
         const repoRoot = await makeTempDir('git-materialize-populated-repo-');
         const targetRoot = join(repoRoot, '.worktrees', 'feature-auth');
 
         try {
-            await runGit(repoRoot, ['init']);
-            await configureGitRepo(repoRoot);
-            await runGit(repoRoot, ['branch', '-M', 'main']);
-            await writeTrackedFile(repoRoot, 'README.md', 'main\n');
-            await runGit(repoRoot, ['commit', '-m', 'initial']);
+            await initializeGitRepoWithInitialCommit(repoRoot);
 
             await mkdir(targetRoot, { recursive: true });
             await writeFile(join(targetRoot, 'README.md'), 'imported\n', 'utf8');
@@ -73,11 +77,7 @@ describe('materializeGitWorkspaceCheckout', () => {
         const originalWorktreeRoot = await makeTempDir('git-materialize-create-restored-original-');
 
         try {
-            await runGit(repoRoot, ['init']);
-            await configureGitRepo(repoRoot);
-            await runGit(repoRoot, ['branch', '-M', 'main']);
-            await writeTrackedFile(repoRoot, 'README.md', 'main\n');
-            await runGit(repoRoot, ['commit', '-m', 'initial']);
+            await initializeGitRepoWithInitialCommit(repoRoot);
             await runGit(repoRoot, ['branch', 'feature/auth']);
             await runGit(repoRoot, ['worktree', 'add', originalWorktreeRoot, 'feature/auth']);
 
@@ -114,11 +114,7 @@ describe('materializeGitWorkspaceCheckout', () => {
         const restoredRoot = join(repoRoot, '.worktrees', 'feature-auth');
 
         try {
-            await runGit(repoRoot, ['init']);
-            await configureGitRepo(repoRoot);
-            await runGit(repoRoot, ['branch', '-M', 'main']);
-            await writeTrackedFile(repoRoot, 'README.md', 'main\n');
-            await runGit(repoRoot, ['commit', '-m', 'initial']);
+            await initializeGitRepoWithInitialCommit(repoRoot);
             await runGit(repoRoot, ['branch', 'feature-auth']);
             await runGit(repoRoot, ['worktree', 'add', originalWorktreeRoot, 'feature-auth']);
 
@@ -143,6 +139,62 @@ describe('materializeGitWorkspaceCheckout', () => {
         } finally {
             await rm(repoRoot, { recursive: true, force: true });
             await rm(originalWorktreeRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects canonical forbidden display names before creating a materialized checkout', async () => {
+        const repoRoot = await makeTempDir('git-materialize-forbidden-name-repo-');
+
+        try {
+            await initializeGitRepoWithInitialCommit(repoRoot);
+
+            for (const displayName of ['release.lock', 'feature/@']) {
+                await expect(createGitWorkspaceCheckoutAtDefaultPath({
+                    repoRoot,
+                    displayName,
+                    baseRef: 'main',
+                })).rejects.toThrow('Invalid Git worktree name');
+            }
+        } finally {
+            await rm(repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('creates a default materialized checkout at the canonical nested path for slash and backslash display names', async () => {
+        const repoRoot = await makeTempDir('git-materialize-canonical-path-repo-');
+
+        try {
+            await initializeGitRepoWithInitialCommit(repoRoot);
+
+            const createdCheckout = await createGitWorkspaceCheckoutAtDefaultPath({
+                repoRoot,
+                displayName: 'feature\\auth api',
+                baseRef: 'main',
+            });
+            const expectedTargetPath = await realpath(join(repoRoot, '.dev', 'worktree', 'feature', 'auth-api'));
+
+            expect(createdCheckout).toEqual({
+                targetPath: expectedTargetPath,
+            });
+            await expect(runGit(expectedTargetPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).resolves.toBe('feature/auth-api');
+        } finally {
+            await rm(repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects empty materialized checkout display names instead of using the managed parent directory as a checkout', async () => {
+        const repoRoot = await makeTempDir('git-materialize-empty-name-repo-');
+
+        try {
+            await initializeGitRepoWithInitialCommit(repoRoot);
+
+            await expect(createGitWorkspaceCheckoutAtDefaultPath({
+                repoRoot,
+                displayName: '///',
+                baseRef: 'main',
+            })).rejects.toThrow('Workspace checkout display name is required');
+        } finally {
+            await rm(repoRoot, { recursive: true, force: true });
         }
     });
 });

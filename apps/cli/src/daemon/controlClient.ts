@@ -18,7 +18,7 @@ import {
   type CodexChatGptAuthTokensRefreshSelection,
 } from '@/backends/codex/connectedServices/codexChatGptAuthTokensRefreshBridgeContract';
 import { resolveComparableCliVersion } from './resolveComparableCliVersion';
-import type { ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
+import type { ConnectedServiceBindingsV1, ConnectedServiceId } from '@happier-dev/protocol';
 
 export type DaemonControlRequestOptions = {
   timeoutMs?: number;
@@ -126,14 +126,38 @@ function resolveDaemonStopWaitForDeathTimeoutMs(): number {
   return Math.max(DEFAULT_DAEMON_STOP_WAIT_FOR_DEATH_TIMEOUT_MS, drainGraceMs + 2_000);
 }
 
+type DaemonPersistedState = NonNullable<Awaited<ReturnType<typeof readDaemonState>>>;
+
 export type DaemonRunningInspection =
   | { status: 'not-running' }
-  | { status: 'starting'; state: NonNullable<Awaited<ReturnType<typeof readDaemonState>>> }
-  | { status: 'running'; state: NonNullable<Awaited<ReturnType<typeof readDaemonState>>> };
+  | { status: 'starting'; state: DaemonPersistedState }
+  | { status: 'starting'; pid: number }
+  | { status: 'running'; state: DaemonPersistedState };
+
+async function inspectDaemonLockStartupProgress(): Promise<DaemonRunningInspection | null> {
+  const lockPid = readDaemonLockPid();
+  if (!lockPid) return null;
+
+  try {
+    process.kill(lockPid, 0);
+  } catch {
+    return null;
+  }
+
+  const { findHappyProcessByPid } = await import('@/daemon/doctor');
+  const proc = await findHappyProcessByPid(lockPid).catch(() => null);
+  const safeToTreatAsStarting = proc?.type === 'daemon' || proc?.type === 'dev-daemon';
+  if (!safeToTreatAsStarting) return null;
+
+  logger.debug('[DAEMON RUN] Daemon lock is held by a live daemon before state was written, treating startup as in progress');
+  return { status: 'starting', pid: lockPid };
+}
 
 export async function inspectDaemonRunningStateAndCleanupStaleState(): Promise<DaemonRunningInspection> {
   const state = await readDaemonState();
   if (!state) {
+    const lockStartup = await inspectDaemonLockStartupProgress();
+    if (lockStartup) return lockStartup;
     return { status: 'not-running' };
   }
 
@@ -362,6 +386,23 @@ export async function notifyDaemonConnectedServiceQuotaSnapshot(
   }, options);
 }
 
+export async function notifyDaemonConnectedServiceQuotaRecoveryCreditConsume(
+  body: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    idempotencyKey: string;
+    providerCreditId?: string;
+  }>,
+  options: DaemonControlRequestOptions = {},
+): Promise<{ error?: string } | any> {
+  return await daemonPost('/connected-service-quota-recovery-credit/consume', {
+    serviceId: body.serviceId,
+    profileId: body.profileId,
+    idempotencyKey: body.idempotencyKey,
+    ...(body.providerCreditId ? { providerCreditId: body.providerCreditId } : {}),
+  }, options);
+}
+
 export async function refreshDaemonOpenAiCodexChatGptAuthTokensForBridge(
   body: Readonly<{
     sessionId: string;
@@ -478,6 +519,10 @@ export async function isDaemonRunningCurrentlyInstalledHappyVersion(params: Read
   const runningDaemon = await inspectDaemonRunningStateAndCleanupStaleState();
   if (runningDaemon.status === 'not-running') {
     logger.debug('[DAEMON CONTROL] No daemon running, returning false');
+    return false;
+  }
+  if (!('state' in runningDaemon)) {
+    logger.debug('[DAEMON CONTROL] Daemon is still starting without state, returning false');
     return false;
   }
 

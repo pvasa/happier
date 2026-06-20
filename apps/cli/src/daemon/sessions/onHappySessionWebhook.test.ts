@@ -288,7 +288,7 @@ describe('createOnHappySessionWebhook', () => {
     expect(pidToTrackedSession.get(444)?.vendorResumeId).toBe('vendor-session-444');
   });
 
-  it('preserves durable connected-service restart intent when refreshing a daemon marker from webhook metadata', async () => {
+  it('does not preserve durable connected-service restart intent by default when refreshing a daemon marker from webhook metadata', async () => {
     const tracked: TrackedSession = {
       pid: 445,
       startedBy: 'daemon',
@@ -317,6 +317,43 @@ describe('createOnHappySessionWebhook', () => {
       ...createMetadata(445, 'daemon'),
       flavor: 'codex',
       codexSessionId: 'vendor-session-445',
+    });
+    await markerWritten;
+
+    expect(markerOptions).toEqual({ preserveConnectedServiceRestartIntent: false });
+  });
+
+  it('preserves durable connected-service restart intent only when the daemon restart owner approves it', async () => {
+    const tracked: TrackedSession = {
+      pid: 446,
+      startedBy: 'daemon',
+    };
+    const pidToTrackedSession = new Map<number, TrackedSession>([[446, tracked]]);
+    const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
+
+    let markerOptions: SessionMarkerWriteOptions | undefined;
+    let resolveMarker!: () => void;
+    const markerWritten = new Promise<void>((resolve) => {
+      resolveMarker = resolve;
+    });
+
+    const onWebhook = createOnHappySessionWebhook({
+      pidToTrackedSession,
+      pidToAwaiter,
+      getParentPidFn: () => null,
+      findHappyProcessByPidFn: async () => null,
+      writeSessionMarkerFn: async (_args, options) => {
+        markerOptions = options;
+        resolveMarker();
+      },
+      shouldPreserveConnectedServiceRestartIntent: ({ trackedSession, pid, sessionId }) =>
+        trackedSession === tracked && pid === 446 && sessionId === 'session-daemon-446',
+    });
+
+    onWebhook('session-daemon-446', {
+      ...createMetadata(446, 'daemon'),
+      flavor: 'codex',
+      codexSessionId: 'vendor-session-446',
     });
     await markerWritten;
 

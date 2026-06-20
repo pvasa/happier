@@ -82,6 +82,41 @@ describe('evaluateCurrentDaemonOwner', () => {
         });
     });
 
+    it('returns a process conflict when a daemon is starting with a lock but no state yet', async () => {
+        await withTempDir('happier-daemon-owner-starting-lock-', async (homeDir) => {
+            envScope.patch({
+                HAPPIER_HOME_DIR: homeDir,
+                HAPPIER_ACTIVE_SERVER_ID: 'cloud',
+                HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+            });
+            vi.resetModules();
+            vi.doMock('@/daemon/controlClient', () => ({
+                inspectDaemonRunningStateAndCleanupStaleState: async () => ({
+                    status: 'starting',
+                    pid: 12345,
+                }),
+            }));
+
+            try {
+                const { evaluateCurrentDaemonOwner } = await import('./evaluateCurrentDaemonOwner');
+
+                const evaluation = await evaluateCurrentDaemonOwner();
+
+                expect(evaluation.kind).toBe('conflict');
+                if (evaluation.kind !== 'conflict') {
+                    throw new Error(`unexpected evaluation: ${evaluation.kind}`);
+                }
+                expect(evaluation.owner.source).toBe('process');
+                expect(evaluation.owner.status).toBe('starting');
+                expect(evaluation.owner.state.pid).toBe(12345);
+                expect(evaluation.owner.versionMatches).toBe(false);
+                expect(evaluation.owner.releaseChannelMatches).toBe(false);
+            } finally {
+                vi.doUnmock('@/daemon/controlClient');
+            }
+        });
+    });
+
     it('ignores a state-less daemon process from the same runtime when it belongs to another daemon scope', async () => {
         await withTempDir('happier-daemon-owner-scope-mismatch-', async (homeDir) => {
             envScope.patch({

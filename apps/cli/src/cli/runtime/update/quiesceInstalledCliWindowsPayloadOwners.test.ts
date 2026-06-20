@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
-
-if (!originalPlatformDescriptor) {
-  throw new Error('process.platform descriptor is required for this test');
-}
+const originalPlatformDescriptor: PropertyDescriptor = (() => {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  if (!descriptor) {
+    throw new Error('process.platform descriptor is required for this test');
+  }
+  return descriptor;
+})();
 
 const {
   existsSyncMock,
@@ -162,6 +164,76 @@ describe('quiesceInstalledCliWindowsPayloadOwners', () => {
       expect.objectContaining({ stdio: 'ignore', windowsHide: true }),
     );
     expect(spawnSyncMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('bounds installed CLI stop commands during installer-driven payload promotion', async () => {
+    findAllHappyProcessesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    await withPlatform('win32', async () => {
+      const { quiesceInstalledCliWindowsPayloadOwners } = await import('./quiesceInstalledCliWindowsPayloadOwners');
+      await quiesceInstalledCliWindowsPayloadOwners({
+        channel: 'publicdev',
+        processEnv: {
+          ...process.env,
+          HAPPIER_HOME_DIR: 'C:\\Users\\tester\\.happier',
+          HAPPIER_INSTALLER_PRE_INSTALL_COMMAND_TIMEOUT_MS: '7000',
+        },
+      });
+    });
+
+    expect(spawnSyncMock).toHaveBeenNthCalledWith(
+      1,
+      'C:\\Users\\tester\\.happier\\bin\\hdev.exe',
+      ['service', 'stop', '--json'],
+      expect.objectContaining({
+        timeout: 7000,
+        stdio: 'ignore',
+        windowsHide: true,
+      }),
+    );
+    expect(spawnSyncMock).toHaveBeenNthCalledWith(
+      2,
+      'C:\\Users\\tester\\.happier\\bin\\hdev.exe',
+      ['daemon', 'stop', '--all', '--kill-sessions', '--json'],
+      expect.objectContaining({
+        timeout: 7000,
+        stdio: 'ignore',
+        windowsHide: true,
+      }),
+    );
+  });
+
+  it('skips redundant installed CLI stop commands when installer pre-install cleanup already ran', async () => {
+    findAllHappyProcessesMock
+      .mockResolvedValueOnce([
+        {
+          pid: 31,
+          command: '"C:\\Users\\tester\\.happier\\bin\\hdev.exe" daemon start-sync',
+          type: 'daemon',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+
+    await withPlatform('win32', async () => {
+      const { quiesceInstalledCliWindowsPayloadOwners } = await import('./quiesceInstalledCliWindowsPayloadOwners');
+      await quiesceInstalledCliWindowsPayloadOwners({
+        channel: 'publicdev',
+        processEnv: {
+          ...process.env,
+          HAPPIER_HOME_DIR: 'C:\\Users\\tester\\.happier',
+          HAPPIER_CLI_SKIP_PAYLOAD_OWNER_STOP_COMMANDS: '1',
+        },
+      });
+    });
+
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      'taskkill',
+      ['/F', '/T', '/PID', '31'],
+      expect.objectContaining({ stdio: 'ignore', windowsHide: true }),
+    );
   });
 
   it('throws when same-home daemon-owned processes remain after force-kill', async () => {

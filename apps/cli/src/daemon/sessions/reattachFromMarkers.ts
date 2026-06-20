@@ -1,6 +1,7 @@
 import { logger } from '@/ui/logger';
 import type { Credentials } from '@/persistence';
 import { parseOptionalBooleanEnv } from '@happier-dev/protocol';
+import { AGENT_IDS, supportsAgentTerminalPromptInjection, type AgentId } from '@happier-dev/agents';
 import { resolveCatalogAgentIdForCliSubcommand } from '@/backends/catalog';
 import { buildSessionRunnerRespawnDescriptorV1FromSpawnOptions } from '../processSupervision/sessionRunnerRespawnDescriptor';
 import {
@@ -12,9 +13,16 @@ import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers
 import { resolveSessionRuntimeSnapshot } from './runtimeSnapshot/resolveSessionRuntimeSnapshot';
 
 import type { TrackedSession } from '../types';
-import { findAllHappyProcesses } from '../doctor';
+import { findAllHappyProcesses, findHappyProcessByPid, type HappyProcessInfo } from '../doctor';
 import { adoptSessionsFromMarkers, isOwnedLiveDaemonSessionProcessCommand } from '../reattach';
-import { hashProcessCommand, listSessionMarkers, removeSessionMarker, writeSessionMarker, type DaemonSessionMarker } from '../sessionRegistry';
+import {
+  clearSessionMarkerConnectedServiceRestartIntent,
+  hashProcessCommand,
+  listSessionMarkers,
+  removeSessionMarker,
+  writeSessionMarker,
+  type DaemonSessionMarker,
+} from '../sessionRegistry';
 
 function extractExistingSessionIdFromCommand(command: string): string | null {
   const match = /(?:^|\s)--existing-session(?:=|\s+)(\S+)/.exec(command);
@@ -112,6 +120,26 @@ function applyRecoveredRuntimeSnapshot(params: Readonly<{
     persistedMetadata: readRuntimeSnapshotMetadata(params.metadata),
     trackedVendorResumeId: params.vendorResumeId ?? null,
   }).spawnOptions;
+}
+
+function readBuiltInAgentId(spawnOptions: SpawnSessionOptions | undefined): AgentId | null {
+  const agentId = spawnOptions?.backendTarget?.kind === 'builtInAgent'
+    ? spawnOptions.backendTarget.agentId
+    : null;
+  return typeof agentId === 'string' && (AGENT_IDS as readonly string[]).includes(agentId)
+    ? agentId as AgentId
+    : null;
+}
+
+export function shouldRestartTerminalPromptInjectionRuntime(
+  spawnOptions: SpawnSessionOptions | undefined,
+  vendorResumeId?: string | null,
+): boolean {
+  const agentId = readBuiltInAgentId(spawnOptions);
+  const spawnResume = typeof spawnOptions?.resume === 'string' ? spawnOptions.resume.trim() : '';
+  const markerResume = typeof vendorResumeId === 'string' ? vendorResumeId.trim() : '';
+  const resume = spawnResume || markerResume;
+  return !!agentId && !!resume && supportsAgentTerminalPromptInjection(agentId);
 }
 
 function parseRecoveredRespawnDescriptor(respawn: unknown): SessionRunnerRespawnDescriptorV1 | null {
@@ -314,6 +342,24 @@ async function recoverMarkerlessDaemonSpawnedSessions(params: Readonly<{
   return recovered;
 }
 
+async function includePidSpecificProcessesForAliveMarkers(params: Readonly<{
+  happyProcesses: ReadonlyArray<HappyProcessInfo>;
+  aliveMarkers: ReadonlyArray<DaemonSessionMarker>;
+}>): Promise<HappyProcessInfo[]> {
+  const processes = [...params.happyProcesses];
+  const knownPids = new Set(processes.map((processInfo) => processInfo.pid));
+
+  for (const marker of params.aliveMarkers) {
+    if (knownPids.has(marker.pid)) continue;
+    const processInfo = await findHappyProcessByPid(marker.pid).catch(() => null);
+    if (!processInfo || knownPids.has(processInfo.pid)) continue;
+    processes.push(processInfo);
+    knownPids.add(processInfo.pid);
+  }
+
+  return processes;
+}
+
 type OrphanedDeadDaemonSession = Readonly<{
   sessionId: string;
   pid: number;
@@ -346,14 +392,6 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
 }>): Promise<ReattachTrackedSessionsFromMarkersResult> {
   const { pidToTrackedSession, credentials } = params;
   const orphanedDeadDaemonSessions: OrphanedDeadDaemonSession[] = [];
-  const deadConnectedServiceRestartMarkers: Array<Readonly<{
-    pid: number;
-    sessionId: string;
-    requestedAtMs: number;
-    spawnOptions: SpawnSessionOptions;
-    vendorResumeId: string;
-  }>> = [];
-
   // On daemon restart, reattach to still-running sessions via disk markers (stack-scoped by HAPPIER_HOME_DIR).
   try {
     const markers = await listSessionMarkers();
@@ -371,27 +409,12 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
         const sessionId = normalizeSessionId(marker.happySessionId);
         const restartIntent = readConnectedServiceRestartIntent(marker);
         if (marker.startedBy === 'daemon' && sessionId && restartIntent) {
-          const parsedRespawnDescriptor = parseRecoveredRespawnDescriptor(marker.respawn);
-          const respawnSpawnOptions = restoreSpawnOptionsFromRespawnDescriptor({
-            parsedRespawnDescriptor,
-            credentials,
+          orphanedDeadDaemonSessions.push({
+            sessionId,
+            pid: marker.pid,
           });
-          const spawnOptions = applyRecoveredRuntimeSnapshot({
-            spawnOptions: respawnSpawnOptions,
-            metadata: marker.metadata,
-            vendorResumeId: null,
-          });
-          const vendorResumeId = typeof spawnOptions?.resume === 'string' ? spawnOptions.resume.trim() : '';
-          if (spawnOptions && vendorResumeId) {
-            deadConnectedServiceRestartMarkers.push({
-              pid: marker.pid,
-              sessionId,
-              requestedAtMs: restartIntent.requestedAtMs,
-              spawnOptions,
-              vendorResumeId,
-            });
-            continue;
-          }
+          await removeSessionMarker(marker.pid);
+          continue;
         }
         if (marker.startedBy === 'daemon' && sessionId) {
           orphanedDeadDaemonSessions.push({
@@ -406,9 +429,19 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
     logger.debug('[DAEMON RUN] Startup reattach alive marker scan finished', {
       aliveMarkerCount: aliveMarkers.length,
     });
+    const happyProcessesForReattach = await includePidSpecificProcessesForAliveMarkers({
+      happyProcesses,
+      aliveMarkers,
+    });
+    if (happyProcessesForReattach.length > happyProcesses.length) {
+      logger.debug('[DAEMON RUN] Startup reattach pid-specific process fallback found live marker processes', {
+        initialHappyProcessCount: happyProcesses.length,
+        fallbackHappyProcessCount: happyProcessesForReattach.length - happyProcesses.length,
+      });
+    }
     const { adopted, adoptedPids = [], respawnRestoreErrors = [] } = adoptSessionsFromMarkers({
       markers: aliveMarkers,
-      happyProcesses,
+      happyProcesses: happyProcessesForReattach,
       pidToTrackedSession,
       credentials,
     });
@@ -447,7 +480,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
     );
     const recoveredMarkerlessCount = shouldRecoverMarkerlessDaemonSpawnedSessions()
       ? await recoverMarkerlessDaemonSpawnedSessions({
-          happyProcesses,
+          happyProcesses: happyProcessesForReattach,
           incompleteMarkerByPid,
           markedPids: markerlessRecoveryBlockedPidSet,
           pidToTrackedSession,
@@ -462,7 +495,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
     if (adopted === 0 && recoveredMarkerlessCount === 0 && (aliveMarkers.length > 0 || happyProcesses.length > 0)) {
       logger.debug('[DAEMON RUN] Startup reattach scan found no recoverable sessions', {
         aliveMarkerCount: aliveMarkers.length,
-        happyProcessCount: happyProcesses.length,
+        happyProcessCount: happyProcessesForReattach.length,
         adoptedPids,
         incompleteMarkerPidCount: incompleteMarkerByPid.size,
       });
@@ -478,33 +511,10 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
         .filter((sessionId): sessionId is string => typeof sessionId === 'string' && sessionId.trim().length > 0)
         .map((sessionId) => sessionId.trim()),
     );
-    const connectedServiceRestartIntents: ReattachedConnectedServiceRestartIntent[] = [];
     for (const marker of aliveMarkers) {
-      const restartIntent = readConnectedServiceRestartIntent(marker);
-      if (!restartIntent) continue;
-      const sessionId = normalizeSessionId(marker.happySessionId);
-      if (!sessionId) continue;
-      const tracked = pidToTrackedSession.get(marker.pid);
-      if (normalizeSessionId(tracked?.happySessionId) !== sessionId) continue;
-      connectedServiceRestartIntents.push({
-        kind: 'live',
-        sessionId,
-        pid: marker.pid,
-        requestedAtMs: restartIntent.requestedAtMs,
-      });
-    }
-    for (const marker of deadConnectedServiceRestartMarkers) {
-      if (recoveredLiveSessionIds.has(marker.sessionId)) {
-        await removeSessionMarker(marker.pid);
-        continue;
-      }
-      connectedServiceRestartIntents.push({
-        kind: 'dead',
-        sessionId: marker.sessionId,
-        pid: marker.pid,
-        requestedAtMs: marker.requestedAtMs,
-        spawnOptions: marker.spawnOptions,
-        vendorResumeId: marker.vendorResumeId,
+      if (!readConnectedServiceRestartIntent(marker)) continue;
+      await clearSessionMarkerConnectedServiceRestartIntent(marker.pid).catch((error) => {
+        logger.debug('[DAEMON RUN] Failed to clear stale connected-service restart intent during startup reattach reconciliation', error);
       });
     }
     return {
@@ -515,7 +525,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
             .map((session) => [session.sessionId, session] as const),
         ).values(),
       ),
-      connectedServiceRestartIntents,
+      connectedServiceRestartIntents: [],
     };
   } catch (e) {
     logger.debug('[DAEMON RUN] Failed to reattach sessions from disk markers', e);

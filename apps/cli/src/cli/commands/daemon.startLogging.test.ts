@@ -8,10 +8,16 @@ import { captureConsoleText, captureStdoutJsonOutput } from '@/testkit/logger/ca
 import { waitForDaemonRunningWithinBudget } from '@/daemon/waitForDaemonRunningWithinBudget';
 import type { DaemonRunningInspection } from '@/daemon/controlClient';
 
-const { checkIfDaemonRunningMock, inspectDaemonRunningStateMock, getLatestDaemonLogMock } = vi.hoisted(() => ({
+const {
+  checkIfDaemonRunningMock,
+  inspectDaemonRunningStateMock,
+  getLatestDaemonLogMock,
+  spawnDetachedDaemonStartSyncMock,
+} = vi.hoisted(() => ({
   checkIfDaemonRunningMock: vi.fn(async () => true),
   inspectDaemonRunningStateMock: vi.fn(async (): Promise<DaemonRunningInspection> => ({ status: 'not-running' })),
   getLatestDaemonLogMock: vi.fn(async () => null as null | { path: string }),
+  spawnDetachedDaemonStartSyncMock: vi.fn(async (): Promise<{ pid?: number; unref: () => void }> => ({ unref: () => {} })),
 }));
 
 async function runDaemonStartAndCapture(expectedExitCode: number): Promise<string> {
@@ -55,7 +61,7 @@ function buildJwtWithSub(sub: string): string {
 }
 
 vi.mock('@/daemon/runtime/spawnDetachedDaemonStartSync', () => ({
-  spawnDetachedDaemonStartSync: async () => ({ unref: () => {} }),
+  spawnDetachedDaemonStartSync: () => spawnDetachedDaemonStartSyncMock(),
 }));
 
 vi.mock('@/daemon/controlClient', async (importOriginal) => {
@@ -79,6 +85,8 @@ describe('happier daemon start output', () => {
     inspectDaemonRunningStateMock.mockResolvedValue({ status: 'not-running' } as DaemonRunningInspection);
     getLatestDaemonLogMock.mockReset();
     getLatestDaemonLogMock.mockResolvedValue(null);
+    spawnDetachedDaemonStartSyncMock.mockReset();
+    spawnDetachedDaemonStartSyncMock.mockResolvedValue({ unref: () => {} });
   });
 
   it('honors HAPPIER_DAEMON_START_WAIT_TIMEOUT_MS to bound polling (fail-closed)', async () => {
@@ -265,6 +273,30 @@ describe('happier daemon start output', () => {
 
       expect(stdout).toContain('Daemon is still starting in the background');
       expect(stdout).toContain('Relay URL:');
+      expect(stdout).toContain('/tmp/happier-daemon.log');
+    } finally {
+      envScope.restore();
+    }
+  }, 60_000);
+
+  it('reports starting instead of failed when the detached daemon child is alive but has not written state yet', async () => {
+    vi.useRealTimers();
+    checkIfDaemonRunningMock.mockResolvedValue(false);
+    inspectDaemonRunningStateMock.mockResolvedValue({ status: 'not-running' });
+    spawnDetachedDaemonStartSyncMock.mockResolvedValue({
+      pid: process.pid,
+      unref: () => {},
+    });
+    getLatestDaemonLogMock.mockResolvedValue({ path: '/tmp/happier-daemon.log' });
+
+    const envScope = createEnvKeyScope(['HAPPIER_DAEMON_START_WAIT_TIMEOUT_MS']);
+    try {
+      vi.resetModules();
+      envScope.patch({ HAPPIER_DAEMON_START_WAIT_TIMEOUT_MS: '1' });
+
+      const stdout = await runDaemonStartAndCapture(0);
+
+      expect(stdout).toContain('Daemon is still starting in the background');
       expect(stdout).toContain('/tmp/happier-daemon.log');
     } finally {
       envScope.restore();

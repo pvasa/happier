@@ -1,7 +1,12 @@
 import { lstat, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol';
+import {
+    SCM_OPERATION_ERROR_CODES,
+    buildWorktreeRelativePath,
+    hasForbiddenGitRefName,
+    normalizeWorktreeDisplayName,
+} from '@happier-dev/protocol';
 
 import { normalizeCommitRef, runScmCommand } from '../../../runtime';
 import { buildScmNonInteractiveEnv } from '../../shared/nonInteractiveEnv';
@@ -14,31 +19,6 @@ type GitWorkspaceCheckoutCreationInput = Readonly<{
     baseRef: string | null;
 }>;
 
-function normalizeWorktreeNameSegment(segment: string): string {
-    const trimmed = segment.trim();
-    if (!trimmed || trimmed === '.' || trimmed === '..') {
-        return '';
-    }
-
-    return trimmed
-        .replace(/\s+/g, '-')
-        .replace(/@\{/g, '-')
-        .replace(/[~^:?*[\]\\]/g, '-')
-        .replace(/\.{2,}/g, '-')
-        .replace(/(^[./-]+)|([./-]+$)/g, '')
-        .replace(/-+/g, '-');
-}
-
-function normalizeWorktreeDisplayName(value: string): string {
-    return value
-        .trim()
-        .replaceAll('\\', '/')
-        .split('/')
-        .map(normalizeWorktreeNameSegment)
-        .filter((segment) => segment.length > 0)
-        .join('/');
-}
-
 function resolveNormalizedBaseRef(baseRef: string | null): string | null {
     if (baseRef == null) {
         return null;
@@ -50,6 +30,19 @@ function resolveNormalizedBaseRef(baseRef: string | null): string | null {
     }
 
     return normalized.commit;
+}
+
+function resolveWorkspaceCheckoutBranchName(displayName: string): string {
+    if (displayName.trim() && hasForbiddenGitRefName(displayName)) {
+        throw new Error('Invalid Git worktree name');
+    }
+
+    const branchName = normalizeWorktreeDisplayName(displayName);
+    if (!branchName) {
+        throw new Error('Workspace checkout display name is required');
+    }
+
+    return branchName;
 }
 
 async function runGitWorktreeAdd(input: Readonly<{
@@ -168,7 +161,7 @@ async function tryReuseExistingGitWorktree(input: Readonly<{
 }
 
 function buildDefaultWorktreeTargetPath(repoRoot: string, branchName: string): string {
-    return join(repoRoot, '.dev', 'worktree', ...branchName.split('/'));
+    return join(repoRoot, buildWorktreeRelativePath(branchName));
 }
 
 function isAlreadyExistsFailure(error: unknown): boolean {
@@ -184,10 +177,7 @@ export async function materializeGitWorkspaceCheckoutAtPath(input: Readonly<{
 }>): Promise<Readonly<{
     targetPath: string;
 }>> {
-    const branchName = normalizeWorktreeDisplayName(input.displayName);
-    if (!branchName) {
-        throw new Error('Workspace checkout display name is required');
-    }
+    const branchName = resolveWorkspaceCheckoutBranchName(input.displayName);
 
     const reusedTargetPath = await tryReuseExistingGitWorktree({
         repoRoot: input.repoRoot,
@@ -229,10 +219,7 @@ export async function createGitWorkspaceCheckoutAtDefaultPath(
 ): Promise<Readonly<{
     targetPath: string;
 }>> {
-    const branchName = normalizeWorktreeDisplayName(input.displayName);
-    if (!branchName) {
-        throw new Error('Workspace checkout display name is required');
-    }
+    const branchName = resolveWorkspaceCheckoutBranchName(input.displayName);
 
     const normalizedBaseRef = resolveNormalizedBaseRef(input.baseRef);
 

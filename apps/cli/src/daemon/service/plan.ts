@@ -242,6 +242,7 @@ export function planDaemonServiceInstall(params: Readonly<{
   uid?: number;
 }>): DaemonServiceInstallPlan {
   const instanceId = sanitizeServiceInstanceId(params.instanceId);
+  const activeServerId = String(params.instanceId ?? '').trim();
   const channel: PublicReleaseRingId = params.channel ?? 'stable';
   const targetMode: DaemonServiceTargetMode = params.targetMode ?? 'pinned';
   const publicReleaseChannel = getReleaseRingCatalogEntry(channel).publicLabel;
@@ -269,7 +270,7 @@ export function planDaemonServiceInstall(params: Readonly<{
   const pinnedTargetEnv: Record<string, string> = targetMode === 'default-following'
     ? {}
     : {
-        HAPPIER_ACTIVE_SERVER_ID: instanceId,
+        HAPPIER_ACTIVE_SERVER_ID: activeServerId,
         HAPPIER_SERVER_URL: params.serverUrl,
         HAPPIER_WEBAPP_URL: params.webappUrl,
         HAPPIER_PUBLIC_SERVER_URL: params.publicServerUrl,

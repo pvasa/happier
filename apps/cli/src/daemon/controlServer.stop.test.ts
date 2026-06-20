@@ -114,6 +114,50 @@ describe('daemon control server: /stop', () => {
     }
   });
 
+  it('lets daemon stop prepare tracked sessions before stopSessions kills them', async () => {
+    const calls: string[] = [];
+
+    const app = createDaemonControlApp({
+      getChildren: () => [
+        { startedBy: 'daemon', pid: 111, happySessionId: 'sess-1' },
+        { startedBy: 'terminal', pid: 333, happySessionId: 'sess-3' },
+      ],
+      machineId: 'machine_local',
+      stopSession: async (sessionId) => {
+        calls.push(`stop:${sessionId}`);
+        return true;
+      },
+      prepareStopSession: async (child) => {
+        calls.push(`prepare:${child.happySessionId ?? `PID-${child.pid}`}`);
+      },
+      spawnSession: async () => ({ type: 'success', sessionId: 'happy-test-123' }),
+      requestShutdown: () => {
+        calls.push('shutdown');
+      },
+      onHappySessionWebhook: () => {},
+      controlToken: 'test-token',
+    });
+
+    try {
+      await app.ready();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/stop',
+        headers: { 'Content-Type': 'application/json', 'x-happier-daemon-token': 'test-token' },
+        payload: JSON.stringify({ stopSessions: true }),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'stopping' });
+
+      await new Promise((resolve) => setTimeout(resolve, 75));
+
+      expect(calls).toEqual(['prepare:sess-1', 'stop:sess-1', 'prepare:sess-3', 'stop:sess-3', 'shutdown']);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('does not stop sessions by default', async () => {
     const calls: string[] = [];
 

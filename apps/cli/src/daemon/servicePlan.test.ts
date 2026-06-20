@@ -103,6 +103,31 @@ describe('daemon service install plan', () => {
     expect(plan.files[0]?.content).toContain('<string>preview</string>');
   });
 
+  it('preserves the raw pinned server id in service env while sanitizing launchd labels', () => {
+    const plan = planDaemonServiceInstall({
+      platform: 'darwin',
+      channel: 'preview',
+      instanceId: 'stack_macos-v0210__id_default',
+      uid: 501,
+      userHomeDir: '/Users/test',
+      happierHomeDir: '/Users/test/.happier',
+      serverUrl: 'http://127.0.0.1:53510',
+      webappUrl: 'http://happier-macos-v0210.localhost:53510',
+      publicServerUrl: 'http://localhost:53510',
+      nodePath: '/opt/homebrew/bin/node',
+      entryPath: '/usr/local/lib/node_modules/@happier-dev/cli/dist/index.mjs',
+    });
+
+    expect(plan.files[0]?.path).toBe(
+      '/Users/test/Library/LaunchAgents/com.happier.cli.daemon.preview.stack_macos-v0210_id_default.plist',
+    );
+    expect(plan.files[0]?.content).toContain(
+      '<string>com.happier.cli.daemon.preview.stack_macos-v0210_id_default</string>',
+    );
+    expect(plan.files[0]?.content).toContain('<key>HAPPIER_ACTIVE_SERVER_ID</key>');
+    expect(plan.files[0]?.content).toContain('<string>stack_macos-v0210__id_default</string>');
+  });
+
   it('plans a systemd --user unit install (linux)', () => {
     envScope.patch({ PATH: '/home/test/.local/bin:/usr/bin' });
     const plan = planDaemonServiceInstall({

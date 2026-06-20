@@ -6,3 +6,7 @@ export type ScmHandlerRouteBase = Readonly<{
     accessPolicy?: ScmFilesystemAccessPolicy;
     connectedAccounts?: ScmConnectedAccountCredentialResolver;
 }>;
+
+export type ScmMutatingRouteRunner = <TResponse>(
+    run: () => Promise<TResponse>,
+) => Promise<TResponse>;

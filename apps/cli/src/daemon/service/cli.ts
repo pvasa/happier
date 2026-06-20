@@ -502,42 +502,30 @@ async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
         return now - stableSince >= params.stableMs;
       }
 
-      if (ownership.kind !== 'compatible') {
-        stableSince = null;
-        return false;
-      }
-
-      if (ownership.owner.serviceManaged !== true) {
-        stableSince = null;
-        return false;
-      }
-
-      if (ownership.owner.state.serviceLabel !== params.expectedServiceLabel) {
-        stableSince = null;
-        return false;
-      }
-
-      if (params.healthCommand && !runCommandCaptureBestEffort(params.healthCommand).ok) {
-        stableSince = null;
-        return false;
-      }
-
-      if (params.platform === 'darwin' && params.expectedInstalledServiceContents && params.installedServicePath) {
-        const installedDefinitionMatches = doesInstalledDaemonServiceDefinitionMatchExpected({
-          installedPath: params.installedServicePath,
-          expectedContents: params.expectedInstalledServiceContents,
-        });
-        if (!installedDefinitionMatches) {
-          stableSince = null;
-          return false;
-        }
-      }
-
       const ownershipMatches = evaluateDaemonServiceLifecycleOwnership({
         ownership,
         expectedServiceLabel: params.expectedServiceLabel,
       }).kind === 'ok';
       if (!ownershipMatches) {
+        stableSince = null;
+        return false;
+      }
+
+      const installedDefinitionMatchesExpected = params.platform === 'darwin'
+        && params.expectedInstalledServiceContents
+        && params.installedServicePath
+        ? doesInstalledDaemonServiceDefinitionMatchExpected({
+            installedPath: params.installedServicePath,
+            expectedContents: params.expectedInstalledServiceContents,
+          })
+        : false;
+
+      if (ownership.kind !== 'compatible' && !installedDefinitionMatchesExpected) {
+        stableSince = null;
+        return false;
+      }
+
+      if (params.healthCommand && !runCommandCaptureBestEffort(params.healthCommand).ok) {
         stableSince = null;
         return false;
       }
@@ -1723,6 +1711,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
     // don't rewrite the file before the lifecycle commands, the daemon will
     // spawn with stale args. Only triggered for start/restart; stop doesn't
     // care about content drift.
+    let expectedInstalledServiceContents: string | null = null;
     if (action === 'start' || action === 'restart') {
       try {
         const expectedPlan = planDaemonServiceInstall({
@@ -1743,6 +1732,7 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
         });
         const expectedFile = expectedPlan.files[0];
         if (expectedFile) {
+          expectedInstalledServiceContents = expectedFile.content;
           const matches = doesInstalledDaemonServiceDefinitionMatchExpected({
             installedPath: paths.installedPath,
             expectedContents: expectedFile.content,
@@ -1863,6 +1853,8 @@ export async function runDaemonServiceCliCommand(params: Readonly<{
             platform: runtime.platform,
             commandPath,
             expectedServiceLabel: paths.label,
+            expectedInstalledServiceContents,
+            installedServicePath: paths.installedPath,
             healthCommand: resolveDaemonServiceOwnershipHealthCommand({
               runtime,
               mode,

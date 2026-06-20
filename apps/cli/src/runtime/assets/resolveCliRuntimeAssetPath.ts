@@ -11,6 +11,14 @@ function isRuntimeExecutablePath(pathLike: string): boolean {
   return base === 'node' || base === 'node.exe' || base === 'bun' || base === 'bun.exe';
 }
 
+function resolveCliInstallRootNameFromShim(executableBase: string): string | null {
+  const normalizedBase = executableBase.toLowerCase().replace(/\.exe$/u, '');
+  if (normalizedBase === 'happier') return 'cli';
+  if (normalizedBase === 'hprev') return 'cli-preview';
+  if (normalizedBase === 'hdev') return 'cli-dev';
+  return null;
+}
+
 export function isSelfContainedCliBinary(execPath: string = process.execPath): boolean {
   const normalized = normalizePathLike(execPath);
   if (!normalized) return false;
@@ -23,8 +31,8 @@ function resolveInstalledCliRuntimeRootPath(execPath: string): string | null {
     return null;
   }
 
-  const executableBase = basename(normalized).toLowerCase();
-  if (executableBase !== 'happier' && executableBase !== 'happier.exe') {
+  const installRootName = resolveCliInstallRootNameFromShim(basename(normalized));
+  if (!installRootName) {
     return null;
   }
 
@@ -33,7 +41,7 @@ function resolveInstalledCliRuntimeRootPath(execPath: string): string | null {
     return null;
   }
 
-  return join(dirname(binaryDir), 'cli', 'current');
+  return join(dirname(binaryDir), installRootName, 'current');
 }
 
 export function resolveCliRuntimeRootPath(execPath: string = process.execPath): string {

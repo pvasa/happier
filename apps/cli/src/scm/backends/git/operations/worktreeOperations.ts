@@ -6,50 +6,19 @@ import type {
     ScmWorktreeRemoveRequest,
     ScmWorktreeRemoveResponse,
 } from '@happier-dev/protocol';
-import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol';
+import {
+    SCM_OPERATION_ERROR_CODES,
+    WORKTREE_RELATIVE_PARENT_DIR,
+    buildWorktreeRelativePath,
+    hasForbiddenGitRefName,
+    normalizeWorktreeDisplayName,
+} from '@happier-dev/protocol';
 import { mkdir } from 'node:fs/promises';
 
 import type { ScmBackendContext } from '../../../types';
 import { runScmCommand } from '../../../runtime';
 import { buildScmNonInteractiveEnv } from '../../shared/nonInteractiveEnv';
 import { mapGitErrorCode } from '../remote';
-
-function normalizeWorktreeNameSegment(segment: string): string {
-    const trimmed = segment.trim();
-    if (!trimmed || trimmed === '.' || trimmed === '..') return '';
-
-    return trimmed
-        .replace(/\s+/g, '-')
-        .replace(/@\{/g, '-')
-        .replace(/[~^:?*[\]\\]/g, '-')
-        .replace(/\.{2,}/g, '-')
-        .replace(/(^[./-]+)|([./-]+$)/g, '')
-        .replace(/-+/g, '-');
-}
-
-function hasForbiddenGitRefSegment(segment: string): boolean {
-    const normalizedSegment = normalizeWorktreeNameSegment(segment);
-    return normalizedSegment === '@' || normalizedSegment.endsWith('.lock');
-}
-
-function normalizeWorktreeDisplayName(value: string): string {
-    const normalizedSegments = value
-        .trim()
-        .replaceAll('\\', '/')
-        .split('/')
-        .map(normalizeWorktreeNameSegment)
-        .filter((segment) => segment.length > 0);
-
-    return normalizedSegments.join('/');
-}
-
-function hasForbiddenGitRefName(value: string): boolean {
-    return value
-        .trim()
-        .replaceAll('\\', '/')
-        .split('/')
-        .some(hasForbiddenGitRefSegment);
-}
 
 function normalizeBaseRef(value: string | null | undefined): string | null {
     const trimmed = String(value ?? '').trim();
@@ -212,10 +181,10 @@ export async function gitWorktreeCreate(input: {
         ? null
         : explicitBaseRef ?? await resolveImplicitBaseRef(input.context);
 
-    await mkdir(`${resolvedPaths.repositoryRootPath}/.dev/worktree`, { recursive: true });
+    await mkdir(`${resolvedPaths.repositoryRootPath}/${WORKTREE_RELATIVE_PARENT_DIR}`, { recursive: true });
 
     const tryCreate = async (branchName: string): Promise<ScmWorktreeCreateResponse> => {
-        const relativeWorktreePath = `.dev/worktree/${branchName}`;
+        const relativeWorktreePath = buildWorktreeRelativePath(branchName);
         const result = await runScmCommand({
             bin: 'git',
             cwd: resolvedPaths.repositoryRootPath,
