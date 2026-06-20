@@ -239,10 +239,13 @@ describe('ApiSessionClient (HAPPIER_TRANSCRIPT_STORAGE=direct)', () => {
       },
     });
 
-    expect(onUserMessage).toHaveBeenCalledWith(expect.objectContaining({
-      role: 'user',
-      localId: 'local-1',
-    }));
+    expect(onUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'user',
+        localId: 'local-1',
+      }),
+      { seq: 1 },
+    );
   });
 
   it('does not double-deliver a user message that was already enqueued locally before committing it', async () => {

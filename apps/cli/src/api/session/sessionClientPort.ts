@@ -6,6 +6,9 @@ import type { TurnAssistantTextSnapshot } from './turnAssistantTextSnapshot';
 import type { CommittedUserMessageSeqWaitOptions } from './committedUserMessageSeqTracker';
 import type { SessionTurnLifecycleController } from '@/agent/runtime/session/turn/types';
 import type { PendingQueueReadOptions, PendingQueueReconcileWhenEmpty } from './pendingQueueReadPolicy';
+import type { PendingMaterializationActiveTurnPolicy } from './pendingMaterializationActiveTurnPolicy';
+import type { ProviderOwnedUserMessageEchoClassifier } from './providerOwnedUserMessageEcho';
+import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 
 export type MaterializeNextPendingResult =
   | { type: 'materialized'; localId: string; seq: number; content: unknown | null; createdAt?: number; updatedAt?: number }
@@ -19,6 +22,9 @@ export interface SessionClientPort {
   sendSessionEvent(event: SessionEventMessage, id?: string): void;
   sendClaudeSessionMessage(message: RawJSONLines, meta?: Record<string, unknown>): void;
   recordClaudeJsonlMessageConsumed?(message: RawJSONLines, meta?: Record<string, unknown>): void;
+  setSessionRuntimeControls?(controls: SessionRuntimeControls | null): void;
+  registerSessionRuntimeControls?(controls: Partial<SessionRuntimeControls> | null): () => void;
+  setProviderOwnedUserMessageEchoClassifier?(classifier: ProviderOwnedUserMessageEchoClassifier | null): void;
   hasActiveCanonicalTurn?(): boolean;
   fetchCommittedClaudeJsonlMessageBaseline?(opts?: { take?: number }): Promise<import('@/backends/claude/utils/claudeJsonlMessageKey').CommittedClaudeJsonlMessageBaseline>;
   fetchRecentTranscriptTextItemsForAcpImport?(opts?: { take?: number }): Promise<Array<{ role: 'user' | 'agent'; text: string }>>;
@@ -32,6 +38,7 @@ export interface SessionClientPort {
 
   updateMetadata(updater: (metadata: Metadata) => Metadata): void | Promise<void>;
   updateAgentState(updater: (state: AgentState) => AgentState): void | Promise<void>;
+  getAgentStateSnapshot?(): AgentState | null;
   sessionTurnLifecycle?: SessionTurnLifecycleController;
 
   keepAlive(thinking: boolean, mode: 'local' | 'remote'): void;
@@ -42,8 +49,11 @@ export interface SessionClientPort {
    * acceptance opt in so the watermark stops persisting at queue handoff…
    */
   deferDeliveredUserMessageWatermarkToProviderAcceptance?(): void;
-  /** …and persist it here once the provider actually accepted the batch (null seq = no-op). */
-  confirmUserMessageDeliveredToProvider?(seq: number | null | undefined): void;
+  /** …and persist it here once the provider actually accepted the batch (null seq = local-id join). */
+  confirmUserMessageDeliveredToProvider?(
+    seq: number | null | undefined,
+    opts?: { localIds?: readonly string[] | null },
+  ): void;
   getLastObservedMessageSeq?(): number;
   getCommittedUserMessageSeq?(localId: string): number | null;
   waitForCommittedUserMessageSeq?(
@@ -56,10 +66,13 @@ export interface SessionClientPort {
     startSeqExclusive?: number | null;
   }): TurnAssistantTextSnapshot | null;
   waitForMetadataUpdate(abortSignal?: AbortSignal): Promise<boolean>;
-  shouldAttemptPendingMaterialization?(): boolean;
+  shouldAttemptPendingMaterialization?(opts?: {
+    activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy;
+  }): boolean;
   reconcilePendingQueueState?(opts?: { force?: boolean }): Promise<boolean>;
   materializeNextPendingMessageSafely?(opts?: {
     reconcileWhenEmpty?: PendingQueueReconcileWhenEmpty;
+    activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy;
   }): Promise<MaterializeNextPendingResult>;
   popPendingMessage(): Promise<boolean>;
 

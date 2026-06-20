@@ -45,6 +45,7 @@ describe('DeferredApiSessionClient', () => {
       sendSessionEvent: vi.fn(),
       sendClaudeSessionMessage: vi.fn(),
       recordClaudeJsonlMessageConsumed: vi.fn(),
+      setProviderOwnedUserMessageEchoClassifier: vi.fn(),
       fetchCommittedClaudeJsonlMessageBaseline: vi.fn(async () => ({ keys: new Set(['claude-jsonl:main:user:u1']), complete: true, oldestCoveredAtMs: null })),
       fetchRecentTranscriptTextItemsForAcpImport: vi.fn(async () => [{ role: 'user' as const, text: 'hello' }]),
       sendAgentMessage: vi.fn(),
@@ -64,6 +65,9 @@ describe('DeferredApiSessionClient', () => {
       flush: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
     } as const;
+
+    const classifier = vi.fn(() => true);
+    deferred.setProviderOwnedUserMessageEchoClassifier(classifier);
 
     await deferred.attach(real);
 
@@ -89,6 +93,7 @@ describe('DeferredApiSessionClient', () => {
     expect(real.fetchCommittedClaudeJsonlMessageBaseline).toHaveBeenCalledWith({ take: 1 });
     expect(real.fetchRecentTranscriptTextItemsForAcpImport).toHaveBeenCalledWith({ take: 1 });
     expect(real.recordClaudeJsonlMessageConsumed).toHaveBeenCalledWith({ type: 'user', uuid: 'u1' }, undefined);
+    expect(real.setProviderOwnedUserMessageEchoClassifier).toHaveBeenCalledWith(classifier);
     expect(real.popPendingMessage).toHaveBeenCalledTimes(1);
     expect(real.sendSessionDeath).toHaveBeenCalledTimes(1);
     expect(real.flush).toHaveBeenCalledTimes(1);

@@ -3,9 +3,10 @@
  *
  * ACP permission handler that only bridges provider permission requests to Happier UI.
  *
- * Key property: it does NOT apply local allow/deny heuristics based on Happier permission mode.
- * The provider is expected to enforce its own policies (sandbox / approval rules) and to decide
- * when to emit ACP `requestPermission` prompts.
+ * Key property: the provider is expected to enforce its own policies (sandbox / approval rules)
+ * and to decide when to emit ACP `requestPermission` prompts. Host-created ACP extension tools
+ * still flow through this handler, so full-access modes must bypass ordinary permission prompts
+ * while preserving structured user-action requests.
  */
 
 import { logger } from '@/ui/logger';
@@ -25,6 +26,7 @@ import {
 import type { AccountSettings, ActionId } from '@happier-dev/protocol';
 import { isChangeTitleToolLikeName } from '@happier-dev/protocol/tools/v2';
 import { shouldDenyAgentSessionTitleToolCall } from './codingPromptTitlePermission';
+import { resolveAgentRequestKind } from './requestKind';
 
 export type { PermissionResult, PendingRequest };
 
@@ -69,10 +71,15 @@ const ALWAYS_AUTO_APPROVE_HAPPIER_ACTION_IDS = new Set<ActionId>([
   'action.options.resolve',
 ]);
 
+function isFullAccessPermissionMode(mode: PermissionMode): boolean {
+  return mode === 'yolo' || mode === 'bypassPermissions';
+}
+
 export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
   private readonly logPrefix: string;
   private readonly alwaysAutoApproveToolNameIncludes: ReadonlyArray<string>;
   private readonly alwaysAutoApproveToolCallIdIncludes: ReadonlyArray<string>;
+  private currentPermissionMode: PermissionMode = 'default';
 
   constructor(
     session: ApiSessionClient,
@@ -102,10 +109,22 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
 
   /**
    * Compatibility shim: some runtimes still call `setPermissionMode()` even when provider enforcement is enabled.
-   * This handler intentionally ignores the mode for decision-making.
+   * Full-access modes still matter for host-created extension tool prompts that do not go through provider policy.
    */
   setPermissionMode(mode: PermissionMode): void {
-    logger.debug(`${this.getLogPrefix()} Permission mode set to: ${mode} (provider-enforced, no local auto-approval)`);
+    this.currentPermissionMode = mode;
+    logger.debug(`${this.getLogPrefix()} Permission mode set to: ${mode} (provider-enforced)`);
+    this.resolvePendingRequestsIfNowDecidable();
+  }
+
+  private resolvePendingRequestsIfNowDecidable(): void {
+    if (this.pendingRequests.size === 0) return;
+
+    for (const [toolCallId, pending] of Array.from(this.pendingRequests.entries())) {
+      const decision = this.getImmediateDecision(toolCallId, pending.toolName, pending.input);
+      if (!decision) continue;
+      this.resolvePendingPermissionRequest(toolCallId, decision);
+    }
   }
 
   private splitNameTokens(value: string): string[] {
@@ -143,6 +162,9 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
       input,
     })) {
       return { decision: 'denied' };
+    }
+    if (isFullAccessPermissionMode(this.currentPermissionMode) && resolveAgentRequestKind(toolName) === 'permission') {
+      return { decision: 'approved' };
     }
     if (this.isAlwaysAutoApprove(toolName, toolCallId, input)) {
       return { decision: 'approved' };

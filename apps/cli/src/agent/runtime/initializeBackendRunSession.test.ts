@@ -492,6 +492,50 @@ describe('initializeBackendRunSession', () => {
     expect(onSessionSwapCount).toBe(1)
   })
 
+  it('notifies providers after a new session is reported to the daemon', async () => {
+    const metadata = { terminal: { mode: 'tmux' } } as unknown as Metadata
+    const state = { controlledByUser: false } as AgentState
+    const session = createSessionStub()
+    const events: string[] = []
+
+    const api = {
+      getOrCreateSession: async () => createSessionResponse('new-session-reported', metadata, state),
+      sessionSyncClient: () => session,
+    }
+
+    await initializeBackendRunSession(
+      {
+        api,
+        sessionTag: 'tag-new-session-reported',
+        metadata,
+        state,
+        uiLogPrefix: '[Codex]',
+        startupMetadataOverrides: {
+          permissionModeOverride: { mode: 'default', updatedAt: 100 },
+        },
+        onDaemonSessionReported: async ({ sessionId }) => {
+          events.push(`provider:${sessionId}`)
+        },
+      },
+      {
+        setupOfflineReconnectionFn: () => ({
+          session,
+          reconnectionHandle: null,
+          isOffline: false,
+        }),
+        primeAgentStateForUiFn: () => {},
+        reportSessionToDaemonIfRunningFn: async (_opts, deps) => {
+          events.push('daemon-report')
+          await deps?.onReported?.({ sessionId: 'new-session-reported' })
+        },
+        persistTerminalAttachmentInfoIfNeededFn: async () => {},
+        sendTerminalFallbackMessageIfNeededFn: () => {},
+      },
+    )
+
+    expect(events).toEqual(['daemon-report', 'provider:new-session-reported'])
+  })
+
   it('throws when a new session cannot be created and offline stubs are not allowed', async () => {
     const metadata = {} as Metadata
     const state = { controlledByUser: false } as AgentState

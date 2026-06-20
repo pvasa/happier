@@ -37,6 +37,10 @@ function createQueue() {
   return { queue, spyPush, spyIsolate };
 }
 
+function waitForSteerWork() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
   it('queues messages normally when no steer controller is provided', async () => {
     const { session, emitUserMessage } = createSessionHarness();
@@ -53,6 +57,7 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     expect(spyPush).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'hello', localId: null }),
       { permissionMode: 'default' },
+      { userMessageSeq: null, userMessageLocalId: null, userMessageLocalIds: null },
     );
   });
 
@@ -80,6 +85,38 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(steerText).toHaveBeenCalledWith('steer me');
+    expect(spyPush).not.toHaveBeenCalled();
+  });
+
+  it('carries localId and committed seq identity when steering in-flight', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    const { queue, spyPush } = createQueue();
+
+    (session as any).getCommittedUserMessageSeq = vi.fn((localId: string) => (localId === 'local-42' ? 42 : null));
+
+    const steerText = vi.fn(async () => {});
+
+    registerPermissionModeMessageQueueBinding({
+      session: session as any,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+      },
+    } as any);
+
+    emitUserMessage({ content: { text: 'steer with identity' }, localId: 'local-42', meta: {} });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(steerText).toHaveBeenCalledWith('steer with identity', {
+      localId: 'local-42',
+      localIds: ['local-42'],
+      userMessageSeq: 42,
+      userMessageSeqs: [42],
+    });
     expect(spyPush).not.toHaveBeenCalled();
   });
 
@@ -115,7 +152,10 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    expect(steerText).toHaveBeenCalledWith('SEED\n\nsteer me');
+    expect(steerText).toHaveBeenCalledWith('SEED\n\nsteer me', {
+      localId: 'local-1',
+      localIds: ['local-1'],
+    });
     expect(spyPush).not.toHaveBeenCalled();
 
     const finalMeta = session.getMetadataSnapshot();
@@ -150,6 +190,40 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     expect(spyPush).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'queue me', localId: null }),
       { permissionMode: 'default' },
+      { userMessageSeq: null, userMessageLocalId: null, userMessageLocalIds: null },
+    );
+  });
+
+  it('preserves localId and committed seq identity when a steer falls back to the queue', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    const { queue, spyPush } = createQueue();
+
+    (session as any).getCommittedUserMessageSeq = vi.fn((localId: string) => (localId === 'local-43' ? 43 : null));
+
+    const steerText = vi.fn(async () => {
+      throw new Error('steer failed');
+    });
+
+    registerPermissionModeMessageQueueBinding({
+      session: session as any,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+      },
+    } as any);
+
+    emitUserMessage({ content: { text: 'queue with identity' }, localId: 'local-43', meta: {} });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(spyPush).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'queue with identity', localId: 'local-43' }),
+      { permissionMode: 'default' },
+      { userMessageSeq: 43, userMessageLocalId: 'local-43', userMessageLocalIds: ['local-43'] },
     );
   });
 
@@ -245,6 +319,63 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     expect(spyPush).not.toHaveBeenCalled();
   });
 
+  it('drops queued old-session steer work after bindSession swaps sessions', async () => {
+    const oldSession = createSessionHarness();
+    const newSession = createSessionHarness();
+    const { queue, spyPush } = createQueue();
+
+    let agentState: any = {};
+    (oldSession.session as any).updateAgentState = (updater: (current: any) => any) => {
+      agentState = updater(agentState);
+    };
+
+    let resolveFirstSteer: () => void = () => {
+      throw new Error('first steer resolver not initialized');
+    };
+    let resolveFirstStarted: () => void = () => {
+      throw new Error('first started resolver not initialized');
+    };
+    const firstSteerGate = new Promise<void>((resolve) => {
+      resolveFirstSteer = resolve;
+    });
+    const firstStarted = new Promise<void>((resolve) => {
+      resolveFirstStarted = resolve;
+    });
+
+    const steerText = vi.fn(async (text: string) => {
+      if (text === 'first') {
+        resolveFirstStarted();
+        await firstSteerGate;
+      }
+    });
+
+    const binding = registerPermissionModeMessageQueueBinding({
+      session: oldSession.session,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+      },
+    } as any);
+
+    oldSession.emitUserMessage({ content: { text: 'first' }, meta: {} });
+    oldSession.emitUserMessage({ content: { text: 'second stale' }, meta: {} });
+    await firstStarted;
+
+    binding.bindSession(newSession.session);
+    resolveFirstSteer();
+    await waitForSteerWork();
+    await waitForSteerWork();
+
+    expect(steerText).toHaveBeenCalledTimes(1);
+    expect(steerText).toHaveBeenCalledWith('first');
+    expect(spyPush).not.toHaveBeenCalled();
+    expect(agentState.capabilities?.inFlightSteerUnavailableReason).toBeUndefined();
+  });
+
   it('does not steer when the message changes permission mode (it must be queued)', async () => {
     const { session, emitUserMessage } = createSessionHarness();
     const { queue, spyPush } = createQueue();
@@ -274,6 +405,7 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
         meta: { permissionMode: 'read-only' },
       },
       { permissionMode: 'read-only' },
+      { userMessageSeq: null, userMessageLocalId: null, userMessageLocalIds: null },
     );
   });
 
@@ -303,6 +435,7 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     expect(spyIsolate).toHaveBeenCalledWith(
       expect.objectContaining({ text: '/clear', localId: null }),
       { permissionMode: 'default' },
+      { userMessageSeq: null, userMessageLocalId: null, userMessageLocalIds: null },
     );
   });
 
@@ -332,7 +465,33 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     expect(spyPush).toHaveBeenCalledWith(
       expect.objectContaining({ text: '/compact', localId: null }),
       { permissionMode: 'default' },
+      { userMessageSeq: null, userMessageLocalId: null, userMessageLocalIds: null },
     );
+  });
+
+  it('steers non-Happier slash prompts through the shared payload policy', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    const { queue, spyPush } = createQueue();
+
+    const steerText = vi.fn(async () => {});
+
+    registerPermissionModeMessageQueueBinding({
+      session,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+      },
+    } as any);
+
+    emitUserMessage({ content: { text: '/model' }, meta: {} });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(steerText).toHaveBeenCalledWith('/model');
+    expect(spyPush).not.toHaveBeenCalled();
   });
 });
 
@@ -430,8 +589,66 @@ describe('registerPermissionModeMessageQueueBinding (in-flight config-delta appl
     expect(spyPush).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'mode change' }),
       { permissionMode: 'read-only' },
+      { userMessageSeq: null, userMessageLocalId: null, userMessageLocalIds: null },
     );
     // Not a bounce: the steer was never accepted, so no unsafe_window corrective publish.
+    expect(agentState.capabilities?.inFlightSteerUnavailableReason).toBeUndefined();
+  });
+
+  it('does not queue old-session config fallback after bindSession swaps sessions', async () => {
+    const oldSession = createSessionHarness();
+    const newSession = createSessionHarness();
+    const { queue, spyPush } = createQueue();
+
+    let agentState: any = {};
+    (oldSession.session as any).updateAgentState = (updater: (current: any) => any) => {
+      agentState = updater(agentState);
+    };
+
+    let resolveConfigApply: () => void = () => {
+      throw new Error('config apply resolver not initialized');
+    };
+    let resolveConfigStarted: () => void = () => {
+      throw new Error('config started resolver not initialized');
+    };
+    const configApplyGate = new Promise<void>((resolve) => {
+      resolveConfigApply = resolve;
+    });
+    const configStarted = new Promise<void>((resolve) => {
+      resolveConfigStarted = resolve;
+    });
+
+    const applyConfigDeltaInFlight = vi.fn(async () => {
+      resolveConfigStarted();
+      await configApplyGate;
+      return { status: 'unsupported', reason: 'stale_after_rebind' } as const;
+    });
+    const steerText = vi.fn(async () => {});
+
+    const binding = registerPermissionModeMessageQueueBinding({
+      session: oldSession.session as any,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+        applyConfigDeltaInFlight,
+      },
+    } as any);
+
+    oldSession.emitUserMessage({ content: { text: 'mode stale' }, meta: { permissionMode: 'read-only' } });
+    await configStarted;
+
+    binding.bindSession(newSession.session);
+    resolveConfigApply();
+    await waitForSteerWork();
+    await waitForSteerWork();
+
+    expect(applyConfigDeltaInFlight).toHaveBeenCalledTimes(1);
+    expect(steerText).not.toHaveBeenCalled();
+    expect(spyPush).not.toHaveBeenCalled();
     expect(agentState.capabilities?.inFlightSteerUnavailableReason).toBeUndefined();
   });
 
@@ -464,6 +681,7 @@ describe('registerPermissionModeMessageQueueBinding (in-flight config-delta appl
     expect(spyPush).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'mode change' }),
       { permissionMode: 'read-only' },
+      { userMessageSeq: null, userMessageLocalId: null, userMessageLocalIds: null },
     );
   });
 
@@ -555,5 +773,71 @@ describe('registerPermissionModeMessageQueueBinding (steer-bounce corrective pub
     expect(agentState.capabilities?.inFlightSteerAvailable).toBe(false);
     expect(agentState.capabilities?.inFlightSteerUnavailableReason).toBe('unsafe_window');
     expect(typeof agentState.capabilities?.inFlightSteerStateAt).toBe('number');
+  });
+
+  it('does not mutate metadata, steer, queue, or bounce old replay-seed work after bindSession swaps sessions', async () => {
+    const oldSession = createSessionHarness();
+    const newSession = createSessionHarness();
+    const { queue, spyPush } = createQueue();
+
+    oldSession.setMetadataSnapshot({
+      replaySeedV1: {
+        v: 1,
+        seedText: 'SEED',
+        sourceSessionId: 'sess_parent',
+        sourceCutoffSeqInclusive: 3,
+        createdAtMs: 123,
+      },
+    });
+
+    let agentState: any = {};
+    (oldSession.session as any).updateAgentState = (updater: (current: any) => any) => {
+      agentState = updater(agentState);
+    };
+
+    let resolveRefresh: () => void = () => {
+      throw new Error('refresh resolver not initialized');
+    };
+    let resolveRefreshStarted: () => void = () => {
+      throw new Error('refresh started resolver not initialized');
+    };
+    const refreshGate = new Promise<void>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const refreshStarted = new Promise<void>((resolve) => {
+      resolveRefreshStarted = resolve;
+    });
+    oldSession.session.refreshSessionSnapshotFromServerBestEffort = vi.fn(async () => {
+      resolveRefreshStarted();
+      await refreshGate;
+    });
+
+    const steerText = vi.fn(async () => {});
+    const binding = registerPermissionModeMessageQueueBinding({
+      session: oldSession.session as any,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+      },
+    } as any);
+
+    oldSession.emitUserMessage({ content: { text: 'seed stale' }, localId: 'local-seed-stale', meta: {} });
+    await refreshStarted;
+
+    binding.bindSession(newSession.session);
+    resolveRefresh();
+    await waitForSteerWork();
+    await waitForSteerWork();
+
+    expect(steerText).not.toHaveBeenCalled();
+    expect(spyPush).not.toHaveBeenCalled();
+    expect(oldSession.session.updateMetadata).not.toHaveBeenCalled();
+    expect(oldSession.session.getMetadataSnapshot()?.replaySeedV1?.seedText).toBe('SEED');
+    expect(oldSession.session.getMetadataSnapshot()?.replaySeedV1?.appliedToLocalId).toBeUndefined();
+    expect(agentState.capabilities?.inFlightSteerUnavailableReason).toBeUndefined();
   });
 });

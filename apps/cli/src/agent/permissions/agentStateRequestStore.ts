@@ -13,9 +13,20 @@ import {
 import { PermissionRequestPushNotifier } from '@/settings/notifications/permissionRequestPushNotifier';
 import type { PermissionRequestPushSender } from '@/agent/permissions/BasePermissionHandler';
 import type { AccountSettings } from '@happier-dev/protocol';
+import {
+    CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
+    CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
+    isAgentStateRequestCoveredByCompletedRequests,
+} from '@happier-dev/agents';
 
 type AgentStateRequestEntry = NonNullable<AgentState['requests']>[string];
 type AgentStateCompletedEntry = NonNullable<AgentState['completedRequests']>[string];
+
+const PENDING_REQUEST_COVERAGE_OPTIONS = {
+    equivalentSources: [CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE],
+    equivalentCompletedStatuses: ['canceled'],
+    equivalentCompletedReasons: [CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON],
+} as const;
 
 export type AgentStateOutstandingRequest = Readonly<{
     requestId: string;
@@ -114,6 +125,14 @@ export class AgentStateRequestStore {
                 if (Array.isArray(params.permissionSuggestions) && params.permissionSuggestions.length > 0) {
                     entry.permissionSuggestions = params.permissionSuggestions;
                 }
+                if (isAgentStateRequestCoveredByCompletedRequests({
+                    requestId: params.requestId,
+                    request: entry,
+                    completedRequests: currentState.completedRequests as Record<string, unknown> | null | undefined,
+                    options: PENDING_REQUEST_COVERAGE_OPTIONS,
+                })) {
+                    return typeof params.updateState === 'function' ? params.updateState(currentState) : currentState;
+                }
                 requests[params.requestId] = entry;
 
                 const nextState: AgentState = {
@@ -197,6 +216,26 @@ export class AgentStateRequestStore {
                 }
 
                 completedRequests[params.requestId] = completedEntry as AgentStateCompletedEntry;
+                for (const [id, request] of Object.entries(requests)) {
+                    if (id === params.requestId) continue;
+                    if (!isAgentStateRequestCoveredByCompletedRequests({
+                        requestId: id,
+                        request,
+                        completedRequests: {
+                            [params.requestId]: completedEntry,
+                        },
+                        options: PENDING_REQUEST_COVERAGE_OPTIONS,
+                    })) continue;
+
+                    delete requests[id];
+                    const equivalentCompleted = clonePlainObjectToNullProto(request) ?? Object.create(null);
+                    equivalentCompleted.completedAt = completedEntry.completedAt;
+                    equivalentCompleted.status = completedEntry.status;
+                    if (typeof completedEntry.reason === 'string') equivalentCompleted.reason = completedEntry.reason;
+                    if (typeof completedEntry.decision === 'string') equivalentCompleted.decision = completedEntry.decision;
+                    completedRequests[id] = equivalentCompleted as AgentStateCompletedEntry;
+                    this.markPermissionRequestCompletedBestEffort(id);
+                }
 
                 const nextState: AgentState = {
                     ...currentState,

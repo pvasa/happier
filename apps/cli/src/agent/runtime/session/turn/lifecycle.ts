@@ -148,6 +148,49 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
         }
     }
 
+    function emitTerminalTurnLifecycleEvent(status: SessionTurnTerminalStatus): void {
+        if (status === 'cancelled') {
+            emitTurnLifecycleEvent('turn_cancelled');
+            return;
+        }
+        emitTurnLifecycleEvent(
+            'assistant_message_end',
+            status === 'failed' ? 'failed' : 'completed',
+        );
+    }
+
+    async function awaitTerminalTurnWriteAndEmit(
+        result: Readonly<{ turn: MutableTurn | null; pendingWrite: Promise<void> | null }>,
+        status: SessionTurnTerminalStatus,
+        beforeWrite?: Promise<void> | null,
+    ): Promise<void> {
+        let firstError: unknown = null;
+        if (beforeWrite) {
+            try {
+                await beforeWrite;
+            } catch (error) {
+                firstError = error;
+            }
+        }
+
+        if (!result.pendingWrite || !result.turn) {
+            if (firstError !== null) throw firstError;
+            return;
+        }
+
+        try {
+            await result.pendingWrite;
+        } catch (error) {
+            firstError ??= error;
+        } finally {
+            emitTerminalTurnLifecycleEvent(status);
+        }
+
+        if (firstError !== null) {
+            throw firstError;
+        }
+    }
+
     function createTurn(input: Readonly<{
         provider?: string | null;
         providerTurnId?: string | null;
@@ -369,8 +412,7 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
 
     async function completeTurn(input: CompleteTurnInput = {}): Promise<void> {
         const result = terminalTurnSync({ ...input, status: 'completed' });
-        if (result.turn) emitTurnLifecycleEvent('assistant_message_end', 'completed');
-        await result.pendingWrite;
+        await awaitTerminalTurnWriteAndEmit(result, 'completed');
     }
 
     async function failTurn(input: FailTurnInput): Promise<void> {
@@ -387,15 +429,12 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
             allocatedWrite = begun.pendingWrite;
         }
         const result = terminalTurnSync({ ...input, status: 'failed' });
-        if (result.turn) emitTurnLifecycleEvent('assistant_message_end', 'failed');
-        await allocatedWrite;
-        await result.pendingWrite;
+        await awaitTerminalTurnWriteAndEmit(result, 'failed', allocatedWrite);
     }
 
     async function cancelTurn(input: CancelTurnInput = {}): Promise<void> {
         const result = terminalTurnSync({ ...input, status: 'cancelled' });
-        if (result.turn) emitTurnLifecycleEvent('turn_cancelled');
-        await result.pendingWrite;
+        await awaitTerminalTurnWriteAndEmit(result, 'cancelled');
     }
 
     async function endSession(input: EndSessionInput = {}): Promise<void> {
@@ -468,17 +507,16 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
                 pendingWrite: null,
             };
         }
-        if (terminalResult.turn.terminalStatus === 'cancelled') {
-            emitTurnLifecycleEvent('turn_cancelled');
-        } else {
-            emitTurnLifecycleEvent(
-                'assistant_message_end',
-                terminalResult.turn.terminalStatus === 'failed' ? 'failed' : 'completed',
-            );
-        }
+        const pendingWrite = terminalResult.pendingWrite
+            ? terminalResult.pendingWrite.finally(() => {
+                if (terminalResult.turn) {
+                    emitTerminalTurnLifecycleEvent(terminalResult.turn.terminalStatus ?? 'completed');
+                }
+            })
+            : null;
         return {
             body: withLifecycleMarkerId(input.body, terminalResult.turn.turnId),
-            pendingWrite: terminalResult.pendingWrite,
+            pendingWrite,
         };
     }
 

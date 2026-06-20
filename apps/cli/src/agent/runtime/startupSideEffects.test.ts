@@ -55,6 +55,37 @@ describe('startup side effects: daemon session reporting retry', () => {
     expect(calls).toBe(3);
   });
 
+  it('invokes the daemon-reported callback after a retry succeeds', async () => {
+    const errors = [
+      { error: 'No daemon running, no state file found' },
+      {},
+    ];
+    let calls = 0;
+    let now = 0;
+    const onReported = vi.fn(async () => {});
+
+    await reportSessionToDaemonIfRunning(
+      { sessionId: 'session-reported', metadata: metadataStub },
+      {
+        notifyDaemonSessionStartedFn: async () => {
+          const next = errors[calls] ?? {};
+          calls++;
+          return next;
+        },
+        sleepFn: async (ms) => {
+          now += ms;
+        },
+        nowFn: () => now,
+        retryTimeoutMs: 1_000,
+        retryIntervalMs: 100,
+        onReported,
+      },
+    );
+
+    expect(calls).toBe(2);
+    expect(onReported).toHaveBeenCalledTimes(1);
+  });
+
   it('retries daemon report when control auth is temporarily out of sync', async () => {
     let calls = 0;
     let now = 0;

@@ -7,6 +7,7 @@ import type {
   DrainPendingOptions,
   DrainPendingResult,
   MessageBatch,
+  PendingMaterializationActiveTurnPolicy,
   PendingMaterializationReconcileWhenEmpty,
   PendingMaterializationResult,
   SessionProviderInputConsumer,
@@ -23,9 +24,12 @@ export class PendingQueueMaterializationAuthError extends Error {
 export interface SessionProviderInputConsumerSession {
   materializeNextPendingMessageSafely?: ((opts?: {
     reconcileWhenEmpty?: PendingMaterializationReconcileWhenEmpty;
+    activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy;
   }) => Promise<PendingMaterializationResult>) | undefined;
   popPendingMessage: () => Promise<boolean>;
-  shouldAttemptPendingMaterialization?: (() => boolean) | undefined;
+  shouldAttemptPendingMaterialization?: ((opts?: {
+    activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy;
+  }) => boolean) | undefined;
   reconcilePendingQueueState?: ((opts: { force: boolean }) => unknown | Promise<unknown>) | undefined;
   waitForMetadataUpdate: (abortSignal?: AbortSignal) => Promise<boolean>;
 }
@@ -35,11 +39,54 @@ export interface SessionProviderInputConsumerOptions<Mode, Message> {
   session: SessionProviderInputConsumerSession;
   onMetadataUpdate?: (() => void | Promise<void>) | null | undefined;
   reconcileWhenEmpty?: PendingMaterializationReconcileWhenEmpty | undefined;
+  activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy | undefined;
+  resolveActiveTurnDeliveryPolicy?: (() => PendingMaterializationActiveTurnPolicy | undefined) | undefined;
   idleWakePollIntervalMs?: number | undefined;
   pendingDrainMaxPopPerWake?: number | undefined;
 }
 
 type WakeWinner = { kind: 'queue'; hasMessages: boolean } | { kind: 'meta'; ok: boolean } | { kind: 'idle' };
+
+function buildMaterializeOptions(
+  reconcileWhenEmpty: PendingMaterializationReconcileWhenEmpty,
+  activeTurnDeliveryPolicy: PendingMaterializationActiveTurnPolicy | undefined,
+): {
+  reconcileWhenEmpty: PendingMaterializationReconcileWhenEmpty;
+  activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy;
+} {
+  return {
+    reconcileWhenEmpty,
+    ...(activeTurnDeliveryPolicy ? { activeTurnDeliveryPolicy } : {}),
+  };
+}
+
+function readActiveTurnDeliveryPolicy(opts: {
+  activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy | undefined;
+  resolveActiveTurnDeliveryPolicy?: (() => PendingMaterializationActiveTurnPolicy | undefined) | undefined;
+}): PendingMaterializationActiveTurnPolicy | undefined {
+  return opts.resolveActiveTurnDeliveryPolicy?.() ?? opts.activeTurnDeliveryPolicy;
+}
+
+function logInputConsumerMaterializationDecision(opts: {
+  source: 'waitForNextInput' | 'drainPending';
+  reconcileWhenEmpty: PendingMaterializationReconcileWhenEmpty;
+  activeTurnDeliveryPolicy: PendingMaterializationActiveTurnPolicy | undefined;
+  result: PendingMaterializationResult;
+}): void {
+  logger.debug('[pendingQueue] input consumer materialization decision', {
+    source: opts.source,
+    reconcileWhenEmpty: opts.reconcileWhenEmpty,
+    activeTurnDeliveryPolicy: opts.activeTurnDeliveryPolicy ?? 'block',
+    resultType: opts.result.type,
+    ...(opts.result.type === 'materialized'
+      ? {
+          localId: opts.result.localId,
+          seq: opts.result.seq,
+        }
+      : {}),
+    ...(opts.result.type === 'deferred' ? { deferredReason: opts.result.reason } : {}),
+  });
+}
 
 export function createSessionProviderInputConsumer<Mode, Message>(
   opts: SessionProviderInputConsumerOptions<Mode, Message>,
@@ -49,7 +96,13 @@ export function createSessionProviderInputConsumer<Mode, Message>(
       return await waitForNextInput({ ...opts, abortSignal: waitOpts.abortSignal });
     },
     async drainPending(drainOpts) {
-      return await drainPendingMessages(withDefaultDrainOptions(opts.session, opts.pendingDrainMaxPopPerWake, drainOpts));
+      return await drainPendingMessages(withDefaultDrainOptions(
+        opts.session,
+        opts.pendingDrainMaxPopPerWake,
+        opts.activeTurnDeliveryPolicy,
+        opts.resolveActiveTurnDeliveryPolicy,
+        drainOpts,
+      ));
     },
   };
 }
@@ -60,7 +113,7 @@ export function createSessionProviderPendingDrainAdapter(
 ): Pick<SessionProviderInputConsumer<never, never>, 'drainPending'> {
   return {
     async drainPending(drainOpts) {
-      return await drainPendingMessages(withDefaultDrainOptions(session, defaults?.maxPopPerWake, drainOpts));
+      return await drainPendingMessages(withDefaultDrainOptions(session, defaults?.maxPopPerWake, undefined, undefined, drainOpts));
     },
   };
 }
@@ -124,6 +177,9 @@ async function waitForNextInput<Mode, Message>(
         controller.abort('sessionProviderInputConsumer-meta-false');
 
         await Promise.resolve();
+        if (!opts.abortSignal.aborted) {
+          await callMetadataUpdate(opts.onMetadataUpdate);
+        }
 
         const queuedAfterMetadataFailure = await collectQueuedBatch(opts.messageQueue, opts.abortSignal);
         if (queuedAfterMetadataFailure) {
@@ -158,6 +214,10 @@ async function waitForNextInput<Mode, Message>(
 
       if (winner.kind === 'idle') {
         wokeByIdleTimer = true;
+        await callMetadataUpdate(opts.onMetadataUpdate);
+        if (opts.abortSignal.aborted) {
+          return null;
+        }
         continue;
       }
 
@@ -185,7 +245,18 @@ async function materializePendingMessage<Mode, Message>(
 ): Promise<void> {
   const safeMaterialize = opts.session.materializeNextPendingMessageSafely;
   if (safeMaterialize) {
-    const result = await safeMaterialize({ reconcileWhenEmpty: opts.reconcileWhenEmpty ?? 'skip' });
+    const reconcileWhenEmpty = opts.reconcileWhenEmpty ?? 'skip';
+    const activeTurnDeliveryPolicy = readActiveTurnDeliveryPolicy(opts);
+    const result = await safeMaterialize(buildMaterializeOptions(
+      reconcileWhenEmpty,
+      activeTurnDeliveryPolicy,
+    ));
+    logInputConsumerMaterializationDecision({
+      source: 'waitForNextInput',
+      reconcileWhenEmpty,
+      activeTurnDeliveryPolicy,
+      result,
+    });
     if (result.type === 'materialized') {
       // The transcript update path owns queue delivery; do not synthesize a provider batch from the pending payload.
       return;
@@ -196,7 +267,9 @@ async function materializePendingMessage<Mode, Message>(
     return;
   }
 
-  if (!(opts.session.shouldAttemptPendingMaterialization?.() ?? true)) {
+  if (!(opts.session.shouldAttemptPendingMaterialization?.({
+    activeTurnDeliveryPolicy: readActiveTurnDeliveryPolicy(opts),
+  }) ?? true)) {
     return;
   }
 
@@ -206,12 +279,19 @@ async function materializePendingMessage<Mode, Message>(
 function withDefaultDrainOptions(
   session: SessionProviderInputConsumerSession,
   defaultMaxPopPerWake: number | undefined,
+  defaultActiveTurnDeliveryPolicy: PendingMaterializationActiveTurnPolicy | undefined,
+  defaultResolveActiveTurnDeliveryPolicy: (() => PendingMaterializationActiveTurnPolicy | undefined) | undefined,
   drainOpts: DrainPendingOptions | undefined,
 ): DrainPendingOptions & { session: SessionProviderInputConsumerSession } {
+  const drainPolicyOverride = drainOpts?.activeTurnDeliveryPolicy !== undefined;
+
   return {
     ...(drainOpts ?? {}),
     session,
     maxPopPerWake: drainOpts?.maxPopPerWake ?? defaultMaxPopPerWake,
+    activeTurnDeliveryPolicy: drainOpts?.activeTurnDeliveryPolicy ?? defaultActiveTurnDeliveryPolicy,
+    resolveActiveTurnDeliveryPolicy: drainOpts?.resolveActiveTurnDeliveryPolicy
+      ?? (drainPolicyOverride ? undefined : defaultResolveActiveTurnDeliveryPolicy),
   };
 }
 
@@ -230,13 +310,15 @@ async function drainPendingMessages(
         return { materialized, stoppedReason: 'drain_disallowed' };
       }
 
-      const canMaterialize = opts.session.shouldAttemptPendingMaterialization?.() ?? true;
+      const activeTurnDeliveryPolicy = readActiveTurnDeliveryPolicy(opts);
+      const attemptOpts = { activeTurnDeliveryPolicy };
+      const canMaterialize = opts.session.shouldAttemptPendingMaterialization?.(attemptOpts) ?? true;
       if (!canMaterialize) {
         await opts.session.reconcilePendingQueueState?.({ force: true });
         if (opts.abortSignal?.aborted) {
           return { materialized, stoppedReason: 'aborted' };
         }
-        if (!(opts.session.shouldAttemptPendingMaterialization?.() ?? true)) {
+        if (!(opts.session.shouldAttemptPendingMaterialization?.(attemptOpts) ?? true)) {
           return { materialized, stoppedReason: 'materialization_blocked' };
         }
       }
@@ -262,7 +344,15 @@ async function materializeNextPendingForDrain(
   const safeMaterialize = session.materializeNextPendingMessageSafely;
   if (safeMaterialize) {
     try {
-      const result = await safeMaterialize({ reconcileWhenEmpty: 'force' });
+      const reconcileWhenEmpty = 'force';
+      const activeTurnDeliveryPolicy = readActiveTurnDeliveryPolicy(opts);
+      const result = await safeMaterialize(buildMaterializeOptions(reconcileWhenEmpty, activeTurnDeliveryPolicy));
+      logInputConsumerMaterializationDecision({
+        source: 'drainPending',
+        reconcileWhenEmpty,
+        activeTurnDeliveryPolicy,
+        result,
+      });
       if (result.type === 'materialized') {
         return 'materialized';
       }

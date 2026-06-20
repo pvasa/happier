@@ -41,6 +41,44 @@ describe('createAcpRuntime (in-flight steer)', () => {
     expect((runtime as any).isTurnInFlight()).toBe(false);
   });
 
+  it('forwards steerPrompt delivery identity to the backend when provided', async () => {
+    const backend = createFakeAcpRuntimeBackend({ sessionId: 'sess_1' }) as any;
+    backend.sendSteerPrompt = vi.fn(async () => {});
+    const confirmUserMessageDeliveredToProvider = vi.fn();
+
+    const runtime = createAcpRuntime({
+      provider: 'codex',
+      directory: '/tmp',
+      session: createBasicSessionClientWithOverrides({
+        confirmUserMessageDeliveredToProvider,
+      } as any),
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+      inFlightSteer: { enabled: true },
+    } as any);
+
+    await (runtime as any).startOrLoad({});
+    await (runtime as any).steerPrompt('steer text', {
+      localId: 'local-1',
+      localIds: ['local-1'],
+      userMessageSeq: 1,
+      userMessageSeqs: [1],
+    });
+
+    expect(backend.sendSteerPrompt).toHaveBeenCalledWith('sess_1', 'steer text', {
+      localId: 'local-1',
+      localIds: ['local-1'],
+      userMessageSeq: 1,
+      userMessageSeqs: [1],
+    });
+    expect(confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(1, {
+      localIds: ['local-1'],
+    });
+  });
+
   it('does not leak pendingQueue metadata listeners when poll wake wins', async () => {
     const backend = createFakeAcpRuntimeBackend({ sessionId: 'sess_1' }) as any;
     backend.sendSteerPrompt = vi.fn(async () => {});

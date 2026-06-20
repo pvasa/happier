@@ -35,6 +35,8 @@ type ContextCompactionEventFields = {
 
 type ConnectedServiceRuntimeAuthRecoveryEvent =
   Extract<TranscriptRawAgentEventV1, { type: 'connected-service-runtime-auth-recovery' }>;
+type TerminalComposerDraftBlockedEvent =
+  Extract<TranscriptRawAgentEventV1, { type: 'terminal-composer-draft-blocked' }>;
 
 export type ACPMessageData = AcpSidechainMeta & (
   | { type: 'message'; message: string }
@@ -60,6 +62,7 @@ export type ACPProvider = string;
 export type SessionEventMessage =
   | (TranscriptEventLifecycle & { type: 'switch'; mode: 'local' | 'remote' })
   | (TranscriptEventLifecycle & { type: 'message'; message: string })
+  | (TranscriptEventLifecycle & TerminalComposerDraftBlockedEvent)
   | (TranscriptEventLifecycle & Extract<TranscriptRawAgentEventV1, { type: 'runtime-config-outcome' }>)
   | (TranscriptEventLifecycle & ConnectedServiceRuntimeAuthRecoveryEvent)
   | (TranscriptEventLifecycle & { type: 'context-compaction' } & ContextCompactionEventFields)

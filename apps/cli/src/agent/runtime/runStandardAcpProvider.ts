@@ -27,7 +27,7 @@ import { sendReadyWithPushNotification } from '@/agent/runtime/sendReadyWithPush
 import { createTurnAssistantPreviewTracker, type TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
 import { resolveEffectiveCodingPromptText } from '@/agent/prompting/coding/resolveEffectiveCodingPrompt';
 import { shouldSendReadyPushNotification } from '@/settings/notifications/notificationsPolicy';
-import type { InFlightSteerController } from '@/agent/runtime/permission/bindPermissionModeQueue';
+import type { InFlightSteerController, InFlightSteerDeliveryIdentity } from '@/agent/runtime/permission/bindPermissionModeQueue';
 import type { Credentials } from '@/persistence';
 import { registerKillSessionHandler } from '@/rpc/handlers/killSession';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
@@ -54,7 +54,7 @@ type RuntimeForLoop = {
   listSkills?: () => Promise<unknown>;
   supportsInFlightSteer?: () => boolean;
   isTurnInFlight?: () => boolean;
-  steerPrompt?: (message: string) => Promise<void>;
+  steerPrompt?: (message: string, identity?: InFlightSteerDeliveryIdentity) => Promise<void>;
   flushTurn: () => void | Promise<void>;
   reset: () => Promise<void>;
   getSessionId: () => string | null;
@@ -269,12 +269,16 @@ export async function runStandardAcpProvider(
   const inFlightSteerController: InFlightSteerController = {
     supportsInFlightSteer: () => runtimeForInFlightSteer?.supportsInFlightSteer?.() === true,
     isTurnInFlight: () => runtimeForInFlightSteer?.isTurnInFlight?.() === true,
-    steerText: async (text: string) => {
+    steerText: async (text: string, identity?: InFlightSteerDeliveryIdentity) => {
       const runtime = runtimeForInFlightSteer;
       if (!runtime?.steerPrompt) {
         throw new Error('in-flight steer is not available');
       }
-      await runtime.steerPrompt(text);
+      if (identity === undefined) {
+        await runtime.steerPrompt(text);
+        return;
+      }
+      await runtime.steerPrompt(text, identity);
     },
   };
 
