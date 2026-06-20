@@ -4173,7 +4173,13 @@ class Sync {
                 },
             });
 
-          await applyMessageCatchUpDecision({
+          // §13: the on-open incremental/snapshot catch-up runs its newer fetches directly here
+          // (NOT through `loadNewerMessages`), so it must bracket the catch-up signal itself —
+          // otherwise opening a normal session that advanced in the background performs real
+          // newer-message fetching with no "Catching up…" overlay. `do_nothing` decisions and the
+          // first-ever snapshot load (handled earlier) are intentionally NOT bracketed.
+          const isCatchUpWork = decision.kind !== 'do_nothing';
+          const applyCatchUpDecision = () => applyMessageCatchUpDecision({
               decision,
               afterSeq,
               onIncrementalExhausted: isPinned ? 'tail_reset_latest_page' : 'defer_forward_loading',
@@ -4229,7 +4235,10 @@ class Sync {
                   }
               },
           });
-          if (decision.kind !== 'do_nothing') {
+          await (isCatchUpWork
+              ? this.withSessionCatchUpNewer(sessionId, applyCatchUpDecision)
+              : applyCatchUpDecision());
+          if (isCatchUpWork) {
               this.markSocketOfflineCatchUpConsumedForSession(sessionId, offlineForMs);
           }
       }
@@ -4373,36 +4382,56 @@ class Sync {
           this.setDirectSessionTailCursor(sessionId, tail.nextCursor ?? null);
       }
 
+      /**
+       * §13: bracket a unit of "catching up to newer activity" work with the UI-observable
+       * per-session signal (ref-counted) so the transcript shows the "Catching up…" overlay for
+       * its duration. The canonical bracket for newer-catch-up that has no other co-lifecycle:
+       * the on-open incremental/snapshot catch-up (`fetchMessages`), the direct-session tail
+       * catch-up, and reconnect invalidation all funnel through here. (`loadNewerMessages` brackets
+       * the same signal inline because its begin/end share one lifecycle with its paging-key guard.)
+       * Ref-counting makes overlapping brackets safe (e.g. an on-open catch-up overlapping a drain).
+       */
+      private async withSessionCatchUpNewer<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+          storage.getState().beginSessionCatchUpNewer(sessionId);
+          try {
+              return await work();
+          } finally {
+              storage.getState().endSessionCatchUpNewer(sessionId);
+          }
+      }
+
       private async catchUpDirectSessionMessages(
           sessionId: string,
           directSessionLink: ReturnType<typeof readDirectSessionLink> extends infer T ? Exclude<T, null> : never,
       ): Promise<void> {
-          const shouldContinue = this.createServerScopeGuard();
-          const cursor = this.getDirectSessionTailCursor(sessionId) ?? 'tail';
-          const tail = await machineDirectSessionTranscriptReadAfter({
-              machineId: directSessionLink.machineId,
-              providerId: directSessionLink.providerId,
-              remoteSessionId: directSessionLink.remoteSessionId,
-              source: directSessionLink.source,
-              cursor,
-          }, { serverId: this.getDirectSessionServerScope(sessionId) });
-          if (!shouldContinue()) return;
+          await this.withSessionCatchUpNewer(sessionId, async () => {
+              const shouldContinue = this.createServerScopeGuard();
+              const cursor = this.getDirectSessionTailCursor(sessionId) ?? 'tail';
+              const tail = await machineDirectSessionTranscriptReadAfter({
+                  machineId: directSessionLink.machineId,
+                  providerId: directSessionLink.providerId,
+                  remoteSessionId: directSessionLink.remoteSessionId,
+                  source: directSessionLink.source,
+                  cursor,
+              }, { serverId: this.getDirectSessionServerScope(sessionId) });
+              if (!shouldContinue()) return;
 
-          if (!tail.ok) {
-              throw new Error(tail.error);
-          }
+              if (!tail.ok) {
+                  throw new Error(tail.error);
+              }
 
-          if (tail.truncated === true) {
-              this.resetSessionTranscriptState(sessionId);
-              await this.fetchDirectSessionMessages(sessionId, directSessionLink);
-              return;
-          }
+              if (tail.truncated === true) {
+                  this.resetSessionTranscriptState(sessionId);
+                  await this.fetchDirectSessionMessages(sessionId, directSessionLink);
+                  return;
+              }
 
-          const normalizedMessages = normalizeDirectTranscriptMessages(tail.items);
-          if (normalizedMessages.length > 0) {
-              this.applyMessages(sessionId, normalizedMessages, { notifyVoice: false });
-          }
-          this.setDirectSessionTailCursor(sessionId, tail.nextCursor ?? null);
+              const normalizedMessages = normalizeDirectTranscriptMessages(tail.items);
+              if (normalizedMessages.length > 0) {
+                  this.applyMessages(sessionId, normalizedMessages, { notifyVoice: false });
+              }
+              this.setDirectSessionTailCursor(sessionId, tail.nextCursor ?? null);
+          });
       }
 
       private collectLoadedDirectSessionsForResume(): Array<{ sessionId: string; directSessionLink: DirectSessionLink }> {
@@ -5142,6 +5171,9 @@ class Sync {
           }
 
           this.sessionMessagesLoadingNewerByKey.add(pagingKey);
+          // §13: bracket inline (mirrors `withSessionCatchUpNewer`) — the catch-up signal shares
+          // this method's exact begin/finally lifecycle with the paging-key in-flight guard.
+          storage.getState().beginSessionCatchUpNewer(sessionId);
           const requestMessages = this.createSessionMessagesRequest(sessionId);
           const session = storage.getState().sessions[sessionId] ?? null;
           const sessionEncryptionMode = session?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
@@ -5182,6 +5214,7 @@ class Sync {
               return { loaded: 0, hasMore: true, status: 'loaded' };
           } finally {
               this.sessionMessagesLoadingNewerByKey.delete(pagingKey);
+              storage.getState().endSessionCatchUpNewer(sessionId);
           }
       }
 
@@ -5528,7 +5561,10 @@ class Sync {
                             }),
                             todos: () => this.todosSync.invalidateAndAwait(),
                         },
-                        invalidateMessagesForSession: (sessionId) => this.getOrCreateMessagesSync(sessionId).invalidateAndAwait(),
+                        invalidateMessagesForSession: async (sessionId) => {
+                            await this.withSessionCatchUpNewer(sessionId, () =>
+                                this.getOrCreateMessagesSync(sessionId).invalidateAndAwait());
+                        },
                         invalidateScmStatusForSession: (sessionId) => scmStatusSync.invalidate(sessionId),
                         applyTodoSocketUpdates: (changes) => this.applyTodoSocketUpdates(changes),
                         kvBulkGet,
@@ -5612,7 +5648,7 @@ class Sync {
                     this.applySessions(sessions);
                 },
                 log,
-                includeTurnsProjection: false,
+                includeTurnsProjection: reason === 'socket-update-turn-projection',
             });
             if (!shouldContinue()) return;
             if (!result.ok) {

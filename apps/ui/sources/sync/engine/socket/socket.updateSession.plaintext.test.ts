@@ -1405,6 +1405,41 @@ describe('socket update handling: plaintext update-session', () => {
         expect((params.applySessions as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
     });
 
+    it('target-hydrates live full-content session turn projections after terminal turn updates', async () => {
+        const sessionId = 's_live_turn_projection';
+        const sourceServerId = 'server-live-turns';
+        markSessionVisible(sessionId, sourceServerId);
+        storage.getState().applySessions([{
+            ...buildSession(sessionId),
+            active: false,
+            latestTurnId: 'turn-1',
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: 1_100,
+        }]);
+
+        const hydrateSessionById = vi.fn();
+        const params = buildBaseParams({ hydrateSessionById });
+        await handleUpdateContainer({
+            ...params,
+            sourceServerId,
+            updateData: {
+                id: 'u_live_turn_projection',
+                seq: 14,
+                createdAt: 1_237,
+                body: {
+                    t: 'update-session',
+                    id: sessionId,
+                    latestTurnId: 'turn-1',
+                    latestTurnStatus: 'completed',
+                    latestTurnStatusObservedAt: 1_235,
+                },
+            },
+        });
+
+        expect(hydrateSessionById).toHaveBeenCalledWith(sessionId, 'socket-update-turn-projection');
+        expect(params.invalidateSessions).not.toHaveBeenCalled();
+    });
+
     it('updates cache-only renderables for active-only update-session payloads without forcing hydration', async () => {
         storage.getState().replaceSessionListRenderables([
             {

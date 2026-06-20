@@ -186,7 +186,7 @@ describe('socket new-message + coalescer: materialized max seq', () => {
         expect(secondMarkOrder).toBeGreaterThan(secondApplyOrder);
     });
 
-    it('defers the first off-screen new-message apply until the coalescing window flushes', async () => {
+    it('defers the first off-screen new-message session projection until the coalescing window flushes', async () => {
         storage.setState((prev) => ({
             ...prev,
             sessions: {
@@ -201,8 +201,10 @@ describe('socket new-message + coalescer: materialized max seq', () => {
             },
         }));
 
+        const applySessions = vi.fn();
         const applyMessages = vi.fn();
         const markSessionMaterializedMaxSeq = vi.fn();
+        const markSessionTranscriptDeferred = vi.fn();
         const baseParams: Omit<Parameters<typeof handleUpdateContainer>[0], 'updateData'> = {
             encryption: {
                 getSessionEncryption: () => null,
@@ -210,15 +212,16 @@ describe('socket new-message + coalescer: materialized max seq', () => {
                 removeSessionEncryption: () => {},
                 decryptEncryptionKey: async () => null as Uint8Array | null,
                 initializeMachines: async () => {},
-            } as any,
+            } as unknown as Parameters<typeof handleUpdateContainer>[0]['encryption'],
             artifactDataKeys: new Map<string, Uint8Array>(),
-            applySessions: vi.fn(),
+            applySessions,
             fetchSessions: vi.fn(),
             applyMessages,
             onSessionVisible: vi.fn(),
             isSessionMessagesLoaded: vi.fn(() => true),
             getSessionMaterializedMaxSeq: vi.fn(() => 1),
             markSessionMaterializedMaxSeq,
+            markSessionTranscriptDeferred,
             onMessageGapDetected: vi.fn(),
             assumeUsers: vi.fn(async () => {}),
             applyTodoSocketUpdates: vi.fn(async () => {}),
@@ -244,12 +247,26 @@ describe('socket new-message + coalescer: materialized max seq', () => {
         });
 
         expect(applyMessages).not.toHaveBeenCalled();
+        expect(applySessions).not.toHaveBeenCalled();
         expect(markSessionMaterializedMaxSeq).not.toHaveBeenCalled();
+        expect(markSessionTranscriptDeferred).toHaveBeenCalledWith('s-offscreen', expect.objectContaining({
+            updateType: 'new-message',
+            seq: 2,
+        }));
 
         await vi.runAllTimersAsync();
 
-        expect(applyMessages).toHaveBeenCalledTimes(1);
-        expect(markSessionMaterializedMaxSeq).toHaveBeenCalledWith('s-offscreen', 2);
+        expect(applyMessages).not.toHaveBeenCalled();
+        expect(markSessionMaterializedMaxSeq).not.toHaveBeenCalled();
+        expect(applySessions).toHaveBeenCalledTimes(1);
+        expect(applySessions).toHaveBeenCalledWith([
+            expect.objectContaining({
+                id: 's-offscreen',
+                seq: 2,
+                updatedAt: 1_002,
+                meaningfulActivityAt: 1_002,
+            }),
+        ]);
     });
 
     it('recomputes unread state for cache-only renderables when a hidden durable new-message advances the readable seq', async () => {

@@ -1,3 +1,4 @@
+import { withSessionUserMessageDeliveryIntentMeta } from '@happier-dev/protocol';
 import { getPendingQueueWakeResumeOptions } from '@/sync/domains/pending/pendingQueueWake';
 import {
     canDirectSubmitUserMessageNow,
@@ -263,6 +264,7 @@ async function directSend(
 async function enqueuePending(
     port: SessionSubmitPort,
     opts: SubmitSessionUserMessageOptions,
+    decision: SessionMessageDeliveryDecision,
 ): Promise<SubmitSessionUserMessageResult> {
     const wakeOpts = getPendingQueueWakeResumeOptions({
         sessionId: opts.sessionId,
@@ -280,7 +282,7 @@ async function enqueuePending(
             opts.sessionId,
             opts.text,
             opts.displayText,
-            opts.metaOverrides,
+            withSessionUserMessageDeliveryIntentMeta(opts.metaOverrides ?? null, decision.intent),
         );
     } catch (error) {
         return {
@@ -385,7 +387,7 @@ export async function submitSessionUserMessage(
     }
 
     if (mode === 'server_pending') {
-        return enqueuePending(port, effectiveOpts);
+        return enqueuePending(port, effectiveOpts, decision);
     }
 
     if (mode === 'interrupt') {

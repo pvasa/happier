@@ -1494,7 +1494,7 @@ describe('computeVisibleSessionListIndex', () => {
         ]);
     });
 
-    it('does not retain stale working placement after runtime clears thinking', () => {
+    it('keeps working placement when active heartbeat refreshes an in-progress turn after legacy thinking clears', () => {
         const now = 1_000_000;
         const groupKey = 'server:s1:active:project:repo';
         const source: SessionListIndexItem[] = [
@@ -1530,9 +1530,8 @@ describe('computeVisibleSessionListIndex', () => {
             ? `h:${item.headerKind}`
             : `s:${item.sessionId}:${item.groupKind ?? 'unknown'}:${item.workingPlacementReason ?? 'none'}`
         ))).toEqual([
-            'h:active',
-            'h:project',
-            's:working:project:none',
+            'h:working',
+            's:working:working:working',
         ]);
     });
 

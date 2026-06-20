@@ -166,6 +166,13 @@ export interface PendingDomainSlice {
     removePendingMessage: (sessionId: string, pendingId: string) => void;
 }
 
+export interface TranscriptLoadingDomainSlice {
+    sessionCatchUpNewerInFlight: Record<string, number>;
+    isSessionCatchingUpNewer: (sessionId: string) => boolean;
+    beginSessionCatchUpNewer: (sessionId: string) => void;
+    endSessionCatchUpNewer: (sessionId: string) => void;
+}
+
 export interface RealtimeDomainSlice {
     realtimeStatus: RealtimeStatus;
     realtimeMode: RealtimeMode;
@@ -304,6 +311,7 @@ export type StorageState = SettingsDomainSlice
     & MachinesDomainSlice
     & MessagesDomainSlice
     & PendingDomainSlice
+    & TranscriptLoadingDomainSlice
     & RealtimeDomainSlice
     & TodosDomainSlice
     & ArtifactsDomainSlice

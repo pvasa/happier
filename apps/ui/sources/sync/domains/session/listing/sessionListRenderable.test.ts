@@ -641,7 +641,7 @@ describe('buildSessionListRenderableFromSession', () => {
         expect(renderable.hasPendingUserActionRequests).toBe(false);
     });
 
-    it('does not mark pending requests as attention when the session is inactive', () => {
+    it('suppresses inactive permission requests but keeps inactive user-action requests visible', () => {
         const renderable = buildSessionListRenderableFromSession({
             id: 's1',
             seq: 1,
@@ -668,7 +668,7 @@ describe('buildSessionListRenderableFromSession', () => {
         } as any);
 
         expect(renderable.hasPendingPermissionRequests).toBe(false);
-        expect(renderable.hasPendingUserActionRequests).toBe(false);
+        expect(renderable.hasPendingUserActionRequests).toBe(true);
     });
 
     it('does not keep stale pending flags when the transcript already marked the request canceled', () => {

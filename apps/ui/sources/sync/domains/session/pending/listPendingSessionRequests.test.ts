@@ -114,6 +114,91 @@ describe('derivePendingRequestFlagsFromSession', () => {
         expect(listPendingSessionRequests(session)).toEqual([]);
     });
 
+    it('surfaces live agentState user-action requests even when projected counts are stale zero', () => {
+        const session = createSessionFixture({
+            active: true,
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+            agentState: {
+                requests: {
+                    toolu_question: {
+                        tool: 'AskUserQuestion',
+                        kind: 'user_action',
+                        arguments: {
+                            questions: [{
+                                header: 'Direction',
+                                question: 'How should I resolve this?',
+                                options: [{ label: 'Keep', description: 'Keep the behavior' }],
+                                multiSelect: false,
+                            }],
+                        },
+                        createdAt: 123,
+                    },
+                },
+                completedRequests: null,
+            },
+        });
+
+        expect(shouldReadTranscriptForPendingSessionRequests(session)).toBe(false);
+        expect(listPendingSessionRequests(session)).toEqual([
+            expect.objectContaining({
+                id: 'toolu_question',
+                tool: 'AskUserQuestion',
+                kind: 'user_action',
+                createdAt: 123,
+            }),
+        ]);
+        expect(derivePendingRequestFlagsFromSession(session)).toEqual({
+            hasPendingPermissionRequests: false,
+            hasPendingUserActionRequests: true,
+        });
+        expect(deriveLatestPendingRequestObservedAtFromSession(session)).toBe(123);
+    });
+
+    it('surfaces live agentState user-action requests even while session.active is false', () => {
+        const session = createSessionFixture({
+            active: false,
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+            agentState: {
+                requests: {
+                    resume_choice: {
+                        tool: 'AskUserQuestion',
+                        kind: 'user_action',
+                        arguments: {
+                            questions: [{
+                                header: 'Claude resume',
+                                question: 'How should Claude resume this session?',
+                                options: [
+                                    { label: 'Resume from summary', description: 'Use the saved summary.' },
+                                    { label: 'Resume full session', description: 'Load full context.' },
+                                ],
+                                multiSelect: false,
+                            }],
+                        },
+                        createdAt: 456,
+                    },
+                },
+                completedRequests: null,
+            },
+        });
+
+        expect(shouldReadTranscriptForPendingSessionRequests(session)).toBe(false);
+        expect(listPendingSessionRequests(session)).toEqual([
+            expect.objectContaining({
+                id: 'resume_choice',
+                tool: 'AskUserQuestion',
+                kind: 'user_action',
+                createdAt: 456,
+            }),
+        ]);
+        expect(derivePendingRequestFlagsFromSession(session)).toEqual({
+            hasPendingPermissionRequests: false,
+            hasPendingUserActionRequests: true,
+        });
+        expect(deriveLatestPendingRequestObservedAtFromSession(session)).toBe(456);
+    });
+
     it('suppresses a stale projected pending flag when a newer hard-terminal transcript outcome exists', () => {
         // Projection still says a permission is pending, but the transcript shows
         // the request was hard-resolved (approved) AFTER the projection was observed.

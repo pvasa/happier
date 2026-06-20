@@ -105,6 +105,7 @@ type CacheOnlySessionUpdateProjectionPatchPayload = Readonly<{
 type SocketSessionHydrationReason =
     | 'socket-update-missing-session'
     | 'socket-update-unpatchable'
+    | 'socket-update-turn-projection'
     | 'share-visibility-change';
 
 type ActivityRenderablePatch = Readonly<{
@@ -230,6 +231,20 @@ function shouldReportReadyProjectionAdvance(
         ?? normalizeProjectionSeq(previous?.metadata?.readStateV1?.sessionSeq)
         ?? 0;
     return normalizedReadySeq > previousReadySeq && normalizedReadySeq > lastViewedSessionSeq;
+}
+
+function isTerminalTurnStatus(value: unknown): boolean {
+    return value === 'completed' || value === 'cancelled' || value === 'failed';
+}
+
+function shouldHydrateTurnsProjectionForSessionUpdate(params: Readonly<{
+    updateBody: unknown;
+    fullContentConsumerActive: boolean;
+}>): boolean {
+    if (!params.fullContentConsumerActive) return false;
+    if (!params.updateBody || typeof params.updateBody !== 'object') return false;
+    const latestTurnStatus = (params.updateBody as { latestTurnStatus?: unknown }).latestTurnStatus;
+    return isTerminalTurnStatus(latestTurnStatus);
 }
 
 function buildCacheOnlySessionProjectionPatch(params: Readonly<{
@@ -1433,6 +1448,21 @@ export async function handleUpdateContainer(params: {
             onReadyProjectionAdvance?.(updateData.body.id, nextSession.latestReadyEventSeq);
         }
         enqueueSocketSessionApplyGuarded(applySessions, [nextSession], shouldContinue);
+        if (shouldHydrateTurnsProjectionForSessionUpdate({
+            updateBody: updateData.body,
+            fullContentConsumerActive,
+        })) {
+            requestTargetedSessionHydration({
+                sessionId: updateData.body.id,
+                reason: 'socket-update-turn-projection',
+                hydrateSessionById,
+                invalidateSessions,
+                invalidationReason: 'socketUpdateSessionTurnsProjection',
+                invalidationFields: {
+                    fullContentConsumerActive: 1,
+                },
+            });
+        }
 
         // Agent state updates can be very frequent and are not a reliable proxy for SCM changes.
         // SCM refresh cadence is handled by screen-scoped intervals (session/files views) and

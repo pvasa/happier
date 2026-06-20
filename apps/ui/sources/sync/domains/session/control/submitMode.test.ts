@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { canApplySteerConfigInFlight, chooseSubmitMode, decideSessionMessageDelivery } from './submitMode';
+import { canApplySteerConfigInFlight, canSteerUserMessageNow, chooseSubmitMode, decideSessionMessageDelivery } from './submitMode';
 
 describe('chooseSubmitMode', () => {
     const now = 1_000_000;
@@ -436,6 +436,19 @@ describe('decideSessionMessageDelivery — non-steerable payload honesty (lane P
         }
     });
 
+    it('keeps non-Happier slash prompts steerable while busy', () => {
+        const decision = decideSessionMessageDelivery({
+            configuredMode: 'agent_queue',
+            busySteerSendPolicy: 'steer_immediately',
+            session: steerableBusySession(),
+            text: '/model',
+            nowMs: now,
+        });
+
+        expect(decision.mode).toBe('agent_queue');
+        expect(decision.nonSteerablePayloadReason ?? null).toBeNull();
+    });
+
     it('keeps steering for a steerable payload while busy (no behavior change)', () => {
         const decision = decideSessionMessageDelivery({
             configuredMode: 'agent_queue',
@@ -614,6 +627,48 @@ describe('decideSessionMessageDelivery — apply-config-and-steer (lane Q)', () 
             agentState: { capabilities: { inFlightSteer: true } },
         }))).toBe(false);
         expect(canApplySteerConfigInFlight(null)).toBe(false);
+    });
+
+    it('canSteerUserMessageNow uses the shared busy-steer runtime gates', () => {
+        expect(canSteerUserMessageNow({
+            session: {
+                thinking: true,
+                thinkingAt: now,
+                active: true,
+                presence: 'online',
+                agentStateVersion: 1,
+                agentState: {
+                    controlledByUser: false,
+                    capabilities: {
+                        inFlightSteer: true,
+                        inFlightSteerSupported: true,
+                        inFlightSteerAvailable: true,
+                    },
+                },
+                metadata: {},
+            } as any,
+            nowMs: now,
+        })).toBe(true);
+
+        expect(canSteerUserMessageNow({
+            session: {
+                thinking: true,
+                thinkingAt: now,
+                active: true,
+                presence: 'online',
+                agentStateVersion: 1,
+                agentState: {
+                    controlledByUser: true,
+                    capabilities: {
+                        inFlightSteer: true,
+                        inFlightSteerSupported: true,
+                        inFlightSteerAvailable: true,
+                    },
+                },
+                metadata: {},
+            } as any,
+            nowMs: now,
+        })).toBe(false);
     });
 });
 

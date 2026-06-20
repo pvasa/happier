@@ -148,6 +148,49 @@ describe('useSessionVisibleReadSeq', () => {
         }
     });
 
+    it('does not reread committed message seqs on unrelated store publishes', async () => {
+        const previousState = storage.getState();
+        try {
+            let seqReadCount = 0;
+            const message = {
+                id: 'm-1',
+                kind: 'agent-text',
+                localId: null,
+                createdAt: 1,
+                text: 'hello',
+                get seq() {
+                    seqReadCount += 1;
+                    return 12;
+                },
+            } as any;
+            seedSessionMessages('s-1', { 'm-1': message }, ['m-1']);
+
+            const hook = await renderHook(() => useSessionVisibleReadSeq('s-1', {
+                sessionSeq: 20,
+                latestTurnStatus: 'in_progress',
+            }), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            expect(hook.getCurrent()).toBe(12);
+            expect(seqReadCount).toBeGreaterThan(0);
+
+            seqReadCount = 0;
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    realtimeStatus: state.realtimeStatus === 'connected' ? 'disconnected' : 'connected',
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(12);
+            expect(seqReadCount).toBe(0);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('re-renders the consumer when a newer committed message seq is appended', async () => {
         const previousState = storage.getState();
         try {

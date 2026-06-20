@@ -227,6 +227,96 @@ describe('selectSessionListRowStateSnapshot', () => {
         expect(third.sessionListRenderables?.s1).toBe(laterProgressRenderable);
     });
 
+    it('keeps focused row store state stable when fresh progress also advances active heartbeat', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-05-30T12:00:00.000Z'));
+        const firstRenderable = {
+            ...createRenderable('s1'),
+            seq: 10,
+            updatedAt: Date.now() - 5_000,
+            meaningfulActivityAt: Date.now() - 5_000,
+            active: true,
+            activeAt: Date.now() - 5_000,
+            presence: 'online' as const,
+            latestTurnStatus: 'in_progress' as const,
+            latestTurnStatusObservedAt: Date.now() - 5_000,
+            hasUnreadMessages: true,
+            metadata: { path: '/tmp', host: 'localhost' },
+        } satisfies SessionListRenderableSession;
+        const selector = createSessionListRowStoreStateSelector([{
+            sessionId: 's1',
+            serverId: 'server-a',
+        }], 'server-a');
+
+        const first = selector({
+            sessions: {},
+            sessionListRenderables: { s1: firstRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+        const freshProgressRenderable = {
+            ...firstRenderable,
+            seq: 11,
+            updatedAt: firstRenderable.updatedAt + 5_000,
+            meaningfulActivityAt: (firstRenderable.meaningfulActivityAt ?? firstRenderable.updatedAt) + 5_000,
+            activeAt: firstRenderable.activeAt + 5_000,
+        } satisfies SessionListRenderableSession;
+        const second = selector({
+            sessions: {},
+            sessionListRenderables: { s1: freshProgressRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+
+        expect(second).toBe(first);
+        expect(second.sessionListRenderables?.s1).toBe(firstRenderable);
+    });
+
+    it('does not suppress row store updates when an active heartbeat refresh is needed before stale status', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-05-30T12:00:00.000Z'));
+        const firstRenderable = {
+            ...createRenderable('s1'),
+            seq: 10,
+            updatedAt: Date.now() - 5_000,
+            meaningfulActivityAt: Date.now() - 5_000,
+            active: true,
+            activeAt: Date.now() - 119_000,
+            presence: 'online' as const,
+            latestTurnStatus: 'in_progress' as const,
+            latestTurnStatusObservedAt: Date.now() - 119_000,
+            hasUnreadMessages: true,
+            metadata: { path: '/tmp', host: 'localhost' },
+        } satisfies SessionListRenderableSession;
+        const selector = createSessionListRowStoreStateSelector([{
+            sessionId: 's1',
+            serverId: 'server-a',
+        }], 'server-a');
+
+        const first = selector({
+            sessions: {},
+            sessionListRenderables: { s1: firstRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+        const heartbeatRefreshRenderable = {
+            ...firstRenderable,
+            seq: 11,
+            updatedAt: firstRenderable.updatedAt + 5_000,
+            meaningfulActivityAt: (firstRenderable.meaningfulActivityAt ?? firstRenderable.updatedAt) + 5_000,
+            activeAt: Date.now(),
+        } satisfies SessionListRenderableSession;
+        const second = selector({
+            sessions: {},
+            sessionListRenderables: { s1: heartbeatRefreshRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+
+        expect(second).not.toBe(first);
+        expect(second.sessionListRenderables?.s1).toBe(heartbeatRefreshRenderable);
+    });
+
     it('does not suppress row store updates when a fresh activity patch starts thinking', () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-05-30T12:00:00.000Z'));
