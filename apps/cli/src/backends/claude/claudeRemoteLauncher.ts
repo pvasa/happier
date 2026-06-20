@@ -1172,6 +1172,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 // If this is a restarted daemon process resuming an existing agent-team session,
                 // we may not replay transcript history through `onMessage`. Seed team inbox mapping
                 // from the transcript file so unread teammate messages still import correctly.
+                session.adoptExplicitResumeSessionIdFromArgs();
                 await seedTeamInboxFromTranscriptPath(session.sessionId, session.transcriptPath ?? null);
 
                 const remoteResult = await claudeRemoteDispatch({
