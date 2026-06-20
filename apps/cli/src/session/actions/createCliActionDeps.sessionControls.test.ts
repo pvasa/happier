@@ -247,6 +247,45 @@ describe('createCliActionDeps session controls', () => {
     expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
   });
 
+  it('calls live terminal composer clear RPC for session terminal composer clear actions', async () => {
+    mocks.callSessionRpc.mockResolvedValueOnce({
+      ok: true,
+      status: 'cleared',
+      sessionId: 'sess_1',
+    } as never);
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+    });
+
+    await expect(deps.sessionTerminalComposerClear?.({
+      sessionId: 'sess_1',
+      expectedStateAtMs: 1_700_000_000_000,
+    })).resolves.toEqual({
+      ok: true,
+      status: 'cleared',
+      sessionId: 'sess_1',
+    });
+
+    expect(mocks.callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'token',
+      sessionId: 'sess_1',
+      mode: 'plain',
+      method: `sess_1:${SESSION_RPC_METHODS.SESSION_TERMINAL_COMPOSER_CLEAR}`,
+      request: {
+        sessionId: 'sess_1',
+        expectedStateAtMs: 1_700_000_000_000,
+      },
+    }));
+  });
+
   it('delegates inactive local goal mutations to the provider goal control adapter', async () => {
     const providerSetGoal = vi.fn(async (_params: unknown) => ({ ok: true, workState: { v: 1, items: [], primaryItemId: null, updatedAt: 1 } }));
     mocks.getSessionGoalControlAdapter.mockResolvedValueOnce({

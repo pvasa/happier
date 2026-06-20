@@ -156,6 +156,47 @@ describe('registerSessionHandlers session controls', () => {
     expect(clearGoal).toHaveBeenCalledTimes(1);
   });
 
+  it('routes terminal composer clear RPCs to runtime controls with typed fallback statuses', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const clearTerminalComposer = vi.fn(async () => ({
+      ok: true,
+      status: 'cleared',
+      sessionId: 'sess_1',
+    }));
+    const method = SESSION_RPC_METHODS.SESSION_TERMINAL_COMPOSER_CLEAR;
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        clearTerminalComposer,
+      },
+    });
+
+    await expect(handlers.get(method)?.({
+      sessionId: 'sess_1',
+      expectedStateAtMs: 1_700_000_000_000,
+    })).resolves.toEqual({
+      ok: true,
+      status: 'cleared',
+      sessionId: 'sess_1',
+    });
+    expect(clearTerminalComposer).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      expectedStateAtMs: 1_700_000_000_000,
+    });
+
+    const { handlers: unsupportedHandlers, registrar: unsupportedRegistrar } = createRegistrar();
+    registerSessionHandlers(unsupportedRegistrar, process.cwd(), {
+      sessionRuntimeControls: {},
+    });
+    await expect(unsupportedHandlers.get(method)?.({ sessionId: 'sess_1' })).resolves.toEqual({
+      ok: false,
+      status: 'unsupported',
+      sessionId: 'sess_1',
+      errorCode: 'unsupported_session_runtime_method',
+      error: `unsupported_session_runtime_method:${method}`,
+    });
+  });
+
   it('routes catalog RPCs to runtime catalog controls', async () => {
     const { handlers, registrar } = createRegistrar();
     const listVendorPlugins = vi.fn(async () => ({
@@ -893,6 +934,230 @@ describe('registerSessionHandlers session controls', () => {
       ok: false,
       errorCode: 'unsupported_session_runtime_method',
       error: `unsupported_session_runtime_method:${SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS}`,
+    });
+  });
+
+  it('routes connected-service auth apply generation controls to the active runtime', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const applyConnectedServiceAuthGeneration = vi.fn(async () => ({
+      ok: true,
+      appliedVia: 'direct_live_hot_auth',
+      verification: {
+        status: 'verified',
+        proofStrength: 'exact',
+        providerAccountId: 'acct_1',
+      },
+    }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        applyConnectedServiceAuthGeneration,
+      },
+    });
+
+    const request = {
+      serviceId: ' openai-codex ',
+      reason: 'usage_limit',
+      requireDirectLiveHotApply: false,
+      expected: {
+        profileId: 'profile-old',
+        groupId: 'group-1',
+        generation: '5',
+      },
+      authGeneration: {
+        kind: 'connected_service_credential',
+        profileId: 'profile-new',
+      },
+    };
+
+    await expect(
+      handlers.get(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION)?.(request),
+    ).resolves.toEqual({
+      ok: true,
+      appliedVia: 'direct_live_hot_auth',
+      verification: {
+        status: 'verified',
+        proofStrength: 'exact',
+        providerAccountId: 'acct_1',
+      },
+    });
+    expect(applyConnectedServiceAuthGeneration).toHaveBeenCalledWith({
+      ...request,
+      serviceId: 'openai-codex',
+    });
+  });
+
+  it('routes connected-service runtime identity reads without mutating auth', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const readConnectedServiceRuntimeIdentity = vi.fn(async () => ({
+      ok: true,
+      serviceId: 'openai-codex',
+      identity: {
+        strategy: 'provider_account_id',
+        proofStrength: 'exact',
+        providerAccountId: 'acct_1',
+        source: 'runtime_loaded_credential',
+      },
+      runtime: {
+        safeToApply: false,
+        inProviderTurn: true,
+      },
+    }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        readConnectedServiceRuntimeIdentity,
+      },
+    });
+
+    await expect(
+      handlers.get(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY)?.({
+        serviceId: ' openai-codex ',
+        reason: 'same_provider_account_exhausted',
+        requireExactProof: true,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      serviceId: 'openai-codex',
+      identity: {
+        strategy: 'provider_account_id',
+        proofStrength: 'exact',
+        providerAccountId: 'acct_1',
+        source: 'runtime_loaded_credential',
+      },
+      runtime: {
+        safeToApply: false,
+        inProviderTurn: true,
+      },
+    });
+    expect(readConnectedServiceRuntimeIdentity).toHaveBeenCalledWith({
+      serviceId: 'openai-codex',
+      reason: 'same_provider_account_exhausted',
+      requireExactProof: true,
+    });
+  });
+
+  it('fails closed when connected-service auth apply generation returns malformed exact proof', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const applyConnectedServiceAuthGeneration = vi.fn(async () => ({
+      ok: true,
+      appliedVia: 'direct_live_hot_auth',
+      verification: {
+        status: 'verified',
+        proofStrength: 'exact',
+      },
+    }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        applyConnectedServiceAuthGeneration,
+      },
+    });
+
+    await expect(
+      handlers.get(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION)?.({
+        serviceId: 'openai-codex',
+        reason: 'usage_limit',
+        authGeneration: {
+          kind: 'connected_service_credential',
+          profileId: 'profile-new',
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      errorCode: 'invalid_runtime_control_result',
+      error: 'invalid_runtime_control_result',
+    });
+  });
+
+  it('fails closed when connected-service runtime identity returns malformed exact proof', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const readConnectedServiceRuntimeIdentity = vi.fn(async () => ({
+      ok: true,
+      serviceId: 'openai-codex',
+      identity: {
+        strategy: 'provider_account_id',
+        proofStrength: 'exact',
+        source: 'runtime_loaded_credential',
+      },
+      runtime: {
+        safeToApply: true,
+      },
+    }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        readConnectedServiceRuntimeIdentity,
+      },
+    });
+
+    await expect(
+      handlers.get(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY)?.({
+        serviceId: 'openai-codex',
+        reason: 'same_provider_account_exhausted',
+        requireExactProof: true,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      errorCode: 'invalid_runtime_control_result',
+      error: 'invalid_runtime_control_result',
+    });
+  });
+
+  it('returns precise unsupported and invalid-parameter results for connected-service runtime controls', async () => {
+    const { handlers, registrar } = createRegistrar();
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {},
+    });
+
+    await expect(
+      handlers.get(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION)?.({
+        serviceId: 'openai-codex',
+        reason: 'usage_limit',
+        authGeneration: {
+          kind: 'connected_service_credential',
+          profileId: 'profile-new',
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      errorCode: 'unsupported_session_runtime_method',
+      error: `unsupported_session_runtime_method:${SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION}`,
+    });
+    await expect(
+      handlers.get(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY)?.({
+        serviceId: 'openai-codex',
+        reason: 'same_provider_account_exhausted',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      errorCode: 'unsupported_session_runtime_method',
+      error: `unsupported_session_runtime_method:${SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY}`,
+    });
+    await expect(
+      handlers.get(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION)?.({
+        serviceId: '',
+        reason: 'usage_limit',
+        authGeneration: {
+          kind: 'connected_service_credential',
+          profileId: 'profile-new',
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      errorCode: 'invalid_parameters',
+      error: 'invalid_parameters',
+    });
+    await expect(
+      handlers.get(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION)?.({
+        serviceId: 'openai-codex',
+        reason: 'usage_limit',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      errorCode: 'invalid_parameters',
+      error: 'invalid_parameters',
     });
   });
 });

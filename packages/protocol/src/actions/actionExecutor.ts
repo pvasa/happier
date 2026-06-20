@@ -148,6 +148,11 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
   }>) => Promise<unknown>;
   sessionGoalClear?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<unknown>;
+  sessionTerminalComposerClear?: (args: Readonly<{
+    sessionId: string;
+    expectedStateAtMs?: number;
+    serverId?: string | null;
+  }>) => Promise<unknown>;
   sessionVendorPluginCatalogList?: (args: Readonly<{ sessionId: string; cwd?: string; serverId?: string | null }>) => Promise<unknown>;
   sessionSkillCatalogList?: (args: Readonly<{ sessionId: string; cwd?: string; serverId?: string | null }>) => Promise<unknown>;
   sessionUsageLimitWaitResumeEnable?: (args: Readonly<{
@@ -169,6 +174,12 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
   }>) => Promise<unknown>;
   sessionUsageLimitSwitchAccountNow?: (args: Readonly<{
+    sessionId: string;
+    provider?: string;
+    resumePromptMode?: 'standard' | 'off' | 'custom';
+    serverId?: string | null;
+  }>) => Promise<unknown>;
+  sessionUsageLimitConsumeResetCredit?: (args: Readonly<{
     sessionId: string;
     provider?: string;
     resumePromptMode?: 'standard' | 'off' | 'custom';
@@ -1550,6 +1561,22 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return { ok: true, result: res };
         }
 
+        if (actionId === 'session.terminalComposer.clear') {
+          const sessionId = normalizeId((parsed.data as any).sessionId);
+          if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if (!deps.sessionTerminalComposerClear) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.terminalComposer.clear' };
+          }
+          const expectedStateAtMs = (parsed.data as any).expectedStateAtMs;
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          const res = await deps.sessionTerminalComposerClear({
+            sessionId,
+            ...(typeof expectedStateAtMs === 'number' ? { expectedStateAtMs } : {}),
+            ...(serverId ? { serverId } : {}),
+          });
+          return { ok: true, result: res };
+        }
+
         if (actionId === 'session.vendor_plugin_catalog.list') {
           const sessionId = normalizeId((parsed.data as any).sessionId);
           if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
@@ -1621,7 +1648,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const sessionId = normalizeId((parsed.data as any).sessionId);
           if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
           const data = parsed.data as Record<string, unknown>;
-          const operation = data.operation === 'switch_account_now' ? 'switch_account_now' : 'check_now';
+          const operation = data.operation === 'switch_account_now'
+            ? 'switch_account_now'
+            : 'check_now';
           if (operation === 'switch_account_now' && !deps.sessionUsageLimitSwitchAccountNow) {
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.usageLimit.checkNow' };
           }
@@ -1633,6 +1662,25 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ? deps.sessionUsageLimitSwitchAccountNow
             : deps.sessionUsageLimitCheckNow;
           const res = await handler?.({
+            sessionId,
+            ...(typeof data.provider === 'string' && data.provider.trim().length > 0 ? { provider: data.provider.trim() } : {}),
+            ...(data.resumePromptMode === 'standard' || data.resumePromptMode === 'off' || data.resumePromptMode === 'custom'
+              ? { resumePromptMode: data.resumePromptMode }
+              : {}),
+            ...(serverId ? { serverId } : {}),
+          });
+          return { ok: true, result: normalizeUsageLimitActionResult(res, sessionId) };
+        }
+
+        if (actionId === 'session.usageLimit.consumeResetCredit') {
+          const sessionId = normalizeId((parsed.data as any).sessionId);
+          if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if (!deps.sessionUsageLimitConsumeResetCredit) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.usageLimit.consumeResetCredit' };
+          }
+          const data = parsed.data as Record<string, unknown>;
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          const res = await deps.sessionUsageLimitConsumeResetCredit({
             sessionId,
             ...(typeof data.provider === 'string' && data.provider.trim().length > 0 ? { provider: data.provider.trim() } : {}),
             ...(data.resumePromptMode === 'standard' || data.resumePromptMode === 'off' || data.resumePromptMode === 'custom'

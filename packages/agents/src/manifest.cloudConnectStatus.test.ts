@@ -14,9 +14,11 @@ describe('AGENTS_CORE cloudConnect status', () => {
     expect(AGENTS_CORE.pi.connectedServices?.supportedServiceIds).toContain('openai');
   });
 
-  it('exposes token-only Claude subscription compatibility for OpenCode', () => {
+  it('exposes Pi Claude subscription OAuth compatibility while keeping OpenCode token-only', () => {
     expect(AGENTS_CORE.opencode.connectedServices?.supportedServiceIds).toContain('claude-subscription');
     expect(AGENTS_CORE.opencode.connectedServices?.supportedKindsByServiceId?.['claude-subscription']).toEqual(['token']);
+    expect(AGENTS_CORE.pi.connectedServices?.supportedServiceIds).toContain('claude-subscription');
+    expect(AGENTS_CORE.pi.connectedServices?.supportedKindsByServiceId?.['claude-subscription']).toEqual(['oauth', 'token']);
   });
 
   it('advertises session auth switching for providers with implemented switch continuity', () => {

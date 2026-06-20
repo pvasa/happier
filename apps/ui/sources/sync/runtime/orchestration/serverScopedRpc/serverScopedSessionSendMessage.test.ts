@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
+
+const sendMessageMock = vi.hoisted(() => vi.fn());
+const legacySendMessageMock = vi.hoisted(() => vi.fn());
+const getSyncSingletonMock = vi.hoisted(() => vi.fn());
 
 const state = {
   sessions: {
@@ -8,6 +12,16 @@ const state = {
   },
   settings: {},
 };
+
+vi.mock('@/sync/runtime/getSyncSingleton', () => ({
+  getSyncSingleton: getSyncSingletonMock,
+}));
+
+vi.mock('@/sync/sync', () => ({
+  sync: {
+    sendMessage: legacySendMessageMock,
+  },
+}));
 
 vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
@@ -19,6 +33,18 @@ vi.mock('@/sync/domains/state/storage', async () => {
 });
 
 describe('sendSessionMessageWithServerScope', () => {
+  beforeEach(() => {
+    state.sessions.s1 = { id: 's1', permissionMode: 'default', metadata: { flavor: 'claude' }, modelMode: 'default' };
+    sendMessageMock.mockReset();
+    legacySendMessageMock.mockReset();
+    getSyncSingletonMock.mockReset();
+    getSyncSingletonMock.mockReturnValue({
+      sendMessage: sendMessageMock,
+    });
+    sendMessageMock.mockResolvedValue(undefined);
+    legacySendMessageMock.mockResolvedValue(undefined);
+  });
+
   it('uses scoped socket path when context is scoped and preserves displayText plus metadata overrides', async () => {
     state.sessions.s1 = { id: 's1', permissionMode: 'default', metadata: { flavor: 'claude' }, modelMode: 'default' };
 
@@ -140,6 +166,37 @@ describe('sendSessionMessageWithServerScope', () => {
       },
       profileId: 'profile-work',
     }, { localId: 'first-turn-local' });
+  });
+
+  it('uses the runtime sync singleton for the default active-scope sender', async () => {
+    const { createServerScopedSessionSendMessage } = await import('./serverScopedSessionSendMessage');
+
+    const resolveContext = vi.fn(async () => ({
+      scope: 'active' as const,
+      timeoutMs: 1000,
+    }));
+
+    const { sendSessionMessageWithServerScope } = createServerScopedSessionSendMessage({
+      resolveContext: resolveContext as any,
+    });
+
+    const res = await sendSessionMessageWithServerScope({
+      sessionId: 's1',
+      message: 'hello',
+      displayText: 'hello display',
+      profileId: 'profile-work',
+      localId: 'first-turn-local',
+    });
+
+    expect(res).toEqual({ ok: true, ack: { ok: true } });
+    expect(getSyncSingletonMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock).toHaveBeenCalledWith('s1', 'hello', 'hello display', {
+      profileId: 'profile-work',
+    }, {
+      localId: 'first-turn-local',
+      bypassPendingQueueReason: 'server_scoped_rpc_active',
+    });
+    expect(legacySendMessageMock).not.toHaveBeenCalled();
   });
 
   it('sends plaintext envelopes for scoped sessions when session encryptionMode is plain', async () => {

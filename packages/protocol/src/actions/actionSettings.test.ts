@@ -83,6 +83,22 @@ describe('ActionsSettingsV1Schema', () => {
     });
   });
 
+  it('gates reset-credit consume independently from usage-limit check-now', () => {
+    const parsed = ActionsSettingsV1Schema.parse({
+      v: 1,
+      actions: {
+        'session.usageLimit.consumeResetCredit': {
+          disabledSurfaces: ['mcp'],
+          approvalRequiredSurfaces: ['cli'],
+        },
+      },
+    });
+
+    expect(isActionEnabledByActionsSettings('session.usageLimit.checkNow' as any, parsed, { surface: 'mcp' } as any)).toBe(true);
+    expect(isActionEnabledByActionsSettings('session.usageLimit.consumeResetCredit' as any, parsed, { surface: 'mcp' } as any)).toBe(false);
+    expect(isActionEnabledByActionsSettings('session.usageLimit.consumeResetCredit' as any, parsed, { surface: 'cli' } as any)).toBe(true);
+  });
+
   it('normalizes legacy session_control_cli surface overrides to cli', () => {
     const parsed = ActionsSettingsV1Schema.parse({
       v: 1,

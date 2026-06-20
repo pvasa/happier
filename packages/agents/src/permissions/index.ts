@@ -18,6 +18,7 @@ export function isPermissionIntent(value: unknown): value is PermissionIntent {
 }
 
 export type PermissionModeGroupId = 'claude' | 'codexLike';
+export type ProviderNativePermissionMode = PermissionMode | 'auto' | 'dontAsk';
 
 export function normalizePermissionModeForGroup(mode: PermissionMode, group: PermissionModeGroupId): PermissionMode {
     if (group === 'claude') {
@@ -50,6 +51,25 @@ export function resolvePermissionModeGroupForAgent(agentId: AgentId): Permission
 
 export function normalizePermissionModeForAgent(params: { agentId: AgentId; mode: PermissionMode }): PermissionMode {
     return normalizePermissionModeForGroup(params.mode, resolvePermissionModeGroupForAgent(params.agentId));
+}
+
+export function resolveProviderNativePermissionModeForAgent(params: {
+    agentId: AgentId;
+    mode: PermissionMode;
+}): ProviderNativePermissionMode {
+    const normalized = normalizePermissionModeForAgent(params);
+    if (params.agentId !== 'claude') return normalized;
+
+    switch (normalized) {
+        case 'yolo':
+            return 'bypassPermissions';
+        case 'safe-yolo':
+            return 'auto';
+        case 'read-only':
+            return 'dontAsk';
+        default:
+            return normalized;
+    }
 }
 
 /**

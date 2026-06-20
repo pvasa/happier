@@ -56,10 +56,12 @@ export {
 
 export {
   type ClaudeUnifiedTerminalHost,
+  type ClaudeUnifiedTerminalResumeChoice,
   CLAUDE_REMOTE_PROVIDER_SETTINGS_DEFINITION,
   CLAUDE_REMOTE_PROVIDER_FIELDS,
   CLAUDE_REMOTE_PROVIDER_SETTINGS_DEFAULTS,
   CLAUDE_UNIFIED_TERMINAL_HOSTS,
+  CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES,
   MAX_CLAUDE_REMOTE_ADVANCED_OPTIONS_JSON_CHARS,
   buildClaudeRemoteOutgoingMessageMetaExtras,
   buildClaudeRemoteProviderSettingsShape,

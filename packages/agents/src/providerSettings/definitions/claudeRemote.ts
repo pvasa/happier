@@ -11,6 +11,13 @@ export type ClaudeSettingSourceV2 = (typeof CLAUDE_SETTING_SOURCES_V2)[number];
 export const CLAUDE_UNIFIED_TERMINAL_HOSTS = ['auto', 'tmux', 'zellij'] as const;
 export type ClaudeUnifiedTerminalHost = (typeof CLAUDE_UNIFIED_TERMINAL_HOSTS)[number];
 
+export const CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES = [
+  'ask_every_time',
+  'resume_from_summary',
+  'resume_full_session',
+] as const;
+export type ClaudeUnifiedTerminalResumeChoice = (typeof CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES)[number];
+
 const CLAUDE_REMOTE_DEBUG_CATEGORIES = ['api', 'mcp', 'hooks', 'file', '1p'] as const;
 export type ClaudeRemoteDebugCategory = (typeof CLAUDE_REMOTE_DEBUG_CATEGORIES)[number];
 
@@ -44,6 +51,12 @@ function normalizeClaudeRemoteDebugCategories(raw: unknown): ClaudeRemoteDebugCa
 function normalizeClaudeUnifiedTerminalHost(raw: unknown): ClaudeUnifiedTerminalHost | null {
   return typeof raw === 'string' && (CLAUDE_UNIFIED_TERMINAL_HOSTS as readonly string[]).includes(raw)
     ? raw as ClaudeUnifiedTerminalHost
+    : null;
+}
+
+function normalizeClaudeUnifiedTerminalResumeChoice(raw: unknown): ClaudeUnifiedTerminalResumeChoice | null {
+  return typeof raw === 'string' && (CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES as readonly string[]).includes(raw)
+    ? raw as ClaudeUnifiedTerminalResumeChoice
     : null;
 }
 
@@ -114,6 +127,13 @@ export const CLAUDE_REMOTE_PROVIDER_FIELDS = {
     schema: z.enum(CLAUDE_UNIFIED_TERMINAL_HOSTS),
     default: 'auto' as ClaudeUnifiedTerminalHost,
     description: 'Terminal host preference for unified runtime',
+    storageScope: 'account',
+    analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+  },
+  claudeUnifiedTerminalResumeChoice: {
+    schema: z.enum(CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES),
+    default: 'ask_every_time' as ClaudeUnifiedTerminalResumeChoice,
+    description: 'How Claude unified terminal should answer heavy-session resume prompts',
     storageScope: 'account',
     analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
   },
@@ -280,6 +300,9 @@ export function buildClaudeRemoteOutgoingMessageMetaExtras(settings: Readonly<Re
     claudeUnifiedTerminalHost:
       normalizeClaudeUnifiedTerminalHost(settings.claudeUnifiedTerminalHost)
       ?? CLAUDE_REMOTE_PROVIDER_SETTINGS_DEFAULTS.claudeUnifiedTerminalHost,
+    claudeUnifiedTerminalResumeChoice:
+      normalizeClaudeUnifiedTerminalResumeChoice(settings.claudeUnifiedTerminalResumeChoice)
+      ?? CLAUDE_REMOTE_PROVIDER_SETTINGS_DEFAULTS.claudeUnifiedTerminalResumeChoice,
     claudeRemoteSettingSourcesV2: effectiveV2,
     ...(legacyFromV2 ? { claudeRemoteSettingSources: legacyFromV2 } : {}),
     claudeCodeExperimentalAgentTeamsEnabled: readBoolean('claudeCodeExperimentalAgentTeamsEnabled'),

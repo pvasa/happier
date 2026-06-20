@@ -47,6 +47,40 @@ describe('SessionUsageLimitRecoveryV1', () => {
     }).success).toBe(true);
   });
 
+  it('accepts generalized recovery-credit inventory on stored recovery intents', () => {
+    expect(SessionUsageLimitRecoveryV1Schema.parse({
+      ...baseIntent,
+      recoveryCredits: {
+        kind: 'usage_limit_resets',
+        availableCount: 1,
+        totalCount: 1,
+        nextExpiresAtMs: 1_701_000_000_000,
+        source: 'provider_api',
+        confidence: 'exact',
+        credits: [{
+          providerCreditId: 'reset-credit-1',
+          kind: 'usage_limit_reset',
+          status: 'available',
+          grantedAtMs: 1_699_000_000_000,
+          expiresAtMs: 1_701_000_000_000,
+          redeemedAtMs: null,
+          title: 'Codex reset',
+          description: null,
+        }],
+      },
+    })).toMatchObject({
+      recoveryCredits: {
+        availableCount: 1,
+        totalCount: 1,
+        credits: [{
+          providerCreditId: 'reset-credit-1',
+          kind: 'usage_limit_reset',
+          status: 'available',
+        }],
+      },
+    });
+  });
+
   it('resolves resumePromptMode by explicit, existing intent, account, group, provider, then default precedence', () => {
     expect(resolveSessionUsageLimitRecoveryResumePromptModeV1({
       explicit: 'standard',

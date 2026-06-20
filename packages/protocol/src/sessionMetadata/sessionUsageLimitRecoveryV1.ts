@@ -4,6 +4,7 @@ import {
   ConnectedServiceAuthGroupIdSchema,
   ConnectedServiceIdSchema,
   ConnectedServiceProfileIdSchema,
+  ConnectedServiceQuotaRecoveryCreditsV1Schema,
 } from '../connect/connectedServiceSchemas.js';
 
 export const SESSION_USAGE_LIMIT_RECOVERY_STATE_FIELD_ID = 'runtime.usageLimitRecovery' as const;
@@ -59,6 +60,7 @@ export const SessionUsageLimitRecoveryV1Schema = z
     lastProbeError: z.string().trim().min(1).nullable(),
     resumePromptMode: SessionUsageLimitRecoveryResumePromptModeV1Schema.default('standard'),
     selectedAuth: SessionUsageLimitRecoveryAuthSelectionV1Schema,
+    recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1Schema.optional(),
   })
   .strict();
 

@@ -393,7 +393,7 @@ export const AGENTS_CORE = {
             supportedKindsByServiceId: {
                 'openai-codex': ['oauth'],
                 openai: ['token'],
-                'claude-subscription': ['token'],
+                'claude-subscription': ['oauth', 'token'],
                 anthropic: ['token'],
             },
         },

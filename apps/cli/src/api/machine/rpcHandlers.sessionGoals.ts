@@ -5,6 +5,7 @@ import {
   DaemonSessionSkillCatalogListRequestV1Schema,
   DaemonSessionVendorPluginCatalogListRequestV1Schema,
   SessionUsageLimitCheckNowRequestV1Schema,
+  SessionUsageLimitConsumeResetCreditRequestV1Schema,
   SessionUsageLimitWaitResumeCancelRequestV1Schema,
   SessionUsageLimitWaitResumeEnableRequestV1Schema,
   normalizeSessionUsageLimitRecoveryOperationResultV1,
@@ -45,6 +46,7 @@ type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
     | 'sessionUsageLimitWaitResumeCancel'
     | 'sessionUsageLimitCheckNow'
     | 'sessionUsageLimitSwitchAccountNow'
+    | 'sessionUsageLimitConsumeResetCredit'
   >;
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
@@ -56,7 +58,7 @@ type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
 
 type GoalOperation = 'get' | 'set' | 'clear';
 type CatalogOperation = 'vendorPlugins' | 'skills';
-type UsageLimitRecoveryOperation = 'enable' | 'cancel' | 'checkNow' | 'switchAccountNow';
+type UsageLimitRecoveryOperation = 'enable' | 'cancel' | 'checkNow' | 'switchAccountNow' | 'consumeResetCredit';
 
 function invalidParameters(): Readonly<{ ok: false; errorCode: 'invalid_parameters'; error: 'invalid_parameters' }> {
   return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
@@ -279,6 +281,21 @@ async function executeUsageLimitRecoveryControl(params: Readonly<{
     });
   }
 
+  const requestedOperation = params.raw && typeof params.raw === 'object'
+    ? (params.raw as { operation?: unknown }).operation
+    : undefined;
+  if (requestedOperation === 'consume_reset_credit') {
+    const parsed = SessionUsageLimitConsumeResetCreditRequestV1Schema.safeParse(params.raw);
+    if (!parsed.success) return invalidUsageLimitParameters(params.raw);
+    return await executeResolvedUsageLimitRecoveryControl({
+      operation: 'consumeResetCredit',
+      sessionId: parsed.data.sessionId,
+      ...(typeof parsed.data.provider === 'string' ? { provider: parsed.data.provider } : {}),
+      ...(parsed.data.resumePromptMode ? { resumePromptMode: parsed.data.resumePromptMode } : {}),
+      deps: params.deps,
+    });
+  }
+
   const parsed = SessionUsageLimitCheckNowRequestV1Schema.safeParse(params.raw);
   if (!parsed.success) return invalidUsageLimitParameters(params.raw);
   const effectiveOperation = parsed.data.operation === 'switch_account_now'
@@ -371,6 +388,16 @@ async function executeResolvedUsageLimitRecoveryControl(params: Readonly<{
   if (params.operation === 'switchAccountNow') {
     const result = actionDeps.sessionUsageLimitSwitchAccountNow
       ? await actionDeps.sessionUsageLimitSwitchAccountNow({
+        sessionId: transport.sessionId,
+        ...(typeof params.provider === 'string' ? { provider: params.provider } : {}),
+        ...(params.resumePromptMode ? { resumePromptMode: params.resumePromptMode } : {}),
+      })
+      : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
+    return normalizeUsageLimitRecoveryMachineResult({ sessionId: transport.sessionId, result });
+  }
+  if (params.operation === 'consumeResetCredit') {
+    const result = actionDeps.sessionUsageLimitConsumeResetCredit
+      ? await actionDeps.sessionUsageLimitConsumeResetCredit({
         sessionId: transport.sessionId,
         ...(typeof params.provider === 'string' ? { provider: params.provider } : {}),
         ...(params.resumePromptMode ? { resumePromptMode: params.resumePromptMode } : {}),

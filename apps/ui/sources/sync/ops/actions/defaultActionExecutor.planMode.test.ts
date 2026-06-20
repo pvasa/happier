@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const executionRunStart = vi.fn(async () => ({ ok: true, runId: 'run_1' }));
 const executionRunList = vi.fn(async () => []);
@@ -8,6 +9,7 @@ const executionRunStop = vi.fn(async () => ({ ok: true }));
 const executionRunAction = vi.fn(async () => ({ ok: true }));
 const listAgentBackendsForVoiceTool = vi.fn(async () => ({ items: [] }));
 const listAgentModelsForVoiceTool = vi.fn(async () => ({ items: [] }));
+const sessionRpcWithServerScopeMock = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ ok: true }));
 const patchSessionMetadataWithRetry = vi.fn(async (_sessionId: string, updater: (metadata: any) => any) => {
   updater({ path: '/tmp/project', host: 'localhost' });
 });
@@ -28,7 +30,7 @@ vi.mock('@/sync/ops/sessions', () => ({
 }));
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
-  sessionRpcWithServerScope: vi.fn(),
+  sessionRpcWithServerScope: sessionRpcWithServerScopeMock,
 }));
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage', () => ({
@@ -157,6 +159,34 @@ vi.mock('@/sync/domains/state/storage', async () => {
 describe('createDefaultActionExecutor plan mode integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionRpcWithServerScopeMock.mockResolvedValue({ ok: true });
+  });
+
+  it('routes terminal composer clear through the live session RPC', async () => {
+    sessionRpcWithServerScopeMock.mockResolvedValueOnce({
+      ok: true,
+      status: 'cleared',
+      sessionId: 's1',
+    });
+    const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+
+    const executor = createDefaultActionExecutor();
+    const result = await executor.execute(
+      'session.terminalComposer.clear',
+      { sessionId: 's1', expectedStateAtMs: 42 },
+      { defaultSessionId: 's1', surface: 'ui_button' },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: { ok: true, status: 'cleared', sessionId: 's1' },
+    });
+    expect(sessionRpcWithServerScopeMock).toHaveBeenCalledWith({
+      sessionId: 's1',
+      serverId: undefined,
+      method: SESSION_RPC_METHODS.SESSION_TERMINAL_COMPOSER_CLEAR,
+      payload: { sessionId: 's1', expectedStateAtMs: 42 },
+    });
   });
 
   it('forwards limit to agents.backends.list voice-tool routing', async () => {

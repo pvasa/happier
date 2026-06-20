@@ -369,6 +369,11 @@ const ConnectedServiceSwitchAttemptVerificationByServiceIdV1Schema = z.partialRe
   ConnectedServiceIdSchema,
   z.object({
     status: z.enum(['verified', 'weakly_verified']),
+    providerAccountId: z.string().trim().min(1).nullable().optional(),
+    activeAccountId: z.string().trim().min(1).nullable().optional(),
+    sharedAuthSurfaceId: z.string().trim().min(1).nullable().optional(),
+    proofStrength: z.enum(['exact', 'weak', 'diagnostic']).optional(),
+    source: z.string().trim().min(1).optional(),
     reason: z.string().trim().min(1).optional(),
   }),
 );
@@ -603,9 +608,22 @@ const RuntimeConfigOutcomeChangeV1Schema = z
   })
   .strict();
 
+const TerminalComposerDraftBlockedReasonV1Schema = z.enum([
+  'idle_draft_guard',
+  'in_flight_steer',
+]);
+
 const AgentEventSchema = z.discriminatedUnion('type', [
   withAgentEventLifecycle(z.object({ type: z.literal('switch'), mode: z.enum(['local', 'remote']) })),
   withAgentEventLifecycle(z.object({ type: z.literal('message'), message: z.string() })),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('terminal-composer-draft-blocked'),
+      reason: TerminalComposerDraftBlockedReasonV1Schema,
+      stateAtMs: z.number().int().nonnegative().optional(),
+      message: z.string().trim().min(1).max(2000).optional(),
+    }),
+  ),
   withAgentEventLifecycle(
     z.object({
       type: z.literal('runtime-config-outcome'),

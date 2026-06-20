@@ -6,14 +6,29 @@ export {
   DaemonSessionGoalSetRequestV1Schema,
   DaemonSessionSkillCatalogListRequestV1Schema,
   DaemonSessionVendorPluginCatalogListRequestV1Schema,
+  ConnectedServiceQuotaRecoveryCreditConsumeReceiptStatusV1Schema,
+  ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1Schema,
+  ConnectedServiceQuotaRecoveryCreditConsumeRequestV1Schema,
+  ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema,
+  SessionConnectedServiceAuthApplyGenerationAppliedViaV1Schema,
+  SessionConnectedServiceAuthApplyGenerationReasonV1Schema,
+  SessionConnectedServiceAuthApplyGenerationRequestV1Schema,
+  SessionConnectedServiceAuthApplyGenerationResponseV1Schema,
   SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema,
   SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema,
+  SessionConnectedServiceAuthReadRuntimeIdentityReasonV1Schema,
+  SessionConnectedServiceAuthReadRuntimeIdentityRequestV1Schema,
+  SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema,
+  SessionConnectedServiceAuthRuntimeIdentityProofStrengthV1Schema,
+  SessionConnectedServiceAuthRuntimeIdentityStrategyV1Schema,
   SessionGoalClearRequestV1Schema,
   SessionGoalGetRequestV1Schema,
   SessionGoalSetRequestV1Schema,
   SessionInitialGoalRequestV1Schema,
   SessionUsageLimitCheckNowRequestV1Schema,
   SessionUsageLimitCheckNowResponseV1Schema,
+  SessionUsageLimitConsumeResetCreditRequestV1Schema,
+  SessionUsageLimitConsumeResetCreditResponseV1Schema,
   SessionUsageLimitOperationResponseV1Schema,
   SessionUsageLimitWaitResumeCancelRequestV1Schema,
   SessionUsageLimitWaitResumeCancelResponseV1Schema,
@@ -45,14 +60,29 @@ export {
   type DaemonSessionGoalSetRequestV1,
   type DaemonSessionSkillCatalogListRequestV1,
   type DaemonSessionVendorPluginCatalogListRequestV1,
+  type ConnectedServiceQuotaRecoveryCreditConsumeReceiptStatusV1,
+  type ConnectedServiceQuotaRecoveryCreditConsumeReceiptV1,
+  type ConnectedServiceQuotaRecoveryCreditConsumeRequestV1,
+  type ConnectedServiceQuotaRecoveryCreditConsumeResponseV1,
+  type SessionConnectedServiceAuthApplyGenerationAppliedViaV1,
+  type SessionConnectedServiceAuthApplyGenerationReasonV1,
+  type SessionConnectedServiceAuthApplyGenerationRequestV1,
+  type SessionConnectedServiceAuthApplyGenerationResponseV1,
   type SessionConnectedServiceAuthInvalidateTransportsRequestV1,
   type SessionConnectedServiceAuthInvalidateTransportsResponseV1,
+  type SessionConnectedServiceAuthReadRuntimeIdentityReasonV1,
+  type SessionConnectedServiceAuthReadRuntimeIdentityRequestV1,
+  type SessionConnectedServiceAuthReadRuntimeIdentityResponseV1,
+  type SessionConnectedServiceAuthRuntimeIdentityProofStrengthV1,
+  type SessionConnectedServiceAuthRuntimeIdentityStrategyV1,
   type SessionGoalClearRequestV1,
   type SessionGoalGetRequestV1,
   type SessionGoalSetRequestV1,
   type SessionInitialGoalRequestV1,
   type SessionUsageLimitCheckNowRequestV1,
   type SessionUsageLimitCheckNowResponseV1,
+  type SessionUsageLimitConsumeResetCreditRequestV1,
+  type SessionUsageLimitConsumeResetCreditResponseV1,
   type SessionUsageLimitOperationResponseV1,
   type SessionUsageLimitWaitResumeCancelRequestV1,
   type SessionUsageLimitWaitResumeCancelResponseV1,
@@ -307,6 +337,10 @@ export {
   ConnectedServiceQuotaLimitScopeV1Schema,
   ConnectedServiceQuotaMeterV1Schema,
   ConnectedServiceQuotaMeterScopeV1Schema,
+  ConnectedServiceQuotaRecoveryCreditKindV1Schema,
+  ConnectedServiceQuotaRecoveryCreditStatusV1Schema,
+  ConnectedServiceQuotaRecoveryCreditV1Schema,
+  ConnectedServiceQuotaRecoveryCreditsV1Schema,
   ConnectedServiceQuotaSnapshotV1Schema,
   ConnectedServiceQuotaSourceV1Schema,
   ConnectedServiceQuotaUnitV1Schema,
@@ -344,6 +378,10 @@ export {
   type ConnectedServiceQuotaLimitScopeV1,
   type ConnectedServiceQuotaMeterV1,
   type ConnectedServiceQuotaMeterScopeV1,
+  type ConnectedServiceQuotaRecoveryCreditKindV1,
+  type ConnectedServiceQuotaRecoveryCreditStatusV1,
+  type ConnectedServiceQuotaRecoveryCreditV1,
+  type ConnectedServiceQuotaRecoveryCreditsV1,
   type ConnectedServiceQuotaSnapshotV1,
   type ConnectedServiceQuotaSourceV1,
   type ConnectedServiceQuotaUnitV1,
@@ -648,7 +686,12 @@ export {
   sealTerminalProvisioningV2Payload,
 } from './crypto/terminalProvisioningV2.js';
 
-export { decodeBase64, encodeBase64, type Base64Variant } from './crypto/base64.js';
+export {
+  decodeBase64,
+  encodeBase64,
+  readCanonicalPaddedBase64DecodedLength,
+  type Base64Variant,
+} from './crypto/base64.js';
 
 export {
   McpServerBindingOverridesV1Schema,
@@ -1062,6 +1105,18 @@ export {
 } from './sessionControl/contract.js';
 
 export {
+  SessionTerminalComposerClearFailureStatusV1Schema,
+  SessionTerminalComposerClearRequestV1Schema,
+  SessionTerminalComposerClearResultV1Schema,
+  SessionTerminalComposerClearSuccessStatusV1Schema,
+  buildUnsupportedSessionTerminalComposerClearResult,
+  type SessionTerminalComposerClearFailureStatusV1,
+  type SessionTerminalComposerClearRequestV1,
+  type SessionTerminalComposerClearResultV1,
+  type SessionTerminalComposerClearSuccessStatusV1,
+} from './sessionControl/sessionTerminalComposerClearV1.js';
+
+export {
   DefaultSessionFoldersV1,
   MoveSessionFolderAssignmentsRequestSchema,
   MoveSessionFolderAssignmentsResponseSchema,
@@ -1199,9 +1254,24 @@ export {
 
 export {
   SessionMessageMetaSchema,
+  SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY,
   type SessionMessageMeta,
+  type SessionUserMessageDeliveryIntentV1,
   createSessionMessageMetaSchema,
+  readSessionUserMessageDeliveryIntentMeta,
+  withSessionUserMessageDeliveryIntentMeta,
 } from './sessionMessages/sessionMessageMeta.js';
+export {
+  isNonSteerablePromptPayload,
+  isNonSteerableSpecialCommandType,
+  parseClear,
+  parseCompact,
+  parseSpecialCommand,
+  type ClearCommandResult,
+  type CompactCommandResult,
+  type SpecialCommandResult,
+  type SpecialCommandType,
+} from './sessionMessages/specialCommands.js';
 export {
   ChangeConfidenceSchema,
   ChangeEvidenceSourceSchema,
@@ -1506,6 +1576,12 @@ export {
   type ScmWorktreeRemoveRequest,
   type ScmWorktreeRemoveResponse,
 } from './scmWorktrees.js';
+export {
+  normalizeWorktreeDisplayName,
+  hasForbiddenGitRefName,
+  buildWorktreeRelativePath,
+  WORKTREE_RELATIVE_PARENT_DIR,
+} from './scmWorktreeName.js';
 export {
   ScmStashApplyRequestSchema,
   ScmStashApplyResponseSchema,

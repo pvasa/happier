@@ -48,6 +48,7 @@ import { registerMachineMemoryRpcHandlers } from './rpcHandlers.memory';
 import { registerMachineTerminalRpcHandlers } from './rpcHandlers.terminal';
 import { registerMachineMcpServersRpcHandlers } from './rpcHandlers.mcpServers';
 import { registerMachineDirectSessionsRpcHandlers } from './rpcHandlers.directSessions';
+import { registerMachineConnectedServiceQuotaRpcHandlers } from './rpcHandlers.connectedServiceQuotas';
 import {
   registerMachineSessionHandoffRpcHandlers,
   type SessionHandoffDirectPeerTransferHandle,
@@ -599,6 +600,9 @@ export function registerMachineRpcHandlers(params: Readonly<{
     spawnSession,
     stopSession,
     emitDirectSessionTranscriptUpdate: params.deps?.emitDirectSessionTranscriptUpdate,
+  });
+  registerMachineConnectedServiceQuotaRpcHandlers({
+    rpcHandlerManager,
   });
   registerMachineSessionGoalRpcHandlers({
     rpcHandlerManager,

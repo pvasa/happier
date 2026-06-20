@@ -105,6 +105,7 @@ export const DEFAULT_ACTIONS_SETTINGS_V1: ActionsSettingsV1 = ActionsSettingsV1S
     'session.usageLimit.waitResume.enable': { disabledSurfaces: ['session_agent'] },
     'session.usageLimit.waitResume.cancel': { disabledSurfaces: ['session_agent'] },
     'session.usageLimit.checkNow': { disabledSurfaces: ['session_agent'] },
+    'session.usageLimit.consumeResetCredit': { disabledSurfaces: ['session_agent'] },
   },
 });
 
