@@ -421,6 +421,29 @@ export async function fetchConnectedServiceAuthGroup(params: Readonly<{
   return group;
 }
 
+export async function fetchConnectedServiceProfiles(params: Readonly<{
+  fixture: Pick<StartedConnectedServicesCodexDaemonFixture, 'serverBaseUrl' | 'auth'>;
+  serviceId: ConnectedServiceId;
+}>): Promise<ReadonlyArray<UnknownRecord>> {
+  const response = await fetchJson<{ profiles?: unknown }>(
+    `${params.fixture.serverBaseUrl}/v2/connect/${params.serviceId}/profiles`,
+    {
+      headers: { Authorization: `Bearer ${params.fixture.auth.token}` },
+      timeoutMs: 20_000,
+    },
+  );
+  const profiles = Array.isArray(response.data?.profiles)
+    ? response.data.profiles.flatMap((profile) => {
+        const record = asRecord(profile);
+        return record ? [record] : [];
+      })
+    : [];
+  if (response.status !== 200) {
+    throw new Error(`Failed to fetch connected service profiles for ${params.serviceId} (status=${response.status})`);
+  }
+  return profiles;
+}
+
 // Mark a member of a group as quota-exhausted (or clear it) via the server
 // runtime-state endpoint, so the daemon's switch coordinator sees no eligible
 // fresh candidate. Faithful to the live Codex incident where the only sibling

@@ -196,6 +196,7 @@ function createRemoteHarness(options?: {
   terminalRuntime?: TerminalRuntimeFlags | null;
   hookPluginDir?: string | null;
   defaultSystemPromptText?: string;
+  claudeArgs?: string[];
 }): RemoteHarness {
   const switchDeferred = createDeferred<RpcHandler>();
   const abortDeferred = createDeferred<RpcHandler>();
@@ -272,6 +273,7 @@ function createRemoteHarness(options?: {
     path: '/tmp',
     logPath: '/tmp/log',
     sessionId: options?.sessionId ?? null,
+    claudeArgs: options?.claudeArgs,
     messageQueue: new MessageQueue2<EnhancedMode>(hashClaudeEnhancedModeForQueue),
     onModeChange: () => {},
     hookSettingsPath: '/tmp/hooks.json',
@@ -2638,6 +2640,92 @@ function createRemoteHarness(options?: {
 
     expect(Object.prototype.hasOwnProperty.call(captured?.happierMcpServers ?? {}, 'happier')).toBe(true);
     expect(Object.prototype.hasOwnProperty.call(captured?.happierMcpServers ?? {}, 'custom')).toBe(false);
+
+    const switchHandler = await switchHandlerReady;
+    expect(await switchHandler({ to: 'local' })).toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  }, 30_000);
+
+  it('passes an explicit Claude resume id into unified terminal dispatch before SessionStart on attached sessions', async () => {
+    const resumeSessionId = '5b0592f3-b5cb-4368-9ace-bd4004ee87de';
+    const { session, switchHandlerReady } = createRemoteHarness({
+      sessionId: null,
+      startedBy: 'daemon',
+      claudeArgs: ['--resume', resumeSessionId],
+    });
+    const mode = {
+      permissionMode: 'default',
+      claudeUnifiedTerminalEnabled: true,
+      claudeUnifiedTerminalHost: 'tmux',
+    } as any;
+    session.queue.push('resume follow-up', mode);
+
+    const runnerCalled = createDeferred<void>();
+    const runnerSignal = new AbortController();
+    let capturedDispatchOpts: any = null;
+    let capturedUnifiedSessionId: string | null = null;
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown, deps: unknown) => {
+      capturedDispatchOpts = opts as any;
+      const unified = (deps as UnifiedTerminalDispatchDeps).claudeUnifiedTerminal;
+      expect(unified).toEqual(expect.any(Function));
+      capturedUnifiedSessionId = capturedDispatchOpts?.sessionId ?? null;
+      await unified?.({
+        path: '/workspace/project',
+        sessionId: capturedDispatchOpts?.sessionId ?? null,
+        transcriptPath: '/tmp/claude-unified-transcript.jsonl',
+        signal: runnerSignal.signal,
+        nextMessage: async () => ({
+          message: 'resume follow-up',
+          mode,
+        }),
+        resolveHostAdapter: async () => ({
+          status: 'resolved',
+          reason: 'test',
+          adapter: {
+            kind: 'tmux',
+            createOrAttachHost: vi.fn(async () => ({
+              kind: 'tmux',
+              sessionName: 'happier-claude-session-test',
+              paneId: 'resume-pane',
+              attachMetadata: {
+                attachStrategy: 'terminal_host',
+                topology: 'shared',
+                locality: 'same_machine',
+                liveProbe: 'required',
+              },
+            })),
+            injectUserPrompt: vi.fn(async (_handle, input) => {
+              runnerSignal.abort();
+              return { status: 'injected', at: Date.now(), bytesWritten: input.text.length };
+            }),
+            evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+            captureInputState: vi.fn(async () => ({
+              stable: true,
+              currentInput: 'What would you like to work on?\n> ',
+              observedAt: Date.now(),
+            })),
+            interruptTurn: vi.fn(async () => {}),
+            dispose: vi.fn(async () => {}),
+          },
+        }),
+        buildSpawn: async () => ({
+          spawnArgv: ['/bin/claude'],
+          spawnEnv: {},
+        }),
+        createSessionName: () => 'happier-claude-session-test',
+        persistTerminalHostAttachmentInfo: vi.fn(async () => {}),
+      });
+      runnerCalled.resolve(undefined);
+      await waitForAbort((opts as RemoteDispatchMockOptions).signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(session);
+
+    await runnerCalled.promise;
+    expect(capturedDispatchOpts?.sessionId).toBe(resumeSessionId);
+    expect(capturedDispatchOpts?.claudeArgs).toEqual(['--resume', resumeSessionId]);
+    expect(capturedUnifiedSessionId).toBe(resumeSessionId);
 
     const switchHandler = await switchHandlerReady;
     expect(await switchHandler({ to: 'local' })).toBe(true);
