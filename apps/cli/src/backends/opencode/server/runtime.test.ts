@@ -60,18 +60,24 @@ function createFakePermissionHandler() {
   } satisfies Pick<ProviderEnforcedPermissionHandler, 'handleToolCall'>;
 }
 
+type OpenCodeRuntimePromptHarness = Readonly<{
+  sendPromptWithMeta(params: { text: string; localId?: string | null }): Promise<void>;
+}>;
+
+type OpenCodePromptAsyncCall = Parameters<OpenCodeServerRuntimeClient['sessionPromptAsync']>[0];
+
 function createFakeClient() {
   let onEvent: ((evt: OpenCodeGlobalEvent) => void) | null = null;
   let directoryOverride: string | null = null;
   let statusType: string = 'idle';
   const client = {
     sessionList: vi.fn(async () => ([] as unknown[])),
-    sessionCreate: vi.fn(async () => ({ id: 'ses_1' })),
+    sessionCreate: vi.fn<OpenCodeServerRuntimeClient['sessionCreate']>(async () => ({ id: 'ses_1' })),
     sessionGet: vi.fn(async ({ sessionId }: { sessionId: string }) => ({ id: sessionId })),
     sessionUpdate: vi.fn(async ({ sessionId }: { sessionId: string }) => ({ id: sessionId })),
     sessionMessagesList: vi.fn(async () => ([] as unknown[])),
     sessionDiff: vi.fn(async () => ([] as unknown[])),
-    sessionPromptAsync: vi.fn(async () => {}),
+    sessionPromptAsync: vi.fn<OpenCodeServerRuntimeClient['sessionPromptAsync']>(async () => {}),
     sessionSummarize: vi.fn(async () => {}),
     sessionAbort: vi.fn(async () => {}),
     sessionFork: vi.fn(async () => ({ id: 'ses_fork' })),
@@ -128,6 +134,17 @@ function createFakeClient() {
   };
 
   return client;
+}
+
+function readOpenCodePromptAsyncCall(
+  client: ReturnType<typeof createFakeClient>,
+  index: number,
+): OpenCodePromptAsyncCall {
+  const call = client.sessionPromptAsync.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected sessionPromptAsync call ${index}`);
+  }
+  return call[0];
 }
 
 function createFakeSession() {
@@ -450,6 +467,89 @@ describe('createOpenCodeServerRuntime', () => {
         enabled: true,
         command: [process.execPath, '--version'],
         environment: { HAPPIER_TEST_MCP: '1' },
+      },
+    });
+  });
+
+  it('creates the OpenCode session without waiting for slow MCP registration', async () => {
+    const client = createFakeClient();
+    let resolveMcpAdd!: () => void;
+    client.mcpAdd.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        resolveMcpAdd = resolve;
+      });
+    });
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {
+        slow_happier: {
+          command: process.execPath,
+          args: ['--version'],
+        },
+      },
+      permissionHandler: createFakePermissionHandler() as unknown as ProviderEnforcedPermissionHandler,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as unknown as OpenCodeServerRuntimeClient,
+    });
+
+    const startPromise = runtime.startOrLoad({});
+    const startState = observePromiseSettlement(startPromise);
+
+    await flushTranscriptCommitMicrotasks();
+
+    expect(client.mcpAdd).toHaveBeenCalledTimes(1);
+    expect(client.sessionCreate).toHaveBeenCalledTimes(1);
+    expect(startState.status).toBe('resolved');
+
+    resolveMcpAdd();
+    await startPromise;
+  });
+
+  it('retries MCP registration after OpenCode changes the session directory while registration is in flight', async () => {
+    const client = createFakeClient();
+    let resolveFirstMcpAdd!: () => void;
+    client.mcpAdd
+      .mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          resolveFirstMcpAdd = resolve;
+        });
+      })
+      .mockResolvedValueOnce(undefined);
+    client.sessionCreate.mockResolvedValueOnce({ id: 'ses_1', directory: '/tmp/opencode-session-dir' });
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {
+        happier: {
+          command: process.execPath,
+          args: ['--version'],
+        },
+      },
+      permissionHandler: createFakePermissionHandler() as unknown as ProviderEnforcedPermissionHandler,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as unknown as OpenCodeServerRuntimeClient,
+    });
+
+    await runtime.startOrLoad({});
+    expect(client.setDirectoryOverride).toHaveBeenCalledWith('/tmp/opencode-session-dir');
+    expect(client.mcpAdd).toHaveBeenCalledTimes(1);
+
+    resolveFirstMcpAdd();
+
+    await expect.poll(() => client.mcpAdd.mock.calls.length).toBe(2);
+    expect(client.mcpAdd).toHaveBeenNthCalledWith(2, {
+      name: 'happier',
+      config: {
+        type: 'local',
+        enabled: true,
+        command: [process.execPath, '--version'],
       },
     });
   });
@@ -1630,6 +1730,58 @@ describe('createOpenCodeServerRuntime', () => {
       parts: [{ type: 'text', text: 'hello' }],
     });
     expect(firstCall.model).toBeUndefined();
+
+    client.__emit({
+      directory: '/tmp',
+      payload: { type: 'message.part.updated', properties: { part: { id: 'part_1', type: 'text', sessionID: 'ses_1' } } },
+    });
+    client.__emit({
+      directory: '/tmp',
+      payload: { type: 'message.part.delta', properties: { sessionID: 'ses_1', messageID: 'msg_asst_1', partID: 'part_1', delta: 'ok' } },
+    });
+    await emitTerminalAssistantAndIdle(client, { messageId: 'msg_asst_1' });
+
+    await expect(promptPromise).resolves.toBeUndefined();
+  });
+
+  it('resolves bare OpenCode model overrides against the active default provider before prompt_async', async () => {
+    const client = createFakeClient();
+    client.globalConfigGet = vi.fn(async () => ({ model: 'openai/gpt-5.5-pro' }));
+    client.providersList = vi.fn(async () => ([
+      {
+        id: 'openai',
+        env: ['OPENAI_API_KEY'],
+        models: ({
+          'gpt-5.5-pro': { id: 'gpt-5.5-pro', name: 'GPT-5.5 Pro', status: 'active', capabilities: { input: { text: true } } },
+          'gpt-5.4-mini': { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini', status: 'active', capabilities: { input: { text: true } } },
+        }) as Record<string, unknown>,
+      },
+    ]));
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createFakePermissionHandler() as unknown as ProviderEnforcedPermissionHandler,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as unknown as OpenCodeServerRuntimeClient,
+    });
+
+    await runtime.startOrLoad({});
+    await runtime.setSessionModel('gpt-5.4-mini');
+    runtime.beginTurn();
+
+    const promptPromise = (runtime as unknown as OpenCodeRuntimePromptHarness).sendPromptWithMeta({ text: 'hello' });
+
+    await expect.poll(() => client.sessionPromptAsync.mock.calls.length).toBe(1);
+    const firstCall = readOpenCodePromptAsyncCall(client, 0);
+    expect(firstCall).toMatchObject({
+      sessionId: 'ses_1',
+      model: { providerID: 'openai', modelID: 'gpt-5.4-mini' },
+      parts: [{ type: 'text', text: 'hello' }],
+    });
 
     client.__emit({
       directory: '/tmp',

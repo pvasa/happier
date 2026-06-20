@@ -36,13 +36,16 @@ export async function materializePiConnectedServiceAuth(params: Readonly<{
   }
 
   if (params.claudeSubscription) {
-    if (params.claudeSubscription.kind !== 'token') {
-      throw new Error('Claude subscription OAuth credentials are not supported by Pi. Reconnect using a Claude setup-token.');
+    if (params.claudeSubscription.kind === 'oauth') {
+      const record = requireConnectedServiceOauthCredentialRecordWithExpiry(params.claudeSubscription);
+      auth.anthropic = buildConnectedServiceOauthAuthEntry(record);
+    } else {
+      const record = requireConnectedServiceTokenCredentialRecord(params.claudeSubscription);
+      auth.anthropic = {
+        type: 'api_key',
+        key: record.token.token,
+      };
     }
-    auth.anthropic = {
-      type: 'api_key',
-      key: params.claudeSubscription.token.token,
-    };
   } else if (params.anthropic) {
     if (params.anthropic.kind !== 'token') {
       throw new Error('Anthropic OAuth credentials are not supported. Reconnect using an Anthropic API key.');

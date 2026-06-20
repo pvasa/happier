@@ -234,7 +234,7 @@ describe('createOpenCodeServerRuntimeClient.subscribeGlobalEvents', () => {
     await client.dispose();
   });
 
-  it('re-ensures the managed OpenCode server when state is missing and the current baseUrl is unhealthy', async () => {
+  it('does not re-ensure or replace the managed server from SSE reconnect alone', async () => {
     delete process.env.HAPPIER_OPENCODE_SERVER_URL;
 
     const fetchSpy = vi.fn(async (url: any) => {
@@ -295,8 +295,8 @@ describe('createOpenCodeServerRuntimeClient.subscribeGlobalEvents', () => {
     rejectFirstDone(new Error('socket hang up'));
 
     await expect.poll(() => subscribeMock.mock.calls.length).toBeGreaterThan(1);
-    expect(String(secondParams?.url ?? '')).toContain('127.0.0.1:10000');
-    expect(ensureMock.mock.calls.length).toBe(2);
+    expect(String(secondParams?.url ?? '')).toContain('127.0.0.1:9999');
+    expect(ensureMock.mock.calls.length).toBe(1);
 
     controller.abort();
     await client.dispose();

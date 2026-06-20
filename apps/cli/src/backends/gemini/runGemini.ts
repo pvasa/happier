@@ -443,6 +443,11 @@ export async function runGemini(opts: {
   const lastGeminiSessionIdPublished: { value: string | null } = { value: null };
 
   async function handleAbort() {
+    if (!turnMessageState.thinking && !turnMessageState.isResponseInProgress) {
+      logger.debug('[Gemini] Abort requested with no active turn; ignoring stale abort');
+      return;
+    }
+
     logger.debug('[Gemini] Abort requested - stopping current task');
     await permissionHandler.abortPendingRequestsAndFlush('Aborted by user');
     await transcriptStream.flushAll({
@@ -839,6 +844,7 @@ export async function runGemini(opts: {
               permissionHandler,
               messageBuffer,
               storedResumeId,
+              currentPromptText: message.message,
               onDebug: (msg) => logger.debug(msg),
             });
             acpSessionId = ensuredSession.acpSessionId;

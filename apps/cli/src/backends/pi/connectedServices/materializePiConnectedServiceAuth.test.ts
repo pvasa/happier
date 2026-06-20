@@ -98,6 +98,80 @@ describe('materializePiConnectedServiceAuth', () => {
     });
   });
 
+  it('writes Claude subscription OAuth credentials as Pi native Anthropic OAuth auth', async () => {
+    const now = Date.now();
+    const rootDir = await mkdtemp(join(tmpdir(), 'happier-pi-auth-'));
+    const claudeSubscription = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'claude-pro-oauth',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'claude-access-token',
+        refreshToken: 'claude-refresh-token',
+        idToken: null,
+        scope: null,
+        tokenType: 'Bearer',
+        providerAccountId: 'claude-account-id',
+        providerEmail: 'claude@example.com',
+      },
+    });
+
+    const res = await materializePiConnectedServiceAuth({
+      rootDir,
+      openaiCodex: null,
+      openai: null,
+      claudeSubscription,
+      anthropic: null,
+    });
+
+    expect(res.env.PI_CODING_AGENT_DIR).toContain('pi-agent-dir');
+    expect(res.env).not.toHaveProperty('ANTHROPIC_OAUTH_TOKEN');
+    expect(res.env).not.toHaveProperty('ANTHROPIC_API_KEY');
+
+    const authPath = join(res.env.PI_CODING_AGENT_DIR, 'auth.json');
+    const authRaw = await readFile(authPath, 'utf8');
+    expect(JSON.parse(authRaw)).toEqual({
+      anthropic: {
+        type: 'oauth',
+        access: 'claude-access-token',
+        refresh: 'claude-refresh-token',
+        expires: now + 60_000,
+        accountId: 'claude-account-id',
+      },
+    });
+  });
+
+  it('continues to reject Anthropic OAuth credentials for Pi', async () => {
+    const now = Date.now();
+    const rootDir = await mkdtemp(join(tmpdir(), 'happier-pi-auth-'));
+    const anthropic = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'anthropic',
+      profileId: 'anthropic-oauth',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'anthropic-access-token',
+        refreshToken: 'anthropic-refresh-token',
+        idToken: null,
+        scope: null,
+        tokenType: 'Bearer',
+        providerAccountId: 'anthropic-account-id',
+        providerEmail: 'anthropic@example.com',
+      },
+    });
+
+    await expect(materializePiConnectedServiceAuth({
+      rootDir,
+      openaiCodex: null,
+      openai: null,
+      claudeSubscription: null,
+      anthropic,
+    })).rejects.toThrow(/Anthropic OAuth credentials are not supported/);
+  });
+
   it('prefers Claude subscription credentials over Anthropic API keys for Pi anthropic auth', async () => {
     const now = Date.now();
     const rootDir = await mkdtemp(join(tmpdir(), 'happier-pi-auth-'));

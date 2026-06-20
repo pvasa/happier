@@ -1,8 +1,42 @@
 import type { AgentBackend } from '@/agent';
+import type { AcpReplayHistorySessionClient } from '@/agent/acp/sessionClient';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { importAcpReplayHistoryV1 } from '@/agent/acp/history/importAcpReplayHistory';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/ProviderEnforcedPermissionHandler';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
+import { logger } from '@/ui/logger';
+
+function normalizeCurrentPromptBoundary(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
+}
+
+function createReplayImportSession(params: {
+  session: ApiSessionClient;
+  currentPromptText?: string | null;
+}): AcpReplayHistorySessionClient {
+  const currentPromptText = typeof params.currentPromptText === 'string'
+    ? normalizeCurrentPromptBoundary(params.currentPromptText)
+    : '';
+
+  return {
+    fetchRecentTranscriptTextItemsForAcpImport: async (opts) => {
+      const items = await params.session.fetchRecentTranscriptTextItemsForAcpImport(opts);
+      if (!currentPromptText || items.length === 0) return items;
+
+      const last = items[items.length - 1];
+      if (
+        last?.role === 'user'
+        && normalizeCurrentPromptBoundary(last.text) === currentPromptText
+      ) {
+        return items.slice(0, -1);
+      }
+      return items;
+    },
+    sendUserTextMessageCommitted: (...args) => params.session.sendUserTextMessageCommitted(...args),
+    sendAgentMessageCommitted: (...args) => params.session.sendAgentMessageCommitted(...args),
+    updateMetadata: (updater) => params.session.updateMetadata(updater),
+  };
+}
 
 export async function ensureGeminiAcpSession(params: {
   backend: AgentBackend;
@@ -10,6 +44,7 @@ export async function ensureGeminiAcpSession(params: {
   permissionHandler: ProviderEnforcedPermissionHandler;
   messageBuffer: MessageBuffer;
   storedResumeId: string | null;
+  currentPromptText?: string | null;
   onDebug: (message: string) => void;
 }): Promise<{
   acpSessionId: string;
@@ -45,13 +80,23 @@ export async function ensureGeminiAcpSession(params: {
     params.onDebug(`[gemini] ACP session loaded: ${acpSessionId}`);
 
     if (replay) {
-      void importAcpReplayHistoryV1({
-        session: params.session,
-        provider: 'gemini',
-        remoteSessionId: acpSessionId,
-        replay,
-        permissionHandler: params.permissionHandler,
-      });
+      try {
+        const replayImportSession = typeof params.currentPromptText === 'string' && params.currentPromptText.trim()
+          ? createReplayImportSession({
+              session: params.session,
+              currentPromptText: params.currentPromptText,
+            })
+          : params.session;
+        await importAcpReplayHistoryV1({
+          session: replayImportSession,
+          provider: 'gemini',
+          remoteSessionId: acpSessionId,
+          replay,
+          permissionHandler: params.permissionHandler,
+        });
+      } catch (error) {
+        logger.debug('[gemini] Failed to import ACP replay history (non-fatal)', { error });
+      }
     }
 
     return { acpSessionId, storedResumeId: nextStoredResumeId, startedFreshSession: false };

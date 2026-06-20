@@ -143,12 +143,12 @@ Connected services are not global "works everywhere" credentials. Each backend d
 | Codex | `openai-codex` (OAuth), `openai` (API key) |
 | Gemini | `gemini` (OAuth) |
 | OpenCode | `openai-codex` (OAuth), `openai` (API key), `claude-subscription` (setup-token only), `anthropic` (API key) |
-| Pi | `openai-codex` (OAuth), `openai` (API key), `claude-subscription` (setup-token only), `anthropic` (API key) |
+| Pi | `openai-codex` (OAuth), `openai` (API key), `claude-subscription` (OAuth or setup-token), `anthropic` (API key) |
 
 Important limitations:
 
 - OpenCode accepts `claude-subscription` only when the profile is a setup-token profile, not a Claude OAuth profile.
-- Pi accepts `claude-subscription` only when the profile is a setup-token profile, not a Claude OAuth profile.
+- Pi accepts `claude-subscription` OAuth and setup-token profiles. Claude subscription OAuth is materialized into Pi's isolated `auth.json`; setup-token profiles are materialized as Pi API-key credentials.
 - `anthropic` is API-key only in Happier.
 - `github` is not consumed by agent backends. It is consumed by source-control workflows.
 

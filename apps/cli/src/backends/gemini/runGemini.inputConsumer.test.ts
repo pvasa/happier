@@ -475,6 +475,11 @@ describe('runGemini input consumer migration', () => {
         model: 'gemini-2.5-pro',
       }),
     );
+    expect(ensureGeminiAcpSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentPromptText: 'queued prompt text',
+      }),
+    );
     expect(resolveGeminiQueuedPromptWithReplaySeedMock).toHaveBeenCalledWith(
       expect.objectContaining({
         localId: 'local-1',
@@ -493,5 +498,67 @@ describe('runGemini input consumer migration', () => {
       }),
     );
     expect(emitReadyIfIdleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores stale abort requests after a cancelled Gemini turn so later pending input can run', async () => {
+    const firstMode: GeminiMode = {
+      permissionMode: 'safe-yolo',
+      model: 'gemini-2.5-pro',
+      originalUserMessage: 'cancelled visible text',
+      appendSystemPrompt: null,
+      localId: 'local-cancelled',
+      replaySeedAllowed: true,
+    };
+    const secondMode: GeminiMode = {
+      ...firstMode,
+      originalUserMessage: 'follow-up visible text',
+      localId: 'local-follow-up',
+    };
+
+    waitForNextInputMock.mockReset();
+    waitForNextInputMock
+      .mockResolvedValueOnce({
+        message: 'cancelled prompt text',
+        mode: firstMode,
+        isolate: false,
+        hash: 'mode-hash-1',
+      })
+      .mockImplementationOnce(async () => {
+        const abortHandler = getFakeSession().rpcHandlerManager.registerHandler.mock.calls.find(
+          ([name]) => name === 'abort',
+        )?.[1] as (() => Promise<void>) | undefined;
+        if (!abortHandler) {
+          throw new Error('Expected Gemini abort handler to be registered');
+        }
+        await abortHandler();
+        return {
+          message: 'follow-up prompt text',
+          mode: secondMode,
+          isolate: false,
+          hash: 'mode-hash-1',
+        };
+      })
+      .mockResolvedValueOnce(null);
+
+    sendGeminiPromptWithRetryMock.mockReset();
+    sendGeminiPromptWithRetryMock
+      .mockResolvedValueOnce({ kind: 'aborted', stopReason: 'cancelled' })
+      .mockResolvedValueOnce({ kind: 'completed', stopReason: 'end_turn' });
+
+    const { runGemini } = await import('./runGemini');
+
+    await expect(runGemini({ credentials })).resolves.toBeUndefined();
+
+    expect(sendGeminiPromptWithRetryMock).toHaveBeenCalledTimes(2);
+    expect(sendGeminiPromptWithRetryMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ prompt: expect.stringContaining('cancelled prompt text') }),
+    );
+    expect(sendGeminiPromptWithRetryMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ prompt: expect.stringContaining('follow-up prompt text') }),
+    );
+    expect(surfacePrimarySessionRuntimeIssueMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'cancelled', provider: 'gemini' }),
+    );
+    expect(fakeBackend.cancel).not.toHaveBeenCalled();
   });
 });

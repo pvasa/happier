@@ -17,6 +17,7 @@ const piConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCredentia
   refreshedCredentialApplication: { mode: 'restart_required' },
   predictiveSoftSwitch: { mode: 'unsupported' },
   sameAccountFanoutStrategy: 'none',
+  runtimeAuthApply: { directLiveHotAuth: 'unsupported' },
 };
 
 export const agent = {
