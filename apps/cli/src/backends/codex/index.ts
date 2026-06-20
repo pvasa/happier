@@ -25,6 +25,17 @@ const codexConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCreden
   refreshedCredentialApplication: { mode: 'restart_required' },
   predictiveSoftSwitch: { mode: 'supported' },
   sameAccountFanoutStrategy: 'provider_account_id',
+  runtimeAuthApply: {
+    directLiveHotAuth: {
+      supportsInTurnApply: true,
+      requiresExactRuntimeIdentity: true,
+      refreshSelectionResync: 'required',
+      authMode: {
+        kind: 'external_token_injection',
+        surface: 'codex_chatgpt_auth_tokens',
+      },
+    },
+  },
 };
 
 export const agent = {

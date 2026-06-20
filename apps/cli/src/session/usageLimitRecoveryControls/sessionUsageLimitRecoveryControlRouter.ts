@@ -92,6 +92,7 @@ type RouteSessionUsageLimitRecoveryCheckNowParams =
     request?: Readonly<{
       sessionId: string;
       provider?: string;
+      operation?: 'check_now' | 'switch_account_now' | 'consume_reset_credit';
       resumePromptMode?: 'standard' | 'off' | 'custom';
     }>;
   }>;
@@ -456,6 +457,7 @@ export async function routeSessionUsageLimitRecoveryWaitResumeCancel(
 export async function routeSessionUsageLimitRecoveryCheckNow(
   params: RouteSessionUsageLimitRecoveryCheckNowParams,
 ): Promise<unknown> {
+  const operation = params.request?.operation === 'consume_reset_credit' ? 'consumeResetCredit' : 'checkNow';
   if (params.retryTemporaryThrottleNow && isRetryableTemporaryThrottleIssue(params.rawSession)) {
     return operationResult(
       params,
@@ -463,7 +465,7 @@ export async function routeSessionUsageLimitRecoveryCheckNow(
     );
   }
 
-  if (params.rawSession.active === true) {
+  if (operation === 'checkNow' && params.rawSession.active === true) {
     const liveResult = await params.callLiveSessionRpc();
     if (!shouldFallbackFromLiveSessionUsageLimitRpc(liveResult)) {
       return operationResult(params, liveResult);
@@ -476,7 +478,8 @@ export async function routeSessionUsageLimitRecoveryCheckNow(
   const resolveAdapter = params.resolveAdapter ?? getSessionUsageLimitRecoveryControlAdapter;
   const adapterAgentId = resolveAgentIdFromFlavor(params.request?.provider) ?? resolveAgentId(context.metadata);
   const adapter = await resolveAdapter(adapterAgentId);
-  if (!adapter?.checkNow) {
+  const adapterOperation = operation === 'consumeResetCredit' ? adapter?.consumeResetCredit : adapter?.checkNow;
+  if (!adapterOperation) {
     return operationResult(params, stableError('session_usage_limit_recovery_control_provider_unsupported'));
   }
 
@@ -487,7 +490,7 @@ export async function routeSessionUsageLimitRecoveryCheckNow(
 
   const result = await persistAdapterMetadataResult(
     params,
-    await adapter.checkNow(await buildAdapterParams(params, context.metadata, context.sessionMachineId)),
+    await adapterOperation(await buildAdapterParams(params, context.metadata, context.sessionMachineId)),
   );
   const resultMetadata = readMetadataResult(result);
   const normalizedResult = operationResult(params, result);

@@ -18,6 +18,13 @@ import type { Credentials } from '@/persistence';
 import { fetchSessionById, fetchSessionsPage, getOrCreateSessionByTag } from '@/session/transport/http/sessionsHttp';
 import { tryDecryptSessionMetadata } from '@/session/transport/encryption/sessionEncryptionContext';
 import { updateSessionMetadataWithRetry } from '@/session/metadata/updateSessionMetadataWithRetry';
+import {
+  hasConnectedServiceBindings,
+  mergeConnectedServiceRuntimeSnapshots,
+  readConnectedServiceRuntimeSnapshot,
+  type ConnectedServiceRuntimeSnapshot,
+} from '@/daemon/connectedServices/connectedServiceRuntimeSnapshot';
+import { listSessionMarkers, type DaemonSessionMarker } from '@/daemon/sessionRegistry';
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
@@ -34,6 +41,13 @@ function asMetadataRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function normalizeDirectoryKey(value: unknown): string | null {
+  const normalized = normalizeNullableString(value);
+  if (!normalized) return null;
+  const slashed = normalized.replaceAll('\\', '/').replace(/\/+$/, '');
+  return /^[a-zA-Z]:\//.test(slashed) ? slashed.toLowerCase() : slashed;
+}
+
 function resolveSessionSummaryTitle(metadata: Readonly<Record<string, unknown>>): string | null {
   const summary = asMetadataRecord(metadata.summary);
   return normalizeNullableString(summary?.text);
@@ -42,6 +56,132 @@ function resolveSessionSummaryTitle(metadata: Readonly<Record<string, unknown>>)
 function resolveDirectRemoteSessionId(metadata: Readonly<Record<string, unknown>>): string | null {
   const directSession = asMetadataRecord(metadata.directSessionV1);
   return normalizeNullableString(directSession?.remoteSessionId);
+}
+
+function resolveMetadataRemoteSessionId(
+  metadata: Readonly<Record<string, unknown>> | null,
+  providerId: DirectSessionsProviderId,
+): string | null {
+  if (!metadata) return null;
+
+  const directSession = asMetadataRecord(metadata.directSessionV1);
+  if (directSession?.providerId === providerId) {
+    const directRemoteSessionId = normalizeNullableString(directSession.remoteSessionId);
+    if (directRemoteSessionId) return directRemoteSessionId;
+  }
+
+  switch (providerId) {
+    case 'codex': {
+      const codexSessionId = normalizeNullableString(metadata.codexSessionId);
+      if (codexSessionId) return codexSessionId;
+      break;
+    }
+    case 'claude': {
+      const claudeSessionId = normalizeNullableString(metadata.claudeSessionId);
+      if (claudeSessionId) return claudeSessionId;
+      break;
+    }
+    case 'opencode': {
+      const openCodeSessionId = normalizeNullableString(metadata.opencodeSessionId);
+      if (openCodeSessionId) return openCodeSessionId;
+      break;
+    }
+  }
+
+  const runtimeDescriptor = asMetadataRecord(metadata.agentRuntimeDescriptorV1);
+  if (runtimeDescriptor?.providerId !== providerId) return null;
+  const provider = asMetadataRecord(runtimeDescriptor.provider);
+  return normalizeNullableString(provider?.vendorSessionId);
+}
+
+function resolveMarkerProviderId(marker: DaemonSessionMarker): DirectSessionsProviderId | null {
+  const metadata = asMetadataRecord(marker.metadata);
+  const metadataFlavor = normalizeNullableString(metadata?.flavor);
+  if (metadataFlavor === 'claude' || metadataFlavor === 'codex' || metadataFlavor === 'opencode') {
+    return metadataFlavor;
+  }
+  if (marker.flavor === 'claude' || marker.flavor === 'codex' || marker.flavor === 'opencode') {
+    return marker.flavor;
+  }
+  const respawn = asMetadataRecord(marker.respawn);
+  const backendTarget = asMetadataRecord(respawn?.backendTarget);
+  const agentId = normalizeNullableString(backendTarget?.agentId);
+  return agentId === 'claude' || agentId === 'codex' || agentId === 'opencode' ? agentId : null;
+}
+
+function resolveMarkerRemoteSessionId(marker: DaemonSessionMarker, providerId: DirectSessionsProviderId): string | null {
+  const respawn = asMetadataRecord(marker.respawn);
+  return normalizeNullableString(respawn?.resume)
+    ?? resolveMetadataRemoteSessionId(asMetadataRecord(marker.metadata), providerId);
+}
+
+function markerMatchesRemoteSession(
+  marker: DaemonSessionMarker,
+  providerId: DirectSessionsProviderId,
+  remoteSessionId: string,
+): boolean {
+  if (resolveMarkerProviderId(marker) !== providerId) return false;
+  return resolveMarkerRemoteSessionId(marker, providerId) === remoteSessionId;
+}
+
+function resolveMarkerDirectoryKeys(marker: DaemonSessionMarker): ReadonlySet<string> {
+  const metadata = asMetadataRecord(marker.metadata);
+  const respawn = asMetadataRecord(marker.respawn);
+  return new Set(
+    [
+      normalizeDirectoryKey(marker.cwd),
+      normalizeDirectoryKey(metadata?.path),
+      normalizeDirectoryKey(respawn?.directory),
+    ].filter((value): value is string => Boolean(value)),
+  );
+}
+
+function resolveMarkerConnectedServiceRuntimeSnapshot(marker: DaemonSessionMarker): ConnectedServiceRuntimeSnapshot {
+  return mergeConnectedServiceRuntimeSnapshots(
+    readConnectedServiceRuntimeSnapshot(marker.respawn),
+    readConnectedServiceRuntimeSnapshot(marker.metadata),
+  );
+}
+
+function uniqueSnapshotKey(snapshot: ConnectedServiceRuntimeSnapshot): string {
+  return JSON.stringify({
+    connectedServices: snapshot.connectedServices,
+    connectedServicesUpdatedAt: snapshot.connectedServicesUpdatedAt,
+    connectedServiceMaterializationIdentityV1: snapshot.connectedServiceMaterializationIdentityV1,
+  });
+}
+
+async function resolveConnectedServiceRuntimeSnapshotForDirectLink(params: Readonly<{
+  providerId: DirectSessionsProviderId;
+  remoteSessionId: string;
+  directoryHint?: string | null;
+}>): Promise<ConnectedServiceRuntimeSnapshot> {
+  const markers = await listSessionMarkers().catch(() => [] as DaemonSessionMarker[]);
+  const markersWithSnapshots = markers
+    .map((marker) => ({
+      marker,
+      snapshot: resolveMarkerConnectedServiceRuntimeSnapshot(marker),
+    }))
+    .filter((entry) => hasConnectedServiceBindings(entry.snapshot));
+
+  const exactRemoteMatch = markersWithSnapshots
+    .filter((entry) => markerMatchesRemoteSession(entry.marker, params.providerId, params.remoteSessionId))
+    .sort((left, right) => right.marker.updatedAt - left.marker.updatedAt)[0];
+  if (exactRemoteMatch) return exactRemoteMatch.snapshot;
+
+  const directoryKey = normalizeDirectoryKey(params.directoryHint);
+  if (!directoryKey) return {};
+
+  const contextualMatches = markersWithSnapshots
+    .filter((entry) => resolveMarkerProviderId(entry.marker) === params.providerId)
+    .filter((entry) => resolveMarkerDirectoryKeys(entry.marker).has(directoryKey))
+    .sort((left, right) => right.marker.updatedAt - left.marker.updatedAt);
+
+  const uniqueSnapshots = new Map<string, ConnectedServiceRuntimeSnapshot>();
+  for (const match of contextualMatches) {
+    uniqueSnapshots.set(uniqueSnapshotKey(match.snapshot), match.snapshot);
+  }
+  return uniqueSnapshots.size === 1 ? [...uniqueSnapshots.values()][0] ?? {} : {};
 }
 
 function isMeaningfulSessionTitle(value: unknown, metadata?: Readonly<Record<string, unknown>>): boolean {
@@ -57,6 +197,7 @@ function resolveRefreshedDirectSessionMetadata(params: Readonly<{
   currentMetadata: Readonly<Record<string, unknown>>;
   titleHint?: string | null;
   directoryHint?: string | null;
+  connectedServiceRuntimeSnapshot?: ConnectedServiceRuntimeSnapshot;
 }>): Record<string, unknown> | null {
   const titleHint = normalizeNullableString(params.titleHint);
   const directoryHint = normalizeNullableString(params.directoryHint);
@@ -81,6 +222,28 @@ function resolveRefreshedDirectSessionMetadata(params: Readonly<{
     didChange = true;
   }
 
+  const snapshot = params.connectedServiceRuntimeSnapshot;
+  if (snapshot && hasConnectedServiceBindings(snapshot)) {
+    const currentSnapshot = readConnectedServiceRuntimeSnapshot(params.currentMetadata);
+    const currentUpdatedAt = currentSnapshot.connectedServicesUpdatedAt;
+    const nextUpdatedAt = snapshot.connectedServicesUpdatedAt;
+    const isOlderThanCurrent =
+      currentSnapshot.connectedServices
+      && currentUpdatedAt !== undefined
+      && nextUpdatedAt !== undefined
+      && nextUpdatedAt < currentUpdatedAt;
+    if (!isOlderThanCurrent && uniqueSnapshotKey(currentSnapshot) !== uniqueSnapshotKey(snapshot)) {
+      nextMetadata.connectedServices = snapshot.connectedServices;
+      if (nextUpdatedAt !== undefined) {
+        nextMetadata.connectedServicesUpdatedAt = nextUpdatedAt;
+      }
+      if (snapshot.connectedServiceMaterializationIdentityV1) {
+        nextMetadata.connectedServiceMaterializationIdentityV1 = snapshot.connectedServiceMaterializationIdentityV1;
+      }
+      didChange = true;
+    }
+  }
+
   return didChange ? nextMetadata : null;
 }
 
@@ -89,8 +252,13 @@ async function refreshExistingDirectSessionMetadataIfNeeded(params: Readonly<{
   sessionId: string;
   titleHint?: string | null;
   directoryHint?: string | null;
+  connectedServiceRuntimeSnapshot?: ConnectedServiceRuntimeSnapshot;
 }>): Promise<void> {
-  if (!normalizeNullableString(params.titleHint) && !normalizeNullableString(params.directoryHint)) {
+  if (
+    !normalizeNullableString(params.titleHint)
+    && !normalizeNullableString(params.directoryHint)
+    && !hasConnectedServiceBindings(params.connectedServiceRuntimeSnapshot ?? {})
+  ) {
     return;
   }
 
@@ -111,6 +279,7 @@ async function refreshExistingDirectSessionMetadataIfNeeded(params: Readonly<{
     currentMetadata: initialMetadataRecord,
     titleHint: params.titleHint,
     directoryHint: params.directoryHint,
+    connectedServiceRuntimeSnapshot: params.connectedServiceRuntimeSnapshot,
   });
   if (!nextMetadata) return;
 
@@ -124,6 +293,7 @@ async function refreshExistingDirectSessionMetadataIfNeeded(params: Readonly<{
         currentMetadata,
         titleHint: params.titleHint,
         directoryHint: params.directoryHint,
+        connectedServiceRuntimeSnapshot: params.connectedServiceRuntimeSnapshot,
       }) ?? currentMetadata,
   }).catch(() => undefined);
 }
@@ -337,6 +507,7 @@ function buildDirectSessionMetadata(params: Readonly<{
   source: DirectSessionsSource;
   codexBackendMode?: CodexBackendMode | null;
   runtimeDescriptor?: AgentRuntimeDescriptorV1 | null;
+  connectedServiceRuntimeSnapshot?: ConnectedServiceRuntimeSnapshot;
   titleHint?: string | null;
   directoryHint?: string | null;
   nowMs: number;
@@ -360,6 +531,16 @@ function buildDirectSessionMetadata(params: Readonly<{
       ...(params.runtimeDescriptor ? { agentRuntimeDescriptorV1: params.runtimeDescriptor } : {}),
     },
   };
+  const snapshot = params.connectedServiceRuntimeSnapshot;
+  if (snapshot && hasConnectedServiceBindings(snapshot)) {
+    base.connectedServices = snapshot.connectedServices;
+    if (snapshot.connectedServicesUpdatedAt !== undefined) {
+      base.connectedServicesUpdatedAt = snapshot.connectedServicesUpdatedAt;
+    }
+    if (snapshot.connectedServiceMaterializationIdentityV1) {
+      base.connectedServiceMaterializationIdentityV1 = snapshot.connectedServiceMaterializationIdentityV1;
+    }
+  }
   if (titleHint) {
     base.name = titleHint;
   }
@@ -433,6 +614,11 @@ export async function ensureDirectSessionLink(params: Readonly<{
   const source = codexIdentity?.source ?? params.source;
   const codexBackendMode = codexIdentity?.codexBackendMode ?? params.codexBackendMode ?? null;
   const runtimeDescriptor = codexIdentity?.runtimeDescriptor ?? openCodeIdentity?.runtimeDescriptor ?? params.runtimeDescriptor ?? null;
+  const connectedServiceRuntimeSnapshot = await resolveConnectedServiceRuntimeSnapshotForDirectLink({
+    providerId: params.providerId,
+    remoteSessionId,
+    directoryHint: params.directoryHint,
+  });
 
   const tag = computeDirectSessionTag({
     machineId: params.machineId,
@@ -447,6 +633,7 @@ export async function ensureDirectSessionLink(params: Readonly<{
       sessionId: existingSessionId,
       titleHint: params.titleHint,
       directoryHint: params.directoryHint,
+      connectedServiceRuntimeSnapshot,
     });
     return { sessionId: existingSessionId, created: false, tag };
   }
@@ -459,6 +646,7 @@ export async function ensureDirectSessionLink(params: Readonly<{
     source,
     codexBackendMode,
     runtimeDescriptor,
+    connectedServiceRuntimeSnapshot,
     titleHint: params.titleHint,
     directoryHint: params.directoryHint,
     nowMs: nowMs(),

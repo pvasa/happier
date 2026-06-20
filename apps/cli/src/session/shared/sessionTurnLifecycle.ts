@@ -18,12 +18,19 @@ export function detectSessionTurnLifecycleEvent(value: unknown): SessionTurnLife
         : null;
     if (!contentObj) return null;
 
-    if (contentObj.type === 'acp') {
+    if (contentObj.type === 'text') {
+        return 'ready';
+    }
+
+    if (contentObj.type === 'acp' || contentObj.type === 'codex') {
         const data = contentObj.data;
         const dataObj = data && typeof data === 'object' && !Array.isArray(data)
             ? (data as Record<string, unknown>)
             : null;
         const dataType = typeof dataObj?.type === 'string' ? dataObj.type : null;
+        if (dataType === 'message') {
+            return 'ready';
+        }
         if (
             dataType === 'task_started'
             || dataType === 'task_complete'

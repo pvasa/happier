@@ -556,14 +556,16 @@ class Configuration {
 
     const pendingWakeRaw = String(process.env.HAPPIER_PENDING_QUEUE_IDLE_WAKE_POLL_INTERVAL_MS ?? '').trim();
     const pendingWakeMs = Number.parseInt(pendingWakeRaw, 10);
-    // Default: slow defensive wake only. Real pending queue wakeups should arrive
-    // via server pending-changed updates and reconnect catch-up.
+    // Default: prompt defensive wake. Real pending queue wakeups should arrive via
+    // server pending-changed updates and reconnect catch-up, but lost nudges must
+    // not leave a user-visible prompt waiting on the long idle path. Repeated
+    // snapshot reads remain bounded by pendingQueueStateReconcileThrottleMs.
     this.pendingQueueIdleWakePollIntervalMs =
       pendingWakeRaw === '0'
         ? 0
         : (Number.isFinite(pendingWakeMs) && pendingWakeMs >= 50
             ? Math.min(pendingWakeMs, 60_000)
-            : 30_000);
+            : 5_000);
 
     this.pendingQueueStateReconcileThrottleMs = resolveIntEnvWithBounds(
       'HAPPIER_PENDING_QUEUE_STATE_RECONCILE_THROTTLE_MS',

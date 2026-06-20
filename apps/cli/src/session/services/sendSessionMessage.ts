@@ -13,8 +13,11 @@ import { fetchEncryptedTranscriptPageAfterSeq } from '@/api/session/fetchEncrypt
 import { materializeNextPendingQueueV2MessageViaHttp } from '@/api/session/pendingQueueV2Transport';
 import { waitForTranscriptEncryptedMessageByLocalId } from '@/api/session/transcriptMessageLookup';
 import type { Credentials } from '@/persistence';
-import { detectSessionTurnActivity } from '@/session/query/detectSessionTurnInFlight';
-import { isSessionUserMessage } from '@/session/query/detectSessionTurnInFlight';
+import {
+  detectSessionTurnActivity,
+  isSessionUserMessage,
+  type SessionTurnActivity,
+} from '@/session/query/detectSessionTurnInFlight';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { waitForIdleViaSocket } from '@/session/transport/socket/sessionSocketAgentState';
@@ -104,6 +107,14 @@ function resolveModelId(params: Readonly<{
   }
   const resolved = resolveMetadataStringOverrideV1(params.decryptedMetadata, 'modelOverrideV1', 'modelId');
   return resolved?.value ?? '';
+}
+
+function unknownCurrentUserTurnActivity(): SessionTurnActivity {
+  return {
+    pendingUserTurns: 1,
+    activeTaskInFlight: false,
+    turnInFlight: true,
+  };
 }
 
 async function resolveCurrentTurnAfterSeqExclusive(params: Readonly<{
@@ -294,41 +305,20 @@ export async function sendSessionMessage(params: Readonly<{
   let currentTurnAfterSeqExclusive: number | null = null;
 
   try {
-    if (!shouldUseRuntimeRpc) {
-      const materialized = await waitForTranscriptEncryptedMessageByLocalId({
-        token: params.credentials.token,
-        sessionId: sessionId,
-        localId,
-        maxWaitMs: Math.max(1, deadlineMs - Date.now()),
-      });
-      if (!materialized) {
-        return {
-          ok: false,
-          code: 'timeout',
-        };
-      }
+    const materialized = await waitForTranscriptEncryptedMessageByLocalId({
+      token: params.credentials.token,
+      sessionId: sessionId,
+      localId,
+      maxWaitMs: Math.max(1, deadlineMs - Date.now()),
+    });
+    if (!materialized) {
       return {
-        ok: true,
-        sessionId: sessionId,
-        localId,
-        waited: true,
+        ok: false,
+        code: 'timeout',
       };
     }
 
-    if (shouldUseRuntimeRpc) {
-      const materialized = await waitForTranscriptEncryptedMessageByLocalId({
-        token: params.credentials.token,
-        sessionId: sessionId,
-        localId,
-        maxWaitMs: Math.max(1, deadlineMs - Date.now()),
-      });
-      if (!materialized) {
-        return {
-          ok: false,
-          code: 'timeout',
-        };
-      }
-
+    try {
       const refreshedSession = await fetchSessionById({
         token: params.credentials.token,
         sessionId: sessionId,
@@ -337,23 +327,32 @@ export async function sendSessionMessage(params: Readonly<{
         throw new Error('Session not found after send');
       }
       waitSessionSnapshot = refreshedSession;
-      currentTurnAfterSeqExclusive = await resolveCurrentTurnAfterSeqExclusive({
-        token: params.credentials.token,
-        sessionId: sessionId,
-        localId,
-        materializedSeq: materialized.seq,
-        ctx: sessionTarget.ctx,
-      });
+    } catch {
+      waitSessionSnapshot = sessionTarget.rawSession;
     }
-
-    const initialTurnActivity = await detectSessionTurnActivity({
+    currentTurnAfterSeqExclusive = await resolveCurrentTurnAfterSeqExclusive({
       token: params.credentials.token,
       sessionId: sessionId,
-      encryptionMode: sessionTarget.mode,
-      encryptionKey: sessionTarget.ctx.encryptionKey,
-      encryptionVariant: sessionTarget.ctx.encryptionVariant,
-      ...(typeof currentTurnAfterSeqExclusive === 'number' ? { afterSeqExclusive: currentTurnAfterSeqExclusive } : {}),
+      localId,
+      materializedSeq: materialized.seq,
+      ctx: sessionTarget.ctx,
     });
+
+    let initialTurnActivityRequiresTranscriptIdleEvidence = false;
+    let initialTurnActivity: SessionTurnActivity;
+    try {
+      initialTurnActivity = await detectSessionTurnActivity({
+        token: params.credentials.token,
+        sessionId: sessionId,
+        encryptionMode: sessionTarget.mode,
+        encryptionKey: sessionTarget.ctx.encryptionKey,
+        encryptionVariant: sessionTarget.ctx.encryptionVariant,
+        ...(typeof currentTurnAfterSeqExclusive === 'number' ? { afterSeqExclusive: currentTurnAfterSeqExclusive } : {}),
+      });
+    } catch {
+      initialTurnActivity = unknownCurrentUserTurnActivity();
+      initialTurnActivityRequiresTranscriptIdleEvidence = true;
+    }
 
     const agentStateCiphertext =
       typeof waitSessionSnapshot.agentState === 'string' ? String(waitSessionSnapshot.agentState).trim() : null;
@@ -365,6 +364,7 @@ export async function sendSessionMessage(params: Readonly<{
       sessionEncryptionMode: sessionTarget.mode,
       timeoutMs: Math.max(1, deadlineMs - Date.now()),
       initialTurnActivity,
+      initialTurnActivityRequiresTranscriptIdleEvidence,
       recheckTurnActivity: async () =>
         detectSessionTurnActivity({
           token: params.credentials.token,

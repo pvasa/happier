@@ -9,6 +9,7 @@ import {
     SESSION_MODES_STATE_KEY,
 } from '@happier-dev/agents';
 import {
+    buildConnectedServiceCredentialRecord,
     SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
     type AccountSettings,
     type SessionMediaItemV1,
@@ -74,6 +75,11 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     rateLimitReadResult?: unknown;
     accountReadResult?: unknown;
     rejectRateLimitRead?: boolean;
+    rejectAccountRead?: boolean;
+    loginStartError?: Readonly<{
+        code: number;
+        message: string;
+    }>;
     rollbackError?: Readonly<{
         code: number;
         message: string;
@@ -107,6 +113,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         `const requestLogPath = ${JSON.stringify(params.requestLogPath)};`,
         'const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });',
         'let staleTerminalTurnId = null;',
+        'let loginStartCount = 0;',
         'const resumedThreadIds = new Set();',
         'for await (const line of rl) {',
         '    if (!line.trim()) continue;',
@@ -207,7 +214,20 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        continue;',
         '    }',
         '    if (msg.method === "account/read") {',
+        `        if (${JSON.stringify(params.rejectAccountRead === true)} && loginStartCount > 0) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32000, message: "account/read diagnostics unavailable" } }) + "\\n");',
+        '            continue;',
+        '        }',
         `        process.stdout.write(JSON.stringify({ id: msg.id, result: ${JSON.stringify(params.accountReadResult ?? { account: { id: 'acct_live_codex', email: 'codex-user@example.test' } })} }) + "\\n");`,
+        '        continue;',
+        '    }',
+        '    if (msg.method === "account/login/start") {',
+        `        if (${JSON.stringify(params.loginStartError ?? null)}) {`,
+        `            process.stdout.write(JSON.stringify({ id: msg.id, error: ${JSON.stringify(params.loginStartError ?? null)} }) + "\\n");`,
+        '            continue;',
+        '        }',
+        '        loginStartCount += 1;',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { ok: true } }) + "\\n");',
         '        continue;',
         '    }',
         '    if (msg.method === "thread/goal/get") {',
@@ -1265,6 +1285,11 @@ describe('createCodexAppServerRuntime', () => {
             rateLimitReadResult?: unknown;
             accountReadResult?: unknown;
             rejectRateLimitRead?: boolean;
+            rejectAccountRead?: boolean;
+            loginStartError?: Readonly<{
+                code: number;
+                message: string;
+            }>;
             rejectThreadRead?: boolean;
             requireResumeBeforeThreadRead?: boolean;
             oversizedResumePayloadChars?: number;
@@ -1305,6 +1330,8 @@ describe('createCodexAppServerRuntime', () => {
             rateLimitReadResult: options.rateLimitReadResult,
             accountReadResult: options.accountReadResult,
             rejectRateLimitRead: options.rejectRateLimitRead,
+            rejectAccountRead: options.rejectAccountRead,
+            loginStartError: options.loginStartError,
             rejectThreadRead: options.rejectThreadRead,
             requireResumeBeforeThreadRead: options.requireResumeBeforeThreadRead,
             oversizedResumePayloadChars: options.oversizedResumePayloadChars,
@@ -2896,7 +2923,7 @@ describe('createCodexAppServerRuntime', () => {
 
     it('advertises in-flight steer support and can call turn/steer while a turn is in flight', async () => {
         const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-steer-');
-        const acceptedPrompts: Array<{ userMessageSeq: number | null }> = [];
+        const acceptedPrompts: Array<{ localIds?: readonly string[] | null; userMessageSeq: number | null }> = [];
 
         const runtime = createCodexAppServerRuntime({
             directory: root,
@@ -2914,7 +2941,7 @@ describe('createCodexAppServerRuntime', () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
 
         expect(runtime.isTurnInFlight()).toBe(true);
-        await runtime.steerPrompt('nudge', { userMessageSeq: 42 });
+        await runtime.steerPrompt('nudge', { localId: 'local-steer-42', userMessageSeq: 42 });
         await sendPromptPromise;
 
         const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
@@ -2928,7 +2955,7 @@ describe('createCodexAppServerRuntime', () => {
             }),
         ]);
         expect(requestLog.filter((entry: { method: string }) => entry.method === 'turn/start')).toHaveLength(1);
-        expect(acceptedPrompts).toContainEqual({ userMessageSeq: 42 });
+        expect(acceptedPrompts).toContainEqual({ localIds: ['local-steer-42'], userMessageSeq: 42 });
     });
 
     it('does not let a delayed turn/start response confirm an overlapping steer prompt', async () => {
@@ -5667,7 +5694,6 @@ describe('createCodexAppServerRuntime', () => {
             },
             accountReadResult: {
                 account: {
-                    id: 'acct_team_live',
                     email: 'team@example.test',
                 },
             },
@@ -5719,6 +5745,15 @@ describe('createCodexAppServerRuntime', () => {
         const runtime = createCodexAppServerRuntime({
             directory: root,
             processEnv,
+            initialConnectedServiceRuntimeIdentity: {
+                serviceId: 'openai-codex',
+                activeAccountId: 'acct_team_seeded',
+                accountLabel: 'team@example.test',
+                profileId: 'backup',
+                groupId: 'happier',
+                generation: 7,
+                source: 'spawn_selection',
+            },
             onThinkingChange: vi.fn(),
             onRateLimitSnapshot,
             onUsageLimitGroupRecovery,
@@ -5764,8 +5799,9 @@ describe('createCodexAppServerRuntime', () => {
                     resets_at: '2026-05-17T12:00:00.000Z',
                 },
             }, {
-                activeAccountId: 'acct_team_live',
+                activeAccountId: 'acct_team_seeded',
                 accountLabel: 'team@example.test',
+                rawResetCredits: null,
             });
             const requestLogBeforeManualCheck = await readRequestLog(requestLogPath);
             expect(requestLogBeforeManualCheck.map((entry) => entry.method)).toEqual(expect.arrayContaining([
@@ -5803,6 +5839,114 @@ describe('createCodexAppServerRuntime', () => {
                     groupId: 'happier',
                     profileId: 'backup',
                 }),
+            });
+        } finally {
+            await runtime.reset();
+        }
+    });
+
+    it('prefers fresh live account id over seeded runtime identity for rate-limit snapshot attribution', async () => {
+        const { root, fakeAppServer } = await createRuntimeFixture('happier-codex-app-server-runtime-usage-limit-live-account-id-', {
+            rateLimitReadResult: {
+                plan_type: 'pro',
+                primary: {
+                    used_percent: 100,
+                    resets_at: '2026-05-17T12:00:00.000Z',
+                },
+            },
+            accountReadResult: {
+                chatgpt_account_id: 'acct_live_codex',
+                account: {
+                    email: 'live@example.test',
+                },
+            },
+        });
+        const metadata: Metadata = {
+            path: root,
+            host: 'test-host',
+            homeDir: root,
+            happyHomeDir: join(root, '.happier'),
+            happyLibDir: join(root, '.happier', 'lib'),
+            happyToolsDir: join(root, '.happier', 'tools'),
+        };
+        (metadata as Record<string, unknown>).connectedServices = {
+            v: 1,
+            bindingsByServiceId: {
+                'openai-codex': {
+                    source: 'connected',
+                    selection: 'group',
+                    groupId: 'happier',
+                    profileId: 'backup',
+                },
+            },
+        };
+        const processEnv = createCodexAppServerProcessEnv(fakeAppServer, {
+            [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+                kind: 'group',
+                serviceId: 'openai-codex',
+                groupId: 'happier',
+                activeProfileId: 'backup',
+                generation: 7,
+            }]),
+        });
+        const onRateLimitSnapshot = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            processEnv,
+            initialConnectedServiceRuntimeIdentity: {
+                serviceId: 'openai-codex',
+                activeAccountId: 'acct_seeded_stale',
+                accountLabel: 'seeded@example.test',
+                profileId: 'backup',
+                groupId: 'happier',
+                generation: 7,
+                source: 'spawn_selection',
+            },
+            onThinkingChange: vi.fn(),
+            onRateLimitSnapshot,
+            onUsageLimitGroupRecovery: vi.fn(async () => ({
+                handled: true,
+                report: {
+                    ok: true,
+                    result: {
+                        status: 'switch_attempted',
+                        result: { status: 'no_eligible_member' },
+                    },
+                },
+                statusCode: 'switch_attempted_no_eligible_member',
+                statusMessage: 'No eligible connected-service account is available.',
+            })),
+            session: {
+                sessionId: 'session-live-account-id',
+                updateMetadata: vi.fn(),
+                sessionTurnLifecycle: createSessionTurnLifecycleTestDouble(),
+                getMetadataSnapshot: () => metadata,
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as unknown as Parameters<typeof createCodexAppServerRuntime>[0]['session'],
+        });
+
+        try {
+            await runtime.startOrLoad({});
+
+            await expect(runtime.sendPrompt('usage-limit-structured')).rejects.toMatchObject({
+                runtimeAuthClassification: {
+                    kind: 'usage_limit',
+                    serviceId: 'openai-codex',
+                    profileId: 'backup',
+                    groupId: 'happier',
+                },
+            });
+            expect(onRateLimitSnapshot).toHaveBeenCalledWith({
+                plan_type: 'pro',
+                primary: {
+                    used_percent: 100,
+                    resets_at: '2026-05-17T12:00:00.000Z',
+                },
+            }, {
+                activeAccountId: 'acct_live_codex',
+                accountLabel: 'live@example.test',
+                rawResetCredits: null,
             });
         } finally {
             await runtime.reset();
@@ -6159,7 +6303,7 @@ describe('createCodexAppServerRuntime', () => {
         }
     });
 
-    it('routes usage-limit rate-limit probes through the shared param-compat reader (single null-params probe when accepted)', async () => {
+    it('routes usage-limit rate-limit probes through the shared param-compat reader with null params when accepted', async () => {
         const { root, fakeAppServer, requestLogPath } = await createRuntimeFixture(
             'happier-codex-app-server-runtime-rate-limit-params-',
         );
@@ -6209,7 +6353,7 @@ describe('createCodexAppServerRuntime', () => {
 
             const rateLimitReads = (await readRequestLog(requestLogPath))
                 .filter((entry) => entry.method === 'account/rateLimits/read');
-            expect(rateLimitReads.map((entry) => entry.params)).toEqual([null]);
+            expect(rateLimitReads.map((entry) => entry.params)).toEqual([null, null]);
         } finally {
             await runtime.reset();
         }
@@ -6725,7 +6869,7 @@ describe('createCodexAppServerRuntime', () => {
                 planType: 'pro',
                 rateLimitReachedType: null,
             },
-        });
+        }, undefined);
     });
 
     it('notifies prompt acceptance only after the provider turn/started event', async () => {
@@ -7195,6 +7339,557 @@ describe('createCodexAppServerRuntime', () => {
             type: 'message',
             message: expect.stringContaining('RETRY_CONTEXT_WINDOW_FAILURE'),
         }));
+    });
+
+    it('applies connected-service auth directly to the running app-server and publishes exact applied account quota proof', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-live-auth-apply-', {
+            accountReadResult: { account: { email: 'target@example.test', planType: 'team' } },
+            rateLimitReadResult: { plan_type: 'team', primary: { used_percent: 3, resets_at: '2026-05-17T12:00:00.000Z' } },
+        });
+        const quotaSnapshots: Array<Readonly<{ rawSnapshot: unknown; context: unknown }>> = [];
+        const refreshSelectionUpdates: unknown[] = [];
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            onRateLimitSnapshot: vi.fn(async (rawSnapshot, context) => {
+                quotaSnapshots.push({ rawSnapshot, context });
+            }),
+            onConnectedServiceAuthGenerationApplied: vi.fn(async ({ selection }) => {
+                refreshSelectionUpdates.push(selection);
+            }),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+        const candidate = buildConnectedServiceCredentialRecord({
+            now: 1000,
+            serviceId: 'openai-codex',
+            profileId: 'target',
+            kind: 'oauth',
+            expiresAt: 2000,
+            oauth: {
+                accessToken: 'target-access',
+                refreshToken: 'target-refresh',
+                idToken: 'target-id',
+                scope: null,
+                tokenType: null,
+                providerAccountId: 'acct_target',
+                providerEmail: 'target@example.test',
+            },
+        });
+        const selection = {
+            kind: 'group',
+            serviceId: 'openai-codex',
+            groupId: 'main',
+            activeProfileId: 'target',
+            fallbackProfileId: 'old',
+            generation: 8,
+        } as const;
+
+        await runtime.startOrLoad({});
+
+        await expect((runtime as any).applyConnectedServiceAuthGeneration({
+            serviceId: 'openai-codex',
+            reason: 'usage_limit',
+            expected: {
+                profileId: 'target',
+                groupId: 'main',
+                generation: 8,
+            },
+            authGeneration: {
+                credential: candidate,
+                selection,
+                forcedWorkspaceId: null,
+            },
+        })).resolves.toMatchObject({
+            ok: true,
+            appliedVia: 'direct_live_hot_auth',
+            verification: {
+                activeAccountId: 'acct_target',
+                proofStrength: 'exact',
+                source: 'applied_credential',
+                reason: 'direct_live_exact_proof_accepted',
+            },
+        });
+
+        await expect((runtime as any).readConnectedServiceRuntimeIdentity({
+            serviceId: 'openai-codex',
+            reason: 'diagnostic',
+            requireExactProof: true,
+        })).resolves.toMatchObject({
+            ok: true,
+            serviceId: 'openai-codex',
+            identity: {
+                strategy: 'provider_account_id',
+                proofStrength: 'exact',
+                providerAccountId: 'acct_target',
+                accountLabel: 'target@example.test',
+                source: 'applied_credential',
+            },
+            runtime: {
+                safeToApply: true,
+                inProviderTurn: false,
+                profileId: 'target',
+                groupId: 'main',
+                generation: 8,
+            },
+        });
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.filter((entry) => entry.method === 'initialize')).toHaveLength(1);
+        expect(requestLog.filter((entry) => entry.method === 'account/login/start')).toHaveLength(1);
+        expect(requestLog).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                method: 'account/login/start',
+                params: {
+                    type: 'chatgptAuthTokens',
+                    accessToken: 'target-access',
+                    chatgptAccountId: 'acct_target',
+                },
+            }),
+            expect.objectContaining({ method: 'account/read' }),
+            expect.objectContaining({ method: 'account/rateLimits/read' }),
+        ]));
+        expect(refreshSelectionUpdates).toEqual([selection]);
+        expect(quotaSnapshots.at(-1)).toMatchObject({
+            rawSnapshot: {
+                plan_type: 'team',
+                primary: { used_percent: 3, resets_at: '2026-05-17T12:00:00.000Z' },
+            },
+            context: {
+                activeAccountId: 'acct_target',
+                accountLabel: 'target@example.test',
+            },
+        });
+        await expect(readFile(join(root, 'codex-home', 'auth.json'), 'utf8'))
+            .resolves
+            .toContain('"account_id": "acct_target"');
+    });
+
+    it('keeps exact direct-live proof when account-read diagnostics fail after live auth apply', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture(
+            'happier-codex-app-server-runtime-live-auth-account-read-diagnostic-',
+            {
+                rejectAccountRead: true,
+                rateLimitReadResult: {
+                    plan_type: 'team',
+                    primary: { used_percent: 3, resets_at: '2026-05-17T12:00:00.000Z' },
+                },
+            },
+        );
+        const quotaSnapshots: Array<Readonly<{ rawSnapshot: unknown; context: unknown }>> = [];
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            onRateLimitSnapshot: vi.fn(async (rawSnapshot, context) => {
+                quotaSnapshots.push({ rawSnapshot, context });
+            }),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+        const candidate = buildConnectedServiceCredentialRecord({
+            now: 1000,
+            serviceId: 'openai-codex',
+            profileId: 'target',
+            kind: 'oauth',
+            expiresAt: 2000,
+            oauth: {
+                accessToken: 'target-access',
+                refreshToken: 'target-refresh',
+                idToken: 'target-id',
+                scope: null,
+                tokenType: null,
+                providerAccountId: 'acct_target',
+                providerEmail: 'target@example.test',
+            },
+        });
+
+        await runtime.startOrLoad({});
+
+        await expect((runtime as any).applyConnectedServiceAuthGeneration({
+            serviceId: 'openai-codex',
+            reason: 'usage_limit',
+            authGeneration: {
+                credential: candidate,
+                forcedWorkspaceId: null,
+            },
+        })).resolves.toMatchObject({
+            ok: true,
+            appliedVia: 'direct_live_hot_auth',
+            activeAccountId: 'acct_target',
+            verification: {
+                activeAccountId: 'acct_target',
+                proofStrength: 'exact',
+                source: 'applied_credential',
+                reason: 'direct_live_exact_proof_accepted',
+            },
+            diagnostics: {
+                accountRead: {
+                    status: 'failed',
+                    reason: 'account_read_diagnostics_failed',
+                },
+            },
+        });
+
+        expect(quotaSnapshots.at(-1)).toMatchObject({
+            context: {
+                activeAccountId: 'acct_target',
+                accountLabel: null,
+            },
+        });
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.map((entry) => entry.method)).toEqual(expect.arrayContaining([
+            'account/read',
+            'account/rateLimits/read',
+        ]));
+    });
+
+    it('reports auth-store persistence failure after direct-live auth as restart-required partial state', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture(
+            'happier-codex-app-server-runtime-live-auth-durability-failure-',
+        );
+        await writeFile(join(root, 'codex-home'), 'not a directory');
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+        const candidate = buildConnectedServiceCredentialRecord({
+            now: 1000,
+            serviceId: 'openai-codex',
+            profileId: 'target',
+            kind: 'oauth',
+            expiresAt: 2000,
+            oauth: {
+                accessToken: 'target-access',
+                refreshToken: 'target-refresh',
+                idToken: 'target-id',
+                scope: null,
+                tokenType: null,
+                providerAccountId: 'acct_target',
+                providerEmail: 'target@example.test',
+            },
+        });
+
+        await runtime.startOrLoad({});
+
+        await expect((runtime as any).applyConnectedServiceAuthGeneration({
+            serviceId: 'openai-codex',
+            reason: 'usage_limit',
+            authGeneration: {
+                credential: candidate,
+                forcedWorkspaceId: null,
+            },
+        })).resolves.toMatchObject({
+            ok: false,
+            errorCode: 'auth_store_persistence_failed_after_live_apply',
+            error: 'auth_store_persistence_failed_after_live_apply',
+            appliedVia: 'direct_live_hot_auth',
+            activeAccountId: 'acct_target',
+            partialState: 'runtime_auth_applied',
+            recovery: 'restart_resume',
+            verification: {
+                activeAccountId: 'acct_target',
+                proofStrength: 'exact',
+                source: 'applied_credential',
+                reason: 'direct_live_exact_proof_accepted',
+            },
+            durability: {
+                persisted: false,
+                errorCode: 'auth_store_persistence_failed_after_live_apply',
+            },
+        });
+
+        await expect((runtime as any).readConnectedServiceRuntimeIdentity({
+            serviceId: 'openai-codex',
+            reason: 'diagnostic',
+            requireExactProof: true,
+        })).resolves.toMatchObject({
+            ok: true,
+            identity: {
+                providerAccountId: 'acct_target',
+                proofStrength: 'exact',
+                source: 'applied_credential',
+            },
+        });
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.map((entry) => entry.method)).toContain('account/login/start');
+    });
+
+    it('reports exact spawn-time connected-service runtime identity before direct live apply', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-spawn-identity-');
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            initialConnectedServiceRuntimeIdentity: {
+                serviceId: 'openai-codex',
+                activeAccountId: 'acct_spawned',
+                accountLabel: 'spawned@example.test',
+                profileId: 'team',
+                groupId: 'main',
+                generation: 42,
+                source: 'spawn_selection',
+            },
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        } as any);
+
+        await expect((runtime as any).readConnectedServiceRuntimeIdentity({
+            serviceId: 'openai-codex',
+            reason: 'same_provider_account_exhausted',
+            expected: {
+                profileId: 'team',
+                groupId: 'main',
+                generation: 42,
+            },
+            requireExactProof: true,
+        })).resolves.toMatchObject({
+            ok: true,
+            identity: {
+                strategy: 'provider_account_id',
+                proofStrength: 'exact',
+                providerAccountId: 'acct_spawned',
+                accountLabel: 'spawned@example.test',
+                source: 'spawn_selection',
+            },
+            runtime: {
+                profileId: 'team',
+                groupId: 'main',
+                generation: 42,
+            },
+        });
+    });
+
+    it('keeps exact runtime identity available when daemon expected profile and generation are stale', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-stale-expected-identity-');
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            initialConnectedServiceRuntimeIdentity: {
+                serviceId: 'openai-codex',
+                activeAccountId: 'acct_runtime',
+                accountLabel: 'runtime@example.test',
+                profileId: 'runtime-current',
+                groupId: 'main',
+                generation: 337,
+                source: 'spawn_selection',
+            },
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        } as any);
+
+        await expect((runtime as any).readConnectedServiceRuntimeIdentity({
+            serviceId: 'openai-codex',
+            reason: 'same_provider_account_exhausted',
+            expected: {
+                profileId: 'stale-daemon-profile',
+                groupId: 'main',
+                generation: 4,
+            },
+            requireExactProof: true,
+        })).resolves.toMatchObject({
+            ok: true,
+            serviceId: 'openai-codex',
+            identity: {
+                strategy: 'provider_account_id',
+                proofStrength: 'exact',
+                providerAccountId: 'acct_runtime',
+                accountLabel: 'runtime@example.test',
+                source: 'spawn_selection',
+            },
+            runtime: {
+                profileId: 'runtime-current',
+                groupId: 'main',
+                generation: 337,
+            },
+        });
+    });
+
+    it('does not adopt runtime identity when refresh bridge update fails before live auth mutation', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-live-auth-partial-');
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            onConnectedServiceAuthGenerationApplied: vi.fn(async () => {
+                throw new Error('selection update failed');
+            }),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+        const candidate = buildConnectedServiceCredentialRecord({
+            now: 1000,
+            serviceId: 'openai-codex',
+            profileId: 'target',
+            kind: 'oauth',
+            expiresAt: 2000,
+            oauth: {
+                accessToken: 'target-access',
+                refreshToken: 'target-refresh',
+                idToken: 'target-id',
+                scope: null,
+                tokenType: null,
+                providerAccountId: 'acct_target',
+                providerEmail: 'target@example.test',
+            },
+        });
+        const selection = {
+            kind: 'group',
+            serviceId: 'openai-codex',
+            groupId: 'main',
+            activeProfileId: 'target',
+            fallbackProfileId: 'old',
+            generation: 8,
+        } as const;
+
+        await runtime.startOrLoad({});
+
+        await expect((runtime as any).applyConnectedServiceAuthGeneration({
+            serviceId: 'openai-codex',
+            reason: 'usage_limit',
+            expected: {
+                profileId: 'target',
+                groupId: 'main',
+                generation: 8,
+            },
+            authGeneration: {
+                credential: candidate,
+                selection,
+                forcedWorkspaceId: null,
+            },
+        })).resolves.toMatchObject({
+            ok: false,
+            errorCode: 'refresh_selection_resync_failed',
+        });
+
+        await expect((runtime as any).readConnectedServiceRuntimeIdentity({
+            serviceId: 'openai-codex',
+            reason: 'diagnostic',
+            expected: {
+                profileId: 'target',
+                groupId: 'main',
+                generation: 8,
+            },
+            requireExactProof: true,
+        })).resolves.toMatchObject({
+            ok: false,
+            errorCode: 'runtime_identity_probe_missing_exact_identity',
+        });
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.map((entry) => entry.method)).not.toContain('account/login/start');
+    });
+
+    it('direct-live applies connected-service auth while a provider turn is in flight', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-live-auth-busy-');
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            onConnectedServiceAuthGenerationApplied: vi.fn(async () => {}),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+        const candidate = buildConnectedServiceCredentialRecord({
+            now: 1000,
+            serviceId: 'openai-codex',
+            profileId: 'target',
+            kind: 'oauth',
+            expiresAt: 2000,
+            oauth: {
+                accessToken: 'target-access',
+                refreshToken: 'target-refresh',
+                idToken: 'target-id',
+                scope: null,
+                tokenType: null,
+                providerAccountId: 'acct_target',
+                providerEmail: null,
+            },
+        });
+
+        await runtime.startOrLoad({});
+        const promptPromise = runtime.sendPrompt('overlap-start');
+        await waitForCondition(async () => {
+            const requestLog = await readRequestLog(requestLogPath);
+            return requestLog.some((entry) => {
+                const params = entry.params as { input?: Array<{ text?: string }> } | null;
+                return entry.method === 'turn/start' && params?.input?.[0]?.text === 'overlap-start';
+            });
+        }, {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'Codex app-server test prompt to start before live auth apply',
+        });
+
+        await expect((runtime as any).applyConnectedServiceAuthGeneration({
+            serviceId: 'openai-codex',
+            reason: 'same_provider_account_exhausted',
+            requireDirectLiveHotApply: true,
+            expected: {
+                profileId: 'target',
+            },
+            authGeneration: {
+                credential: candidate,
+                forcedWorkspaceId: null,
+            },
+        })).resolves.toMatchObject({
+            ok: true,
+            appliedVia: 'direct_live_hot_auth',
+            activeAccountId: 'acct_target',
+            verification: {
+                activeAccountId: 'acct_target',
+                proofStrength: 'exact',
+                source: 'applied_credential',
+                reason: 'direct_live_exact_proof_accepted',
+            },
+        });
+
+        const identityResponse = await (runtime as any).readConnectedServiceRuntimeIdentity({
+            serviceId: 'openai-codex',
+            reason: 'same_provider_account_exhausted',
+            expected: {
+                profileId: 'target',
+            },
+            requireExactProof: true,
+        });
+        expect(identityResponse).toMatchObject({
+            ok: true,
+            identity: {
+                strategy: 'provider_account_id',
+                proofStrength: 'exact',
+                providerAccountId: 'acct_target',
+                source: 'applied_credential',
+            },
+            runtime: {
+                inProviderTurn: true,
+                safeToApply: false,
+                profileId: 'target',
+            },
+        });
+        expect(identityResponse.runtime).not.toHaveProperty('safeToDirectLiveApply');
+        expect(identityResponse.runtime).not.toHaveProperty('requiresTurnBoundaryForApply');
+
+        await expect(promptPromise).resolves.toBeUndefined();
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.map((entry) => entry.method)).toContain('account/login/start');
     });
 
     it('invalidates connected-service auth transports by restarting the app-server and resuming the same thread', async () => {

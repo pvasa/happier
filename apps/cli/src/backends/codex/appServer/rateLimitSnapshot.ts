@@ -8,6 +8,7 @@ export function unwrapCodexRateLimitSnapshot(rawSnapshot: unknown): unknown {
   const record = isRecord(rawSnapshot) ? rawSnapshot : null;
   if (record && isRecord(record.rateLimits)) return record.rateLimits;
   if (record && isRecord(record.rate_limits)) return record.rate_limits;
+  if (record && isRecord(record.rate_limit)) return record.rate_limit;
   return rawSnapshot;
 }
 

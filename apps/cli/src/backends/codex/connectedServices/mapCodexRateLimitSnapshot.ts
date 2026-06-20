@@ -6,6 +6,7 @@ import {
   type ConnectedServiceQuotaSnapshotV1,
 } from '@happier-dev/protocol';
 
+import { mapCodexRateLimitResetCreditsToQuotaRecoveryCredits } from '../quota/codexQuotaRecoveryCredits';
 import { unwrapCodexRateLimitSnapshot } from '../appServer/rateLimitSnapshot';
 import { parseProviderTimestampMs } from '@/daemon/connectedServices/quotas/normalization';
 
@@ -110,16 +111,21 @@ export function mapCodexRateLimitSnapshotToQuotaSnapshot(params: Readonly<{
   fetchedAt: number;
   staleAfterMs?: number;
   rawSnapshot: unknown;
+  rawResetCredits?: unknown;
 }>): ConnectedServiceQuotaSnapshotV1 {
   const unwrappedSnapshot = unwrapCodexRateLimitSnapshot(params.rawSnapshot);
+  const rawRoot = isRecord(params.rawSnapshot) ? params.rawSnapshot : {};
   const raw = isRecord(unwrappedSnapshot) ? unwrappedSnapshot : {};
   const account = readCodexSnapshotAccount(params.rawSnapshot, unwrappedSnapshot);
   const relativeResetReferenceMs = Math.max(0, Math.trunc(params.fetchedAt));
+  const resetCredits = mapCodexRateLimitResetCreditsToQuotaRecoveryCredits(
+    params.rawResetCredits ?? rawRoot.rate_limit_reset_credits ?? raw.rate_limit_reset_credits,
+  );
   const meters = [
     buildMeter('primary', raw.primary ?? raw.primary_window ?? raw.primaryWindow, relativeResetReferenceMs),
     buildMeter('secondary', raw.secondary ?? raw.secondary_window ?? raw.secondaryWindow, relativeResetReferenceMs),
   ].filter((meter): meter is ConnectedServiceQuotaMeterV1 => meter !== null);
-  const activeAccountId = readCodexSnapshotActiveAccountId(account) ?? readString(params.activeAccountId);
+  const activeAccountId = readString(params.activeAccountId) ?? readCodexSnapshotActiveAccountId(account);
 
   return ConnectedServiceQuotaSnapshotV1Schema.parse({
     v: 1,
@@ -133,8 +139,9 @@ export function mapCodexRateLimitSnapshotToQuotaSnapshot(params: Readonly<{
     staleAtMs: Math.max(0, Math.trunc(params.fetchedAt)) + (params.staleAfterMs ?? CODEX_RATE_LIMIT_SNAPSHOT_STALE_AFTER_MS),
     source: 'in_band_provider_snapshot',
     confidence: meters.length > 0 ? 'exact' : 'unknown',
-    planLabel: readString(raw.planType ?? raw.plan_type),
-    accountLabel: readString(account.email ?? raw.email ?? raw.accountLabel ?? raw.account_label ?? params.accountLabel),
+    planLabel: readString(raw.planType ?? raw.plan_type ?? rawRoot.planType ?? rawRoot.plan_type),
+    accountLabel: readString(account.email ?? raw.email ?? rawRoot.email ?? raw.accountLabel ?? raw.account_label ?? params.accountLabel),
+    ...(resetCredits ? { recoveryCredits: resetCredits } : {}),
     meters,
   });
 }

@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { readCodexEnvironmentAuthState } from './readCodexEnvironmentAuthState';
+import {
+  readCodexEnvironmentAuthState,
+  readCodexEnvironmentAuthTokens,
+} from './readCodexEnvironmentAuthState';
 
 function buildJwt(payload: Record<string, unknown>): string {
   return [
@@ -57,6 +60,30 @@ describe('readCodexEnvironmentAuthState', () => {
 
     expect(readCodexEnvironmentAuthState({ HOME: dir, USERPROFILE: dir })).toEqual({
       method: 'credentials_file',
+      accountLabel: 'valid@example.test',
+    });
+  });
+
+  it('reads unexpired Codex auth tokens and ChatGPT account id for provider APIs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-codex-auth-tokens-'));
+    tempDirs.push(dir);
+    await mkdir(join(dir, '.codex'), { recursive: true });
+    await writeFile(
+      join(dir, '.codex', 'auth.json'),
+      JSON.stringify({
+        tokens: {
+          id_token: buildJwt({ email: 'valid@example.test', exp: 4_102_444_800 }),
+          access_token: buildJwt({ email: 'valid@example.test', exp: 4_102_444_800 }),
+          account_id: 'acct-native',
+        },
+      }),
+      'utf8',
+    );
+
+    expect(readCodexEnvironmentAuthTokens({ HOME: dir, USERPROFILE: dir })).toEqual({
+      idToken: expect.any(String),
+      accessToken: expect.any(String),
+      accountId: 'acct-native',
       accountLabel: 'valid@example.test',
     });
   });

@@ -1,8 +1,13 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { buildCodexAgentRuntimeDescriptor } from '@happier-dev/agents';
 import {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   type SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionUsageLimitRecoveryControlAdapterParams } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryControlTypes';
 import type { CodexAppServerClient } from '../client/createCodexAppServerClient';
 import { createCodexAppServerUsageLimitRecoveryControlAdapter } from './codexAppServerUsageLimitRecoveryControlAdapter';
@@ -54,7 +59,21 @@ function createParams(
   };
 }
 
+function buildJwt(payload: Record<string, unknown>): string {
+  return [
+    Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url'),
+    Buffer.from(JSON.stringify(payload)).toString('base64url'),
+    'signature',
+  ].join('.');
+}
+
 describe('codexAppServerUsageLimitRecoveryControlAdapter', () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
   it('probes Codex rate limits with a temporary app-server control client and marks ready when lifted', async () => {
     const controlClientCalls: RunWithControlClientParams[] = [];
     const runWithControlClient: RunWithControlClient = async (params) => {
@@ -390,5 +409,149 @@ describe('codexAppServerUsageLimitRecoveryControlAdapter', () => {
       errorCode: 'codex_quota_probe_unsupported_for_backend_mode',
       error: 'codex_quota_probe_unsupported_for_backend_mode',
     });
+  });
+
+  it('consumes a native Codex reset credit then probes rate limits and marks recovery ready', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'happier-codex-reset-native-home-'));
+    tempDirs.push(codexHome);
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(
+      join(codexHome, 'auth.json'),
+      JSON.stringify({
+        tokens: {
+          id_token: buildJwt({ email: 'native@example.test', exp: 4_102_444_800 }),
+          access_token: buildJwt({ email: 'native@example.test', exp: 4_102_444_800 }),
+          account_id: 'acct-native',
+        },
+      }),
+      'utf8',
+    );
+    const fetchRuntime = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    } as Response));
+    const runWithControlClient: RunWithControlClient = async (params) => ({
+      ok: true,
+      value: await params.run(createClient(async (method) => {
+        expect(method).toBe('account/rateLimits/read');
+        return { primary: { used_percent: 12 } };
+      })),
+    });
+    const adapter = createCodexAppServerUsageLimitRecoveryControlAdapter({
+      runWithControlClient,
+      fetchRuntime,
+    });
+    const metadata = {
+      machineId: 'machine-local',
+      agentRuntimeDescriptorV1: buildCodexAgentRuntimeDescriptor({
+        backendMode: 'appServer',
+        vendorSessionId: 'thread-1',
+        home: 'user',
+        homePath: codexHome,
+      }),
+      sessionUsageLimitRecoveryV1: {
+        v: 1,
+        status: 'waiting',
+        issueFingerprint: 'usage-limit:sess_1:reset',
+        armedAtMs: 1,
+        resetAtMs: 2,
+        nextCheckAtMs: 2,
+        attemptCount: 0,
+        maxAttempts: 3,
+        lastProbeError: null,
+        selectedAuth: { kind: 'native', serviceId: 'openai-codex' },
+      },
+    };
+
+    await expect(adapter.consumeResetCredit?.(createParams(metadata))).resolves.toMatchObject({
+      ok: true,
+      status: 'ready',
+      metadata: {
+        sessionUsageLimitRecoveryV1: {
+          status: 'cancelled',
+          attemptCount: 1,
+        },
+      },
+    });
+    expect(fetchRuntime).toHaveBeenCalledWith(
+      'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: expect.stringMatching(/^Bearer /),
+          'ChatGPT-Account-Id': 'acct-native',
+        }),
+      }),
+    );
+  });
+
+  it('consumes a connected-service Codex reset credit for the selected profile', async () => {
+    const fetchRuntime = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    } as Response));
+    const resolveConnectedServiceResetCreditAuth = vi.fn(async () => ({
+      accessToken: 'connected-access',
+      accountId: 'acct-connected',
+    }));
+    const runWithControlClient: RunWithControlClient = async (params) => ({
+      ok: true,
+      value: await params.run(createClient(async () => ({ primary: { used_percent: 12 } }))),
+    });
+    const adapter = createCodexAppServerUsageLimitRecoveryControlAdapter({
+      runWithControlClient,
+      fetchRuntime,
+      resolveConnectedServiceResetCreditAuth,
+    });
+    const metadata = {
+      machineId: 'machine-local',
+      agentRuntimeDescriptorV1: buildCodexAgentRuntimeDescriptor({
+        backendMode: 'appServer',
+        vendorSessionId: 'thread-1',
+        home: 'connectedService',
+        connectedServiceId: 'openai-codex',
+        connectedServiceProfileId: 'work',
+      }),
+      sessionUsageLimitRecoveryV1: {
+        v: 1,
+        status: 'waiting',
+        issueFingerprint: 'usage-limit:sess_1:reset',
+        armedAtMs: 1,
+        resetAtMs: 2,
+        nextCheckAtMs: 2,
+        attemptCount: 0,
+        maxAttempts: 3,
+        lastProbeError: null,
+        selectedAuth: {
+          kind: 'profile',
+          serviceId: 'openai-codex',
+          profileId: 'work',
+        },
+      },
+    };
+
+    await expect(adapter.consumeResetCredit?.(createParams(metadata))).resolves.toMatchObject({
+      ok: true,
+      status: 'ready',
+    });
+    expect(resolveConnectedServiceResetCreditAuth).toHaveBeenCalledWith(expect.objectContaining({
+      selectedAuth: {
+        kind: 'profile',
+        serviceId: 'openai-codex',
+        profileId: 'work',
+      },
+    }));
+    expect(fetchRuntime).toHaveBeenCalledWith(
+      'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer connected-access',
+          'ChatGPT-Account-Id': 'acct-connected',
+        }),
+      }),
+    );
   });
 });

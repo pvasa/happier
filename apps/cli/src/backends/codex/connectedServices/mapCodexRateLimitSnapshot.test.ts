@@ -66,6 +66,27 @@ describe('mapCodexRateLimitSnapshotToQuotaSnapshot', () => {
     });
   });
 
+  it('prefers exact connected-service account identity over raw app-server account fields', () => {
+    const snapshot = mapCodexRateLimitSnapshotToQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      fetchedAt: 1_768_000_000_000,
+      activeAccountId: 'acct_exact_connected_service',
+      rawSnapshot: {
+        account: {
+          id: 'acct_provider_visible_stale',
+          email: 'live@example.test',
+        },
+        primary: { used_percent: 12 },
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      activeAccountId: 'acct_exact_connected_service',
+      accountLabel: 'live@example.test',
+    });
+  });
+
   it('unwraps official app-server rateLimits response and notification envelopes', () => {
     for (const rawSnapshot of [
       {
@@ -200,5 +221,109 @@ describe('mapCodexRateLimitSnapshotToQuotaSnapshot', () => {
         },
       ],
     });
+  });
+
+  it('maps ChatGPT wham usage reset-credit summary into generalized recovery credits', () => {
+    const snapshot = mapCodexRateLimitSnapshotToQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      fetchedAt: 1_768_000_000_000,
+      rawSnapshot: {
+        plan_type: 'pro',
+        email: 'codex-user@example.test',
+        rate_limit: {
+          primary_window: {
+            used_percent: 100,
+            reset_at: '2026-06-17T12:00:00.000Z',
+          },
+          secondary_window: {
+            used_percent: 40,
+            reset_at: '2026-06-24T12:00:00.000Z',
+          },
+        },
+        rate_limit_reset_credits: {
+          available_count: 1,
+        },
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      planLabel: 'pro',
+      accountLabel: 'codex-user@example.test',
+      recoveryCredits: {
+        kind: 'usage_limit_resets',
+        availableCount: 1,
+        totalCount: 1,
+        source: 'provider_api',
+        confidence: 'derived',
+        credits: [],
+      },
+      meters: [
+        {
+          meterId: 'primary',
+          utilizationPct: 100,
+          resetsAt: Date.parse('2026-06-17T12:00:00.000Z'),
+        },
+        {
+          meterId: 'secondary',
+          utilizationPct: 40,
+          resetsAt: Date.parse('2026-06-24T12:00:00.000Z'),
+        },
+      ],
+    });
+  });
+
+  it('maps Codex reset-credit collection details with expiry and redemption state', () => {
+    const snapshot = mapCodexRateLimitSnapshotToQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      fetchedAt: 1_768_000_000_000,
+      rawSnapshot: {
+        primary: { used_percent: 100 },
+      },
+      rawResetCredits: {
+        available_count: 1,
+        credits: [
+          {
+            id: 'credit-1',
+            reset_type: 'codex_rate_limits',
+            status: 'available',
+            granted_at: '2026-06-12T01:51:02.745763Z',
+            expires_at: '2026-07-12T01:51:02.745763Z',
+            redeem_started_at: null,
+            redeemed_at: null,
+            title: 'One free rate limit reset',
+            description: 'Granted by the provider',
+            profile_user_id: 'redacted-user-id',
+            profile_image_url: 'https://example.test/profile.png',
+          },
+        ],
+      },
+    });
+
+    expect(snapshot.recoveryCredits).toEqual({
+      kind: 'usage_limit_resets',
+      availableCount: 1,
+      totalCount: 1,
+      nextExpiresAtMs: Date.parse('2026-07-12T01:51:02.745Z'),
+      source: 'provider_api',
+      confidence: 'exact',
+      credits: [
+        {
+          providerCreditId: 'credit-1',
+          kind: 'rate_limit_reset',
+          status: 'available',
+          providerResetType: 'codex_rate_limits',
+          title: 'One free rate limit reset',
+          description: 'Granted by the provider',
+          grantedAtMs: Date.parse('2026-06-12T01:51:02.745Z'),
+          expiresAtMs: Date.parse('2026-07-12T01:51:02.745Z'),
+          redeemStartedAtMs: null,
+          redeemedAtMs: null,
+        },
+      ],
+    });
+    expect(JSON.stringify(snapshot.recoveryCredits)).not.toContain('profile_user_id');
+    expect(JSON.stringify(snapshot.recoveryCredits)).not.toContain('profile_image_url');
   });
 });

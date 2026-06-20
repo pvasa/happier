@@ -1,10 +1,15 @@
+import { readSessionMetadataRuntimeDescriptor } from '@happier-dev/agents';
 import {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   SessionRuntimeIssueV1Schema,
   SessionUsageLimitRecoveryV1Schema,
+  type ConnectedServiceQuotaRecoveryCreditsV1,
   type SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
 
+import { createConnectedServiceCredentialApi } from '@/api/connectedServices/connectedServiceCredentialApi';
+import { resolveConnectedServiceCredentials } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
+import type { Credentials } from '@/persistence';
 import type {
   SessionUsageLimitRecoveryControlAdapter as GenericSessionUsageLimitRecoveryControlAdapter,
   SessionUsageLimitRecoveryControlAdapterParams,
@@ -20,6 +25,13 @@ import {
   isCodexRateLimitSnapshotExhausted,
   readEarliestCodexRateLimitResetAtMs,
 } from '../rateLimitSnapshot';
+import { readCodexEnvironmentAuthTokens } from '../../cli/auth/readCodexEnvironmentAuthState';
+import { mapCodexRateLimitResetCreditsToQuotaRecoveryCredits } from '../../quota/codexQuotaRecoveryCredits';
+import {
+  consumeCodexRateLimitResetCredit,
+  fetchCodexRateLimitResetCredits,
+  type CodexRateLimitResetCreditsFetch,
+} from '../../quota/codexRateLimitResetCreditsClient';
 
 type MetadataRecord = Record<string, unknown>;
 
@@ -38,6 +50,21 @@ type RunWithControlClient = (params: Readonly<{
   timeoutMs?: number | null;
   run: (client: CodexAppServerClient) => Promise<unknown>;
 }>) => Promise<CodexAppServerControlClientResult<unknown>>;
+
+type ResetCreditAuth = Readonly<{
+  accessToken: string;
+  accountId: string | null;
+}>;
+
+type ConnectedServiceResetCreditSelectedAuth = Extract<
+  SessionUsageLimitRecoveryV1['selectedAuth'],
+  { kind: 'profile' | 'group' }
+>;
+
+type ResolveConnectedServiceResetCreditAuth = (params: Readonly<{
+  credentials?: Credentials;
+  selectedAuth: ConnectedServiceResetCreditSelectedAuth;
+}>) => Promise<ResetCreditAuth | null>;
 
 function stableError(errorCode: string): Readonly<{ ok: false; errorCode: string; error: string }> {
   return { ok: false, errorCode, error: errorCode };
@@ -121,6 +148,7 @@ function buildNextIntent(params: Readonly<{
   intent: SessionUsageLimitRecoveryV1;
   exhausted: boolean;
   resetAtMs: number | null;
+  recoveryCredits?: ConnectedServiceQuotaRecoveryCreditsV1 | null;
 }>): SessionUsageLimitRecoveryV1 {
   const attemptCount = params.intent.attemptCount + 1;
   if (!params.exhausted) {
@@ -129,6 +157,7 @@ function buildNextIntent(params: Readonly<{
       status: 'cancelled',
       attemptCount,
       lastProbeError: null,
+      ...(params.recoveryCredits ? { recoveryCredits: params.recoveryCredits } : {}),
     };
   }
   return {
@@ -138,67 +167,171 @@ function buildNextIntent(params: Readonly<{
     resetAtMs: params.resetAtMs ?? params.intent.resetAtMs,
     nextCheckAtMs: params.resetAtMs ?? params.intent.nextCheckAtMs ?? params.intent.resetAtMs,
     lastProbeError: null,
+    ...(params.recoveryCredits ? { recoveryCredits: params.recoveryCredits } : {}),
+  };
+}
+
+async function resolveConnectedServiceResetCreditAuthDefault(
+  params: Readonly<{
+    credentials?: Credentials;
+    selectedAuth: ConnectedServiceResetCreditSelectedAuth;
+  }>,
+): Promise<ResetCreditAuth | null> {
+  if (!params.credentials) return null;
+  const profileId = params.selectedAuth.profileId;
+  if (!profileId) return null;
+
+  const api = createConnectedServiceCredentialApi(params.credentials);
+  const records = await resolveConnectedServiceCredentials({
+    credentials: params.credentials,
+    api,
+    bindings: [{
+      serviceId: params.selectedAuth.serviceId,
+      profileId,
+    }],
+  });
+  const record = records.get(params.selectedAuth.serviceId);
+  if (!record || record.kind !== 'oauth' || !record.oauth.accessToken.trim()) return null;
+  return {
+    accessToken: record.oauth.accessToken,
+    accountId: record.oauth.providerAccountId,
   };
 }
 
 export function createCodexAppServerUsageLimitRecoveryControlAdapter(deps: Readonly<{
   runWithControlClient?: RunWithControlClient;
+  fetchRuntime?: CodexRateLimitResetCreditsFetch;
+  processEnv?: NodeJS.ProcessEnv;
+  resolveConnectedServiceResetCreditAuth?: ResolveConnectedServiceResetCreditAuth;
 }> = {}): GenericSessionUsageLimitRecoveryControlAdapter {
   const runWithControlClient = deps.runWithControlClient ?? withCodexAppServerControlClient;
+  const resolveConnectedServiceResetCreditAuth =
+    deps.resolveConnectedServiceResetCreditAuth ?? resolveConnectedServiceResetCreditAuthDefault;
+  const resolveNativeResetCreditAuth = (
+    params: SessionUsageLimitRecoveryControlAdapterParams,
+  ): Readonly<{ accessToken: string; accountId: string | null }> | null => {
+    const runtimeDescriptor = readSessionMetadataRuntimeDescriptor(params.metadata, 'codex');
+    const env = {
+      ...(deps.processEnv ?? process.env),
+      ...(runtimeDescriptor?.homePath ? { CODEX_HOME: runtimeDescriptor.homePath } : {}),
+    };
+    const tokens = readCodexEnvironmentAuthTokens(env);
+    const accessToken = tokens.accessToken ?? tokens.idToken;
+    return accessToken ? { accessToken, accountId: tokens.accountId } : null;
+  };
+  const readRecoveryCreditsForIntent = async (
+    params: SessionUsageLimitRecoveryControlAdapterParams,
+    intent: SessionUsageLimitRecoveryV1,
+  ): Promise<ConnectedServiceQuotaRecoveryCreditsV1 | null> => {
+    const auth = intent.selectedAuth.kind === 'native'
+      ? resolveNativeResetCreditAuth(params)
+      : await resolveConnectedServiceResetCreditAuth({
+        credentials: params.credentials,
+        selectedAuth: intent.selectedAuth,
+      });
+    if (!auth) return intent.recoveryCredits ?? null;
+    const result = await fetchCodexRateLimitResetCredits({
+      accessToken: auth.accessToken,
+      accountId: auth.accountId,
+      ...(deps.fetchRuntime ? { fetchRuntime: deps.fetchRuntime } : {}),
+    });
+    if (!result.ok) return intent.recoveryCredits ?? null;
+    return mapCodexRateLimitResetCreditsToQuotaRecoveryCredits(result.response)
+      ?? intent.recoveryCredits
+      ?? null;
+  };
+  const runCheckNow = async (
+    params: SessionUsageLimitRecoveryControlAdapterParams,
+  ): Promise<CodexAppServerUsageLimitRecoveryControlResult> => {
+    const backendMode = readCodexBackendMode(params.metadata);
+    if (backendMode && backendMode !== 'appServer') {
+      return stableError('codex_quota_probe_unsupported_for_backend_mode');
+    }
+
+    const persistedIntent = readRecoveryIntent(params.metadata);
+    const intent = persistedIntent && persistedIntent.status !== 'cancelled'
+      ? persistedIntent
+      : buildRecoveryIntentFromLatestUsageLimitIssue(params);
+    if (!intent) {
+      return stableError('session_usage_limit_recovery_control_inactive');
+    }
+
+    const exhaustedIntent = resolveUsageLimitRecoveryMaxAttemptsExhaustion(intent);
+    if (exhaustedIntent) {
+      return {
+        ok: true,
+        status: 'waiting',
+        metadata: {
+          ...params.metadata,
+          [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: exhaustedIntent,
+        },
+      };
+    }
+
+    const cwd = normalizeCwd(params.cwd);
+    if (!cwd) return stableError('session_usage_limit_recovery_control_cwd_unavailable');
+
+    const controlResult = await runWithControlClient({
+      cwd,
+      metadata: params.metadata,
+      accountSettings: null,
+      run: async (client) => await readCodexRateLimitsSnapshot({
+        request: async (_method, requestParams) => await client.request('account/rateLimits/read', requestParams),
+      }),
+    });
+    if (!controlResult.ok) return stableError(controlResult.errorCode);
+
+    const exhausted = isCodexRateLimitSnapshotExhausted(controlResult.value);
+    const recoveryCredits = await readRecoveryCreditsForIntent(params, intent);
+    const nextIntent = buildNextIntent({
+      intent,
+      exhausted,
+      resetAtMs: readEarliestCodexRateLimitResetAtMs(controlResult.value),
+      recoveryCredits,
+    });
+    return {
+      ok: true,
+      status: exhausted ? 'waiting' : 'ready',
+      metadata: {
+        ...params.metadata,
+        [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: nextIntent,
+      },
+    };
+  };
+
   return {
     checkNow: async (params: SessionUsageLimitRecoveryControlAdapterParams): Promise<CodexAppServerUsageLimitRecoveryControlResult> => {
-      const backendMode = readCodexBackendMode(params.metadata);
-      if (backendMode && backendMode !== 'appServer') {
-        return stableError('codex_quota_probe_unsupported_for_backend_mode');
-      }
-
+      return await runCheckNow(params);
+    },
+    consumeResetCredit: async (
+      params: SessionUsageLimitRecoveryControlAdapterParams,
+    ): Promise<CodexAppServerUsageLimitRecoveryControlResult> => {
       const persistedIntent = readRecoveryIntent(params.metadata);
       const intent = persistedIntent && persistedIntent.status !== 'cancelled'
         ? persistedIntent
         : buildRecoveryIntentFromLatestUsageLimitIssue(params);
-      if (!intent) {
-        return stableError('session_usage_limit_recovery_control_inactive');
+      if (!intent) return stableError('session_usage_limit_recovery_control_inactive');
+      const auth = intent.selectedAuth.kind === 'native'
+        ? resolveNativeResetCreditAuth(params)
+        : await resolveConnectedServiceResetCreditAuth({
+          credentials: params.credentials,
+          selectedAuth: intent.selectedAuth,
+        });
+      if (!auth) {
+        return stableError(intent.selectedAuth.kind === 'native'
+          ? 'codex_reset_credit_native_auth_unavailable'
+          : 'codex_reset_credit_connected_service_auth_unavailable');
       }
 
-      const exhaustedIntent = resolveUsageLimitRecoveryMaxAttemptsExhaustion(intent);
-      if (exhaustedIntent) {
-        return {
-          ok: true,
-          status: 'waiting',
-          metadata: {
-            ...params.metadata,
-            [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: exhaustedIntent,
-          },
-        };
-      }
-
-      const cwd = normalizeCwd(params.cwd);
-      if (!cwd) return stableError('session_usage_limit_recovery_control_cwd_unavailable');
-
-      const controlResult = await runWithControlClient({
-        cwd,
-        metadata: params.metadata,
-        accountSettings: null,
-        run: async (client) => await readCodexRateLimitsSnapshot({
-          request: async (_method, requestParams) => await client.request('account/rateLimits/read', requestParams),
-        }),
+      const consumed = await consumeCodexRateLimitResetCredit({
+        accessToken: auth.accessToken,
+        accountId: auth.accountId,
+        idempotencyKey: `${intent.issueFingerprint}:reset-credit`,
+        ...(deps.fetchRuntime ? { fetchRuntime: deps.fetchRuntime } : {}),
       });
-      if (!controlResult.ok) return stableError(controlResult.errorCode);
+      if (!consumed.ok) return stableError(consumed.providerCode ?? consumed.errorCode);
 
-      const exhausted = isCodexRateLimitSnapshotExhausted(controlResult.value);
-      const nextIntent = buildNextIntent({
-        intent,
-        exhausted,
-        resetAtMs: readEarliestCodexRateLimitResetAtMs(controlResult.value),
-      });
-      return {
-        ok: true,
-        status: exhausted ? 'waiting' : 'ready',
-        metadata: {
-          ...params.metadata,
-          [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: nextIntent,
-        },
-      };
+      return await runCheckNow(params);
     },
   };
 }
