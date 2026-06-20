@@ -51,6 +51,7 @@ const storageMutators = vi.hoisted(() => ({
 }));
 const routerState = vi.hoisted(() => ({
     back: vi.fn(),
+    navigate: vi.fn(),
     replace: vi.fn(),
 }));
 const navigationState = vi.hoisted(() => ({
@@ -92,6 +93,7 @@ const expoRouterMock = createExpoRouterMock({
     },
     router: {
         back: () => routerState.back(),
+        navigate: (value: unknown) => routerState.navigate(value),
         replace: (value: unknown) => routerState.replace(value),
     },
 });
@@ -334,6 +336,7 @@ describe('MobileBottomChromeHost', () => {
     afterEach(() => {
         standardCleanup();
         routerState.replace.mockReset();
+        routerState.navigate.mockReset();
         routerState.back.mockReset();
         navigationState.canGoBack = null;
         navigationState.goBack.mockReset();
@@ -408,7 +411,7 @@ describe('MobileBottomChromeHost', () => {
         expect(bar.props.activeTab).toBe('settings');
     });
 
-    it('routes main app tab presses before tab persistence settles', async () => {
+    it('navigates main app tab presses before tab persistence settles', async () => {
         pathState.pathname = '/settings';
         let resolvePersistence: () => void = () => {};
         const persistence = new Promise<void>((resolve) => {
@@ -426,7 +429,8 @@ describe('MobileBottomChromeHost', () => {
 
         try {
             expect(tabState.setActiveTab).toHaveBeenCalledWith('sessions');
-            expect(routerState.replace).toHaveBeenCalledWith('/');
+            expect(routerState.navigate).toHaveBeenCalledWith('/');
+            expect(routerState.replace).not.toHaveBeenCalled();
         } finally {
             resolvePersistence();
             await act(async () => {
@@ -446,11 +450,12 @@ describe('MobileBottomChromeHost', () => {
             void bar.props.onTabPress('settings');
         });
 
+        expect(routerState.navigate).not.toHaveBeenCalled();
         expect(routerState.replace).not.toHaveBeenCalled();
         expect(tabState.setActiveTab).not.toHaveBeenCalled();
     });
 
-    it('ignores a press on a selected main app tab while on a nested tab route', async () => {
+    it('resets a selected routed main app tab to its root route when reselected', async () => {
         pathState.pathname = '/settings/session';
 
         const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
@@ -461,8 +466,41 @@ describe('MobileBottomChromeHost', () => {
             void bar.props.onTabPress('settings');
         });
 
+        expect(routerState.navigate).toHaveBeenCalledWith('/settings');
         expect(routerState.replace).not.toHaveBeenCalled();
         expect(tabState.setActiveTab).not.toHaveBeenCalled();
+    });
+
+    it('returns to the last routed settings surface after switching away through the main tab bar', async () => {
+        pathState.pathname = '/settings/session';
+
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const screen = await renderScreen(<MobileBottomChromeHost />);
+
+        const settingsBar = screen.tree.findByType('TabBar' as never);
+        act(() => {
+            void settingsBar.props.onTabPress('sessions');
+        });
+
+        expect(routerState.navigate).toHaveBeenCalledWith('/');
+        expect(tabState.setActiveTab).toHaveBeenCalledWith('sessions');
+
+        pathState.pathname = '/';
+        await act(async () => {
+            notifyPathListeners();
+        });
+
+        routerState.navigate.mockClear();
+        tabState.setActiveTab.mockClear();
+
+        const sessionsBar = screen.tree.findByType('TabBar' as never);
+        act(() => {
+            void sessionsBar.props.onTabPress('settings');
+        });
+
+        expect(routerState.navigate).toHaveBeenCalledWith('/settings/session');
+        expect(tabState.setActiveTab).not.toHaveBeenCalled();
+        expect(routerState.replace).not.toHaveBeenCalled();
     });
 
     it('does not render chrome on desktop', async () => {
@@ -568,6 +606,51 @@ describe('MobileBottomChromeHost', () => {
             'session-1': 'git',
         });
         expect(routerState.replace).toHaveBeenCalledWith('/session/session-1/git?serverId=server-session');
+    });
+
+    it('keeps cockpit tab switches inside the navigator bridge when it is ready', async () => {
+        pathState.pathname = '/session/session-1/file/src%2Findex.ts';
+        searchParamsState.id = 'session-1';
+        searchParamsState.serverId = 'server-session';
+        settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
+        const switchSurface = vi.fn();
+
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const {
+            SessionCockpitChromeRegistryProvider,
+            useSessionCockpitChromeRegister,
+        } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+
+        function RegisteredCockpitChrome() {
+            const register = useSessionCockpitChromeRegister();
+            React.useEffect(() => register({
+                sessionId: 'session-1',
+                activeSurface: 'browse',
+                terminalTabAvailable: true,
+                openDetailsTabCount: 0,
+                switchSurface,
+            }), [register]);
+            return null;
+        }
+
+        const screen = await renderScreen(
+            <SessionCockpitChromeRegistryProvider>
+                <RegisteredCockpitChrome />
+                <MobileBottomChromeHost />
+            </SessionCockpitChromeRegistryProvider>,
+        );
+
+        await act(async () => {
+            await Promise.resolve();
+        });
+
+        const cockpitBar = screen.tree.findByType('SessionCockpitTabBar' as never);
+        act(() => {
+            cockpitBar.props.onSurfacePress('git');
+        });
+
+        expect(switchSurface).toHaveBeenCalledWith('git');
+        expect(routerState.replace).not.toHaveBeenCalled();
     });
 
     it('keeps session cockpit chrome mounted when a tab press has incidental vertical movement', async () => {

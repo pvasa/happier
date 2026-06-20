@@ -8,6 +8,8 @@ import type { SystemTaskRunState, SystemTaskRunner } from '@/components/systemTa
 import { isSystemTaskBridgeUnavailableError, readSystemTaskStartErrorMessage } from '@/components/systemTasks/systemTaskStartError';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
@@ -113,6 +115,7 @@ export const LocalTailscaleSecureAccessSection = React.memo(function LocalTailsc
     const [taskId, setTaskId] = React.useState<string | null>(null);
     const [lastResult, setLastResult] = React.useState<TailscaleResultData | null>(null);
     const [lastErrorMessage, setLastErrorMessage] = React.useState<string | null>(null);
+    const copyFeedback = useTemporaryCopyFeedback();
     const snapshot = useSystemTaskSnapshot(runner, taskId);
     const normalizedUpstreamUrl = React.useMemo(() => {
         const value = typeof props.upstreamUrl === 'string' ? props.upstreamUrl.trim() : '';
@@ -216,12 +219,12 @@ export const LocalTailscaleSecureAccessSection = React.memo(function LocalTailsc
         }
         void setClipboardStringSafe(shareableHttpsUrl).then((copied) => {
             if (copied) {
-                Modal.alert(t('common.copied'), t('items.copiedToClipboard', { label: t('settings.localTailscale.shareableUrlTitle') }));
+                copyFeedback.markCopied('shareableUrl');
                 return;
             }
             Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
         });
-    }, [shareableHttpsUrl]);
+    }, [copyFeedback, shareableHttpsUrl]);
 
     const handleAddThisPhone = React.useCallback(() => {
         if (!shareableHttpsUrl) {
@@ -264,6 +267,12 @@ export const LocalTailscaleSecureAccessSection = React.memo(function LocalTailsc
                         testID="settings.localTailscale.copyShareableUrl"
                         title={t('common.copy')}
                         onPress={copyShareableUrl}
+                        rightElement={
+                            <CopiedPill
+                                visible={copyFeedback.isCopied('shareableUrl')}
+                                testID="settings.localTailscale.copyShareableUrl.copied"
+                            />
+                        }
                     />
                 ) : null}
                 {shareableHttpsUrl ? (

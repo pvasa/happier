@@ -1007,7 +1007,9 @@ describe('MachineSetupFlowScreen', () => {
 
         await screen.pressByTestIdAsync('settings.machineSetup.copyRemoteRelayUrl');
         expect(setClipboardStringSafeSpy).toHaveBeenCalledWith('https://relay.remote.example.test');
-        expect(modalAlertSpy).toHaveBeenCalledWith('common.copied', 'items.copiedToClipboard');
+        expect(modalAlertSpy).not.toHaveBeenCalledWith('common.copied', 'items.copiedToClipboard');
+        expect(screen.findByTestId('settings.machineSetup.copyRemoteRelayUrl')?.props.rightElement?.props.testID)
+            .toBe('settings.machineSetup.copyRemoteRelayUrl.copied');
 
         await screen.pressByTestIdAsync('settings.machineSetup.remoteRelayKeepCurrent');
         expect(setPendingSetupIntentSpy).not.toHaveBeenCalled();

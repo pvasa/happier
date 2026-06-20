@@ -41,6 +41,10 @@ import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 const bootstrappedWebServerOverride = bootstrapActiveServerFromWebLocation({ scope: 'device' });
 const DESKTOP_PET_OVERLAY_SCREEN_OPTIONS = { headerShown: false } as const;
 const MAIN_TAB_STACK_SCREEN_OPTIONS = { animation: 'none' } as const;
+const SESSION_COCKPIT_SURFACE_STACK_SCREEN_OPTIONS = {
+    animation: 'none',
+    headerShown: false,
+} as const;
 const UNAUTH_SHELL_STACK_SCREEN_OPTIONS = { headerShown: false } as const;
 const NEW_SESSION_HEADER_TITLE_TYPOGRAPHY = Typography.header();
 
@@ -482,35 +486,25 @@ export default function RootLayout() {
             />
             <Stack.Screen
                 name="session/[id]/files"
-                options={{
-                    // The Files/SCM mobile route renders the exact same surface as the desktop right panel,
-                    // including its own header (tabs + close button). Avoid double headers.
-                    headerShown: false,
-                }}
+                // The Files/SCM mobile route renders the exact same surface as the desktop right panel,
+                // including its own header (tabs + close button). Avoid double headers.
+                options={SESSION_COCKPIT_SURFACE_STACK_SCREEN_OPTIONS}
             />
             <Stack.Screen
                 name="session/[id]/git"
-                options={{
-                    headerShown: false,
-                }}
+                options={SESSION_COCKPIT_SURFACE_STACK_SCREEN_OPTIONS}
             />
             <Stack.Screen
                 name="session/[id]/details"
-                options={{
-                    headerShown: false,
-                }}
+                options={SESSION_COCKPIT_SURFACE_STACK_SCREEN_OPTIONS}
             />
             <Stack.Screen
                 name="session/[id]/terminal"
-                options={{
-                    headerShown: false,
-                }}
+                options={SESSION_COCKPIT_SURFACE_STACK_SCREEN_OPTIONS}
             />
             <Stack.Screen
                 name="session/[id]/index"
-                options={{
-                    headerShown: false
-                }}
+                options={SESSION_COCKPIT_SURFACE_STACK_SCREEN_OPTIONS}
             />
             <Stack.Screen
                 name="session/[id]/message/[messageId]"

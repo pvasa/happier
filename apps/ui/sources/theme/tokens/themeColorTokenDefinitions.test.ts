@@ -27,6 +27,7 @@ const requiredTokenIds = [
     'surface.selected',
     'surface.pressedOverlay',
     'surface.ripple',
+    'surface.sectionTint',
     'border.default',
     'border.surface',
     'border.strong',
@@ -217,7 +218,7 @@ describe('editable theme color token definitions', () => {
         expect(unclassifiedPaths).toEqual([]);
     });
 
-    it('classifies floating tab bar recipe leaves as internal chrome tokens', () => {
+    it('classifies floating glass surface recipe leaves as internal chrome tokens', () => {
         const classificationsByPath = new Map(
             (tokenDefinitionsModule.THEME_COLOR_TOKEN_CLASSIFICATIONS ?? []).map((classification) => [
                 classification.path.join('.'),
@@ -225,10 +226,16 @@ describe('editable theme color token definitions', () => {
             ]),
         );
 
-        expect(classificationsByPath.get('tabBarBorder')).toEqual(expect.objectContaining({
+        expect(classificationsByPath.get('glass.border')).toEqual(expect.objectContaining({
             status: 'internal',
         }));
-        expect(classificationsByPath.get('tabBarInnerShadow')).toEqual(expect.objectContaining({
+        expect(classificationsByPath.get('glass.innerShadow')).toEqual(expect.objectContaining({
+            status: 'internal',
+        }));
+        expect(classificationsByPath.get('glass.castShadow')).toEqual(expect.objectContaining({
+            status: 'internal',
+        }));
+        expect(classificationsByPath.get('glass.composerSurface')).toEqual(expect.objectContaining({
             status: 'internal',
         }));
     });

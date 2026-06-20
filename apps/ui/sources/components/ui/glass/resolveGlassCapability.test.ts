@@ -42,4 +42,31 @@ describe('resolveGlassCapability', () => {
             reduceTransparency: true,
         })).toBe('solid');
     });
+
+    it('uses web blur (backdrop-filter) when only web blur is available', () => {
+        expect(resolveGlassCapability({
+            liquidGlassAvailable: false,
+            blurAvailable: false,
+            webBlurAvailable: true,
+            reduceTransparency: false,
+        })).toBe('webBlur');
+    });
+
+    it('prefers native blur over web blur', () => {
+        expect(resolveGlassCapability({
+            liquidGlassAvailable: false,
+            blurAvailable: true,
+            webBlurAvailable: true,
+            reduceTransparency: false,
+        })).toBe('blur');
+    });
+
+    it('forces solid over web blur when Reduce Transparency is enabled', () => {
+        expect(resolveGlassCapability({
+            liquidGlassAvailable: false,
+            blurAvailable: false,
+            webBlurAvailable: true,
+            reduceTransparency: true,
+        })).toBe('solid');
+    });
 });

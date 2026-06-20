@@ -13,6 +13,8 @@ import { LocalRelayRuntimeControlSection } from '@/components/settings/server/lo
 import { LocalTailscaleSecureAccessSection } from '@/components/settings/server/localControl/LocalTailscaleSecureAccessSection';
 import { resolveKnownLocalRelayUrl } from '@/components/settings/server/localControl/resolveKnownLocalRelayUrl';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -127,6 +129,7 @@ const DesktopMachineSetupFlowScreen = React.memo(function DesktopMachineSetupFlo
     const adoptTaskSnapshot = useSystemTaskSnapshot(runner, adoptTaskId);
     const [adoptedMachineId, setAdoptedMachineId] = React.useState<string | null>(null);
     const handledAdoptResultTaskIdRef = React.useRef<string | null>(null);
+    const copyFeedback = useTemporaryCopyFeedback();
 
     const localSetupFollowUp = React.useMemo(() => {
         return resolveThisComputerSetupFollowUp(activeTaskSnapshot?.result ?? null);
@@ -178,12 +181,12 @@ const DesktopMachineSetupFlowScreen = React.memo(function DesktopMachineSetupFlo
         }
         void setClipboardStringSafe(remoteRelayRuntimeUrl).then((copied) => {
             if (copied) {
-                Modal.alert(t('common.copied'), t('items.copiedToClipboard', { label: t('settings.machineSetupRemoteRelayRuntimeUrlTitle') }));
+                copyFeedback.markCopied('remoteRelayRuntimeUrl');
                 return;
             }
             Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
         });
-    }, [remoteRelayRuntimeUrl]);
+    }, [copyFeedback, remoteRelayRuntimeUrl]);
     const saveRemoteRelayUrl = React.useCallback(() => {
         if (!remoteRelayRuntimeUrl) {
             return;
@@ -427,6 +430,12 @@ const DesktopMachineSetupFlowScreen = React.memo(function DesktopMachineSetupFlo
                         testID="settings.machineSetup.copyRemoteRelayUrl"
                         title={t('common.copy')}
                         onPress={copyRemoteRelayUrl}
+                        rightElement={
+                            <CopiedPill
+                                visible={copyFeedback.isCopied('remoteRelayRuntimeUrl')}
+                                testID="settings.machineSetup.copyRemoteRelayUrl.copied"
+                            />
+                        }
                     />
                     <Item
                         testID="settings.machineSetup.remoteRelayKeepCurrent"

@@ -31,6 +31,7 @@ import {
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { PromptExternalLinksGroup } from '@/components/settings/prompts/shared/PromptExternalLinksGroup';
 import { PromptOrganizationFields } from '@/components/settings/prompts/shared/PromptOrganizationFields';
+import { usePromptEditorDraftField } from '@/components/settings/prompts/shared/usePromptEditorDraftField';
 import { readSkillBundleArtifactState } from '@/components/settings/prompts/skills/readSkillBundleArtifactState';
 import { ensurePromptFolderByName, findPromptFolderById, formatPromptTags, normalizePromptTags } from '@/sync/ops/promptLibrary/promptFolders';
 
@@ -76,19 +77,38 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
   const [promptFoldersV1, setPromptFoldersV1] = useSettingMutable('promptFoldersV1');
   const savedArtifactId = props.artifactId;
   const [isLoading, setIsLoading] = React.useState<boolean>(Boolean(props.artifactId));
-  const [title, setTitle] = React.useState('');
-  const [skillMarkdown, setSkillMarkdown] = React.useState(DEFAULT_SKILL_PROMPT_MARKDOWN);
-  const [folderName, setFolderName] = React.useState('');
-  const [tagsText, setTagsText] = React.useState('');
+  const {
+    value: title,
+    setValue: setTitle,
+    setPristineValue: setPristineTitle,
+    applyExternalValue: applyExternalTitle,
+  } = usePromptEditorDraftField('');
+  const {
+    value: skillMarkdown,
+    setValue: setSkillMarkdown,
+    setPristineValue: setPristineSkillMarkdown,
+    applyExternalValue: applyExternalSkillMarkdown,
+  } = usePromptEditorDraftField(DEFAULT_SKILL_PROMPT_MARKDOWN);
+  const {
+    value: folderName,
+    setValue: setFolderName,
+    setPristineValue: setPristineFolderName,
+    applyExternalValue: applyExternalFolderName,
+  } = usePromptEditorDraftField('');
+  const {
+    value: tagsText,
+    setValue: setTagsText,
+    setPristineValue: setPristineTagsText,
+    applyExternalValue: applyExternalTagsText,
+  } = usePromptEditorDraftField('');
   const [saving, setSaving] = React.useState(false);
   const [supportingFiles, setSupportingFiles] = React.useState<Array<{ path: string; contentKind: 'utf8' | 'binary' }>>([]);
   // Flushed before reading `skillMarkdown` on save so the latest rich/raw edit
   // (which may still be debounced inside the active editor surface) is captured.
   const editorRef = React.useRef<CodeEditorHandle | null>(null);
-  const isTitleDirtyRef = React.useRef(false);
-  const isSkillMarkdownDirtyRef = React.useRef(false);
-  const isFolderDirtyRef = React.useRef(false);
-  const isTagsDirtyRef = React.useRef(false);
+  const promptFoldersRef = React.useRef(promptFoldersV1);
+  promptFoldersRef.current = promptFoldersV1;
+  const loadedArtifactIdRef = React.useRef<string | null>(null);
 
   const applyArtifactState = React.useCallback((artifactId: string, options?: Readonly<{
     preserveDirtyFields?: boolean;
@@ -99,22 +119,24 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
       return false;
     }
 
-    const preserveDirtyFields = options?.preserveDirtyFields === true;
+    const preserveDirty = options?.preserveDirtyFields === true && loadedArtifactIdRef.current === artifactId;
+    const applyOptions = { preserveDirty };
     const nextSkillMarkdown = readSkillMarkdownFromPromptBundleBody(artifactState.body) ?? '';
     const nextSupportingFiles = listPromptBundleSupportingEntries(artifactState.body).map((entry) => ({
       path: entry.path,
       contentKind: entry.contentKind,
     }));
-    const nextFolderName = findPromptFolderById(promptFoldersV1, artifactState.folderId)?.name ?? '';
+    const nextFolderName = findPromptFolderById(promptFoldersRef.current, artifactState.folderId)?.name ?? '';
     const nextTagsText = formatPromptTags(artifactState.tags);
 
     setSupportingFiles(nextSupportingFiles);
-    setTitle((current) => (preserveDirtyFields && isTitleDirtyRef.current ? current : artifactState.title));
-    setSkillMarkdown((current) => (preserveDirtyFields && isSkillMarkdownDirtyRef.current ? current : nextSkillMarkdown));
-    setFolderName((current) => (preserveDirtyFields && isFolderDirtyRef.current ? current : nextFolderName));
-    setTagsText((current) => (preserveDirtyFields && isTagsDirtyRef.current ? current : nextTagsText));
+    applyExternalTitle(artifactState.title, applyOptions);
+    applyExternalSkillMarkdown(nextSkillMarkdown, applyOptions);
+    applyExternalFolderName(nextFolderName, applyOptions);
+    applyExternalTagsText(nextTagsText, applyOptions);
+    loadedArtifactIdRef.current = artifactId;
     return true;
-  }, [promptFoldersV1]);
+  }, [applyExternalFolderName, applyExternalSkillMarkdown, applyExternalTagsText, applyExternalTitle]);
 
   const loadArtifact = React.useCallback(async (artifactId: string, options?: Readonly<{
     preserveDirtyFields?: boolean;
@@ -133,16 +155,13 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
 
   React.useEffect(() => {
     if (!savedArtifactId) {
+      loadedArtifactIdRef.current = null;
       setIsLoading(false);
       setSupportingFiles([]);
-      setTitle('');
-      setSkillMarkdown(DEFAULT_SKILL_PROMPT_MARKDOWN);
-      setFolderName('');
-      setTagsText('');
-      isTitleDirtyRef.current = false;
-      isSkillMarkdownDirtyRef.current = false;
-      isFolderDirtyRef.current = false;
-      isTagsDirtyRef.current = false;
+      setPristineTitle('');
+      setPristineSkillMarkdown(DEFAULT_SKILL_PROMPT_MARKDOWN);
+      setPristineFolderName('');
+      setPristineTagsText('');
       return;
     }
 
@@ -152,10 +171,6 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
       try {
         const loaded = await loadArtifact(savedArtifactId);
         if (!cancelled && loaded) {
-          isTitleDirtyRef.current = false;
-          isSkillMarkdownDirtyRef.current = false;
-          isFolderDirtyRef.current = false;
-          isTagsDirtyRef.current = false;
           setIsLoading(false);
         }
       } catch {
@@ -165,7 +180,7 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
     return () => {
       cancelled = true;
     };
-  }, [loadArtifact, savedArtifactId]);
+  }, [loadArtifact, savedArtifactId, setPristineFolderName, setPristineSkillMarkdown, setPristineTagsText, setPristineTitle]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -185,6 +200,12 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
       };
     }, [loadArtifact, savedArtifactId]),
   );
+
+  React.useEffect(() => {
+    if (!savedArtifactId) return;
+    if (loadedArtifactIdRef.current !== savedArtifactId) return;
+    applyArtifactState(savedArtifactId, { preserveDirtyFields: true });
+  }, [applyArtifactState, promptFoldersV1, savedArtifactId]);
 
   const canSave = title.trim().length > 0 && hasSkillPromptMarkdownContent(skillMarkdown) && !saving;
 
@@ -255,25 +276,16 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
               placeholder={t('promptLibrary.titlePlaceholder')}
               placeholderTextColor={theme.colors.input.placeholder}
               value={title}
-              onChangeText={(nextTitle) => {
-                setTitle(nextTitle);
-                isTitleDirtyRef.current = true;
-              }}
+              onChangeText={setTitle}
               style={styles.titleInput}
               editable={!isLoading}
             />
           </View>
           <PromptOrganizationFields
             folderName={folderName}
-            onChangeFolderName={(nextValue) => {
-              setFolderName(nextValue);
-              isFolderDirtyRef.current = true;
-            }}
+            onChangeFolderName={setFolderName}
             tags={tagsText}
-            onChangeTags={(nextValue) => {
-              setTagsText(nextValue);
-              isTagsDirtyRef.current = true;
-            }}
+            onChangeTags={setTagsText}
             folderTestID="skillBundle.folderName"
             tagsTestID="skillBundle.tags"
             editable={!isLoading}
@@ -288,10 +300,7 @@ export const SkillBundleEditorScreen = React.memo((props: Readonly<{ artifactId:
                 testID="skillBundle.editor"
                 value={skillMarkdown}
                 filePath="SKILL.md"
-                onChange={(nextValue) => {
-                  setSkillMarkdown(nextValue);
-                  isSkillMarkdownDirtyRef.current = true;
-                }}
+                onChange={setSkillMarkdown}
                 readOnly={isLoading}
                 editorRef={editorRef}
               />

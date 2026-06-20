@@ -59,6 +59,10 @@ function commandIdSort(left: KeyboardCommandId, right: KeyboardCommandId): numbe
     return left.localeCompare(right);
 }
 
+function isKeyboardSettingsVisibleCommand(command: (typeof defaultKeyboardCommands)[number]): boolean {
+    return command.settingsTitleKey != null;
+}
+
 function getEffectiveBindings(
     commandId: KeyboardCommandId,
     overrides: Readonly<Record<string, readonly KeybindingRule[]>>,
@@ -112,7 +116,7 @@ function buildBrowserReservedConflicts(params: Readonly<{
     const { surface } = params;
     if (surface !== 'web') return [];
 
-    return defaultKeyboardCommands.flatMap((command) => {
+    return defaultKeyboardCommands.filter(isKeyboardSettingsVisibleCommand).flatMap((command) => {
         if (params.disabledIds.has(command.id)) return [];
         return getActiveEffectiveBindings({
             commandId: command.id,
@@ -144,7 +148,7 @@ function buildDuplicateBindingConflicts(params: Readonly<{
 }>): readonly KeyboardShortcutSettingsConflict[] {
     const commandIdsByLabel = new Map<string, KeyboardCommandId[]>();
 
-    for (const command of defaultKeyboardCommands) {
+    for (const command of defaultKeyboardCommands.filter(isKeyboardSettingsVisibleCommand)) {
         if (params.disabledIds.has(command.id)) continue;
         for (const binding of getActiveEffectiveBindings({
             commandId: command.id,
@@ -182,7 +186,7 @@ export function buildKeyboardShortcutSettingsModel(params: Readonly<{
     const overrides = params.settings.keyboardShortcutOverridesV1;
     const singleKeyShortcutsEnabled = params.settings.keyboardSingleKeyShortcutsEnabled === true;
     const titledCommands = defaultKeyboardCommands.filter((command): command is (typeof defaultKeyboardCommands)[number] & { settingsTitleKey: TranslationKey } =>
-        command.settingsTitleKey != null,
+        isKeyboardSettingsVisibleCommand(command),
     );
     const commandRows = titledCommands.map((command): KeyboardShortcutSettingsCommandRow => {
         const effectiveBinding = getActiveEffectiveBindings({

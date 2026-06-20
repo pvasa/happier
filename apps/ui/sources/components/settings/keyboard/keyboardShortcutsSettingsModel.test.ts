@@ -90,6 +90,22 @@ describe('keyboardShortcutsSettingsModel', () => {
         expect(model.commandRows.every((row) => typeof row.titleKey === 'string' && row.titleKey.length > 0)).toBe(true);
     });
 
+    it('ignores hidden commands when detecting conflicts for visible settings rows', () => {
+        const model = buildKeyboardShortcutSettingsModel({
+            settings: baseSettings,
+            platform: 'macos',
+            surface: 'web',
+        });
+
+        expect(model.commandRows.map((row) => row.commandId)).toContain('sessions.selection.clear');
+        expect(model.commandRows.map((row) => row.commandId)).not.toContain('transcript.selection.cancel');
+        expect(model.conflicts).not.toContainEqual({
+            id: 'duplicate:sessions.selection.clear:transcript.selection.cancel',
+            kind: 'duplicate',
+            commandIds: ['sessions.selection.clear', 'transcript.selection.cancel'],
+        });
+    });
+
     it('detects duplicate override bindings without exposing raw binding values', () => {
         const model = buildKeyboardShortcutSettingsModel({
             settings: {

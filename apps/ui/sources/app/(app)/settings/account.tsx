@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { View, Pressable, Platform, useWindowDimensions } from 'react-native';
 import { useAuth } from '@/auth/context/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
 import { Typography } from '@/constants/Typography';
 import { formatSecretKeyForBackup } from '@/auth/recovery/secretKeyBackup';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -44,6 +45,7 @@ import { buildAccountEncryptionMigrateToE2eeRequest } from '@/sync/ops/account/b
 import { getConnectedServiceCredentialPlain } from '@/sync/api/account/apiConnectedServicesV3';
 import { isWebMobileLikeQrScannerHost } from '@/utils/platform/webMobileHeuristics';
 import { AccountEncryptionMigrateInvalidParamsReasonSchema } from '@happier-dev/protocol';
+import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 
 export default React.memo(() => {
@@ -52,7 +54,7 @@ export default React.memo(() => {
     const router = useRouter();
     const { width, height } = useWindowDimensions();
     const [showSecret, setShowSecret] = useState(false);
-    const [copiedRecently, setCopiedRecently] = useState(false);
+    const copyFeedback = useTemporaryCopyFeedback(2000);
     const [analyticsOptOut, setAnalyticsOptOut] = useSettingMutable('analyticsOptOut');
     const [crashReportsOptOut, setCrashReportsOptOut] = useSettingMutable('crashReportsOptOut');
     const { connectAccount, isLoading: isConnecting } = useConnectAccount();
@@ -165,14 +167,12 @@ export default React.memo(() => {
 
     const handleCopySecret = async () => {
         if (!formattedSecret) return;
-        try {
-            await Clipboard.setStringAsync(formattedSecret);
-            setCopiedRecently(true);
-            setTimeout(() => setCopiedRecently(false), 2000);
-            Modal.alert(t('common.success'), t('settingsAccount.secretKeyCopied'));
-        } catch (error) {
-            Modal.alert(t('common.error'), t('settingsAccount.secretKeyCopyFailed'));
+        const copied = await setClipboardStringSafe(formattedSecret);
+        if (copied) {
+            copyFeedback.markCopied('secretKey');
+            return;
         }
+        Modal.alert(t('common.error'), t('settingsAccount.secretKeyCopyFailed'));
     };
 
     const handleLogout = async () => {
@@ -332,11 +332,18 @@ export default React.memo(() => {
                             onPress={handleShowSecret}
                             rightElement={
                                 <Pressable testID="settings-account-secret-key-copy" onPress={handleCopySecret} hitSlop={12}>
-                                    <Ionicons
-                                        name="copy-outline"
-                                        size={18}
-                                        color={theme.colors.text.secondary}
-                                    />
+                                    {copyFeedback.isCopied('secretKey') ? (
+                                        <CopiedPill
+                                            visible
+                                            testID="settings-account-secret-key-copy-copied"
+                                        />
+                                    ) : (
+                                        <Ionicons
+                                            name="copy-outline"
+                                            size={18}
+                                            color={theme.colors.text.secondary}
+                                        />
+                                    )}
                                 </Pressable>
                             }
                             showChevron={false}
@@ -367,9 +374,9 @@ export default React.memo(() => {
                                         {t('settingsAccount.secretKeyLabel')}
                                     </Text>
                                     <Ionicons
-                                        name={copiedRecently ? "checkmark-circle" : "copy-outline"}
+                                        name={copyFeedback.isCopied('secretKey') ? "checkmark-circle" : "copy-outline"}
                                         size={18}
-                                        color={copiedRecently ? theme.colors.state.success.foreground : theme.colors.text.secondary}
+                                        color={copyFeedback.isCopied('secretKey') ? theme.colors.state.success.foreground : theme.colors.text.secondary}
                                     />
                                 </View>
                                 <Text style={{

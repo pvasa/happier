@@ -27,6 +27,7 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
     const [agentInputActionBarLayout, setAgentInputActionBarLayout] = useSettingMutable('agentInputActionBarLayout');
     const [agentInputChipDensity, setAgentInputChipDensity] = useSettingMutable('agentInputChipDensity');
     const [alwaysShowContextSize, setAlwaysShowContextSize] = useSettingMutable('alwaysShowContextSize');
+    const [composerSurfaceStyle, setComposerSurfaceStyle] = useSettingMutable('composerSurfaceStyle');
     const [openHistoryScopeMenu, setOpenHistoryScopeMenu] = React.useState(false);
 
     const enterToSendEnabled = Platform.OS === 'web' ? agentInputEnterToSend : agentInputEnterToSendNative;
@@ -254,6 +255,19 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
                     subtitle={t('settingsAppearance.alwaysShowContextSizeDescription')}
                     icon={<Ionicons name="analytics-outline" size={29} color={theme.colors.accent.indigo} />}
                     rightElement={<Switch value={alwaysShowContextSize} onValueChange={setAlwaysShowContextSize} />}
+                    showChevron={false}
+                />
+                <Item
+                    title={t('settingsAppearance.glass.composer')}
+                    subtitle={t('settingsAppearance.glass.composerHint')}
+                    icon={<Ionicons name="chatbox-outline" size={29} color={theme.colors.accent.indigo} />}
+                    rightElement={
+                        <Switch
+                            testID="settings-composer-glassSurface-switch"
+                            value={composerSurfaceStyle === 'glass'}
+                            onValueChange={(next) => setComposerSurfaceStyle(next ? 'glass' : 'standard')}
+                        />
+                    }
                     showChevron={false}
                 />
             </ItemGroup>

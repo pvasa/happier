@@ -425,6 +425,41 @@ describe('RootLayout main tabs', () => {
     }, 30_000);
 });
 
+describe('RootLayout session cockpit surface routes', () => {
+    it('disables outer stack animations between cockpit surface routes', async () => {
+        stubFeatureFetch();
+
+        const { default: RootLayout } = await import('@/app/(app)/_layout');
+
+        let tree: renderer.ReactTestRenderer | undefined;
+        try {
+            const screen = await renderScreen(React.createElement(RootLayout));
+            tree = screen.tree;
+            if (!tree) throw new Error('Expected renderer');
+
+            const screens = screen.findAllByType('StackScreen' as any);
+            for (const name of [
+                'session/[id]/files',
+                'session/[id]/git',
+                'session/[id]/details',
+                'session/[id]/terminal',
+                'session/[id]/index',
+            ]) {
+                const routeScreen = screens.find((s) => s.props?.name === name);
+                expect(routeScreen?.props?.options).toEqual(expect.objectContaining({
+                    animation: 'none',
+                }));
+            }
+        } finally {
+            if (tree) {
+                act(() => {
+                    tree!.unmount();
+                });
+            }
+        }
+    }, 30_000);
+});
+
 describe('RootLayout native freeze policy', () => {
     function resolveScreenOptions(screen: StackScreenTestNode): Record<string, unknown> {
         const options = screen.props?.options;

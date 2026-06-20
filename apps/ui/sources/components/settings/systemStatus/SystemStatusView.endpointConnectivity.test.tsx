@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { standardCleanup } from '@/dev/testkit';
 
@@ -12,6 +12,25 @@ import { standardCleanup } from '@/dev/testkit';
 
 afterEach(() => {
     standardCleanup();
+});
+
+const useUpdatesMock = vi.hoisted(() => vi.fn());
+const useNativeUpdateMock = vi.hoisted(() => vi.fn());
+
+beforeEach(() => {
+    useNativeUpdateMock.mockReturnValue(null);
+    useUpdatesMock.mockReturnValue({
+        otaUpdatesEnabled: true,
+        updateAvailable: false,
+        isChecking: false,
+        isDownloading: false,
+        isRestarting: false,
+        isUpdatePending: false,
+        downloadProgress: undefined,
+        lastCheckForUpdateTimeSinceRestart: undefined,
+        checkForUpdates: vi.fn(),
+        reloadApp: vi.fn(),
+    });
 });
 
 vi.mock('react-native-mmkv', () => {
@@ -41,20 +60,7 @@ vi.mock('react-native', async () => {
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock({
-        theme: {
-            colors: {
-                text: '#000000',
-                textSecondary: '#777777',
-                accent: {
-                    indigo: '#0000ff',
-                    blue: '#0000ff',
-                    orange: '#ff8800',
-                    purple: '#9900ff',
-                },
-            },
-        },
-    });
+    return createUnistylesMock();
 });
 
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
@@ -81,6 +87,20 @@ vi.mock('expo-constants', () => ({
     default: { expoConfig: { version: '0.0.0-test' }, deviceName: 'test-device' },
 }));
 
+vi.mock('expo-application', () => ({
+    nativeApplicationVersion: '0.0.0-test',
+    nativeBuildVersion: '1',
+    applicationId: 'dev.happier.test',
+}));
+
+vi.mock('expo-updates', () => ({
+    updateId: 'embedded-update-id',
+    createdAt: new Date('2026-04-07T08:00:00.000Z'),
+    channel: 'preview',
+    runtimeVersion: '0.0.0-test',
+    isEmbeddedLaunch: true,
+}));
+
 vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(async () => {}),
 }));
@@ -100,6 +120,14 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
     listServerProfiles: () => [],
+}));
+
+vi.mock('@/hooks/inbox/useUpdates', () => ({
+    useUpdates: () => useUpdatesMock(),
+}));
+
+vi.mock('@/hooks/ui/useNativeUpdate', () => ({
+    useNativeUpdate: () => useNativeUpdateMock(),
 }));
 
 vi.mock('@/sync/ops/machines', () => ({
@@ -134,4 +162,5 @@ describe('SystemStatusView (endpoint connectivity)', () => {
         const { SystemStatusView } = await import('./SystemStatusView');
         expect(SystemStatusView).toBeTruthy();
     });
+
 });
