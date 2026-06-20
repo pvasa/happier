@@ -150,12 +150,23 @@ function normalizeServerIds(raw: ReadonlyArray<string>): string[] {
     return out;
 }
 
+const EMPTY_NORMALIZED_SERVER_IDS: string[] = [];
+
+function buildNormalizedServerIdsKey(raw: ReadonlyArray<string>): string {
+    return normalizeServerIds(raw).join('\u0000');
+}
+
+function readNormalizedServerIdsFromKey(key: string): string[] {
+    return key ? key.split('\u0000') : EMPTY_NORMALIZED_SERVER_IDS;
+}
+
 export function useServerFeaturesMainSelectionSnapshot(
     serverIdsRaw: ReadonlyArray<string>,
     options?: Readonly<{ enabled?: boolean }>,
 ): ServerFeaturesMainSelectionSnapshot {
     const enabled = options?.enabled ?? true;
-    const serverIds = React.useMemo(() => normalizeServerIds(serverIdsRaw), [serverIdsRaw]);
+    const serverIdsKey = React.useMemo(() => buildNormalizedServerIdsKey(serverIdsRaw), [serverIdsRaw]);
+    const serverIds = React.useMemo(() => readNormalizedServerIdsFromKey(serverIdsKey), [serverIdsKey]);
 
     const [state, setState] = React.useState<ServerFeaturesMainSelectionSnapshot>(() => {
         if (!enabled) {

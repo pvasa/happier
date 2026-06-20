@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { Encryption } from '@/sync/encryption/encryption';
+import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 import {
     decryptSecretStringV1,
     deriveAccountMachineKeyFromRecoverySecret,
@@ -170,6 +171,7 @@ const TEST_MACHINE_KEY = new Uint8Array(32).fill(11);
 
 describe('syncSettings account settings ciphertext', () => {
     beforeEach(() => {
+        invalidateAccountEncryptionModeCache();
         mocks.serverFetch.mockReset();
         mocks.applySettingsFn.mockClear();
         mocks.settingsParse.mockClear();

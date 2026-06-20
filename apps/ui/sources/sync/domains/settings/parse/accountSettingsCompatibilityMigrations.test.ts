@@ -108,6 +108,40 @@ describe('applyAccountSettingsCompatibilityMigrations', () => {
         });
     });
 
+    it('carries the legacy tab-bar blur preference into the generalized glass surface keys', () => {
+        const migrated = applyAccountSettingsCompatibilityMigrations({
+            input: {
+                tabBarBlurEnabled: false,
+                tabBarBlurIntensity: 'strong',
+            },
+            settings: {
+                ...settingsDefaults,
+            },
+            inputSchemaVersion: 8,
+            supportedSchemaVersion: 8,
+        });
+
+        expect(migrated.glassBlurEnabled).toBe(false);
+        expect(migrated.glassBlurIntensity).toBe('strong');
+    });
+
+    it('keeps the new glass blur preference when both legacy and new keys are present', () => {
+        const migrated = applyAccountSettingsCompatibilityMigrations({
+            input: {
+                tabBarBlurEnabled: false,
+                glassBlurEnabled: true,
+            },
+            settings: {
+                ...settingsDefaults,
+                glassBlurEnabled: true,
+            },
+            inputSchemaVersion: 8,
+            supportedSchemaVersion: 8,
+        });
+
+        expect(migrated.glassBlurEnabled).toBe(true);
+    });
+
     it('preserves an existing codex backend mode when migrating a pre-v6 payload', () => {
         const migrated = applyAccountSettingsCompatibilityMigrations({
             input: {

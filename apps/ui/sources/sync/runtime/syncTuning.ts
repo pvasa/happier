@@ -217,11 +217,20 @@ export function loadSyncTuning(opts?: {
         // streaming-overlap (the growing row renders in real layout), fixes the composer-inset gap,
         // bounds the hot tail (no blank), and — critically — AUTO-FOLLOW: the inverted bottom pin
         // fires authoritatively on a pre-change following decision (mirrors web's
-        // capture-before/write-after), beating FlashList MVCP's index-0 re-anchor. Device-validated
-        // end-to-end (2026-06-15): streaming holds the bottom (dist≈0, was 2055px), the hot→cold
-        // advance no longer parks, scrolled-up readers are not yanked, and jump-to-bottom +
-        // entry-restore land flush. All fix logic is carve-gated (nativeHotTailHeightRef>0), so 0
-        // remains a byte-for-byte fallback.
+        // capture-before/write-after), beating FlashList MVCP's index-0 re-anchor.
+        //
+        // VALIDATION STATUS:
+        // - iOS: DEVICE-VALIDATED (2026-06-15) — measured proof for overlap (dist≈0, was 2055px),
+        //   multi-row hot-tail ordering on a complex turn, the deterministic synced pin, idle/finalize
+        //   (no orphan), and scrolled-up readers not yanked; jump-to-bottom + entry-restore land flush.
+        // - Android: DEVICE-VALIDATED (2026-06-16) — measured on a real Android device under the
+        //   `rotate(180deg)` inverted transform (PlatformHelper.android, vs iOS/web `scaleY(-1)`): a
+        //   genuine multi-row hot tail (hotCount=5) rendered oldest-top/newest-bottom (telemetry +
+        //   component-tree + screenshots), the synced pin held the bottom (distanceFromBottom 0), and
+        //   MVCP never re-anchored the carve insert (offsetCorrection-while-live = 0). Confirms the
+        //   transform-agnostic involution argument: both `scaleY(-1)` and `rotate(180deg)` apply-twice
+        //   to identity, so the nested-transform order-preservation holds identically on Android.
+        // All fix logic is carve-gated (nativeHotTailHeightRef>0), so 0 remains a byte-for-byte fallback.
         //
         // NOTE for tests: the carve replaces the flag=0 inverted "zero-writes" design with the
         // authoritative force-pin design. `dev/testkit/harness/chatListHarness.ts` pins this to 0 in

@@ -2,7 +2,6 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
 
 import { CodeView } from '@/components/ui/media/CodeView';
 import { Item } from '@/components/ui/lists/Item';
@@ -16,7 +15,6 @@ import {
     isSessionRouteHydrationAvailable,
     isSessionRouteHydrationMissing,
 } from '@/sync/domains/session/sessionRouteHydrationState';
-import { Modal } from '@/modal';
 import { useIsDataReady, useSession } from '@/sync/domains/state/storage';
 import { machineReadSessionLogTail } from '@/sync/ops';
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
@@ -59,15 +57,6 @@ export default function SessionLogScreen() {
     const [truncated, setTruncated] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
     const [loading, setLoading] = React.useState(false);
-
-    const copyText = React.useCallback(async (label: string, value: string) => {
-        try {
-            await Clipboard.setStringAsync(value);
-            Modal.alert(t('common.copied'), t('items.copiedToClipboard', { label }));
-        } catch {
-            Modal.alert(t('common.error'), t('common.error'));
-        }
-    }, []);
 
     const refreshTail = React.useCallback(async () => {
         if (!session?.id) return;
@@ -143,11 +132,7 @@ export default function SessionLogScreen() {
                     subtitle={resolvedLogPath || metadataLogPath || t('sessionLog.unavailable')}
                     icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.accent.indigo} />}
                     showChevron={false}
-                    onPress={() => {
-                        const path = resolvedLogPath || metadataLogPath;
-                        if (!path) return;
-                        void copyText(t('sessionLog.logPathCopyLabel'), path);
-                    }}
+                    copy={resolvedLogPath || metadataLogPath || false}
                 />
                 <Item
                     title={t('sessionLog.refreshTailTitle')}
@@ -160,7 +145,7 @@ export default function SessionLogScreen() {
                     title={t('sessionLog.copyVisibleTitle')}
                     subtitle={tailText.length > 0 ? t('sessionLog.copyVisibleSubtitleLoaded') : t('sessionLog.copyVisibleSubtitleEmpty')}
                     icon={<Ionicons name="copy-outline" size={29} color={theme.colors.accent.blue} />}
-                    onPress={() => void copyText(t('sessionLog.copyLogLabel'), tailText)}
+                    copy={tailText || false}
                     showChevron={false}
                     disabled={tailText.length === 0}
                 />

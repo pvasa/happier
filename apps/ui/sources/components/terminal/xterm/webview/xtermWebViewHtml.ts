@@ -334,11 +334,15 @@ export function buildXtermWebViewHtml(params: Readonly<{
         }
       }
 
+      function focusTerminal() {
+        try { term && term.focus(); } catch (e) {}
+      }
+
       function scheduleReadyFitAttempt(delayMs) {
         setTimeout(() => {
           readyFitAttemptCount += 1;
           fitAndReport('ready');
-          try { term && term.focus(); } catch {}
+          focusTerminal();
           scheduleWriteFlush();
           if (!didSendReady && readyFitAttemptCount < READY_FIT_RETRY_LIMIT) {
             scheduleReadyFitAttempt(READY_FIT_RETRY_INTERVAL_MS);
@@ -372,7 +376,7 @@ export function buildXtermWebViewHtml(params: Readonly<{
           return;
         }
         if (message.type === 'focus') {
-          try { term && term.focus(); } catch {}
+          focusTerminal();
           return;
         }
         if (message.type === 'setTheme') {
@@ -422,6 +426,9 @@ export function buildXtermWebViewHtml(params: Readonly<{
         } catch {}
 
         term.open(root);
+        root.addEventListener('pointerdown', focusTerminal, { capture: true, passive: true });
+        root.addEventListener('touchstart', focusTerminal, { capture: true, passive: true });
+        root.addEventListener('mousedown', focusTerminal, { capture: true, passive: true });
         term.onData((data) => {
           if (typeof data === 'string' && data) {
             sendEnvelope({ v: 1, type: 'input', payload: { data } });

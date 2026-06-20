@@ -40,7 +40,8 @@ const stylesheet = StyleSheet.create(() => ({
         paddingHorizontal: 8,
         paddingVertical: 2,
         borderRadius: 999,
-        borderWidth: 1,
+        // Badges are background-only: no border chrome on any pill app-wide.
+        borderWidth: 0,
     },
     plainContainer: {
         gap: 4,
@@ -78,7 +79,6 @@ export function StatusPill(props: StatusPillProps): React.ReactElement {
                     ? styles.plainContainer
                     : {
                         backgroundColor: state.background,
-                        borderColor: state.border,
                     },
                 props.style,
             ]}

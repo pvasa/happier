@@ -44,4 +44,53 @@ describe('normalizeNodeForView', () => {
 
         expect(normalized).toBe(node);
     });
+
+    it('preserves a single child as a single node (React.Children.only contract)', async () => {
+        const { normalizeNodeForView } = await import('./normalizeNodeForView');
+
+        // Mirrors RNGH's `GestureDetector`, whose web wrapper calls
+        // `React.Children.only(children)`. When a single-child element flows
+        // through `Item`'s `rightElement` normalization, the clone must keep a
+        // single child — collapsing it to a one-element ARRAY makes
+        // `React.Children.only` throw, which RNGH rethrows as the misleading
+        // "GestureDetector got more than one view as a child".
+        const inner = React.createElement('Inner', null);
+        const node = React.createElement('Outer', null, inner);
+
+        const normalized = normalizeNodeForView(node) as React.ReactElement;
+        const normalizedChildren = (normalized.props as { children?: React.ReactNode }).children;
+
+        expect(Array.isArray(normalizedChildren)).toBe(false);
+        expect(() => React.Children.only(normalizedChildren)).not.toThrow();
+    });
+
+    it('fans out multiple children to an array, preserves Fragment children, and tolerates empty children', async () => {
+        const { normalizeNodeForView } = await import('./normalizeNodeForView');
+
+        // Multiple element children -> the normalized clone keeps an array of both.
+        const multi = React.createElement(
+            'Outer',
+            null,
+            React.createElement('A', { key: 'a' }),
+            React.createElement('B', { key: 'b' }),
+        );
+        const normalizedMulti = normalizeNodeForView(multi) as React.ReactElement;
+        const multiChildren = (normalizedMulti.props as { children?: React.ReactNode }).children;
+        expect(Array.isArray(multiChildren)).toBe(true);
+        expect(React.Children.count(multiChildren)).toBe(2);
+
+        // Explicit null children must not throw.
+        const nullChildren = React.createElement('Outer', { children: null });
+        expect(() => normalizeNodeForView(nullChildren)).not.toThrow();
+
+        // A Fragment with multiple children preserves them as an array.
+        const frag = React.createElement(
+            React.Fragment,
+            null,
+            React.createElement('A', { key: 'a' }),
+            React.createElement('B', { key: 'b' }),
+        );
+        const normalizedFrag = normalizeNodeForView(frag) as React.ReactElement;
+        expect(React.Children.count((normalizedFrag.props as { children?: React.ReactNode }).children)).toBe(2);
+    });
 });

@@ -43,6 +43,7 @@ describe('PopoverBackdrop', () => {
                 backdropAnchorOverlay={undefined}
                 backdropStyle={undefined}
                 closeOnBackdropPan={false}
+                backdropPointerEventsEnabled
                 onRequestClose={onRequestClose}
                 shouldPortal
                 shouldPortalWeb={false}

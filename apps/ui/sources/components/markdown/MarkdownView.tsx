@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
 
-import type { Option } from './MarkdownBlockView';
+import type { Option, OptionLongPressHandler } from './MarkdownBlockView';
 import type { MarkdownSourceRange } from './parseMarkdown';
 import {
     normalizeMarkdownRenderingProfile,
@@ -12,6 +12,7 @@ import type { StreamingTextRevealPreset } from './streaming/streamingTextRevealC
 import type { MarkdownStreamingMode } from './streaming/useStreamingMarkdownBlocks';
 
 export type { Option };
+export type { OptionLongPressHandler };
 export type { MarkdownRenderingProfile };
 export type { MarkdownSourceRange };
 
@@ -24,6 +25,7 @@ export const MarkdownView = React.memo((props: {
     testID?: string;
     markdown: string;
     onOptionPress?: (option: Option) => void;
+    onOptionLongPress?: OptionLongPressHandler;
     onLinkPress?: (url: string) => boolean | void;
     textStyle?: StyleProp<TextStyle>;
     selectable?: boolean;
@@ -48,6 +50,7 @@ export const MarkdownView = React.memo((props: {
             testID={props.testID}
             markdown={props.markdown}
             onOptionPress={props.onOptionPress}
+            onOptionLongPress={props.onOptionLongPress}
             onLinkPress={props.onLinkPress}
             textStyle={props.textStyle}
             selectable={selectable}

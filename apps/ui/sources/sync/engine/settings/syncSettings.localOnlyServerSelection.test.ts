@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { Encryption } from '@/sync/encryption/encryption';
 import type { Settings } from '@/sync/domains/settings/settings';
+import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol';
 
 function createBaseMockSettings(): Record<string, unknown> {
@@ -223,6 +224,7 @@ const encryptionStub = {
 
 describe('syncSettings local-only server-selection settings', () => {
     beforeEach(() => {
+        invalidateAccountEncryptionModeCache();
         mocks.serverFetch.mockReset();
         mocks.loadPendingSettings.mockReset();
         mocks.loadPendingSettings.mockReturnValue({});

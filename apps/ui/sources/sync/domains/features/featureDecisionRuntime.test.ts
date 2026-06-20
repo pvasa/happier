@@ -317,4 +317,27 @@ describe('featureDecisionRuntime', () => {
 
         nowSpy.mockRestore();
     });
+
+    it('keeps disabled main-selection snapshots stable for equivalent server id arrays', async () => {
+        vi.resetModules();
+
+        const { useServerFeaturesMainSelectionSnapshot } = await import('./featureDecisionRuntime');
+
+        let renders = 0;
+        function Test() {
+            renders += 1;
+            useServerFeaturesMainSelectionSnapshot(['server-a'], { enabled: false });
+            return React.createElement('View');
+        }
+
+        const screen = await renderScreen(React.createElement(Test));
+        await flushHookEffects(6);
+
+        expect(renders).toBeLessThanOrEqual(2);
+
+        await act(async () => {
+            screen.tree.unmount();
+            await flushHookEffects(2);
+        });
+    });
 });

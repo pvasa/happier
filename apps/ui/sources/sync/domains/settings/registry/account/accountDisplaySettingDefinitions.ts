@@ -244,17 +244,24 @@ export const ACCOUNT_DISPLAY_SETTING_DEFINITIONS = defineSettingDefinitions({
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },
-    tabBarBlurEnabled: {
+    glassBlurEnabled: {
         schema: z.boolean(),
         default: true,
-        description: 'Use a translucent blur/glass material for the tab bar (off = solid surface)',
+        description: 'Use a translucent blur/glass material for floating glass surfaces — tab bar, jump-to-bottom button, … (off = solid surface)',
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
     },
-    tabBarBlurIntensity: {
+    glassBlurIntensity: {
         schema: z.enum(['light', 'regular', 'strong']),
         default: 'regular',
-        description: 'Tab bar blur intensity when the blur material is enabled',
+        description: 'Glass surface blur intensity when the blur material is enabled',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
+    composerSurfaceStyle: {
+        schema: z.enum(['standard', 'glass']),
+        default: 'glass',
+        description: 'Composer panel surface style — a glass surface matching the tab bar (surface color + rim + cast shadow), or the standard input surface',
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },

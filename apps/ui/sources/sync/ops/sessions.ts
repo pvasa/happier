@@ -46,6 +46,7 @@ import { isSocketIoAckTimeoutError } from '@/sync/runtime/socketIoAckTimeout';
 import { readMachineControlTargetForSession } from './sessionMachineTarget';
 import { stopSessionUsingCanonicalStrategy } from './sessionStopStrategy';
 import type { Metadata } from '../domains/state/storageTypes';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 export { sessionRipgrep } from './sessionRipgrep';
 export type { SessionRipgrepResponse } from './sessionRipgrep';
 
@@ -976,7 +977,7 @@ export async function sessionRename(
             return { success: false, message: 'invalid_parameters' };
         }
 
-        const { sync } = await import('../sync');
+        const sync = getSyncSingleton();
         const updatedAt = Date.now();
 
         await sync.patchSessionMetadataWithRetry(

@@ -75,6 +75,13 @@ function readNumericStyle(style: Record<string, unknown>, key: string): number {
     return value;
 }
 
+function findNativePortalBackdropPressable(tree: ReturnType<typeof renderer.create> | undefined) {
+    return tree?.root.findAll((node: any) => (
+        node?.type === 'Pressable'
+        && flattenTestStyle(node?.props?.style).zIndex === 200000
+    )).find(Boolean) ?? null;
+}
+
 describe('Popover (native portal)', () => {
     let restorePopoverWebGlobals: (() => void) | null = null;
 
@@ -532,6 +539,76 @@ describe('Popover (native portal)', () => {
         });
 
         expect(findFirstHostNodeByTestId(tree, 'host-slot')?.findAllByType('PopoverChild' as any).length).toBe(0);
+    });
+
+    it('does not let a closing native backdrop intercept taps above follow-up modals', async () => {
+        vi.useFakeTimers();
+        const { OverlayPortalHost, OverlayPortalProvider } = await import('./OverlayPortal');
+        const { Popover } = await import('./Popover');
+        const { motionTokens } = await import('@/components/ui/motion/motionTokens');
+
+        const anchorRef = {
+            current: {
+                measureInWindow: (cb: any) => cb(200, 200, 20, 20),
+            },
+        } as any;
+
+        const onRequestClose = vi.fn();
+        let tree: ReturnType<typeof renderer.create> | undefined;
+        tree = (await renderScreen(React.createElement(
+            OverlayPortalProvider,
+            null,
+            React.createElement(Popover, {
+                open: true,
+                anchorRef,
+                portal: { native: true },
+                backdrop: { enabled: true, blockOutsidePointerEvents: true },
+                onRequestClose,
+                children: () => React.createElement(PopoverChild),
+            }),
+            React.createElement(
+                'View',
+                { testID: 'host-slot' },
+                React.createElement(OverlayPortalHost),
+            ),
+        ))).tree;
+
+        await act(async () => {
+            await flushInitialPositioning();
+        });
+
+        expect(findNativePortalBackdropPressable(tree)?.props.pointerEvents).toBe('auto');
+
+        await act(async () => {
+            tree?.update(
+                React.createElement(
+                    OverlayPortalProvider,
+                    null,
+                    React.createElement(Popover, {
+                        open: false,
+                        anchorRef,
+                        portal: { native: true },
+                        backdrop: { enabled: true, blockOutsidePointerEvents: true },
+                        onRequestClose,
+                        children: () => React.createElement(PopoverChild),
+                    }),
+                    React.createElement(
+                        'View',
+                        { testID: 'host-slot' },
+                        React.createElement(OverlayPortalHost),
+                    ),
+                ),
+            );
+        });
+
+        expect(findFirstHostNodeByTestId(tree, 'host-slot')?.findAllByType('PopoverChild' as any).length).toBe(1);
+        expect(findNativePortalBackdropPressable(tree)?.props.pointerEvents).toBe('none');
+
+        await act(async () => {
+            vi.advanceTimersByTime(motionTokens.overlay.popover.exitMs);
+        });
+
+        expect(findNativePortalBackdropPressable(tree)).toBeNull();
     });
 
     it('keeps portal content hidden until it can be positioned (prevents visible jiggle)', async () => {

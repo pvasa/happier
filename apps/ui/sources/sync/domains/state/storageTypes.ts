@@ -365,6 +365,12 @@ const AgentStateObjectSchema = z.object({
          * the RUNNING turn — enables the "Apply setting & steer now" affordance. Fail-closed.
          */
         inFlightConfigApplySupported: z.boolean().nullish(),
+        /**
+         * Provider-neutral terminal composer controls. Injectable-terminal runtimes publish these
+         * so the UI can offer explicit, user-authorized draft clearing without provider branching.
+         */
+        terminalComposerClearSupported: z.boolean().nullish(),
+        terminalComposerDraftPresent: z.boolean().nullish(),
         localPermissionBridgeInLocalMode: z.boolean().optional(),
         permissionsInUiWhileLocal: z.boolean().optional(),
     }).nullish(),

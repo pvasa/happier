@@ -25,6 +25,18 @@ describe('AgentStateSchema capabilities', () => {
         expect(parsed.capabilities?.localPermissionBridgeInLocalMode).toBe(true);
     });
 
+    it('preserves terminal composer clear capability fields when present', () => {
+        const parsed = AgentStateSchema.parse({
+            capabilities: {
+                terminalComposerClearSupported: true,
+                terminalComposerDraftPresent: true,
+            },
+        });
+
+        expect(parsed.capabilities?.terminalComposerClearSupported).toBe(true);
+        expect(parsed.capabilities?.terminalComposerDraftPresent).toBe(true);
+    });
+
     it('preserves request source fields when present', () => {
         const parsed = AgentStateSchema.parse({
             requests: {

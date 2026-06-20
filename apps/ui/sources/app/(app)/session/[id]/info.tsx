@@ -9,7 +9,6 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { storage, useSession, useIsDataReady, useLocalSetting, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
 import { getSessionName, useSessionStatus, formatOSPlatform, formatPathRelativeToHome, getSessionAvatarId, type SessionStatus } from '@/utils/sessions/sessionUtils';
-import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
 import { useUnistyles } from 'react-native-unistyles';
 import { layout } from '@/components/ui/layout/layout';
@@ -87,6 +86,11 @@ import {
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { setSessionFolderAssignment } from '@/sync/ops/sessionFolders';
+import {
+    buildSessionDebugInformation,
+    isSessionDebugInformationEnabled,
+    resolveProviderSessionIdForDebug,
+} from '@/components/sessions/debug/sessionDebugInformation';
 
 type RawJsonSectionId = 'agentState' | 'metadata' | 'sessionStatus' | 'session';
 
@@ -434,7 +438,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const { theme } = useUnistyles();
     const router = useRouter();
     const localDevModeEnabled = useLocalSetting('devModeEnabled');
-    const devModeEnabled = __DEV__ || localDevModeEnabled === true;
+    const devModeEnabled = isSessionDebugInformationEnabled(localDevModeEnabled);
     const sessionName = getSessionName(session);
     const sessionStatus = useSessionStatus(session, {
         subscribeToSession: false,
@@ -508,6 +512,19 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const vendorResumeId = React.useMemo(() => {
         return getAgentVendorResumeId(session.metadata, agentId);
     }, [agentId, session.metadata]);
+    const providerDisplayName = React.useMemo(() => t(core.displayNameKey), [core.displayNameKey]);
+    const providerSessionIdForDebug = React.useMemo(() => {
+        return resolveProviderSessionIdForDebug({
+            metadata: session.metadata,
+            vendorResumeIdField: core.resume.vendorResumeIdField,
+        });
+    }, [core.resume.vendorResumeIdField, session.metadata]);
+    const sessionDebugInformation = React.useMemo(() => buildSessionDebugInformation({
+        session,
+        providerDisplayName,
+        providerSessionId: providerSessionIdForDebug,
+    }), [providerDisplayName, providerSessionIdForDebug, session]);
+    const providerSessionArtifactPath = sessionDebugInformation.providerSessionArtifactPath;
 
     const profileLabel = React.useMemo(() => {
         const profileId = session.metadata?.profileId;
@@ -580,46 +597,6 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
             : '';
         return value.length > 0 ? value : null;
     }, [session.metadata]);
-
-    const handleCopySessionId = useCallback(async () => {
-        if (!session) return;
-        try {
-            await Clipboard.setStringAsync(session.id);
-            Modal.alert(t('common.success'), t('sessionInfo.happySessionIdCopied'));
-        } catch (error) {
-            Modal.alert(t('common.error'), t('sessionInfo.failedToCopySessionId'));
-        }
-    }, [session]);
-
-    const handleCopyAttachCommand = useCallback(async () => {
-        if (!attachCommand) return;
-        try {
-            await Clipboard.setStringAsync(attachCommand);
-            Modal.alert(t('common.copied'), t('items.copiedToClipboard', { label: t('sessionInfo.attachFromTerminal') }));
-        } catch (error) {
-            Modal.alert(t('common.error'), t('sessionInfo.failedToCopyMetadata'));
-        }
-    }, [attachCommand]);
-
-    const handleCopyMetadata = useCallback(async () => {
-        if (!session?.metadata) return;
-        try {
-            await Clipboard.setStringAsync(JSON.stringify(session.metadata, null, 2));
-            Modal.alert(t('common.success'), t('sessionInfo.metadataCopied'));
-        } catch (error) {
-            Modal.alert(t('common.error'), t('sessionInfo.failedToCopyMetadata'));
-        }
-    }, [session]);
-
-    const handleCopySessionLogPath = useCallback(async () => {
-        if (!sessionLogPath) return;
-        try {
-            await Clipboard.setStringAsync(sessionLogPath);
-            Modal.alert(t('common.copied'), t('items.copiedToClipboard', { label: t('sessionLog.logPathCopyLabel') }));
-        } catch {
-            Modal.alert(t('common.error'), t('sessionInfo.failedToCopyMetadata'));
-        }
-    }, [sessionLogPath]);
 
     const handleExitAfterSessionMutation = useCallback(() => {
         safeRouterBack({
@@ -939,20 +916,6 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         return new Date(timestamp).toLocaleString();
     }, []);
 
-    const handleCopyCommand = useCallback(async (command: string) => {
-        try {
-            await Clipboard.setStringAsync(command);
-            Modal.alert(t('common.success'), command);
-        } catch (error) {
-            Modal.alert(t('common.error'), t('common.error'));
-        }
-    }, []);
-
-    const handleCopyUpdateCommand = useCallback(async () => {
-        const updateCommand = 'happier self update';
-        await handleCopyCommand(updateCommand);
-    }, [handleCopyCommand]);
-
     return (
         <>
             <ItemList>
@@ -997,7 +960,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             subtitle={t('sessionInfo.updateCliInstructions')}
                             icon={<Ionicons name="warning-outline" size={29} color={theme.colors.accent.orange} />}
                             showChevron={false}
-                            onPress={handleCopyUpdateCommand}
+                            copy="happier self update"
                         />
                     </ItemGroup>
                 )}
@@ -1010,21 +973,14 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         title={t('sessionInfo.happySessionId')}
                         subtitle={`${session.id.substring(0, 8)}...${session.id.substring(session.id.length - 8)}`}
                         icon={<Ionicons name="finger-print-outline" size={29} color={theme.colors.accent.blue} />}
-                        onPress={handleCopySessionId}
+                        copy={session.id}
                     />
                     {vendorResumeId && vendorResumeLabelKey && vendorResumeCopiedKey && (
                         <Item
                             title={t(vendorResumeLabelKey)}
                             subtitle={`${vendorResumeId.substring(0, 8)}...${vendorResumeId.substring(vendorResumeId.length - 8)}`}
                             icon={<AgentIcon agentId={agentId} size={29} color={theme.colors.accent.blue} />}
-                            onPress={async () => {
-                                try {
-                                    await Clipboard.setStringAsync(vendorResumeId);
-                                    Modal.alert(t('common.success'), t(vendorResumeCopiedKey));
-                                } catch (error) {
-                                    Modal.alert(t('common.error'), t('sessionInfo.failedToCopyMetadata'));
-                                }
-                            }}
+                            copy={vendorResumeId}
                         />
                     )}
                     <Item
@@ -1069,6 +1025,14 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         icon={<Ionicons name="copy-outline" size={29} color={theme.colors.accent.blue} />}
                         onPress={handleNewSessionSameSetup}
                     />
+                    {devModeEnabled ? (
+                        <Item
+                            testID="session-info-copy-debug-information"
+                            title={t('sessionInfo.copyDebugInformation')}
+                            icon={<Ionicons name="copy-outline" size={29} color={theme.colors.accent.blue} />}
+                            copy={sessionDebugInformation.text}
+                        />
+                    ) : null}
                     {!session.accessLevel && handoffActionEnabled && handoffSupported && (
                         <Item
                             title={handoffActionSpec.title}
@@ -1120,21 +1084,21 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             onPress={() => router.push(routeScope.buildHref(session.id, { suffix: '/automations' }))}
                         />
                     ) : null}
-                        {!session.active && Boolean(vendorResumeId) && (
-                            <Item
-                                title={t('sessionInfo.copyResumeCommand')}
-                                subtitle={t('sessionInfo.resumeCommand', { sessionId: session.id })}
-                                icon={<Ionicons name="terminal-outline" size={29} color={theme.colors.accent.purple} />}
-                                showChevron={false}
-                                onPress={() => handleCopyCommand(t('sessionInfo.resumeCommand', { sessionId: session.id }))}
-                            />
-                        )}
-                    <Item
-                            title={t('sessionInfo.viewSessionLogTitle')}
-                            subtitle={t('sessionInfo.viewSessionLogSubtitle')}
-                            icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.accent.blue} />}
-                            onPress={() => router.push(routeScope.buildHref(session.id, { suffix: '/log' }))}
+                    {!session.active && Boolean(vendorResumeId) && (
+                        <Item
+                            title={t('sessionInfo.copyResumeCommand')}
+                            subtitle={t('sessionInfo.resumeCommand', { sessionId: session.id })}
+                            icon={<Ionicons name="terminal-outline" size={29} color={theme.colors.accent.purple} />}
+                            showChevron={false}
+                            copy={t('sessionInfo.resumeCommand', { sessionId: session.id })}
                         />
+                    )}
+                    <Item
+                        title={t('sessionInfo.viewSessionLogTitle')}
+                        subtitle={t('sessionInfo.viewSessionLogSubtitle')}
+                        icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.accent.blue} />}
+                        onPress={() => router.push(routeScope.buildHref(session.id, { suffix: '/log' }))}
+                    />
                     {displayMachineId && (
                         <Item
                             title={t('sessionInfo.viewMachine')}
@@ -1254,7 +1218,16 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                 title={t('sessionLog.logPathCopyLabel')}
                                 subtitle={formatPathRelativeToHome(sessionLogPath, session.metadata.homeDir)}
                                 icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.accent.indigo} />}
-                                onPress={handleCopySessionLogPath}
+                                copy={sessionLogPath}
+                                showChevron={false}
+                            />
+                        )}
+                        {devModeEnabled && providerSessionArtifactPath && (
+                            <Item
+                                title={t('sessionInfo.providerSessionLogs', { provider: providerDisplayName })}
+                                subtitle={formatPathRelativeToHome(providerSessionArtifactPath, session.metadata.homeDir)}
+                                icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.accent.indigo} />}
+                                copy={providerSessionArtifactPath}
                                 showChevron={false}
                             />
                         )}
@@ -1263,7 +1236,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                 title={t('sessionInfo.attachFromTerminal')}
                                 subtitle={attachCommand}
                                 icon={<Ionicons name="terminal-outline" size={29} color={theme.colors.accent.indigo} />}
-                                onPress={handleCopyAttachCommand}
+                                copy={attachCommand}
                                 showChevron={false}
                             />
                         )}
@@ -1286,7 +1259,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         <Item
                             title={t('sessionInfo.copyMetadata')}
                             icon={<Ionicons name="copy-outline" size={29} color={theme.colors.accent.blue} />}
-                            onPress={handleCopyMetadata}
+                            copy={JSON.stringify(session.metadata, null, 2)}
                         />
                     </ItemGroup>
                 )}
