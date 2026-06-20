@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, resolveExecutableName, type BinaryTarget } from './targets.js';
@@ -23,6 +24,8 @@ const CLI_RUNTIME_SIDECAR_ENTRIES = [
   ['session_hook_forwarder.cjs'],
   ['permission_hook_forwarder.cjs'],
   ['ripgrep_launcher.cjs'],
+  ['statusline_forwarder.cjs'],
+  ['terminal_launch_spec_runner.cjs'],
   ['runtime'],
   ['shims'],
 ] as const;
@@ -32,6 +35,25 @@ const CLI_RUNTIME_EXTERNAL_PACKAGES = [
   'node-pty',
   '@homebridge/node-pty-prebuilt-multiarch',
 ] as const;
+
+type CliToolUnpackModule = {
+  unpackTools?: (options: Readonly<{ platformDir: string; toolsDir: string }>) => Promise<unknown> | unknown;
+};
+
+function resolveCliToolsPlatformDir(target: BinaryTarget): string {
+  const targetKey = `${target.arch}-${target.os}`;
+  switch (targetKey) {
+    case 'arm64-darwin':
+    case 'x64-darwin':
+    case 'arm64-linux':
+    case 'x64-linux':
+      return targetKey;
+    case 'x64-windows':
+      return 'x64-win32';
+    default:
+      throw new Error(`[component-artifacts] unsupported CLI tools binary target: ${targetKey}`);
+  }
+}
 
 async function copyCliRuntimeSidecars(repoRoot: string, payloadDir: string): Promise<void> {
   for (const segments of CLI_RUNTIME_SIDECAR_ENTRIES) {
@@ -49,6 +71,28 @@ async function copyCliRuntimeSidecars(repoRoot: string, payloadDir: string): Pro
       destNodeModulesDir: join(payloadDir, 'node_modules'),
     });
   }
+}
+
+async function copyCliRuntimeTools(repoRoot: string, payloadDir: string, target: BinaryTarget): Promise<void> {
+  const sourceToolsDir = join(repoRoot, 'apps', 'cli', 'tools');
+  const targetToolsDir = join(payloadDir, 'tools');
+  const targetArchivesDir = join(targetToolsDir, 'archives');
+  await rm(targetToolsDir, { recursive: true, force: true });
+  await mkdir(targetToolsDir, { recursive: true });
+  await cp(join(sourceToolsDir, 'archives'), targetArchivesDir, { recursive: true });
+
+  const unpackToolsScript = join(repoRoot, 'apps', 'cli', 'scripts', 'unpack-tools.cjs');
+  const requireFromUnpackTools = createRequire(unpackToolsScript);
+  const unpackToolsModule = requireFromUnpackTools(unpackToolsScript) as CliToolUnpackModule;
+  if (typeof unpackToolsModule.unpackTools !== 'function') {
+    throw new Error('[component-artifacts] apps/cli/scripts/unpack-tools.cjs must export unpackTools()');
+  }
+
+  await unpackToolsModule.unpackTools({
+    platformDir: resolveCliToolsPlatformDir(target),
+    toolsDir: targetToolsDir,
+  });
+  await rm(targetArchivesDir, { recursive: true, force: true });
 }
 
 async function copyCliNodeRuntimePayload(
@@ -227,6 +271,7 @@ export async function buildCliBinaryArtifactPayload({
     await rm(join(payloadDir, 'node_modules'), { recursive: true, force: true });
     await copyCliNodeRuntimePayload(repoRoot, payloadDir, snapshotDistDir, workspaceBundles, { yarn, runCommand });
     await copyCliRuntimeSidecars(repoRoot, payloadDir);
+    await copyCliRuntimeTools(repoRoot, payloadDir, target);
 
     return {
       executableName,

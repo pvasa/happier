@@ -297,9 +297,31 @@ function resolveStagedManagedProviderWorkspaceDir(
   return join(dirname(resolveStagedManagedProviderCommandPath(providerId, stage, env)), '..', 'workspace');
 }
 
+function buildManagedPackageInstallEnvironment(
+  env: NodeJS.ProcessEnv,
+  workspaceDir: string,
+): NodeJS.ProcessEnv {
+  const childEnv = buildManagedPnpmEnvironment(env);
+  delete childEnv.INIT_CWD;
+  delete childEnv.npm_command;
+  delete childEnv.npm_config_user_agent;
+  delete childEnv.npm_execpath;
+  delete childEnv.npm_lifecycle_event;
+  delete childEnv.npm_lifecycle_script;
+  delete childEnv.npm_node_execpath;
+  delete childEnv.npm_package_json;
+  delete childEnv.npm_package_manager;
+  for (const key of Object.keys(childEnv)) {
+    if (key.startsWith('npm_package_') || key.startsWith('YARN_')) {
+      delete childEnv[key];
+    }
+  }
+  childEnv.PWD = workspaceDir;
+  return childEnv;
+}
+
 async function writeManagedPackageLauncher(params: Readonly<{
   outputPath: string;
-  pnpmCommand: string;
   workspaceDir: string;
   binaryName: string;
   runtimePathEntries?: ReadonlyArray<string>;
@@ -311,17 +333,19 @@ async function writeManagedPackageLauncher(params: Readonly<{
       ? `${runtimePathEntries.join(process.platform === 'win32' ? ';' : ':')}${process.platform === 'win32' ? ';' : ':'}`
       : '';
   if (process.platform === 'win32') {
+    const binaryPath = join(params.workspaceDir, 'node_modules', '.bin', `${params.binaryName}.cmd`);
     await writeFile(
       params.outputPath,
-      `@echo off\r\nset "PATH=${pathPrefix}%PATH%"\r\n"${params.pnpmCommand}" --dir "${params.workspaceDir}" exec "${params.binaryName}" %*\r\n`,
+      `@echo off\r\nset "PATH=${pathPrefix}%PATH%"\r\n"${binaryPath}" %*\r\nexit /b %ERRORLEVEL%\r\n`,
       'utf8',
     );
     return;
   }
 
+  const binaryPath = join(params.workspaceDir, 'node_modules', '.bin', params.binaryName);
   await writeFile(
     params.outputPath,
-    `#!/bin/sh\nPATH="${pathPrefix}$PATH"\nexport PATH\nexec "${params.pnpmCommand}" --dir "${params.workspaceDir}" exec "${params.binaryName}" "$@"\n`,
+    `#!/bin/sh\nPATH="${pathPrefix}$PATH"\nexport PATH\nexec "${binaryPath}" "$@"\n`,
     'utf8',
   );
   await chmod(params.outputPath, 0o755);
@@ -374,15 +398,16 @@ async function installManagedPackageProviderCli(params: Readonly<{
     'utf8',
   );
 
-  const childEnv = buildManagedPnpmEnvironment(params.env);
+  const childEnv = buildManagedPackageInstallEnvironment(params.env, workspaceDir);
   if (runtimePathEntries.length > 0) {
     childEnv.PATH = [...runtimePathEntries, String(childEnv.PATH ?? params.env.PATH ?? '')]
       .filter((value) => value.length > 0)
       .join(delimiter);
   }
-  const addArgs = ['--dir', workspaceDir, 'add', params.managedInstall.packageName];
+  const addArgs = ['--dir', workspaceDir, 'add', params.managedInstall.packageName, '--ignore-scripts'];
   const spawn = params.deps.spawnSync ?? spawnSync;
   const result = spawn(pnpmCommand, addArgs, {
+    cwd: workspaceDir,
     encoding: 'utf8',
     env: childEnv,
     windowsHide: true,
@@ -405,7 +430,6 @@ async function installManagedPackageProviderCli(params: Readonly<{
 
   await writeManagedPackageLauncher({
     outputPath: launcherPath,
-    pnpmCommand,
     workspaceDir: launcherWorkspaceDir,
     binaryName: params.managedInstall.binaryName,
     runtimePathEntries,

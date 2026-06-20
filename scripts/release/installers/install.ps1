@@ -146,9 +146,21 @@ function Read-InstallerMarkerFile {
 
 function Test-InstallerPayloadDirectCopyFallbackSafe {
   $installRoot = Join-Path $InstallDir (Resolve-CliInstallRootName)
+  $versionsDir = Join-Path $installRoot "versions"
   $currentVersionMarkerPath = Join-Path $installRoot "current.version"
   $currentPointerPath = Join-Path $installRoot "current"
   $managedShimPath = Join-Path $BinDir "$((Resolve-CliShimName)).exe"
+
+  $partialVersionDirs = @()
+  if (Test-Path $versionsDir -PathType Container) {
+    $partialVersionDirs = @(
+      Get-ChildItem -Path $versionsDir -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\..*\.tmp-' }
+    )
+  }
+  if ($partialVersionDirs.Count -gt 0) {
+    return $false
+  }
 
   $currentVersion = Read-InstallerMarkerFile -Path $currentVersionMarkerPath
   $currentPointerExists = Test-Path $currentPointerPath -PathType Container
@@ -163,6 +175,35 @@ function Test-InstallerPayloadDirectCopyFallbackSafe {
   }
 
   return $false
+}
+
+function New-InstallerStagingDirectory {
+  param (
+    [Parameter(Mandatory = $true)] [string] $InstallHomeDir
+  )
+
+  $stagingParent = Join-Path $InstallHomeDir ".install-staging"
+  New-Item -ItemType Directory -Path $stagingParent -Force | Out-Null
+  return New-Item -ItemType Directory -Path (Join-Path $stagingParent ("happier-install-" + [System.Guid]::NewGuid().ToString("N")))
+}
+
+function Remove-InstallerStagingDirectory {
+  param (
+    [Parameter(Mandatory = $false)] $Directory
+  )
+
+  if (-not $Directory -or -not $Directory.FullName) {
+    return
+  }
+
+  $stagingParent = Split-Path -Parent $Directory.FullName
+  Remove-Item -Path $Directory.FullName -Recurse -Force -ErrorAction SilentlyContinue
+  if ($stagingParent -and (Test-Path $stagingParent -PathType Container)) {
+    $remaining = @(Get-ChildItem -Path $stagingParent -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($remaining.Count -eq 0) {
+      Remove-Item -Path $stagingParent -Force -ErrorAction SilentlyContinue
+    }
+  }
 }
 
 function Set-InstallerDirectoryPointer {
@@ -488,6 +529,161 @@ function Invoke-InstallerCommandWithDaemonServiceContext {
     & $CliPath @CommandArgs
   }
   finally {
+    if ($null -eq $previousHomeDir) {
+      Remove-Item Env:HAPPIER_HOME_DIR -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_HOME_DIR = $previousHomeDir
+    }
+    if ($null -eq $previousNoninteractive) {
+      Remove-Item Env:HAPPIER_NONINTERACTIVE -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_NONINTERACTIVE = $previousNoninteractive
+    }
+    if ($null -eq $previousPublicReleaseChannel) {
+      Remove-Item Env:HAPPIER_PUBLIC_RELEASE_CHANNEL -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_PUBLIC_RELEASE_CHANNEL = $previousPublicReleaseChannel
+    }
+    if ($null -eq $previousDaemonServiceChannel) {
+      Remove-Item Env:HAPPIER_DAEMON_SERVICE_CHANNEL -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_DAEMON_SERVICE_CHANNEL = $previousDaemonServiceChannel
+    }
+    if ($null -eq $previousInstallerDaemonServiceStrategy) {
+      Remove-Item Env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY = $previousInstallerDaemonServiceStrategy
+    }
+  }
+}
+
+function Resolve-InstallerPreInstallCommandTimeoutMs {
+  $raw = [string]$env:HAPPIER_INSTALLER_PRE_INSTALL_COMMAND_TIMEOUT_MS
+  if (-not $raw) {
+    return 30000
+  }
+
+  $parsed = 0
+  if (-not [int]::TryParse($raw.Trim(), [ref]$parsed)) {
+    return 30000
+  }
+  if ($parsed -lt 5000) {
+    return 5000
+  }
+  if ($parsed -gt 120000) {
+    return 120000
+  }
+  return $parsed
+}
+
+function Stop-InstallerProcessTree {
+  param (
+    [Parameter(Mandatory = $true)] [System.Diagnostics.Process] $Process
+  )
+
+  if ($null -eq $Process) {
+    return
+  }
+
+  $processId = [int]$Process.Id
+  if ($processId -le 0) {
+    return
+  }
+
+  try {
+    if (-not $Process.HasExited) {
+      $Process.Kill($true)
+      return
+    }
+  }
+  catch {
+  }
+
+  try {
+    $taskkillCommand = Get-Command "taskkill.exe" -ErrorAction SilentlyContinue
+    if ($taskkillCommand -and $taskkillCommand.Source) {
+      & $taskkillCommand.Source "/T" "/F" "/PID" ([string]$processId) *> $null
+      if ($LASTEXITCODE -eq 0) {
+        return
+      }
+    }
+  }
+  catch {
+  }
+
+  try {
+    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+  }
+  catch {
+  }
+}
+
+function Invoke-InstallerCommandWithDaemonServiceContextCapturingOutputWithTimeout {
+  param (
+    [Parameter(Mandatory = $true)] [string] $CliPath,
+    [Parameter(Mandatory = $true)] [string[]] $CommandArgs,
+    [Parameter(Mandatory = $true)] [string] $HomeDir,
+    [Parameter(Mandatory = $true)] [int] $timeoutMs
+  )
+
+  $previousHomeDir = $env:HAPPIER_HOME_DIR
+  $previousNoninteractive = $env:HAPPIER_NONINTERACTIVE
+  $previousPublicReleaseChannel = $env:HAPPIER_PUBLIC_RELEASE_CHANNEL
+  $previousDaemonServiceChannel = $env:HAPPIER_DAEMON_SERVICE_CHANNEL
+  $previousInstallerDaemonServiceStrategy = $env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY
+  $runToken = [System.Guid]::NewGuid().ToString("N")
+  $stdoutPath = Join-Path $env:TEMP "happier-pre-install-$runToken.stdout.log"
+  $stderrPath = Join-Path $env:TEMP "happier-pre-install-$runToken.stderr.log"
+
+  try {
+    $channelLabel = if ($Channel -eq "publicdev") { "dev" } else { $Channel }
+    $env:HAPPIER_HOME_DIR = $HomeDir
+    if ($null -eq $previousNoninteractive) {
+      Remove-Item Env:HAPPIER_NONINTERACTIVE -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:HAPPIER_NONINTERACTIVE = $previousNoninteractive
+    }
+    $env:HAPPIER_PUBLIC_RELEASE_CHANNEL = $channelLabel
+    $env:HAPPIER_DAEMON_SERVICE_CHANNEL = $channelLabel
+    if ($env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY) {
+      $env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY = $env:HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY
+    }
+
+    $process = Start-Process -FilePath $CliPath -ArgumentList $CommandArgs -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -WindowStyle Hidden
+    $completed = $process.WaitForExit($timeoutMs)
+    if (-not $completed) {
+      Stop-InstallerProcessTree -Process $process
+
+      $stdout = if (Test-Path $stdoutPath -PathType Leaf) { Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue } else { "" }
+      $stderr = if (Test-Path $stderrPath -PathType Leaf) { Get-Content -Path $stderrPath -Raw -ErrorAction SilentlyContinue } else { "" }
+      $output = @("Pre-install command timed out after $timeoutMs ms: $($CommandArgs -join ' ')", $stdout, $stderr) -join ""
+      return @{
+        ExitCode = 124
+        Output = [string]$output
+        TimedOut = $true
+      }
+    }
+
+    $stdout = if (Test-Path $stdoutPath -PathType Leaf) { Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue } else { "" }
+    $stderr = if (Test-Path $stderrPath -PathType Leaf) { Get-Content -Path $stderrPath -Raw -ErrorAction SilentlyContinue } else { "" }
+    $output = @($stdout, $stderr) -join ""
+
+    return @{
+      ExitCode = [int]$process.ExitCode
+      Output = [string]$output
+      TimedOut = $false
+    }
+  }
+  finally {
+    Remove-Item -Path $stdoutPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $stderrPath -Force -ErrorAction SilentlyContinue
+
     if ($null -eq $previousHomeDir) {
       Remove-Item Env:HAPPIER_HOME_DIR -ErrorAction SilentlyContinue
     }
@@ -1302,7 +1498,7 @@ function Get-InstallerLockHygieneMatchNeedles {
     }
   }
 
-  return @($needles)
+  return $needles.ToArray()
 }
 
 function Get-InstallerScopedHappierProcesses {
@@ -1348,7 +1544,7 @@ function Get-InstallerScopedHappierProcesses {
     }
   }
 
-  return @($matched)
+  return $matched.ToArray()
 }
 
 function Wait-InstallerLockHygieneProcessesToExit {
@@ -1402,14 +1598,25 @@ function Invoke-InstallerPreInstallLockHygiene {
   $matchNeedles = Get-InstallerLockHygieneMatchNeedles -InstallHomeDir $InstallHomeDir
   $existingInvoker = Resolve-InstalledCliInvoker
   if ($existingInvoker) {
+    $preInstallCommandTimeoutMs = Resolve-InstallerPreInstallCommandTimeoutMs
     foreach ($commandArgs in @(
         @("service", "stop", "--json"),
         @("daemon", "stop", "--all", "--kill-sessions", "--json")
       )) {
       try {
-        [void](Invoke-NativeCommandCapturingOutput {
-          Invoke-InstallerCommandWithDaemonServiceContext -CliPath $existingInvoker -CommandArgs $commandArgs -HomeDir $InstallHomeDir
-        })
+        $commandResult = Invoke-InstallerCommandWithDaemonServiceContextCapturingOutputWithTimeout -CliPath $existingInvoker -CommandArgs $commandArgs -HomeDir $InstallHomeDir -TimeoutMs $preInstallCommandTimeoutMs
+        if ([int]$commandResult.ExitCode -ne 0) {
+          $output = ([string]$commandResult.Output).Trim()
+          if ($commandResult.TimedOut) {
+            Write-Warning "Pre-install lock hygiene command timed out after $preInstallCommandTimeoutMs ms ($($commandArgs -join ' ')); continuing with scoped process cleanup."
+          }
+          else {
+            Write-Warning "Pre-install lock hygiene command exited with code $($commandResult.ExitCode) ($($commandArgs -join ' ')); continuing with scoped process cleanup."
+          }
+          if ($output) {
+            Write-Warning "Pre-install lock hygiene command output ($($commandArgs -join ' ')): $output"
+          }
+        }
       }
       catch {
         Write-Warning "Pre-install lock hygiene command failed ($($commandArgs -join ' ')): $($_.Exception.Message)"
@@ -1436,6 +1643,31 @@ function Invoke-InstallerPreInstallLockHygiene {
   Remove-StaleInstallerVersionBackups -InstallHomeDir $InstallHomeDir
 }
 
+function Resolve-InstallerPowerShellExecutablePath {
+  $currentHostExecutableName = if ($PSVersionTable -and $PSVersionTable.PSEdition -eq "Core") {
+    "pwsh.exe"
+  }
+  else {
+    "powershell.exe"
+  }
+
+  if ($PSHOME) {
+    $currentHostExecutablePath = Join-Path $PSHOME $currentHostExecutableName
+    if (Test-Path -LiteralPath $currentHostExecutablePath -PathType Leaf) {
+      return $currentHostExecutablePath
+    }
+  }
+
+  foreach ($commandName in @("pwsh.exe", "pwsh", "powershell.exe", "powershell")) {
+    $command = Get-Command -Name $commandName -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command -and $command.Source -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+      return $command.Source
+    }
+  }
+
+  throw "Unable to locate PowerShell executable for installer payload promotion."
+}
+
 function Invoke-InstallerPayloadPromotionWithTimeout {
   param (
     [Parameter(Mandatory = $true)] [string] $BinaryPath,
@@ -1447,6 +1679,7 @@ function Invoke-InstallerPayloadPromotionWithTimeout {
 
   $timeoutMs = Resolve-InstallerPayloadPromotionTimeoutMs
   $runToken = [System.Guid]::NewGuid().ToString("N")
+  $runnerBinaryPath = Join-Path $env:TEMP "happier-payload-promotion-$runToken.exe"
   $runnerScriptPath = Join-Path $env:TEMP "happier-payload-promotion-$runToken.ps1"
   $stdoutPath = Join-Path $env:TEMP "happier-payload-promotion-$runToken.stdout.log"
   $stderrPath = Join-Path $env:TEMP "happier-payload-promotion-$runToken.stderr.log"
@@ -1459,9 +1692,13 @@ function Invoke-InstallerPayloadPromotionWithTimeout {
   $runnerScript = @"
 `$ErrorActionPreference = 'Stop'
 `$previousHappyHomeDir = `$env:HAPPIER_HOME_DIR
+`$previousSkipPayloadOwnerStopCommands = `$env:HAPPIER_CLI_SKIP_PAYLOAD_OWNER_STOP_COMMANDS
+`$previousSkipInstallPayloadMigration = `$env:HAPPIER_CLI_SKIP_INSTALL_PAYLOAD_MIGRATION
 try {
   `$env:HAPPIER_HOME_DIR = '$(& $escapeSingleQuotedLiteral $InstallHomeDir)'
-  & '$(& $escapeSingleQuotedLiteral $BinaryPath)' self __install-payload --component happier-cli --payload-root '$(& $escapeSingleQuotedLiteral $PayloadRoot)' --version '$(& $escapeSingleQuotedLiteral $Version)' --channel '$(& $escapeSingleQuotedLiteral $ChannelValue)'
+  `$env:HAPPIER_CLI_SKIP_PAYLOAD_OWNER_STOP_COMMANDS = '1'
+  `$env:HAPPIER_CLI_SKIP_INSTALL_PAYLOAD_MIGRATION = '1'
+  & '$(& $escapeSingleQuotedLiteral $runnerBinaryPath)' self __install-payload --component happier-cli --payload-root '$(& $escapeSingleQuotedLiteral $PayloadRoot)' --version '$(& $escapeSingleQuotedLiteral $Version)' --channel '$(& $escapeSingleQuotedLiteral $ChannelValue)'
   `$exitCode = `$LASTEXITCODE
   if (`$null -eq `$exitCode) {
     `$exitCode = 1
@@ -1475,22 +1712,31 @@ finally {
   else {
     `$env:HAPPIER_HOME_DIR = `$previousHappyHomeDir
   }
+  if (`$null -eq `$previousSkipPayloadOwnerStopCommands) {
+    Remove-Item Env:HAPPIER_CLI_SKIP_PAYLOAD_OWNER_STOP_COMMANDS -ErrorAction SilentlyContinue
+  }
+  else {
+    `$env:HAPPIER_CLI_SKIP_PAYLOAD_OWNER_STOP_COMMANDS = `$previousSkipPayloadOwnerStopCommands
+  }
+  if (`$null -eq `$previousSkipInstallPayloadMigration) {
+    Remove-Item Env:HAPPIER_CLI_SKIP_INSTALL_PAYLOAD_MIGRATION -ErrorAction SilentlyContinue
+  }
+  else {
+    `$env:HAPPIER_CLI_SKIP_INSTALL_PAYLOAD_MIGRATION = `$previousSkipInstallPayloadMigration
+  }
 }
 "@
 
   try {
+    Copy-Item -Path $BinaryPath -Destination $runnerBinaryPath -Force
     Set-Content -Path $runnerScriptPath -Value $runnerScript -Encoding utf8
 
-    $process = Start-Process -FilePath "pwsh" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $runnerScriptPath) -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -WindowStyle Hidden
+    $powerShellExecutablePath = Resolve-InstallerPowerShellExecutablePath
+    $process = Start-Process -FilePath $powerShellExecutablePath -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $runnerScriptPath) -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -WindowStyle Hidden
 
     $completed = $process.WaitForExit($timeoutMs)
     if (-not $completed) {
-      try {
-        $process.Kill($true)
-      }
-      catch {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-      }
+      Stop-InstallerProcessTree -Process $process
 
       return @{
         ExitCode = 124
@@ -1510,6 +1756,7 @@ finally {
     }
   }
   finally {
+    Remove-Item -Path $runnerBinaryPath -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $runnerScriptPath -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $stdoutPath -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $stderrPath -Force -ErrorAction SilentlyContinue
@@ -1615,7 +1862,7 @@ if (-not $signatureAsset) {
   throw "Unable to locate minisign signature asset on release tag $tag."
 }
 
-$tmpDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("happier-install-" + [System.Guid]::NewGuid().ToString("N")))
+$tmpDir = New-InstallerStagingDirectory -InstallHomeDir $InstallDir
 try {
   $archivePath = Join-Path $tmpDir.FullName "happier.tar.gz"
   $checksumsPath = Join-Path $tmpDir.FullName "checksums.txt"
@@ -1680,9 +1927,15 @@ try {
   $promotionResult = Invoke-InstallerPayloadPromotionWithTimeout -BinaryPath $binary -PayloadRoot $payloadRoot -Version $version -ChannelValue $Channel -InstallHomeDir $InstallDir
   if ($promotionResult.ExitCode -ne 0) {
     $promotionOutput = if ($promotionResult.Output) { $promotionResult.Output.Trim() } else { "" }
+    if ($promotionResult.TimedOut) {
+      if ($promotionOutput) {
+        Write-Warning $promotionOutput
+      }
+      throw "Payload promotion timed out. Refusing direct binary copy to avoid partial install state drift (versioned payload/current marker/shim/channel migration)."
+    }
     $payloadPromotionFallbackSafe = Test-InstallerPayloadDirectCopyFallbackSafe
     $legacyFallbackCompatible = $promotionOutput -match 'Unknown self subcommand:\s+__install-payload'
-    $longPathOrMissingSourceSignature = $promotionOutput -match '(ENOENT: no such file or directory, copyfile|ENOENT: no such file or directory, open|ENAMETOOLONG|name too long|path too long|timed out after|ETIMEDOUT)'
+    $longPathOrMissingSourceSignature = $promotionOutput -match '(ENOENT: no such file or directory, copyfile|ENOENT: no such file or directory, open|ENAMETOOLONG|name too long|path too long)'
 
     if ($payloadPromotionFallbackSafe -and ($legacyFallbackCompatible -or $longPathOrMissingSourceSignature)) {
       Write-Warning "Payload promotion is unsupported by this CLI build, falling back to legacy direct binary copy."
@@ -1884,5 +2137,5 @@ try {
   Invoke-PostInstallAction -CliPath $invoker
 }
 finally {
-  Remove-Item -Path $tmpDir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-InstallerStagingDirectory -Directory $tmpDir
 }

@@ -31,16 +31,18 @@ test('planArchiveExtraction selects tar for .tar.xz archives', () => {
   });
 });
 
-test('planArchiveExtraction selects powershell Expand-Archive for .zip archives on windows', () => {
+test('planArchiveExtraction selects tar for .zip archives on windows', () => {
   const planned = planArchiveExtraction({
     archiveName: 'happier-server-v1.2.3-windows-x64.zip',
     archivePath: 'C:\\\\Temp\\\\server.zip',
     destDir: 'C:\\\\Temp\\\\extract',
     os: 'windows',
   });
-  assert.equal(planned.requiredCommand, 'powershell');
-  assert.equal(planned.command.cmd, 'powershell');
-  assert.match(planned.command.args.join(' '), /Expand-Archive/i);
+  assert.equal(planned.requiredCommand, 'tar');
+  assert.deepEqual(planned.command, {
+    cmd: 'tar',
+    args: ['-xf', 'C:\\\\Temp\\\\server.zip', '-C', 'C:\\\\Temp\\\\extract'],
+  });
 });
 
 test('planArchiveExtraction rejects unknown archive extensions', () => {

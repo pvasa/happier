@@ -55,6 +55,38 @@ function writeNodePackageFixture({ repoRoot, packageName, packageJson = {}, file
   }
 }
 
+function writeCliToolUnpackFixture(repoRoot) {
+  const cliDir = join(repoRoot, 'apps', 'cli');
+  const cliScriptsDir = join(cliDir, 'scripts');
+  const cliToolsArchivesDir = join(cliDir, 'tools', 'archives');
+  mkdirSync(cliScriptsDir, { recursive: true });
+  mkdirSync(cliToolsArchivesDir, { recursive: true });
+  writeFileSync(join(cliToolsArchivesDir, 'checksums.sha256'), '', 'utf8');
+  writeFileSync(join(cliToolsArchivesDir, 'zellij-no-web-x86_64-unknown-linux-musl.tar.gz'), 'fake zellij archive\n', 'utf8');
+  writeFileSync(join(cliToolsArchivesDir, 'zellij-LICENSE'), 'fake zellij license\n', 'utf8');
+  writeFileSync(join(cliScriptsDir, 'unpack-tools.cjs'), `
+const fs = require('fs');
+const path = require('path');
+
+async function unpackTools(options = {}) {
+  const platformDir = options.platformDir || 'unknown';
+  const toolsDir = options.toolsDir || path.resolve(__dirname, '..', 'tools');
+  const unpackedPath = path.join(toolsDir, 'unpacked');
+  fs.mkdirSync(unpackedPath, { recursive: true });
+  const binaryName = platformDir === 'x64-win32' ? 'zellij.exe' : 'zellij';
+  fs.writeFileSync(path.join(unpackedPath, binaryName), 'zellij 0.44.3 for ' + platformDir + '\\n');
+  fs.writeFileSync(path.join(unpackedPath, 'zellij-LICENSE'), 'fake zellij license\\n');
+  fs.writeFileSync(path.join(unpackedPath, '.happier-tools-manifest.json'), JSON.stringify({
+    platformDir,
+    tools: { zellij: { version: '0.44.3' } },
+  }, null, 2) + '\\n');
+  return { success: true, alreadyUnpacked: false };
+}
+
+module.exports = { unpackTools };
+`, 'utf8');
+}
+
 function writeCliRuntimePackageFixture(
   repoRoot,
   bundledDependencies = [
@@ -85,6 +117,8 @@ function writeCliRuntimePackageFixture(
     ),
     'utf8',
   );
+
+  writeCliToolUnpackFixture(repoRoot);
 
   writeWorkspacePackageFixture({ repoRoot, packageName: '@happier-dev/agents', relativeDir: ['packages', 'agents'] });
   writeWorkspacePackageFixture({ repoRoot, packageName: '@happier-dev/cli-common', relativeDir: ['packages', 'cli-common'] });
@@ -207,6 +241,8 @@ test('buildCliBinaryArtifactPayload compiles the local CLI binary into the paylo
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'statusline_forwarder.cjs'), 'console.log("statusline");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'terminal_launch_spec_runner.cjs'), 'console.log("terminal launch spec");\n', 'utf8');
     writeFileSync(join(cliRuntimeDir, 'loadTransformersFromRuntime.mjs'), 'export const env = {}; export async function pipeline() { return () => null; }\n', 'utf8');
     writeFileSync(join(cliShimsDir, 'git'), '#!/bin/sh\nexit 0\n', 'utf8');
     writeFileSync(join(cliShimsDir, 'rg'), '#!/bin/sh\nexit 0\n', 'utf8');
@@ -300,6 +336,15 @@ test('buildCliBinaryArtifactPayload compiles the local CLI binary into the paylo
       'export const env = {}; export async function pipeline() { return () => null; }\n',
     );
     assert.equal(readFileSync(join(payloadDir, 'scripts', 'shims', 'git'), 'utf8'), '#!/bin/sh\nexit 0\n');
+    assert.equal(readFileSync(join(payloadDir, 'tools', 'unpacked', 'zellij'), 'utf8'), 'zellij 0.44.3 for x64-linux\n');
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(payloadDir, 'tools', 'unpacked', '.happier-tools-manifest.json'), 'utf8')),
+      {
+        platformDir: 'x64-linux',
+        tools: { zellij: { version: '0.44.3' } },
+      },
+    );
+    assert.equal(existsSync(join(payloadDir, 'tools', 'archives')), false);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -363,6 +408,8 @@ test('buildCliBinaryArtifactPayload removes compile-generated node_modules befor
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'statusline_forwarder.cjs'), 'console.log("statusline");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'terminal_launch_spec_runner.cjs'), 'console.log("terminal launch spec");\n', 'utf8');
     writeFileSync(join(cliRuntimeDir, 'loadTransformersFromRuntime.mjs'), 'export const env = {}; export async function pipeline() { return () => null; }\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'shims', 'git'), '#!/bin/sh\nexit 0\n', 'utf8');
     writeFileSync(
@@ -477,6 +524,8 @@ test('buildCliBinaryArtifactPayload snapshots CLI dist before compile/copy so la
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'statusline_forwarder.cjs'), 'console.log("statusline");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'terminal_launch_spec_runner.cjs'), 'console.log("terminal launch spec");\n', 'utf8');
     writeFileSync(join(cliRuntimeDir, 'loadTransformersFromRuntime.mjs'), 'export const env = {}; export async function pipeline() { return () => null; }\n', 'utf8');
     writeFileSync(join(cliShimsDir, 'git'), '#!/bin/sh\nexit 0\n', 'utf8');
     writeFileSync(join(cliShimsDir, 'rg'), '#!/bin/sh\nexit 0\n', 'utf8');
@@ -567,6 +616,8 @@ test('buildCliBinaryArtifactPayload derives bundled workspace packages from apps
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'statusline_forwarder.cjs'), 'console.log("statusline");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'terminal_launch_spec_runner.cjs'), 'console.log("terminal launch spec");\n', 'utf8');
     writeFileSync(join(cliRuntimeDir, 'loadTransformersFromRuntime.mjs'), 'export const env = {}; export async function pipeline() { return () => null; }\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'shims', 'git'), '#!/bin/sh\nexit 0\n', 'utf8');
     writeFileSync(
@@ -643,6 +694,8 @@ test('buildCliBinaryArtifactPayload restores runtime sidecars after compile rewr
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'statusline_forwarder.cjs'), 'console.log("statusline");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'terminal_launch_spec_runner.cjs'), 'console.log("terminal launch spec");\n', 'utf8');
     writeFileSync(join(cliRuntimeDir, 'loadTransformersFromRuntime.mjs'), 'export const env = {}; export async function pipeline() { return () => null; }\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'shims', 'git'), '#!/bin/sh\nexit 0\n', 'utf8');
     writeFileSync(
@@ -731,6 +784,8 @@ test('buildCliBinaryArtifactPayload stages embeddings runtime packages and exter
     writeFileSync(join(cliScriptsDir, 'session_hook_forwarder.cjs'), 'console.log("session");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'permission_hook_forwarder.cjs'), 'console.log("permission");\n', 'utf8');
     writeFileSync(join(cliScriptsDir, 'ripgrep_launcher.cjs'), 'require("./childProcessOptions.cjs");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'statusline_forwarder.cjs'), 'console.log("statusline");\n', 'utf8');
+    writeFileSync(join(cliScriptsDir, 'terminal_launch_spec_runner.cjs'), 'console.log("terminal launch spec");\n', 'utf8');
     writeFileSync(join(cliRuntimeDir, 'loadTransformersFromRuntime.mjs'), 'export const env = {}; export async function pipeline() { return () => null; }\n', 'utf8');
     writeFileSync(join(cliShimsDir, 'git'), '#!/bin/sh\nexit 0\n', 'utf8');
     writeFileSync(
