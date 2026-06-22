@@ -316,6 +316,178 @@ describe("sessionWriteService", () => {
             });
         });
 
+        it("does not make a non-unread system message create unread activity when the session was already read", async () => {
+            const createdAt = new Date("2020-01-01T00:00:00.000Z");
+
+            currentTx.sessionMessage.findUnique.mockResolvedValue(null);
+            currentTx.session.findUnique
+                .mockResolvedValueOnce({ accountId: "u1" })
+                .mockResolvedValueOnce({
+                    seq: 9,
+                    lastViewedSessionSeq: 9,
+                    pendingCount: 0,
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                    active: true,
+                    archivedAt: null,
+                });
+            currentTx.session.update.mockResolvedValueOnce({ seq: 10 });
+            currentTx.session.updateMany.mockResolvedValue({ count: 1 });
+            currentTx.sessionMessage.create.mockResolvedValue({
+                id: "m-system",
+                seq: 10,
+                localId: "system-local",
+                sidechainId: null,
+                messageRole: "event",
+                content: { t: "encrypted", c: "cipher" },
+                createdAt,
+                updatedAt: createdAt,
+            });
+            getSessionParticipantUserIds.mockResolvedValue(["u1"]);
+            markAccountChanged.mockResolvedValueOnce(101);
+
+            const res = await createSessionMessage({
+                actorUserId: "u1",
+                sessionId: "s1",
+                ciphertext: "cipher",
+                localId: "system-local",
+                messageRole: "event",
+                trustedAttentionImpact: {
+                    affectsUnread: false,
+                    affectsMeaningfulActivity: false,
+                },
+            } as Parameters<typeof createSessionMessage>[0]);
+
+            expect(res.ok).toBe(true);
+            if (!res.ok || res.didWrite === false) throw new Error("expected ok + didWrite");
+            expect(res.badgeAttentionChanged).toBe(false);
+            expect(currentTx.session.update).toHaveBeenNthCalledWith(1, {
+                where: { id: "s1" },
+                select: { seq: true },
+                data: {
+                    seq: { increment: 1 },
+                },
+            });
+            expect(currentTx.session.updateMany).toHaveBeenCalledWith({
+                where: {
+                    id: "s1",
+                    OR: [{ lastViewedSessionSeq: { lt: 10 } }, { lastViewedSessionSeq: null }],
+                },
+                data: { lastViewedSessionSeq: 10 },
+            });
+            expect(currentTx.session.update).toHaveBeenCalledTimes(1);
+        });
+
+        it("does not let a non-unread system message clear pre-existing unread activity", async () => {
+            const createdAt = new Date("2020-01-01T00:00:00.000Z");
+
+            currentTx.sessionMessage.findUnique.mockResolvedValue(null);
+            currentTx.session.findUnique
+                .mockResolvedValueOnce({ accountId: "u1" })
+                .mockResolvedValueOnce({
+                    seq: 9,
+                    lastViewedSessionSeq: 7,
+                    pendingCount: 0,
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                    active: true,
+                    archivedAt: null,
+                });
+            currentTx.session.update.mockResolvedValue({ seq: 10 });
+            currentTx.sessionMessage.create.mockResolvedValue({
+                id: "m-system",
+                seq: 10,
+                localId: "system-local",
+                sidechainId: null,
+                messageRole: "event",
+                content: { t: "encrypted", c: "cipher" },
+                createdAt,
+                updatedAt: createdAt,
+            });
+            getSessionParticipantUserIds.mockResolvedValue(["u1"]);
+            markAccountChanged.mockResolvedValueOnce(101);
+
+            const res = await createSessionMessage({
+                actorUserId: "u1",
+                sessionId: "s1",
+                ciphertext: "cipher",
+                localId: "system-local",
+                messageRole: "event",
+                trustedAttentionImpact: {
+                    affectsUnread: false,
+                    affectsMeaningfulActivity: false,
+                },
+            } as Parameters<typeof createSessionMessage>[0]);
+
+            expect(res.ok).toBe(true);
+            if (!res.ok || res.didWrite === false) throw new Error("expected ok + didWrite");
+            expect(res.badgeAttentionChanged).toBe(false);
+            expect(currentTx.session.update).toHaveBeenCalledTimes(1);
+            expect(currentTx.session.updateMany).not.toHaveBeenCalled();
+        });
+
+        it("does not move the read cursor backward when a concurrent update already advanced past a non-unread message", async () => {
+            const createdAt = new Date("2020-01-01T00:00:00.000Z");
+
+            currentTx.sessionMessage.findUnique.mockResolvedValue(null);
+            currentTx.session.findUnique
+                .mockResolvedValueOnce({ accountId: "u1" })
+                .mockResolvedValueOnce({
+                    seq: 9,
+                    lastViewedSessionSeq: 9,
+                    pendingCount: 0,
+                    pendingPermissionRequestCount: 0,
+                    pendingUserActionRequestCount: 0,
+                    active: true,
+                    archivedAt: null,
+                })
+                .mockResolvedValueOnce({
+                    lastViewedSessionSeq: 12,
+                });
+            currentTx.session.update.mockResolvedValue({ seq: 10 });
+            currentTx.session.updateMany.mockResolvedValue({ count: 0 });
+            currentTx.sessionMessage.create.mockResolvedValue({
+                id: "m-system",
+                seq: 10,
+                localId: "system-local",
+                sidechainId: null,
+                messageRole: "event",
+                content: { t: "encrypted", c: "cipher" },
+                createdAt,
+                updatedAt: createdAt,
+            });
+            getSessionParticipantUserIds.mockResolvedValue(["u1"]);
+            markAccountChanged.mockResolvedValueOnce(101);
+
+            const res = await createSessionMessage({
+                actorUserId: "u1",
+                sessionId: "s1",
+                ciphertext: "cipher",
+                localId: "system-local",
+                messageRole: "event",
+                trustedAttentionImpact: {
+                    affectsUnread: false,
+                    affectsMeaningfulActivity: false,
+                },
+            } as Parameters<typeof createSessionMessage>[0]);
+
+            expect(res.ok).toBe(true);
+            if (!res.ok || res.didWrite === false) throw new Error("expected ok + didWrite");
+            expect(res.badgeAttentionChanged).toBe(false);
+            expect(currentTx.session.update).toHaveBeenCalledTimes(1);
+            expect(currentTx.session.updateMany).toHaveBeenCalledWith({
+                where: {
+                    id: "s1",
+                    OR: [{ lastViewedSessionSeq: { lt: 10 } }, { lastViewedSessionSeq: null }],
+                },
+                data: { lastViewedSessionSeq: 10 },
+            });
+            expect(currentTx.session.findUnique).toHaveBeenNthCalledWith(3, {
+                where: { id: "s1" },
+                select: { lastViewedSessionSeq: true },
+            });
+        });
+
         it("persists a ready-event list projection beside encrypted transcript content", async () => {
             const createdAt = new Date("2020-01-01T00:00:00.000Z");
 
@@ -2160,8 +2332,10 @@ describe("sessionWriteService", () => {
                 data: expect.objectContaining({
                     latestTurnId: "turn-1",
                     latestTurnStatus: "in_progress",
-                    latestTurnStatusObservedAt: BigInt(100),
+                    latestTurnStatusObservedAt: BigInt(150),
                     lastRuntimeIssue: null,
+                    thinking: true,
+                    thinkingAt: new Date(150),
                 }),
             });
             expect(res).toMatchObject({
@@ -2169,7 +2343,7 @@ describe("sessionWriteService", () => {
                 didApply: true,
                 latestTurnId: "turn-1",
                 latestTurnStatus: "in_progress",
-                latestTurnStatusObservedAt: 100,
+                latestTurnStatusObservedAt: 150,
             });
         });
 

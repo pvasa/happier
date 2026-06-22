@@ -10,11 +10,15 @@ import { t } from '@/text';
 export const JumpToBottomButton = React.memo(function JumpToBottomButton(props: {
     count: number;
     onPress: () => void;
+    presentation?: 'standard' | 'activity';
     testID?: string;
 }) {
     const { theme, rt } = useUnistyles();
     const label = t('settingsSession.transcript.jumpToBottomButtonLabel');
-    const compact = rt.breakpoint === 'xs' || rt.breakpoint === 'sm' || rt.breakpoint === 'md';
+    const accessibilityLabel = props.count > 0
+        ? t('settingsSession.transcript.jumpToBottomButtonNewActivityLabel', { count: props.count })
+        : label;
+    const compact = props.presentation === 'activity' || rt.breakpoint === 'xs' || rt.breakpoint === 'sm' || rt.breakpoint === 'md';
     return (
         <GlassPanel
             // Match the tab bar's glass look: default solid fill (surface.base), not a
@@ -27,7 +31,7 @@ export const JumpToBottomButton = React.memo(function JumpToBottomButton(props: 
                 testID={props.testID}
                 onPress={props.onPress}
                 accessibilityRole="button"
-                accessibilityLabel={label}
+                accessibilityLabel={accessibilityLabel}
                 style={({ pressed }) => [styles.row, compact && styles.compactRow, pressed && { opacity: 0.92 }]}
             >
                 {props.count > 0 ? (

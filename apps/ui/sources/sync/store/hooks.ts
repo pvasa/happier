@@ -34,7 +34,10 @@ import {
   areServerProfileIdentifiersEquivalent,
   resolveServerProfileScopeIdForIdentifier,
 } from '../domains/server/serverProfiles';
-import { resolveSessionReadableSeq } from '../domains/session/readCursor/resolveSessionReadableSeq';
+import {
+  resolveLatestUnreadAffectingCommittedMessageSeq,
+  resolveSessionReadableSeq,
+} from '../domains/session/readCursor/resolveSessionReadableSeq';
 import { resolveSessionWorkspacePath } from '../domains/session/resolveSessionWorkspacePath';
 import { buildSessionMetadataStabilitySignature } from '../domains/session/metadata/sessionMetadataStability';
 import type { ReviewCommentDraft } from '../domains/input/reviewComments/reviewCommentTypes';
@@ -73,6 +76,7 @@ import {
   compareTranscriptMessagesOldestFirst,
   normalizeTranscriptSeq,
 } from '../domains/messages/transcriptOrdering';
+import { readStoredSessionMessagesFromStateLike } from '../domains/messages/readStoredSessionMessages';
 import type { MachineDisplayRenderable } from '../domains/machines/machineDisplayRenderable';
 import type { AgentEvent } from '../typesRaw';
 
@@ -770,7 +774,7 @@ export function useSessionVisibleReadSeq(
     const session = state.sessions[sessionId];
     const renderable = state.sessionListRenderables[sessionId];
     return resolveSessionReadableSeq({
-      latestMessageSeq: resolveLatestCommittedMessageSeqForHooksCached(sessionMessages),
+      latestMessageSeq: resolveLatestUnreadAffectingCommittedMessageSeqForHooksCached(sessionMessages),
       sessionSeq,
       latestReadyEventSeq:
         sessionMessages.latestReadyEventSeq
@@ -783,26 +787,22 @@ export function useSessionVisibleReadSeq(
   });
 }
 
-function resolveLatestCommittedMessageSeqForHooks(
+function resolveLatestUnreadAffectingCommittedMessageSeqForHooks(
   sessionMessages: StorageState['sessionMessages'][string],
 ): number | null {
-  let latestSeq: number | null = null;
-  for (const messageId of sessionMessages.messageIdsOldestFirst) {
-    const seq = normalizeHookSeq(sessionMessages.messagesById[messageId]?.seq);
-    if (seq === null) continue;
-    latestSeq = latestSeq === null ? seq : Math.max(latestSeq, seq);
-  }
-  return latestSeq;
+  return resolveLatestUnreadAffectingCommittedMessageSeq(
+    readStoredSessionMessagesFromStateLike(sessionMessages),
+  );
 }
 
-function resolveLatestCommittedMessageSeqForHooksCached(
+function resolveLatestUnreadAffectingCommittedMessageSeqForHooksCached(
   sessionMessages: StorageState['sessionMessages'][string],
 ): number | null {
   if (latestCommittedMessageSeqBySessionMessagesRef.has(sessionMessages)) {
     return latestCommittedMessageSeqBySessionMessagesRef.get(sessionMessages) ?? null;
   }
 
-  const latestSeq = resolveLatestCommittedMessageSeqForHooks(sessionMessages);
+  const latestSeq = resolveLatestUnreadAffectingCommittedMessageSeqForHooks(sessionMessages);
   latestCommittedMessageSeqBySessionMessagesRef.set(sessionMessages, latestSeq);
   return latestSeq;
 }
@@ -812,7 +812,9 @@ function resolveSessionHasUnreadForHooks(
   sessionMessages: StorageState['sessionMessages'][string] | undefined,
   renderable: SessionListRenderableSession | undefined,
 ): boolean {
-  const readableMessageSeq = resolveCommittedSessionMessageSeqForUnread(sessionMessages);
+  const readableMessageSeq = sessionMessages
+    ? resolveLatestUnreadAffectingCommittedMessageSeqForHooksCached(sessionMessages)
+    : null;
   const readableSeq = resolveSessionReadableSeq({
     latestMessageSeq: readableMessageSeq,
     sessionSeq: session.seq,
@@ -825,31 +827,6 @@ function resolveSessionHasUnreadForHooks(
   if (readableSeq > 0) return false;
   if (readableMessageSeq !== null) return false;
   return renderable?.hasUnreadMessages === true;
-}
-
-function resolveCommittedSessionMessageSeqForUnread(
-  sessionMessages: StorageState['sessionMessages'][string] | undefined,
-): number | null {
-  if (!sessionMessages) return null;
-  const messageIds = sessionMessages.messageIdsOldestFirst;
-  if (!Array.isArray(messageIds)) return null;
-  if (messageIds.length === 0 && sessionMessages.isLoaded !== true) return null;
-
-  let latestSeq: number | null = null;
-  for (const messageId of messageIds) {
-    const message = sessionMessages.messagesById?.[messageId];
-    const seq = normalizeHookSeq(message?.seq);
-    if (seq !== null) {
-      latestSeq = latestSeq === null ? seq : Math.max(latestSeq, seq);
-    }
-  }
-  return latestSeq;
-}
-
-function normalizeHookSeq(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? Math.max(0, Math.trunc(value))
-    : null;
 }
 
 export function useSessionPendingMessages(

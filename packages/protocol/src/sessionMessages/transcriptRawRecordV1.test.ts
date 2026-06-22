@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  agentEventAttentionImpact,
   TranscriptRawAgentEventV1Schema,
   TranscriptRawRecordV1Schema,
+  type TranscriptRawAgentEventV1,
   type RuntimeConfigOutcomeChangeKeyV1,
   type RuntimeConfigOutcomeStatusV1,
   type RuntimeConfigOutcomeTimingV1,
@@ -85,6 +87,31 @@ describe('TranscriptRawRecordV1Schema', () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+
+  it('classifies maintenance events as non-unread system activity', () => {
+    const maintenanceEventTypes = [
+      'connected-service-account-switch',
+      'connected-service-account-switch-deferral',
+      'connected-service-account-switch-deferral-completed',
+      'connected-service-account-switch-deferral-superseded',
+      'connected-service-account-switch-attempt',
+      'provider-state-sharing-degraded',
+    ] as const satisfies ReadonlyArray<TranscriptRawAgentEventV1['type']>;
+
+    for (const type of maintenanceEventTypes) {
+      expect(agentEventAttentionImpact({ type })).toEqual({
+        affectsUnread: false,
+        affectsMeaningfulActivity: false,
+      });
+    }
+
+    expect(agentEventAttentionImpact({
+      type: 'ready',
+    })).toEqual({
+      affectsUnread: true,
+      affectsMeaningfulActivity: true,
+    });
   });
 
   it('parses codex turn_aborted lifecycle records', () => {

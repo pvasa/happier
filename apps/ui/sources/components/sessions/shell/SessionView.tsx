@@ -1987,6 +1987,7 @@ function SessionViewLoaded({
     routeHydrationPending,
 }: SessionViewLoadedProps) {
     const { theme } = useUnistyles();
+    const sessionRuntimeStatusSource = useSessionRuntimeStatusSource(session);
     const applyLocalSettings = useApplyLocalSettings();
     const router = useRouter();
     const pathname = usePathname();
@@ -2305,22 +2306,22 @@ function SessionViewLoaded({
         }
     }, []);
     const usageLimitRuntimeState = React.useMemo(() => {
-        const pendingFlags = derivePendingRequestFlagsFromSession(session);
+        const pendingFlags = derivePendingRequestFlagsFromSession(sessionRuntimeStatusSource);
         return deriveSessionRuntimePresentationState({
-            active: session.active,
-            activeAt: session.activeAt,
-            presence: session.presence,
-            thinking: session.thinking,
-            thinkingAt: session.thinkingAt,
-            latestTurnStatus: session.latestTurnStatus,
-            latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
-            meaningfulActivityAt: session.meaningfulActivityAt,
+            active: sessionRuntimeStatusSource.active,
+            activeAt: sessionRuntimeStatusSource.activeAt,
+            presence: sessionRuntimeStatusSource.presence,
+            thinking: sessionRuntimeStatusSource.thinking,
+            thinkingAt: sessionRuntimeStatusSource.thinkingAt,
+            latestTurnStatus: sessionRuntimeStatusSource.latestTurnStatus,
+            latestTurnStatusObservedAt: sessionRuntimeStatusSource.latestTurnStatusObservedAt,
+            meaningfulActivityAt: sessionRuntimeStatusSource.meaningfulActivityAt,
             hasPendingPermissionRequests: pendingFlags.hasPendingPermissionRequests,
             hasPendingUserActionRequests: pendingFlags.hasPendingUserActionRequests,
-            pendingRequestObservedAt: deriveLatestPendingRequestObservedAtFromSession(session),
+            pendingRequestObservedAt: deriveLatestPendingRequestObservedAtFromSession(sessionRuntimeStatusSource),
         }, usageLimitRecoveryNowMs);
     }, [
-        session,
+        sessionRuntimeStatusSource,
         usageLimitRecoveryNowMs,
     ]);
     const hasInterruptedWorkToResume = React.useMemo(() => (
@@ -2330,13 +2331,13 @@ function SessionViewLoaded({
     ), [pendingMessages.length, session.active, session.metadata]);
     const baseUsageLimitRecoveryPresentation = React.useMemo(() => buildSessionUsageLimitRecoveryPresentation({
         featureEnabled: usageLimitRecoveryFeatureEnabled,
-        latestTurnStatus: session.latestTurnStatus ?? null,
-        issue: session.lastRuntimeIssue ?? null,
+        latestTurnStatus: sessionRuntimeStatusSource.latestTurnStatus ?? null,
+        issue: sessionRuntimeStatusSource.lastRuntimeIssue ?? null,
         recovery: usageLimitRecovery,
         recoveryCredits: usageLimitRecoveryCredits,
         operationStatus: null,
         runtimeWorking: usageLimitRuntimeState.runtimeActivelyWorking,
-        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(sessionRuntimeStatusSource),
         hasInterruptedWorkToResume,
         rememberedMode: usageLimitRecoveryMode,
         checkNowSupported: usageLimitRecoveryCheckNowSupported,
@@ -2345,10 +2346,10 @@ function SessionViewLoaded({
         formatTime: formatUsageLimitRecoveryTime,
     }), [
         formatUsageLimitRecoveryTime,
-        session.latestTurnStatus,
-        session.latestTurnStatusObservedAt,
-        session.lastRuntimeIssue,
-        session.meaningfulActivityAt,
+        sessionRuntimeStatusSource.latestTurnStatus,
+        sessionRuntimeStatusSource.latestTurnStatusObservedAt,
+        sessionRuntimeStatusSource.lastRuntimeIssue,
+        sessionRuntimeStatusSource.meaningfulActivityAt,
         translateUsageLimitRecovery,
         hasInterruptedWorkToResume,
         usageLimitRecovery,
@@ -2388,14 +2389,14 @@ function SessionViewLoaded({
     const activeUsageLimitRecoveryOperationRetryAtMs = activeUsageLimitRecoveryOperation?.retryAtMs ?? null;
     const usageLimitRecoveryPresentation = React.useMemo(() => buildSessionUsageLimitRecoveryPresentation({
         featureEnabled: usageLimitRecoveryFeatureEnabled && !usageLimitRecoveryIssueResolved,
-        latestTurnStatus: session.latestTurnStatus ?? null,
-        issue: session.lastRuntimeIssue ?? null,
+        latestTurnStatus: sessionRuntimeStatusSource.latestTurnStatus ?? null,
+        issue: sessionRuntimeStatusSource.lastRuntimeIssue ?? null,
         recovery: usageLimitRecovery,
         recoveryCredits: usageLimitRecoveryCredits,
         operationStatus: activeUsageLimitRecoveryOperationStatus,
         operationRetryAtMs: activeUsageLimitRecoveryOperationRetryAtMs,
         runtimeWorking: usageLimitRuntimeState.runtimeActivelyWorking,
-        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(sessionRuntimeStatusSource),
         hasInterruptedWorkToResume,
         rememberedMode: usageLimitRecoveryMode,
         checkNowSupported: usageLimitRecoveryCheckNowSupported,
@@ -2406,10 +2407,10 @@ function SessionViewLoaded({
         activeUsageLimitRecoveryOperationRetryAtMs,
         activeUsageLimitRecoveryOperationStatus,
         formatUsageLimitRecoveryTime,
-        session.latestTurnStatus,
-        session.latestTurnStatusObservedAt,
-        session.lastRuntimeIssue,
-        session.meaningfulActivityAt,
+        sessionRuntimeStatusSource.latestTurnStatus,
+        sessionRuntimeStatusSource.latestTurnStatusObservedAt,
+        sessionRuntimeStatusSource.lastRuntimeIssue,
+        sessionRuntimeStatusSource.meaningfulActivityAt,
         translateUsageLimitRecovery,
         hasInterruptedWorkToResume,
         usageLimitRecovery,
@@ -2426,13 +2427,13 @@ function SessionViewLoaded({
         : usageLimitRecoveryPresentation;
     const usageLimitStatusBadgePresentation = React.useMemo(() => buildSessionUsageLimitStatusBadgePresentation({
         featureEnabled: usageLimitRecoveryFeatureEnabled && !usageLimitRecoveryIssueResolved,
-        latestTurnStatus: session.latestTurnStatus ?? null,
-        issue: session.lastRuntimeIssue ?? null,
+        latestTurnStatus: sessionRuntimeStatusSource.latestTurnStatus ?? null,
+        issue: sessionRuntimeStatusSource.lastRuntimeIssue ?? null,
         recovery: usageLimitRecovery,
         operationStatus: activeUsageLimitRecoveryOperationStatus,
         operationRetryAtMs: activeUsageLimitRecoveryOperationRetryAtMs,
         runtimeWorking: usageLimitRuntimeState.runtimeActivelyWorking,
-        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(sessionRuntimeStatusSource),
         hasInterruptedWorkToResume,
         nowMs: usageLimitRecoveryNowMs,
         translate: translateUsageLimitRecovery,
@@ -2441,10 +2442,10 @@ function SessionViewLoaded({
         activeUsageLimitRecoveryOperationRetryAtMs,
         activeUsageLimitRecoveryOperationStatus,
         formatUsageLimitRecoveryTime,
-        session.latestTurnStatus,
-        session.latestTurnStatusObservedAt,
-        session.lastRuntimeIssue,
-        session.meaningfulActivityAt,
+        sessionRuntimeStatusSource.latestTurnStatus,
+        sessionRuntimeStatusSource.latestTurnStatusObservedAt,
+        sessionRuntimeStatusSource.lastRuntimeIssue,
+        sessionRuntimeStatusSource.meaningfulActivityAt,
         translateUsageLimitRecovery,
         hasInterruptedWorkToResume,
         usageLimitRecovery,
@@ -3854,7 +3855,7 @@ function SessionViewLoaded({
         });
         const connectedServicesAuthSwitchDisabledReason = resolveConnectedServicesAuthSwitchDisabledReason({
             isReadOnly,
-            session,
+            session: sessionRuntimeStatusSource,
             nowMs: Date.now(),
         });
         const intentionalRestartSourceEvents = useSessionConnectedServiceAccountSwitchEvents(sessionId);

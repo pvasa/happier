@@ -82,4 +82,41 @@ describe('useSessionRuntimeStatusSource', () => {
             storage.setState(previousState, true);
         }
     });
+
+    it('wakes subscribers when only the pending request freshness timestamp changes', async () => {
+        const previousState = storage.getState();
+        try {
+            const shellSession = createSession({
+                pendingUserActionRequestCount: 1,
+                pendingRequestObservedAt: 1_000,
+            });
+            storage.setState((state) => ({
+                ...state,
+                sessions: {
+                    ...state.sessions,
+                    [shellSession.id]: shellSession,
+                },
+            }));
+
+            const hook = await renderHook(() => useSessionRuntimeStatusSource(shellSession), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const initial = hook.getCurrent();
+            expect(initial.pendingRequestObservedAt).toBe(1_000);
+
+            await act(async () => {
+                storage.getState().applySessions([{
+                    ...shellSession,
+                    pendingRequestObservedAt: 5_000,
+                }]);
+            });
+
+            expect(hook.getCurrent()).not.toBe(initial);
+            expect(hook.getCurrent().pendingRequestObservedAt).toBe(5_000);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
 });

@@ -163,6 +163,21 @@ describe('buildSessionViewShellSessionSignature', () => {
         );
     });
 
+    it('changes when pending request freshness timestamp changes', () => {
+        const base = createSession({
+            pendingUserActionRequestCount: 1,
+            pendingRequestObservedAt: 1_000,
+        });
+        const refreshed = createSession({
+            pendingUserActionRequestCount: 1,
+            pendingRequestObservedAt: 5_000,
+        });
+
+        expect(buildSessionViewShellSessionSignature(refreshed)).not.toBe(
+            buildSessionViewShellSessionSignature(base),
+        );
+    });
+
     it('stays stable for read-cursor-only updates while viewing the session', () => {
         const base = createSession({
             lastViewedSessionSeq: 25,

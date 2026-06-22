@@ -8,14 +8,18 @@ import {
     isStoredContentKindAllowedForSessionByStoragePolicy,
     PrimaryTurnStatusV1Schema,
     TranscriptRawRecordV1Schema,
+    SESSION_MESSAGE_USER_ATTENTION_IMPACT,
+    agentEventAttentionImpact,
     SessionTurnMutationV1Schema,
     SessionRuntimeIssueV1Schema,
+    TranscriptRawAgentEventV1Schema,
     type PrimaryTurnStatusV1,
     type SessionRuntimeIssueV1,
     type SessionTurnMutationReceiptV1,
     type SessionTurnMutationV1,
     type SessionMessageRole,
     type SessionStoredContentKind,
+    type SessionMessageAttentionImpact,
 } from "@happier-dev/protocol";
 import { resolveEncryptionWriteRejectionCode, type EncryptionPolicyRejectionCode } from "@/app/session/encryptionRejectionCodes";
 import { isDeepStrictEqual } from "node:util";
@@ -76,14 +80,17 @@ export async function updateSessionMessageActivityProjection(
         sessionId: string;
         created: Pick<SessionMessageWriteRow, "seq" | "createdAt">;
         trustedSessionEventType?: "ready";
+        affectsMeaningfulActivity?: boolean;
     }>,
 ): Promise<SessionReadyProjectionUpdate | undefined> {
-    await tx.session.updateMany({
-        where: { id: params.sessionId, seq: params.created.seq },
-        data: {
-            meaningfulActivityAt: params.created.createdAt,
-        },
-    });
+    if (params.affectsMeaningfulActivity !== false) {
+        await tx.session.updateMany({
+            where: { id: params.sessionId, seq: params.created.seq },
+            data: {
+                meaningfulActivityAt: params.created.createdAt,
+            },
+        });
+    }
 
     if (params.trustedSessionEventType !== "ready") return undefined;
 
@@ -154,6 +161,39 @@ function toSessionActivityBadgeInputs(
         active: value?.active ?? true,
         archivedAt: value?.archivedAt ?? null,
     };
+}
+
+function resolvePlainStoredAgentEvent(content: PrismaJson.SessionMessageContent): ReturnType<typeof TranscriptRawAgentEventV1Schema.parse> | null {
+    if (content.t !== "plain") return null;
+    const parsed = TranscriptRawRecordV1Schema.safeParse(content.v);
+    if (
+        !parsed.success
+        || parsed.data.role !== "agent"
+        || parsed.data.content.type !== "event"
+    ) return null;
+    const event = TranscriptRawAgentEventV1Schema.safeParse(parsed.data.content.data);
+    return event.success ? event.data : null;
+}
+
+function resolveMessageAttentionImpact(params: Readonly<{
+    content: PrismaJson.SessionMessageContent;
+    explicitAttentionImpact?: SessionMessageAttentionImpact;
+}>): SessionMessageAttentionImpact {
+    if (params.explicitAttentionImpact) return params.explicitAttentionImpact;
+    const event = resolvePlainStoredAgentEvent(params.content);
+    return event ? agentEventAttentionImpact(event) : SESSION_MESSAGE_USER_ATTENTION_IMPACT;
+}
+
+function shouldAdvanceReadCursorForNonUnreadMessage(before: SessionActivityBadgeInputs): boolean {
+    const normalized = toSessionActivityBadgeInputs(before);
+    const seq = typeof normalized.seq === "number" && Number.isFinite(normalized.seq)
+        ? Math.max(0, Math.trunc(normalized.seq))
+        : 0;
+    const lastViewedSessionSeq = typeof normalized.lastViewedSessionSeq === "number" && Number.isFinite(normalized.lastViewedSessionSeq)
+        ? Math.max(0, Math.trunc(normalized.lastViewedSessionSeq))
+        : null;
+    if (lastViewedSessionSeq !== null) return lastViewedSessionSeq >= seq;
+    return seq === 0;
 }
 
 function parseStoredObservedAt(value: unknown): number | null {
@@ -504,6 +544,7 @@ type CreateSessionMessageParamsBase = Readonly<{
     sidechainId?: string | null;
     messageRole?: unknown;
     trustedSessionEventType?: "ready";
+    trustedAttentionImpact?: SessionMessageAttentionImpact;
 }>;
 
 export async function createSessionMessage(
@@ -624,6 +665,11 @@ export async function createSessionMessage(
                 where: { id: sessionId },
                 select: selectSessionActivityBadgeInputs(),
             });
+            const normalizedBeforeBadgeInputs = toSessionActivityBadgeInputs(beforeBadgeInputs);
+            const attentionImpact = resolveMessageAttentionImpact({
+                content,
+                explicitAttentionImpact: params.trustedAttentionImpact,
+            });
 
             const next = await tx.session.update({
                 where: { id: sessionId },
@@ -651,6 +697,7 @@ export async function createSessionMessage(
             const readyProjection = await updateSessionMessageActivityProjection(tx, {
                 sessionId,
                 created,
+                affectsMeaningfulActivity: attentionImpact.affectsMeaningfulActivity,
                 trustedSessionEventType: resolveReadyProjectionEventType({
                     actorUserId,
                     sessionOwnerId: access.sessionOwnerId,
@@ -659,6 +706,28 @@ export async function createSessionMessage(
                 }),
             });
 
+            const shouldAdvanceReadCursor = !attentionImpact.affectsUnread
+                && shouldAdvanceReadCursorForNonUnreadMessage(normalizedBeforeBadgeInputs);
+            let nextLastViewedSessionSeq = normalizedBeforeBadgeInputs.lastViewedSessionSeq ?? null;
+            if (shouldAdvanceReadCursor) {
+                const { count } = await tx.session.updateMany({
+                    where: {
+                        id: sessionId,
+                        OR: [{ lastViewedSessionSeq: { lt: created.seq } }, { lastViewedSessionSeq: null }],
+                    },
+                    data: { lastViewedSessionSeq: created.seq },
+                });
+                if (count > 0) {
+                    nextLastViewedSessionSeq = created.seq;
+                } else {
+                    const freshReadCursor = await tx.session.findUnique({
+                        where: { id: sessionId },
+                        select: { lastViewedSessionSeq: true },
+                    });
+                    nextLastViewedSessionSeq = freshReadCursor?.lastViewedSessionSeq ?? nextLastViewedSessionSeq;
+                }
+            }
+
             const participantCursors = await markSessionParticipantsChanged({
                 tx,
                 sessionId,
@@ -666,10 +735,11 @@ export async function createSessionMessage(
             });
 
             const badgeAttentionChanged = didSessionActivityBadgeContributionChange(
-                toSessionActivityBadgeInputs(beforeBadgeInputs),
+                normalizedBeforeBadgeInputs,
                 {
-                    ...toSessionActivityBadgeInputs(beforeBadgeInputs),
+                    ...normalizedBeforeBadgeInputs,
                     seq: created.seq,
+                    lastViewedSessionSeq: nextLastViewedSessionSeq,
                 },
             );
 

@@ -5,6 +5,7 @@ import {
     type LastViewedSessionSeqInput,
 } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
 import {
+    resolveLatestUnreadAffectingCommittedMessageSeq,
     resolveSessionReadableSeq,
     type ResolveSessionReadableSeqInput,
 } from '@/sync/domains/session/readCursor/resolveSessionReadableSeq';
@@ -49,9 +50,12 @@ function readSessionMessagesForReadState(session: SessionReadStateInput): Resolv
 }
 
 export function deriveSessionReadState(session: SessionReadStateInput): SessionReadState {
+    const storedMessages = readSessionMessagesForReadState(session);
     const readableSeq = resolveSessionReadableSeq({
-        messages: readSessionMessagesForReadState(session),
-        latestMessageSeq: session.latestMessageSeq,
+        messages: storedMessages,
+        latestMessageSeq: storedMessages === null
+            ? session.latestMessageSeq
+            : resolveLatestUnreadAffectingCommittedMessageSeq(storedMessages),
         sessionSeq: session.seq,
         latestReadyEventSeq: session.latestReadyEventSeq,
         latestTurnStatus: session.latestTurnStatus ?? null,

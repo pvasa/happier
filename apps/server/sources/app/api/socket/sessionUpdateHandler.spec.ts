@@ -569,6 +569,55 @@ describe("sessionUpdateHandler", () => {
         expect(callback).toHaveBeenCalledWith(expect.objectContaining({ ok: true, didWrite: true }));
     });
 
+    it("does not forward caller-supplied attention overrides from the public socket event", async () => {
+        const createdAt = new Date("2020-01-01T00:00:00.000Z");
+        createSessionMessage.mockResolvedValueOnce({
+            ok: true,
+            didWrite: true,
+            didUpdate: false,
+            message: {
+                id: "m-user",
+                seq: 10,
+                localId: "local-user-1",
+                sidechainId: null,
+                content: { t: "plain", v: { type: "user", text: "hi" } },
+                createdAt,
+                updatedAt: createdAt,
+            },
+            participantCursors: [{ accountId: "user-1", cursor: 10 }],
+            badgeAttentionChanged: false,
+        });
+        const socket = createFakeSocket();
+
+        registerSessionUpdateHandler(
+            "user-1",
+            socket as any,
+            { connectionType: "session-scoped", socket: socket as any, userId: "user-1", sessionId: "s-1" } as any,
+        );
+
+        const handler = getSocketHandler(socket, "message");
+        const callback = vi.fn();
+        await handler({
+            sid: "s-1",
+            message: { t: "plain", v: { type: "user", text: "hi" } },
+            localId: "local-user-1",
+            attentionImpact: {
+                affectsUnread: false,
+                affectsMeaningfulActivity: false,
+            },
+            affectsUnread: false,
+        }, callback);
+
+        expect(createSessionMessage).toHaveBeenCalledWith({
+            actorUserId: "user-1",
+            sessionId: "s-1",
+            content: { t: "plain", v: { type: "user", text: "hi" } },
+            localId: "local-user-1",
+            sidechainId: null,
+        });
+        expect(callback).toHaveBeenCalledWith(expect.objectContaining({ ok: true, didWrite: true }));
+    });
+
     it("throttles repeated socket no-op pending materialization calls per session", async () => {
         materializeNextPendingMessage.mockResolvedValueOnce({
             ok: true,

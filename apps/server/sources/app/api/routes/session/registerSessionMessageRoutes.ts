@@ -3,12 +3,16 @@ import { z } from "zod";
 
 import { buildMessageUpdatedUpdate, buildNewMessageUpdate, eventRouter } from "@/app/events/eventRouter";
 import { catchupFollowupFetchesCounter, catchupFollowupReturnedCounter } from "@/app/monitoring/metrics2";
-import { SessionMessageRoleSchema, SessionStoredMessageContentSchema, type SessionMessageRole } from "@happier-dev/protocol";
+import {
+    SessionMessageRoleSchema,
+    SessionStoredMessageContentSchema,
+    type SessionMessageRole,
+} from "@happier-dev/protocol";
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 import { createSessionMessage } from "@/app/session/sessionWriteService";
 import { parseSessionMessageSidechainId } from "@/app/session/parseSessionMessageSidechainId";
 import { publishSessionReadyProjectionUpdate } from "@/app/session/ready/publishSessionReadyProjectionUpdate";
-import { checkSessionAccess } from "@/app/share/accessControl";
+import { checkSessionAccess, requireAccessLevel } from "@/app/share/accessControl";
 import { db } from "@/storage/db";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
@@ -323,7 +327,12 @@ export function registerSessionMessageRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const { sessionId } = request.params;
-        const body = request.body as Readonly<{ localId?: string; sidechainId?: string | null; messageRole?: unknown; sessionEventType?: "ready" } & ({ ciphertext: string } | { content: SessionStoredMessageContent })>;
+        const body = request.body as Readonly<{
+            localId?: string;
+            sidechainId?: string | null;
+            messageRole?: unknown;
+            sessionEventType?: "ready";
+        } & ({ ciphertext: string } | { content: SessionStoredMessageContent })>;
         const localId = typeof body.localId === "string" ? body.localId : undefined;
         const trustedSessionEventType = body.sessionEventType === "ready" ? "ready" : undefined;
         const parsedSidechainId = parseSessionMessageSidechainId(body.sidechainId, { emptyString: "invalid" });
@@ -341,7 +350,6 @@ export function registerSessionMessageRoutes(app: Fastify) {
                     : null;
 
         const effectiveLocalId = localId ?? idempotencyKey ?? null;
-
         const result =
             "content" in body
                 ? await createSessionMessage({

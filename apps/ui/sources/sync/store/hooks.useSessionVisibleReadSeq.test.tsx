@@ -93,6 +93,51 @@ describe('useSessionVisibleReadSeq', () => {
         }
     });
 
+    it('ignores trailing maintenance events that do not affect unread state', async () => {
+        const previousState = storage.getState();
+        try {
+            seedSessionMessages('s-1', {
+                'm-visible': {
+                    id: 'm-visible',
+                    kind: 'agent-text',
+                    localId: null,
+                    createdAt: 1,
+                    text: 'Visible assistant message',
+                    seq: 945,
+                } as any,
+                'm-switch': {
+                    id: 'm-switch',
+                    kind: 'agent-event',
+                    localId: null,
+                    createdAt: 2,
+                    seq: 946,
+                    event: {
+                        type: 'connected-service-account-switch',
+                        serviceId: 'openai-codex',
+                        groupId: 'codex-main',
+                        fromProfileId: 'profile-a',
+                        toProfileId: 'profile-b',
+                        reason: 'usage_limit',
+                        mode: 'hot_apply',
+                    },
+                } as any,
+            }, ['m-visible', 'm-switch']);
+
+            const hook = await renderHook(() => useSessionVisibleReadSeq('s-1', {
+                sessionSeq: 946,
+                latestTurnStatus: 'in_progress',
+            }), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent()).toBe(945);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('does not re-render the consumer when committed message content streams without changing seq', async () => {
         const previousState = storage.getState();
         try {

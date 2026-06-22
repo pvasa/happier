@@ -51,6 +51,7 @@ import { SyncPerformanceReactProfiler } from '@/components/ui/performance/SyncPe
 import { TranscriptFirstPaintPlaceholder } from '@/components/sessions/transcript/TranscriptFirstPaintPlaceholder';
 import { resolveTranscriptToolCallsCollapsedPreviewCount } from '@/sync/domains/settings/transcriptToolCallsCollapsedPreviewCount';
 import { JumpToBottomButton } from '@/components/sessions/transcript/scroll/JumpToBottomButton';
+import { resolveJumpToBottomAffordanceState } from '@/components/sessions/transcript/scroll/jumpToBottomAffordanceState';
 import { resolveNextJumpToBottomDistanceVisibilityState } from '@/components/sessions/transcript/scroll/jumpToBottomVisibilityDistanceState';
 import {
     resolveTranscriptScrollPinStateUpdate,
@@ -492,7 +493,6 @@ const TRANSCRIPT_NATIVE_DRAW_DISTANCE_DEFAULT_MAX_PX = 1200;
 const TRANSCRIPT_NATIVE_ENTRY_SLICE_HEAD_OFFSET_TOLERANCE_PX = 2;
 const TRANSCRIPT_NATIVE_ENTRY_RESTORE_PAINT_RELEASE_DELAY_MS = 32;
 const TRANSCRIPT_NATIVE_TOUCH_ESCAPE_MOVE_THRESHOLD_PX = 12;
-const TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_FALLBACK = 0.75;
 const TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_MAX = 4;
 const TRANSCRIPT_WEB_INITIAL_PIN_STABILIZE_FALLBACK_MS = 1500;
 const TRANSCRIPT_WEB_INITIAL_PIN_RETRY_INTERVAL_FALLBACK_MS = 250;
@@ -2585,7 +2585,7 @@ const ChatListInternal = React.memo((props: {
     const jumpRevealViewportRatio =
         typeof transcriptScrollJumpToBottomRevealViewportRatio === 'number' && Number.isFinite(transcriptScrollJumpToBottomRevealViewportRatio)
             ? Math.max(0, Math.min(TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_MAX, transcriptScrollJumpToBottomRevealViewportRatio))
-            : TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_FALLBACK;
+            : settingsDefaults.transcriptScrollJumpToBottomRevealViewportRatio;
     const jumpRevealOffsetThresholdPx = Math.max(pinThresholdPx, Math.trunc(listLayoutHeight * jumpRevealViewportRatio));
     const commitJumpToBottomDistanceForVisibility = React.useCallback((distanceFromBottom: number) => {
         jumpToBottomDistanceFromBottomRef.current = distanceFromBottom;
@@ -2808,7 +2808,14 @@ const ChatListInternal = React.memo((props: {
             })
         );
     }, [jumpRevealOffsetThresholdPx]);
-    const showJumpToBottom = jumpEnabled && !scrollPin.isPinned && jumpToBottomDistanceFromBottom >= jumpRevealOffsetThresholdPx;
+    const jumpToBottomAffordance = resolveJumpToBottomAffordanceState({
+        distanceFromBottom: jumpToBottomDistanceFromBottom,
+        enabled: jumpEnabled,
+        isPinned: scrollPin.isPinned,
+        minNewActivityCount: jumpMinNewCount,
+        newActivityCount: scrollPin.newActivityCount,
+        revealThresholdPx: jumpRevealOffsetThresholdPx,
+    });
     const jumpAnimateScroll = transcriptScrollJumpToBottomAnimateScroll !== false;
     // §13 catch-up overlay gate. `useSessionCatchingUpNewer` is the canonical UI-observable per-session
     // "sync is catching the transcript up to newer activity" signal (fail-closed). The signal is
@@ -10033,7 +10040,7 @@ const ChatListInternal = React.memo((props: {
               {(olderPagination.isLoadingOlder || isLoadingOlder) && !showFirstPaintPlaceholder ? (
                   <OlderLoadProgressOverlay />
               ) : null}
-              {showJumpToBottom ? (
+              {jumpToBottomAffordance.isVisible ? (
                   <ComposerKeyboardFloatingInset
                       testID="transcript-jump-to-bottom-keyboard-offset"
                       baseBottom={12}
@@ -10041,8 +10048,9 @@ const ChatListInternal = React.memo((props: {
                   >
                       <JumpToBottomButton
                           testID="transcript-jump-to-bottom"
-                          count={scrollPin.newActivityCount >= jumpMinNewCount ? scrollPin.newActivityCount : 0}
+                          count={jumpToBottomAffordance.count}
                           onPress={jumpToBottom}
+                          presentation={jumpToBottomAffordance.presentation}
                     />
                 </ComposerKeyboardFloatingInset>
             ) : null}

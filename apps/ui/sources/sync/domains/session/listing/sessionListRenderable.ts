@@ -7,6 +7,7 @@ import {
     derivePendingRequestFlagsFromSession,
 } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import type { Message } from '@/sync/domains/messages/messageTypes';
+import { messageAttentionImpact } from '@/sync/domains/messages/messageUserAttention';
 import { resolveLastViewedSessionSeq } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
 import { resolveSessionReadableSeq } from '@/sync/domains/session/readCursor/resolveSessionReadableSeq';
 import { resolveSessionProjectGroupingKeyParts } from './sessionListProjectGroupingKeys';
@@ -164,6 +165,7 @@ export function buildSessionListRenderableFromSession(
     const pending = derivePendingRequestFlagsFromSession(session, messages);
     const latestCommittedMessageCreatedAt = Array.isArray(messages) && messages.length > 0
         ? messages.reduce<number | null>((latest, message) => {
+            if (!messageAttentionImpact(message).affectsMeaningfulActivity) return latest;
             const createdAt = message.createdAt;
             if (typeof createdAt !== 'number' || !Number.isFinite(createdAt) || createdAt <= 0) return latest;
             return latest == null ? createdAt : Math.max(latest, createdAt);
