@@ -9,6 +9,7 @@ import {
 
 import { buildConnectedServiceUxDiagnostic } from './connectedServiceUxDiagnostics';
 import {
+  buildConnectedServiceCredentialSpawnErrorResult,
   buildConnectedServiceCredentialRefreshSpawnErrorResult,
   buildConnectedServiceDiagnosticSpawnValidationErrorResult,
   buildConnectedServiceMaterializationSpawnErrorResult,
@@ -177,5 +178,44 @@ describe('buildConnectedServiceDiagnosticSpawnValidationErrorResult', () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain('must-not-leak');
+  });
+
+  it('builds a reconnect-focused spawn diagnostic for missing connected-service credentials', () => {
+    const result = buildConnectedServiceCredentialSpawnErrorResult({
+      agentId: 'claude',
+      error: Object.assign(new Error('Missing connected service credential (claude-subscription/batiplus)'), {
+        name: 'ConnectedServiceCredentialResolutionError',
+        kind: 'missing_credential',
+        serviceId: 'claude-subscription',
+        profileId: 'batiplus',
+      }),
+    });
+
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error('expected missing-credential spawn diagnostic');
+    }
+    expect(result).toMatchObject({
+      type: 'error',
+      errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      errorMessage: 'connected_service_credential_reconnect_required',
+    });
+    expect(isConnectedServiceUxDiagnosticSpawnErrorDetail(result.errorDetail)).toBe(true);
+    if (!isConnectedServiceUxDiagnosticSpawnErrorDetail(result.errorDetail)) {
+      throw new Error('expected connected-service diagnostic spawn detail');
+    }
+    expect(result.errorDetail.uxDiagnostic).toMatchObject({
+      code: 'connected_service_credential_reconnect_required',
+      failurePhase: 'materialization',
+      source: 'spawn_resume',
+      serviceId: 'claude-subscription',
+      agentId: 'claude',
+      profileId: 'batiplus',
+      retryable: false,
+      suggestedActions: ['reconnect_profile', 'open_connected_accounts'],
+      diagnostics: {
+        reason: 'missing_credential',
+      },
+    });
   });
 });

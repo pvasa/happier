@@ -6,6 +6,8 @@ import {
 import {
   ConnectedServiceIdSchema,
   type ConnectedServiceId,
+  type ConnectedServiceCredentialHealthV1,
+  type ConnectedServiceCredentialRecordV1,
   type ConnectedServiceOauthCredentialRawMetadata,
 } from '@happier-dev/protocol';
 
@@ -53,6 +55,10 @@ export type ConnectedAccountDescriptor = Readonly<{
   providerDisplayName?: string;
   credentialKind: 'oauth' | 'token' | 'oauth-or-token';
   oauth?: ConnectedAccountOAuthDescriptor;
+  resolvePostRefreshCredentialHealth?: (input: Readonly<{
+    credential: ConnectedServiceCredentialRecordV1;
+    now: number;
+  }>) => ConnectedServiceCredentialHealthV1 | null;
   ui?: Readonly<{
     iconName: string;
     oauthAddActionModes: readonly string[];
@@ -217,6 +223,24 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
         };
       },
     },
+    resolvePostRefreshCredentialHealth: ({ credential, now }) => {
+      if (
+        credential.kind !== 'oauth'
+        || resolveMissingClaudeSubscriptionClaudeCodeScopes(credential.oauth.scope).length === 0
+      ) {
+        return null;
+      }
+      return {
+        v: 1,
+        status: 'needs_reauth',
+        reconnectRequired: true,
+        lastRefreshAttemptAt: now,
+        lastRefreshFailureAt: now,
+        lastRefreshFailureKind: 'provider_403',
+        providerHttpStatus: 403,
+        providerErrorCode: 'missing_claude_code_scope',
+      };
+    },
     ui: { iconName: 'claude', oauthAddActionModes: ['browser'] },
   },
   {
@@ -264,6 +288,14 @@ const DESCRIPTORS_BY_ID: ReadonlyMap<ConnectedServiceId, ConnectedAccountDescrip
 
 export function getConnectedAccountDescriptor(serviceId: ConnectedServiceId): ConnectedAccountDescriptor | null {
   return DESCRIPTORS_BY_ID.get(serviceId) ?? null;
+}
+
+export function resolveConnectedAccountPostRefreshCredentialHealth(input: Readonly<{
+  credential: ConnectedServiceCredentialRecordV1;
+  now: number;
+}>): ConnectedServiceCredentialHealthV1 | null {
+  const descriptor = getConnectedAccountDescriptor(input.credential.serviceId);
+  return descriptor?.resolvePostRefreshCredentialHealth?.(input) ?? null;
 }
 
 export function resolveConnectedServiceProviderDisplayName(serviceId: string, explicit?: string | null): string {

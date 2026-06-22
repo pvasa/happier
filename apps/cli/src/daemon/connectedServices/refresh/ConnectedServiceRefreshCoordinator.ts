@@ -33,7 +33,7 @@ import {
   collectBlockingConnectedServicesMaterializationDiagnostics,
   type ConnectedServicesMaterializationDiagnostic,
 } from '../materialize/providerMaterializerTypes';
-import { resolveMissingClaudeSubscriptionClaudeCodeScopes } from '../descriptors/connectedAccountDescriptors';
+import { resolveConnectedAccountPostRefreshCredentialHealth } from '../descriptors/connectedAccountDescriptors';
 import { refreshConnectedAccountOauthTokens } from './serviceRefreshers';
 import { ConnectedServiceOauthRefreshError } from './serviceRefreshers';
 import type {
@@ -101,6 +101,18 @@ type SpawnTarget = Readonly<{
   sessionDirectory: string | null;
   bindings: ReadonlyArray<BoundProfile>;
   selectionsByServiceId: ReadonlyMap<ConnectedServiceId, ConnectedServiceChildSelection>;
+}>;
+
+type RematerializedTargetFailure = Readonly<{
+  target: SpawnTarget;
+  binding: BoundProfile;
+  diagnostic: ConnectedServicesMaterializationDiagnostic;
+}>;
+
+type RematerializedTargetsResult = Readonly<{
+  affectedTargets: ReadonlyArray<SpawnTarget>;
+  rematerializedTargets: ReadonlyArray<SpawnTarget>;
+  failedTargets: ReadonlyArray<RematerializedTargetFailure>;
 }>;
 
 /**
@@ -174,6 +186,47 @@ function providerErrorCodeForHealth(code: string | null | undefined): string | u
   return trimmed.length > 0 ? trimmed.slice(0, 128) : undefined;
 }
 
+function readConnectedServiceRefreshFailureCategory(
+  value: unknown,
+): ConnectedServiceRefreshFailureCategory | null {
+  switch (value) {
+    case 'invalid_grant':
+    case 'invalid_client':
+    case 'provider_401':
+    case 'provider_403':
+    case 'network_error':
+    case 'malformed_response':
+    case 'missing_access_token':
+    case 'missing_refresh_token':
+    case 'unknown':
+      return value;
+    default:
+      return null;
+  }
+}
+
+export type ConnectedServiceMaterializationCredentialRefreshClassification = Readonly<{
+  category: ConnectedServiceRefreshFailureCategory;
+  providerStatus?: number;
+  providerErrorCode?: string;
+}>;
+
+export function classifyConnectedServiceMaterializationDiagnosticForCredentialRefresh(
+  diagnostic: ConnectedServicesMaterializationDiagnostic,
+): ConnectedServiceMaterializationCredentialRefreshClassification {
+  const refreshFailure = diagnostic.credentialRefreshFailure;
+  const category = readConnectedServiceRefreshFailureCategory(refreshFailure?.category) ?? 'unknown';
+  const providerStatus = providerHttpStatusForHealth(refreshFailure?.providerStatus);
+  const providerErrorCode = providerErrorCodeForHealth(refreshFailure?.providerErrorCode)
+    ?? providerErrorCodeForHealth(diagnostic.code);
+
+  return {
+    category,
+    ...(providerStatus !== undefined ? { providerStatus } : {}),
+    ...(providerErrorCode !== undefined ? { providerErrorCode } : {}),
+  };
+}
+
 async function defaultSleepMs(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     const timeout = setTimeout(resolve, Math.max(0, Math.trunc(ms)));
@@ -217,6 +270,29 @@ function buildRefreshDiagnostic(params: Readonly<{
     expiryAgeMs: typeof expiresAt === 'number' && Number.isFinite(expiresAt) ? params.now - expiresAt : null,
     refreshWindowMs: params.refreshWindowMs,
   };
+}
+
+function resolveRuntimeAuthRematerializationFailures(input: Readonly<{
+  result: RematerializedTargetsResult;
+  sessionId: string | null;
+}>): ReadonlyArray<RematerializedTargetFailure> {
+  if (input.sessionId) {
+    const sessionFailures = input.result.failedTargets.filter((failure) => failure.target.sessionId === input.sessionId);
+    if (sessionFailures.length > 0) return sessionFailures;
+    const sessionWasAffected = input.result.affectedTargets.some((target) => target.sessionId === input.sessionId);
+    return sessionWasAffected ? [] : input.result.failedTargets;
+  }
+  if (input.result.affectedTargets.length === 0) return [];
+  if (input.result.rematerializedTargets.length > 0) return [];
+  return input.result.failedTargets;
+}
+
+function wasRuntimeAuthSessionRematerialized(input: Readonly<{
+  result: RematerializedTargetsResult;
+  sessionId: string | null;
+}>): boolean {
+  if (!input.sessionId) return true;
+  return input.result.rematerializedTargets.some((target) => target.sessionId === input.sessionId);
 }
 
 export class ConnectedServiceCredentialRefreshError extends Error {
@@ -489,12 +565,43 @@ export class ConnectedServiceRefreshCoordinator {
   async refreshConnectedServiceCredentialForRuntimeAuthFailure(input: Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
+    sessionId?: string | null;
   }>): Promise<ConnectedServiceCredentialRefreshResult> {
-    return await this.refreshOauthBinding(
-      { serviceId: input.serviceId, profileId: input.profileId },
+    const binding = { serviceId: input.serviceId, profileId: input.profileId } satisfies BoundProfile;
+    const result = await this.refreshOauthBinding(
+      binding,
       this.params.now(),
       { force: true, reason: 'runtime_auth_failure' },
     );
+    if (result.status !== 'refreshed') return result;
+
+    const rematerialization = await this.rematerializeTargetsForBindingDetailed(binding);
+    const targetFailures = resolveRuntimeAuthRematerializationFailures({
+      result: rematerialization,
+      sessionId: input.sessionId ?? null,
+    });
+    if (targetFailures.length > 0) {
+      return this.buildMaterializationFailureRefreshResult({
+        binding,
+        sourceResult: result,
+        failure: targetFailures[0]!,
+      });
+    }
+
+    const affectedTargets = rematerialization.rematerializedTargets;
+    if (!wasRuntimeAuthSessionRematerialized({ result: rematerialization, sessionId: input.sessionId ?? null })) {
+      return await this.finalizeRefreshResult(this.buildMissingRuntimeAuthTargetRefreshResult({
+        binding,
+        sourceResult: result,
+      }));
+    }
+    if (affectedTargets.length === 0) return result;
+    await this.params.onAuthUpdated?.({
+      binding,
+      affectedTargets,
+      trigger: 'refresh_triggered_restart',
+    });
+    return result;
   }
 
   async handleExternalCredentialUpdate(input: Readonly<{
@@ -779,16 +886,18 @@ export class ConnectedServiceRefreshCoordinator {
     if (typeof updateHealth !== 'function') return;
 
     const now = this.params.now();
-    const providerErrorCode = providerErrorCodeForHealth(diagnostic.code);
+    const classification = classifyConnectedServiceMaterializationDiagnosticForCredentialRefresh(diagnostic);
     const health: ConnectedServiceCredentialHealthV1 = {
       v: 1,
-      status: 'needs_reauth',
-      reconnectRequired: true,
+      status: isReauthRequiredFailure(classification.category) ? 'needs_reauth' : 'refresh_failed_retryable',
+      reconnectRequired: isReauthRequiredFailure(classification.category),
       lastRefreshAttemptAt: now,
       lastRefreshFailureAt: now,
-      lastRefreshFailureKind: 'provider_403',
-      providerHttpStatus: 403,
-      ...(providerErrorCode ? { providerErrorCode } : {}),
+      lastRefreshFailureKind: classification.category,
+      ...(providerHttpStatusForHealth(classification.providerStatus) !== undefined
+        ? { providerHttpStatus: providerHttpStatusForHealth(classification.providerStatus) }
+        : {}),
+      ...(classification.providerErrorCode ? { providerErrorCode: classification.providerErrorCode } : {}),
     };
 
     try {
@@ -808,27 +917,57 @@ export class ConnectedServiceRefreshCoordinator {
     }
   }
 
+  private buildMaterializationFailureRefreshResult(input: Readonly<{
+    binding: BoundProfile;
+    sourceResult: ConnectedServiceCredentialRefreshResult;
+    failure: RematerializedTargetFailure;
+  }>): ConnectedServiceCredentialRefreshResult {
+    const classification = classifyConnectedServiceMaterializationDiagnosticForCredentialRefresh(input.failure.diagnostic);
+    return {
+      status: 'refresh_failed',
+      credential: input.sourceResult.credential,
+      diagnostic: buildRefreshDiagnostic({
+        binding: input.failure.binding,
+        reason: 'runtime_auth_failure',
+        status: 'refresh_failed',
+        category: classification.category,
+        providerStatus: classification.providerStatus,
+        providerErrorCode: classification.providerErrorCode ?? 'materialization_failed',
+        expiresAt: input.sourceResult.diagnostic.expiresAt ?? input.sourceResult.credential?.expiresAt ?? null,
+        now: this.params.now(),
+        refreshWindowMs: this.params.refreshWindowMs,
+      }),
+    };
+  }
+
+  private buildMissingRuntimeAuthTargetRefreshResult(input: Readonly<{
+    binding: BoundProfile;
+    sourceResult: ConnectedServiceCredentialRefreshResult;
+  }>): ConnectedServiceCredentialRefreshResult {
+    return {
+      status: 'refresh_failed',
+      credential: input.sourceResult.credential,
+      diagnostic: buildRefreshDiagnostic({
+        binding: input.binding,
+        reason: 'runtime_auth_failure',
+        status: 'refresh_failed',
+        category: 'unknown',
+        providerErrorCode: 'runtime_auth_target_not_registered',
+        expiresAt: input.sourceResult.diagnostic.expiresAt ?? input.sourceResult.credential?.expiresAt ?? null,
+        now: this.params.now(),
+        refreshWindowMs: this.params.refreshWindowMs,
+      }),
+    };
+  }
+
   private buildSuccessCredentialHealth(
     result: ConnectedServiceCredentialRefreshResult,
     now: number,
   ): ConnectedServiceCredentialHealthV1 {
-    const credential = result.credential;
-    if (
-      credential?.serviceId === 'claude-subscription'
-      && credential.kind === 'oauth'
-      && resolveMissingClaudeSubscriptionClaudeCodeScopes(credential.oauth.scope).length > 0
-    ) {
-      return {
-        v: 1,
-        status: 'needs_reauth',
-        reconnectRequired: true,
-        lastRefreshAttemptAt: now,
-        lastRefreshFailureAt: now,
-        lastRefreshFailureKind: 'provider_403',
-        providerHttpStatus: 403,
-        providerErrorCode: 'missing_claude_code_scope',
-      };
-    }
+    const providerHealth = result.credential
+      ? resolveConnectedAccountPostRefreshCredentialHealth({ credential: result.credential, now })
+      : null;
+    if (providerHealth) return providerHealth;
 
     return {
       v: 1,
@@ -1088,10 +1227,15 @@ export class ConnectedServiceRefreshCoordinator {
   }
 
   private async rematerializeTargetsForBinding(binding: BoundProfile): Promise<ReadonlyArray<SpawnTarget>> {
+    return (await this.rematerializeTargetsForBindingDetailed(binding)).rematerializedTargets;
+  }
+
+  private async rematerializeTargetsForBindingDetailed(binding: BoundProfile): Promise<RematerializedTargetsResult> {
     const affected = Array.from(this.targetsByPid.values()).filter((target) =>
       target.bindings.some((b) => b.serviceId === binding.serviceId && b.profileId === binding.profileId),
     );
     const rematerialized: SpawnTarget[] = [];
+    const failed: RematerializedTargetFailure[] = [];
     for (const target of affected) {
       const records = await resolveConnectedServiceCredentials({
         credentials: this.params.credentials,
@@ -1124,6 +1268,11 @@ export class ConnectedServiceRefreshCoordinator {
           ?? target.bindings.find((candidate) => candidate.serviceId === binding.serviceId)
           ?? binding;
         await this.persistCredentialHealthForMaterializationFailure(affectedBinding, primaryDiagnostic);
+        failed.push({
+          target,
+          binding: affectedBinding,
+          diagnostic: primaryDiagnostic,
+        });
         logger.warn('[DAEMON RUN] Connected-service rematerialization blocked; skipping auth-update restart', {
           serviceId: affectedBinding.serviceId,
           profileId: affectedBinding.profileId,
@@ -1135,6 +1284,10 @@ export class ConnectedServiceRefreshCoordinator {
       }
       rematerialized.push(target);
     }
-    return rematerialized;
+    return {
+      affectedTargets: affected,
+      rematerializedTargets: rematerialized,
+      failedTargets: failed,
+    };
   }
 }

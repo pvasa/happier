@@ -34,6 +34,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
       settingsSecretsReadKeys: [],
       expoPushSender: { sendToAllDevicesAsync },
       transition: {
+        cycleId: 'quota-blocked:openai-codex:main:blocked_at_90000',
         phase: 'blocked',
         serviceId: 'openai-codex',
         groupId: 'main',
@@ -68,6 +69,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
       settingsSecretsReadKeys: [],
       expoPushSender: { sendToAllDevicesAsync },
       transition: {
+        cycleId: 'quota-blocked:openai-codex:main:blocked_at_none',
         phase: 'blocked',
         serviceId: 'openai-codex',
         groupId: 'main',
@@ -92,6 +94,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
       settingsSecretsReadKeys: [],
       expoPushSender: { sendToAllDevicesAsync },
       transition: {
+        cycleId: 'quota-blocked:openai-codex:main:blocked_at_none',
         phase: 'recovered',
         serviceId: 'openai-codex',
         groupId: 'main',

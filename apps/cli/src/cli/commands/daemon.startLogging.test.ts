@@ -10,13 +10,19 @@ import type { DaemonRunningInspection } from '@/daemon/controlClient';
 
 const {
   checkIfDaemonRunningMock,
+  evaluateCurrentDaemonOwnerMock,
+  evaluateDaemonStartupServiceConflictMock,
   inspectDaemonRunningStateMock,
   getLatestDaemonLogMock,
+  restartDaemonAndWaitMock,
   spawnDetachedDaemonStartSyncMock,
 } = vi.hoisted(() => ({
   checkIfDaemonRunningMock: vi.fn(async () => true),
+  evaluateCurrentDaemonOwnerMock: vi.fn(async () => ({ kind: 'none' as const })),
+  evaluateDaemonStartupServiceConflictMock: vi.fn(async () => ({ kind: 'none' as const })),
   inspectDaemonRunningStateMock: vi.fn(async (): Promise<DaemonRunningInspection> => ({ status: 'not-running' })),
   getLatestDaemonLogMock: vi.fn(async () => null as null | { path: string }),
+  restartDaemonAndWaitMock: vi.fn(async () => true),
   spawnDetachedDaemonStartSyncMock: vi.fn(async (): Promise<{ pid?: number; unref: () => void }> => ({ unref: () => {} })),
 }));
 
@@ -64,6 +70,22 @@ vi.mock('@/daemon/runtime/spawnDetachedDaemonStartSync', () => ({
   spawnDetachedDaemonStartSync: () => spawnDetachedDaemonStartSyncMock(),
 }));
 
+vi.mock('@/daemon/restartDaemonAndWait', () => ({
+  restartDaemonAndWait: () => restartDaemonAndWaitMock(),
+}));
+
+vi.mock('@/daemon/ownership/evaluateCurrentDaemonOwner', () => ({
+  evaluateCurrentDaemonOwner: () => evaluateCurrentDaemonOwnerMock(),
+}));
+
+vi.mock('@/daemon/ownership/daemonServiceInventory', async (importOriginal) => {
+  const actual = await importOriginal<any>();
+  return {
+    ...actual,
+    evaluateDaemonStartupServiceConflict: () => evaluateDaemonStartupServiceConflictMock(),
+  };
+});
+
 vi.mock('@/daemon/controlClient', async (importOriginal) => {
   const actual = await importOriginal<any>();
   return {
@@ -81,10 +103,16 @@ describe('happier daemon start output', () => {
   beforeEach(() => {
     checkIfDaemonRunningMock.mockReset();
     checkIfDaemonRunningMock.mockResolvedValue(true);
+    evaluateCurrentDaemonOwnerMock.mockReset();
+    evaluateCurrentDaemonOwnerMock.mockResolvedValue({ kind: 'none' });
+    evaluateDaemonStartupServiceConflictMock.mockReset();
+    evaluateDaemonStartupServiceConflictMock.mockResolvedValue({ kind: 'none' });
     inspectDaemonRunningStateMock.mockReset();
     inspectDaemonRunningStateMock.mockResolvedValue({ status: 'not-running' } as DaemonRunningInspection);
     getLatestDaemonLogMock.mockReset();
     getLatestDaemonLogMock.mockResolvedValue(null);
+    restartDaemonAndWaitMock.mockReset();
+    restartDaemonAndWaitMock.mockResolvedValue(true);
     spawnDetachedDaemonStartSyncMock.mockReset();
     spawnDetachedDaemonStartSyncMock.mockResolvedValue({ unref: () => {} });
   });
@@ -249,19 +277,17 @@ describe('happier daemon start output', () => {
   it('reports starting instead of failed when the daemon is still within startup grace after the wait budget', async () => {
     vi.useRealTimers();
     checkIfDaemonRunningMock.mockResolvedValue(false);
-    inspectDaemonRunningStateMock
-      .mockResolvedValueOnce({ status: 'not-running' })
-      .mockResolvedValueOnce({
-        status: 'starting',
-        state: {
-          pid: 12345,
-          httpPort: 43111,
-          controlToken: 'daemon-token',
-          startedAt: Date.now(),
-          startedWithCliVersion: '0.2.4',
-          startedWithPublicReleaseChannel: 'preview',
-        },
-      });
+    inspectDaemonRunningStateMock.mockResolvedValue({
+      status: 'starting',
+      state: {
+        pid: 12345,
+        httpPort: 43111,
+        controlToken: 'daemon-token',
+        startedAt: Date.now(),
+        startedWithCliVersion: '0.2.4',
+        startedWithPublicReleaseChannel: 'preview',
+      },
+    });
     getLatestDaemonLogMock.mockResolvedValue({ path: '/tmp/happier-daemon.log' });
 
     const envScope = createEnvKeyScope(['HAPPIER_DAEMON_START_WAIT_TIMEOUT_MS']);
@@ -306,19 +332,17 @@ describe('happier daemon start output', () => {
   it('prints structured JSON for daemon start --json when startup is still in progress after the wait budget', async () => {
     vi.useRealTimers();
     checkIfDaemonRunningMock.mockResolvedValue(false);
-    inspectDaemonRunningStateMock
-      .mockResolvedValueOnce({ status: 'not-running' })
-      .mockResolvedValueOnce({
-        status: 'starting',
-        state: {
-          pid: 12345,
-          httpPort: 43111,
-          controlToken: 'daemon-token',
-          startedAt: Date.now(),
-          startedWithCliVersion: '0.2.4',
-          startedWithPublicReleaseChannel: 'preview',
-        },
-      });
+    inspectDaemonRunningStateMock.mockResolvedValue({
+      status: 'starting',
+      state: {
+        pid: 12345,
+        httpPort: 43111,
+        controlToken: 'daemon-token',
+        startedAt: Date.now(),
+        startedWithCliVersion: '0.2.4',
+        startedWithPublicReleaseChannel: 'preview',
+      },
+    });
     getLatestDaemonLogMock.mockResolvedValue({ path: '/tmp/happier-daemon.log' });
 
     const envScope = createEnvKeyScope([
@@ -372,6 +396,61 @@ describe('happier daemon start output', () => {
     } finally {
       envScope.restore();
       await removeTempDir(tmp);
+    }
+  }, 60_000);
+
+  it('prints structured JSON for daemon restart --json when restart fails', async () => {
+    vi.useRealTimers();
+    restartDaemonAndWaitMock.mockResolvedValue(false);
+    getLatestDaemonLogMock.mockResolvedValue({ path: '/tmp/happier-daemon.log' });
+
+    const envScope = createEnvKeyScope([
+      'HAPPIER_SERVER_URL',
+      'HAPPIER_WEBAPP_URL',
+      'HAPPIER_ACTIVE_SERVER_ID',
+    ]);
+
+    try {
+      vi.resetModules();
+      envScope.patch({
+        HAPPIER_SERVER_URL: 'http://localhost:4321',
+        HAPPIER_WEBAPP_URL: 'http://localhost:9999',
+        HAPPIER_ACTIVE_SERVER_ID: 'env_test',
+      });
+
+      const output = captureStdoutJsonOutput<{
+        ok: boolean;
+        error: string;
+        message: string;
+        relay: string;
+        relayId: string;
+        latestDaemonLogPath?: string;
+      }>();
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+        throw new Error(`exit:${code ?? ''}`);
+      }) as any);
+      try {
+        const { handleDaemonCliCommand } = await import('./daemon');
+        await expect(handleDaemonCliCommand({
+          args: ['daemon', 'restart', '--json'],
+          rawArgv: [],
+          terminalRuntime: null,
+        })).rejects.toThrow(/exit:1/);
+
+        expect(output.json()).toEqual({
+          ok: false,
+          error: 'restart_failed',
+          message: 'Failed to restart daemon',
+          relay: 'http://localhost:4321',
+          relayId: 'env_test',
+          latestDaemonLogPath: '/tmp/happier-daemon.log',
+        });
+      } finally {
+        exitSpy.mockRestore();
+        output.restore();
+      }
+    } finally {
+      envScope.restore();
     }
   }, 60_000);
 });

@@ -239,10 +239,13 @@ function composerContentIsDimPlaceholder(rawText: string, content: string): bool
     const visible = runs.map((run) => run.char).join('');
     const start = visible.lastIndexOf(content);
     if (start === -1) return false;
+    let checkedVisibleContent = false;
     for (let i = start; i < start + content.length; i += 1) {
+      if (/[^\S\n]/u.test(runs[i]?.char ?? '')) continue;
+      checkedVisibleContent = true;
       if (!runs[i].dim) return false;
     }
-    return true;
+    return checkedVisibleContent;
   }
   return false;
 }

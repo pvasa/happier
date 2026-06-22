@@ -5,6 +5,7 @@ import type {
 } from '@happier-dev/protocol';
 import type { CatalogAgentId } from '@/backends/types';
 import type { ConnectedServiceResolvedSelection } from './materializeConnectedServicesForSpawn';
+import type { ConnectedServiceRefreshFailureCategory } from '../credentials/lifecycleTypes';
 
 export type ConnectedServicesMaterializationDiagnostic = Readonly<{
   code: string;
@@ -15,6 +16,11 @@ export type ConnectedServicesMaterializationDiagnostic = Readonly<{
   effectiveStateMode?: string;
   entryName?: string;
   reason?: string;
+  credentialRefreshFailure?: Readonly<{
+    category: ConnectedServiceRefreshFailureCategory;
+    providerStatus?: number;
+    providerErrorCode?: string;
+  }>;
 }>;
 
 export function isBlockingConnectedServicesMaterializationDiagnostic(

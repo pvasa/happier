@@ -340,6 +340,37 @@ describe('claudeUnifiedTerminalLauncher', () => {
     );
   });
 
+  it('uses zellij session metadata as the unified terminal host when runtime flags are absent', async () => {
+    setProcessTty(false);
+    const session = createSession({
+      terminalRuntime: null,
+      metadata: {
+        terminal: {
+          mode: 'zellij',
+          requested: 'zellij',
+          zellij: { sessionName: 'happy-zellij', paneId: 'terminal_7' },
+        },
+      } as Metadata,
+    });
+    mocks.runClaudeUnifiedTerminalSession.mockResolvedValueOnce(undefined);
+
+    await claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalEnabled: true,
+        claudeUnifiedTerminalHost: 'tmux',
+      },
+    });
+
+    expect(mocks.runClaudeUnifiedTerminalSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialMode: expect.objectContaining({
+          claudeUnifiedTerminalHost: 'zellij',
+        }),
+      }),
+    );
+  });
+
   it('requeues a message the runner could not deliver back onto the session queue (silent queue-swallow fix)', async () => {
     setProcessTty(false);
     const session = createSession();

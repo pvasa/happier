@@ -92,7 +92,7 @@ import type { ClaudeCompletionEvent } from './contextCompactionEvents';
 import { mergeSessionWorkStateMetadataV1, type SessionWorkStateV1 } from '@/session/workState/sessionWorkStateMetadata';
 import { createClaudeReadyHandler } from './ready/createClaudeReadyHandler';
 import {
-    surfaceClaudeConnectedServiceRuntimeAuthFailure,
+    surfaceClaudeRuntimeAuthFailure,
     surfaceClaudeRateLimitRuntimeIssue,
 } from './connectedServices/surfaceClaudeRuntimeIssues';
 import type { NormalizedProviderUsageLimitDetailsV1 } from './connectedServices/mapClaudeRateLimitEventToUsageDetails';
@@ -1386,7 +1386,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         }
                     },
                     onRuntimeAuthFailureEvent: async (error: unknown) => {
-                        await surfaceClaudeConnectedServiceRuntimeAuthFailure(session, error, '[remote]');
+                        await surfaceClaudeRuntimeAuthFailure(session, error, '[remote]');
                     },
                     onCompletionEvent: (event: ClaudeCompletionEvent) => {
                         logger.debug('[remote]: Completion event', event);

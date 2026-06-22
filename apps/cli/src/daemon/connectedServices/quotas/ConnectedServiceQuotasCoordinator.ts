@@ -65,14 +65,15 @@ import {
 import { RuntimeAccountIdentityIndex } from './identity/RuntimeAccountIdentityIndex';
 import {
   reconcileIndexedSameAccountFanoutCandidates,
-  type ReconciledRuntimeAccountIdentityEntry,
 } from './identity/reconcileIndexedSameAccountFanoutCandidates';
+import { resolveRuntimeAccountIdentityFanoutMatch } from './identity/resolveRuntimeAccountIdentityFanoutMatch';
 import { resolveSessionsSharingProviderAccount } from './identity/resolveSessionsSharingProviderAccount';
 import {
   requiresExactProviderAccountFanout,
   type ConnectedServiceSameAccountFanoutStrategy,
 } from './identity/providerFanoutStrategy';
 import type {
+  ReconciledRuntimeAccountIdentityEntry,
   RuntimeAccountIdentityEntry,
   RuntimeAccountIdentityProbeResult,
   RuntimeAccountIdentityRecordInput,
@@ -89,6 +90,21 @@ import { evaluateConnectedServiceSwitchApplyPolicy } from '../accountGroups/swit
 const DEFAULT_QUOTA_PERSISTENCE_MIN_FRESHNESS_REFRESH_MS = 60_000;
 const ACCOUNT_MODE_UNKNOWN_RETRY_AFTER_MS = 30_000;
 const SAME_ACCOUNT_FANOUT_RESET_BUCKET_MS = 60_000;
+
+function isQuotaLifecycleBlockingExclusion(exclusion: Readonly<{ reason: string }>): boolean {
+  return exclusion.reason === 'quota_exhausted' || exclusion.reason === 'capacity_limited';
+}
+
+function buildQuotaLifecycleCycleId(input: Readonly<{
+  now: number;
+  resetAtMs: number | null;
+}>): string {
+  const blockedAtMs = Math.max(0, Math.trunc(input.now));
+  const resetAtMs = typeof input.resetAtMs === 'number' && Number.isFinite(input.resetAtMs)
+    ? Math.max(0, Math.trunc(input.resetAtMs))
+    : null;
+  return `blocked_at_${blockedAtMs}:reset_at_${resetAtMs ?? 'none'}`;
+}
 
 type ConnectedServicesBindingsV1Like = Readonly<{
   v?: unknown;
@@ -343,6 +359,7 @@ export type ConnectedServiceQuotaLifecycleTransition = Readonly<{
   groupId: string;
   activeProfileId: string | null;
   sessionIds: ReadonlyArray<string>;
+  cycleId: string;
   issueFingerprint: string;
   resetAtMs: number | null;
   reason: string;
@@ -423,6 +440,20 @@ function extractActiveBindings(
   return out;
 }
 
+function activeBindingMatchesRuntimeIdentity(
+  binding: ActiveConnectedServiceBinding,
+  identity: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    groupId?: string | null;
+  }>,
+): boolean {
+  if (binding.serviceId !== identity.serviceId) return false;
+  const groupId = typeof identity.groupId === 'string' ? identity.groupId.trim() : '';
+  if (groupId) return binding.groupId === groupId;
+  return binding.profileId === identity.profileId;
+}
+
 function readCredentialAccountIdentity(record: ConnectedServiceCredentialRecordV1): Readonly<{
   providerAccountId: string;
   accountLabel: string | null;
@@ -450,17 +481,6 @@ function readCredentialAccountIdentity(record: ConnectedServiceCredentialRecordV
   return null;
 }
 
-function readNonEmptyString(value: string | null | undefined): string | null {
-  const trimmed = typeof value === 'string' ? value.trim() : '';
-  return trimmed ? trimmed : null;
-}
-
-function readGroupGeneration(value: number | null | undefined): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-    ? Math.trunc(value)
-    : null;
-}
-
 function deriveQuotaSnapshotStatus(snapshot: ConnectedServiceQuotaSnapshotV1): 'ok' | 'unavailable' | 'estimated' {
   const meters = Array.isArray(snapshot.meters) ? snapshot.meters : [];
   if (meters.length === 0) return 'ok';
@@ -482,6 +502,8 @@ type RefreshConnectedServiceCredentialForQuota = (input: Readonly<{
   force: boolean;
   reason: CredentialRefreshReason;
 }>) => Promise<ConnectedServiceCredentialRecordV1 | null>;
+
+const QUOTA_AUTH_FAILURE_REAUTH_CONSECUTIVE_FAILURES = 5;
 
 function readFiniteNonNegativeMs(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
@@ -517,16 +539,32 @@ function providerErrorCodeForHealth(code: unknown): string | undefined {
   return trimmed ? trimmed.slice(0, 128) : undefined;
 }
 
+function isTerminalQuotaAuthFailure(error: unknown): boolean {
+  const record = isRecord(error) ? error : null;
+  if (!record) return false;
+  if (record.status === 403) return true;
+  const providerCode = providerErrorCodeForHealth(record.providerCode);
+  return providerCode === 'invalid_grant'
+    || providerCode === 'invalid_client'
+    || providerCode === 'missing_refresh_token'
+    || providerCode === 'missing_claude_code_scope'
+    || providerCode === 'claude_subscription_missing_claude_code_scope';
+}
+
 function buildQuotaAuthFailureCredentialHealth(
   error: unknown,
   now: number,
+  options: Readonly<{ consecutiveFailuresBeforeCurrent: number }>,
 ): ConnectedServiceCredentialHealthV1 {
   const status = providerHttpStatusForHealth((error as Readonly<{ status?: unknown }> | null)?.status);
   const providerCode = providerErrorCodeForHealth((error as Readonly<{ providerCode?: unknown }> | null)?.providerCode);
+  const consecutiveFailures = Math.max(1, Math.trunc(options.consecutiveFailuresBeforeCurrent) + 1);
+  const reconnectRequired = isTerminalQuotaAuthFailure(error)
+    || consecutiveFailures >= QUOTA_AUTH_FAILURE_REAUTH_CONSECUTIVE_FAILURES;
   return {
     v: 1,
-    status: 'needs_reauth',
-    reconnectRequired: true,
+    status: reconnectRequired ? 'needs_reauth' : 'refresh_failed_retryable',
+    reconnectRequired,
     lastRefreshAttemptAt: now,
     lastRefreshFailureAt: now,
     lastRefreshFailureKind: quotaAuthFailureKindForHealth(error),
@@ -648,7 +686,7 @@ export class ConnectedServiceQuotasCoordinator {
   private readonly groupSwitchCheckAtByKey = new Map<string, number>();
   private readonly sameAccountFanoutAtByKey = new Map<string, number>();
   private readonly persistedInBandQuotaStateByKey = new Map<string, PersistedInBandQuotaState>();
-  private readonly notifiedQuotaBlockedGroupKeys = new Set<string>();
+  private readonly notifiedQuotaBlockedGroupCycleIds = new Map<string, string>();
   private readonly runtimeAccountIdentities: RuntimeAccountIdentityIndex;
   private readonly recoveryCreditConsumeResultsByKey = new Map<string, ConnectedServiceQuotaRecoveryCreditConsumeResult>();
   private readonly recoveryCreditConsumeInFlightByKey = new Map<string, Promise<ConnectedServiceQuotaRecoveryCreditConsumeResult>>();
@@ -1453,11 +1491,7 @@ export class ConnectedServiceQuotasCoordinator {
     for (const target of this.spawnTargetsByPid.values()) {
       if (target.sessionId !== entry.sessionId) continue;
       const bindings = extractActiveBindings(target.bindings, target.connectedServiceSelectionsEnv);
-      return bindings.some((binding) => (
-        binding.serviceId === entry.serviceId
-        && binding.profileId === entry.profileId
-        && (entry.groupId === null || binding.groupId === entry.groupId)
-      ));
+      return bindings.some((binding) => activeBindingMatchesRuntimeIdentity(binding, entry));
     }
     return false;
   }
@@ -1468,11 +1502,7 @@ export class ConnectedServiceQuotasCoordinator {
     selections: ReadonlyArray<RuntimeAccountIdentitySelectionInput>;
   }>): void {
     for (const selection of input.selections) {
-      const matchesActiveBinding = input.bindings.some((binding) => (
-        binding.serviceId === selection.serviceId
-        && binding.profileId === selection.profileId
-        && (selection.groupId === undefined || selection.groupId === null || binding.groupId === selection.groupId)
-      ));
+      const matchesActiveBinding = input.bindings.some((binding) => activeBindingMatchesRuntimeIdentity(binding, selection));
       if (!matchesActiveBinding) continue;
       this.recordRuntimeAccountIdentitySelection({
         sessionId: input.sessionId,
@@ -1615,90 +1645,41 @@ export class ConnectedServiceQuotasCoordinator {
         continue;
       }
 
-      if (result.status !== 'verified' || result.proofStrength !== 'exact') {
+      const match = resolveRuntimeAccountIdentityFanoutMatch({
+        strategy: input.strategy,
+        serviceId: input.serviceId,
+        groupId: input.groupId,
+        providerAccountId: input.providerAccountId,
+        candidate: {
+          sessionId: candidate.sessionId,
+          serviceId: candidate.serviceId,
+          groupId: candidate.groupId,
+          profileId: candidate.profileId,
+          accountLabel: null,
+          groupGeneration: candidate.groupGeneration,
+        },
+        result,
+        observedAtMs: this.now(),
+      });
+      if (match.status === 'suppressed') {
         this.recordDiagnostic?.({
           event: 'quota_work_suppressed',
           phase: 'same_account_fanout',
-          reason: 'runtime_identity_probe_missing_exact_identity',
+          reason: match.reason,
         });
         continue;
       }
-      const strategy = result.strategy ?? 'provider_account_id';
-      const providerAccountId = readNonEmptyString(result.providerAccountId);
-      const sharedAuthSurfaceId = readNonEmptyString(result.sharedAuthSurfaceId) ?? readNonEmptyString(result.groupId);
-      if (input.strategy === 'provider_account_id') {
-        if (strategy !== 'provider_account_id' || !providerAccountId) {
-          this.recordDiagnostic?.({
-            event: 'quota_work_suppressed',
-            phase: 'same_account_fanout',
-            reason: 'runtime_identity_probe_missing_exact_identity',
-          });
-          continue;
-        }
-        if (providerAccountId !== input.providerAccountId) {
-          this.recordDiagnostic?.({
-            event: 'quota_work_suppressed',
-            phase: 'same_account_fanout',
-            reason: 'runtime_identity_probe_account_mismatch',
-          });
-          continue;
-        }
-      } else if (input.strategy === 'shared_group_auth_surface') {
-        if (strategy !== 'shared_group_auth_surface' || sharedAuthSurfaceId !== input.groupId) {
-          this.recordDiagnostic?.({
-            event: 'quota_work_suppressed',
-            phase: 'same_account_fanout',
-            reason: 'runtime_identity_probe_account_mismatch',
-          });
-          continue;
-        }
-      } else {
-        continue;
-      }
-
-      const runtimeGroupId = readNonEmptyString(result.groupId);
-      if (runtimeGroupId && runtimeGroupId !== input.groupId) {
-        this.recordDiagnostic?.({
-          event: 'quota_work_suppressed',
-          phase: 'same_account_fanout',
-          reason: 'runtime_identity_probe_account_mismatch',
-        });
-        continue;
-      }
-      const runtimeProfileId = readNonEmptyString(result.profileId);
-      const runtimeGroupGeneration = readGroupGeneration(result.groupGeneration);
-      const nextProfileId = runtimeProfileId ?? candidate.profileId;
-      const nextGroupGeneration = runtimeGroupGeneration ?? candidate.groupGeneration;
-      if (
-        nextProfileId !== candidate.profileId
-        || nextGroupGeneration !== candidate.groupGeneration
-      ) {
+      if (match.staleExpectedStateReconciled) {
         this.recordDiagnostic?.({
           event: 'quota_work_suppressed',
           phase: 'same_account_fanout',
           reason: 'runtime_identity_probe_stale_expected_state_reconciled',
         });
       }
-
-      const entry: ReconciledRuntimeAccountIdentityEntry = {
-        sessionId: candidate.sessionId,
-        serviceId: candidate.serviceId,
-        groupId: candidate.groupId,
-        profileId: nextProfileId,
-        providerAccountId: providerAccountId ?? '',
-        accountLabel: typeof result.accountLabel === 'string' && result.accountLabel.trim()
-          ? result.accountLabel.trim()
-          : null,
-        observedAtMs: this.now(),
-        source: result.source ?? 'runtime_identity_probe',
-        proofStrength: 'exact',
-        groupGeneration: nextGroupGeneration,
-        ...(result.runtime ? { runtime: result.runtime } : {}),
-      };
       if (input.strategy === 'provider_account_id') {
-        this.runtimeAccountIdentities.record(entry);
+        this.runtimeAccountIdentities.record(match.entry);
       }
-      reconciled.push(entry);
+      reconciled.push(match.entry);
     }
     return {
       activeCandidateCount: activeCandidates.length,
@@ -1995,20 +1976,27 @@ export class ConnectedServiceQuotasCoordinator {
     const groupId = input.group.groupId;
     const groupKey = `${serviceId}\u0000${groupId}`;
     const blocked = selection.reason === 'no_eligible_members';
-    const previouslyNotified = this.notifiedQuotaBlockedGroupKeys.has(groupKey);
-    if (blocked === previouslyNotified) return;
+    const existingCycleId = this.notifiedQuotaBlockedGroupCycleIds.get(groupKey) ?? null;
+    const previouslyNotified = existingCycleId !== null;
 
     const sessionIds = this.resolveActiveSessionIdsForGroup(serviceId, groupId);
     const issueFingerprint = `quota-blocked:${serviceId}:${groupId}`;
     if (blocked) {
+      const quotaLikeExclusions = selection.excluded.filter(isQuotaLifecycleBlockingExclusion);
+      if (quotaLikeExclusions.length === 0) {
+        if (previouslyNotified) this.notifiedQuotaBlockedGroupCycleIds.delete(groupKey);
+        return;
+      }
+      if (previouslyNotified) return;
       // No group-bound sessions: nothing to notify yet. Stay unmarked so a session
       // observing the still-blocked group later still gets the blocked edge.
       if (sessionIds.length === 0) return;
-      const resetAtMs = selection.excluded
+      const resetAtMs = quotaLikeExclusions
         .map((exclusion) => exclusion.retryAtMs)
         .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > input.now)
         .sort((left, right) => left - right)[0] ?? null;
-      this.notifiedQuotaBlockedGroupKeys.add(groupKey);
+      const cycleId = buildQuotaLifecycleCycleId({ now: input.now, resetAtMs });
+      this.notifiedQuotaBlockedGroupCycleIds.set(groupKey, cycleId);
       try {
         await listener({
           phase: 'blocked',
@@ -2016,6 +2004,7 @@ export class ConnectedServiceQuotasCoordinator {
           groupId,
           activeProfileId: switchState.activeProfileId,
           sessionIds,
+          cycleId,
           issueFingerprint,
           resetAtMs,
           reason: 'connected_service_group_quota_exhausted',
@@ -2026,7 +2015,8 @@ export class ConnectedServiceQuotasCoordinator {
       return;
     }
 
-    this.notifiedQuotaBlockedGroupKeys.delete(groupKey);
+    if (!previouslyNotified) return;
+    this.notifiedQuotaBlockedGroupCycleIds.delete(groupKey);
     try {
       await listener({
         phase: 'recovered',
@@ -2034,6 +2024,7 @@ export class ConnectedServiceQuotasCoordinator {
         groupId,
         activeProfileId: switchState.activeProfileId,
         sessionIds,
+        cycleId: existingCycleId,
         issueFingerprint,
         resetAtMs: null,
         reason: 'fresh_quota_evidence',
@@ -2138,16 +2129,20 @@ export class ConnectedServiceQuotasCoordinator {
     profileId: string;
     error: unknown;
     now: number;
-  }>): Promise<boolean> {
-    if (!isQuotaAuthFailure(input.error)) return false;
+  }>): Promise<ConnectedServiceCredentialHealthV1['status'] | null> {
+    if (!isQuotaAuthFailure(input.error)) return null;
     const updateHealth = this.api.updateConnectedServiceCredentialHealth;
-    if (typeof updateHealth !== 'function') return false;
+    if (typeof updateHealth !== 'function') return null;
+    const bindingKey = this.makeBindingKey({ serviceId: input.serviceId, profileId: input.profileId });
+    const health = buildQuotaAuthFailureCredentialHealth(input.error, input.now, {
+      consecutiveFailuresBeforeCurrent: this.failureStateByBindingKey.get(bindingKey)?.consecutiveFailures ?? 0,
+    });
     await updateHealth.call(this.api, {
       serviceId: input.serviceId,
       profileId: input.profileId,
-      health: buildQuotaAuthFailureCredentialHealth(input.error, input.now),
+      health,
     });
-    return true;
+    return health.status;
   }
 
   private async maybeRequestActiveGroupSwitchForSnapshot(input: Readonly<{
@@ -3177,13 +3172,13 @@ export class ConnectedServiceQuotasCoordinator {
           this.failureStateByBindingKey.delete(bindingKey);
         } catch (error) {
           const bindingKey = this.makeBindingKey({ serviceId, profileId });
-          const credentialHealthUpdated = await this.persistCredentialHealthForQuotaFailure({
+          const credentialHealthStatus = await this.persistCredentialHealthForQuotaFailure({
             serviceId,
             profileId,
             error,
             now,
-          }).catch(() => false);
-          if (credentialHealthUpdated) {
+          }).catch(() => null);
+          if (credentialHealthStatus === 'needs_reauth') {
             profileHealthByProfileId.set(profileId, 'needs_reauth');
           }
           this.applyFailureBackoff({

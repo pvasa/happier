@@ -15,7 +15,10 @@ import type { SessionHookData } from '../utils/startHookServer';
 import type { EnhancedMode } from '../loop';
 import type { RawJSONLines } from '../types';
 import { getProjectPath } from '../utils/path';
-import { runClaudeUnifiedTerminalSession } from './runClaudeUnifiedTerminalSession';
+import {
+  runClaudeUnifiedTerminalSession,
+  shouldProbeTmuxForClaudeUnifiedDefaultHost,
+} from './runClaudeUnifiedTerminalSession';
 import type {
   ClaudeUnifiedRuntimeConfigOutcomeEvent,
   ClaudeUnifiedRuntimeControlApplyResult,
@@ -57,12 +60,24 @@ vi.mock('@/ui/logger', () => ({
   logger: loggerMock,
 }));
 
+const originalProcessPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
 const interactiveClaudeScreen = [
   'Some previous Claude output',
   '',
   'What would you like to work on?',
   '> ',
 ].join('\n');
+
+function setProcessPlatform(platform: NodeJS.Platform): void {
+  if (!originalProcessPlatformDescriptor) {
+    throw new Error('process.platform descriptor is unavailable');
+  }
+  Object.defineProperty(process, 'platform', {
+    ...originalProcessPlatformDescriptor,
+    value: platform,
+  });
+}
 
 function createAbortableSignal(): AbortController {
   return new AbortController();
@@ -116,6 +131,9 @@ describe('runClaudeUnifiedTerminalSession', () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    if (originalProcessPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalProcessPlatformDescriptor);
+    }
     loggerMock.debug.mockClear();
     for (const dir of tempDirs.splice(0)) {
       await rm(dir, { recursive: true, force: true });
@@ -195,6 +213,92 @@ describe('runClaudeUnifiedTerminalSession', () => {
         reason: 'test',
       },
     });
+  });
+
+  it('normalizes native Windows tmux preference to auto before resolving a host', async () => {
+    setProcessPlatform('win32');
+    const abortController = createAbortableSignal();
+    const telemetry = { emit: vi.fn() };
+    const resolvedPreferences: Array<'auto' | 'tmux' | 'zellij'> = [];
+    const handle: TerminalHostHandle = {
+      kind: 'zellij',
+      sessionName: 'happier-claude-session-test',
+      paneId: 'terminal_1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'zellij',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        abortController.abort();
+        return { status: 'injected', at: 1, bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let consumed = false;
+
+    await runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage: async () => {
+        if (consumed) return null;
+        consumed = true;
+        return {
+          message: 'hello from Windows',
+          mode: {
+            permissionMode: 'default',
+            claudeUnifiedTerminalHost: 'tmux',
+          },
+        };
+      },
+      resolveHostAdapter: async (preference) => {
+        resolvedPreferences.push(preference);
+        if (preference === 'tmux') {
+          return {
+            status: 'disabled',
+            reason: 'tmux_unsupported_on_windows',
+            message: "tmux is not supported on native Windows; use 'auto' or 'zellij', or install WSL2.",
+          };
+        }
+        return { status: 'resolved', adapter, reason: 'windows_zellij' };
+      },
+      buildSpawn: async () => ({
+        spawnArgv: ['C:\\Tools\\claude.exe'],
+        spawnEnv: {},
+      }),
+      createSessionName: () => 'happier-claude-session-test',
+      telemetry,
+    });
+
+    expect(resolvedPreferences).toEqual(['auto']);
+    expect(adapter.createOrAttachHost).toHaveBeenCalledWith(expect.objectContaining({
+      sessionName: 'happier-claude-session-test',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['C:\\Tools\\claude.exe'],
+    }));
+    expect(telemetry.emit).toHaveBeenCalledWith({
+      name: 'unified.session.host_resolved',
+      properties: {
+        kind: 'zellij',
+        platform: 'win32',
+        preference: 'auto',
+        reason: 'windows_zellij',
+      },
+    });
+  });
+
+  it('does not probe tmux while resolving native Windows default terminal hosts', () => {
+    expect(shouldProbeTmuxForClaudeUnifiedDefaultHost('win32')).toBe(false);
+    expect(shouldProbeTmuxForClaudeUnifiedDefaultHost('linux')).toBe(true);
+    expect(shouldProbeTmuxForClaudeUnifiedDefaultHost('darwin')).toBe(true);
   });
 
   it('registers a user-authorized terminal composer clear runtime control while the host is live', async () => {
@@ -3465,6 +3569,44 @@ describe('runClaudeUnifiedTerminalSession', () => {
       name: 'unified.session.windows_guard_triggered',
       properties: {
         guard: 'windows_arm64_unsupported',
+        hostKind: 'zellij',
+        platform: 'win32',
+      },
+    });
+  });
+
+  it('emits Windows guard telemetry when native Windows zellij is disabled as unvalidated', async () => {
+    const telemetry = { emit: vi.fn() };
+
+    await expect(
+      runClaudeUnifiedTerminalSession({
+        path: '/workspace/project',
+        nextMessage: async () => ({
+          message: 'hello',
+          mode: {
+            permissionMode: 'default',
+            claudeUnifiedTerminalHost: 'zellij',
+          },
+        }),
+        resolveHostAdapter: async () => ({
+          status: 'disabled',
+          reason: 'windows_zellij_unvalidated',
+          message: 'Bundled zellij is not validated on native Windows.',
+        }),
+        buildSpawn: async () => ({
+          spawnArgv: ['/bin/claude'],
+          spawnEnv: {},
+        }),
+        telemetry,
+      }),
+    ).rejects.toMatchObject({
+      code: 'claude_unified_terminal_host_unavailable',
+    });
+
+    expect(telemetry.emit).toHaveBeenCalledWith({
+      name: 'unified.session.windows_guard_triggered',
+      properties: {
+        guard: 'windows_zellij_unvalidated',
         hostKind: 'zellij',
         platform: 'win32',
       },

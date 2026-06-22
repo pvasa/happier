@@ -1,4 +1,5 @@
 import { resolveTerminalInjectionReadiness } from '@/agent/runtime/terminal/injection/arbiter';
+import { resolveTerminalPromptProviderAcceptanceTimeoutMs } from '@/agent/runtime/terminal/injection/promptWriteTimeout';
 import type { TerminalInputInjectionResult, TerminalLifecycleObservation, TerminalTurnState } from '@/agent/runtime/terminal/_types';
 import { isNonSteerablePromptPayload, parseSpecialCommand } from '@/cli/parsers/specialCommands';
 
@@ -268,7 +269,10 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     const armedBatch = pendingProviderAcceptance.batch;
     const timeoutResult = steerAcceptanceTimeoutResult ?? buildProviderAcceptanceTimeoutResult();
     clearPendingSteerArming();
-    scheduleProviderAcceptanceTimeout(providerAcceptanceTimeoutMs, timeoutResult);
+    scheduleProviderAcceptanceTimeout(
+      resolveProviderAcceptanceTimeoutMs(armedBatch),
+      timeoutResult,
+    );
     opts.onSteerAcceptanceArmed?.(armedBatch);
   }
 
@@ -290,6 +294,8 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
 
   function armTerminalCustodyAcceptanceAfterTurnEnd(): void {
     if (terminalCustodyAcceptanceTimer || terminalCustodyAcceptances.length === 0) return;
+    const waitingAcceptance = terminalCustodyAcceptances[0];
+    if (!waitingAcceptance) return;
     const result = buildProviderAcceptanceTimeoutResult();
     terminalCustodyAcceptanceTimer = setTimeout(() => {
       terminalCustodyAcceptanceTimer = null;
@@ -297,7 +303,7 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       if (!disposed && turnState !== 'running') {
         armTerminalCustodyAcceptanceAfterTurnEnd();
       }
-    }, providerAcceptanceTimeoutMs);
+    }, resolveProviderAcceptanceTimeoutMs(waitingAcceptance.batch));
     terminalCustodyAcceptanceTimer.unref?.();
   }
 
@@ -359,6 +365,17 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       duplicateRisk: 'likely',
       recoverable: true,
     };
+  }
+
+  function resolveProviderAcceptanceTimeoutMs(
+    batch: ClaudeUnifiedPromptBatch<Mode>,
+    result?: Extract<TerminalInputInjectionResult, { status: 'injected' }> | undefined,
+    baseTimeoutMs = providerAcceptanceTimeoutMs,
+  ): number {
+    return resolveTerminalPromptProviderAcceptanceTimeoutMs(batch.message, {
+      baseTimeoutMs,
+      ...(result ? { bytesWritten: result.bytesWritten } : {}),
+    });
   }
 
   function scheduleProviderAcceptanceTimeout(
@@ -669,7 +686,10 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
           steerAcceptanceTimeoutResult = buildProviderAcceptanceTimeoutResult();
           scheduleSteerTurnEndFallbackWake();
         } else {
-          scheduleProviderAcceptanceTimeout(providerAcceptanceTimeoutMs, buildProviderAcceptanceTimeoutResult());
+          scheduleProviderAcceptanceTimeout(
+            resolveProviderAcceptanceTimeoutMs(next, result),
+            buildProviderAcceptanceTimeoutResult(),
+          );
         }
         return;
       }
@@ -715,7 +735,10 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
           steerAcceptanceTimeoutResult = result;
           scheduleSteerTurnEndFallbackWake();
         } else {
-          scheduleProviderAcceptanceTimeout(failureAction.timeoutMs, result);
+          scheduleProviderAcceptanceTimeout(
+            resolveProviderAcceptanceTimeoutMs(next, undefined, failureAction.timeoutMs),
+            result,
+          );
         }
         return;
       }

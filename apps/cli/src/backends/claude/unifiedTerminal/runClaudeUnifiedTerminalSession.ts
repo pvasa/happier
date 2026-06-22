@@ -88,6 +88,7 @@ import { removeTerminalAttachmentInfo } from '@/terminal/attachment/terminalAtta
 import { createTerminalHostRegistry } from '@/integrations/terminalHost/registry';
 import { resolveTerminalHost } from '@/integrations/terminalHost/resolveTerminalHost';
 import { createTmuxTerminalHostAdapter, isTmuxAvailable } from '@/integrations/tmux';
+import { createPtyTerminalHostAdapter } from '@/integrations/pty';
 import { createZellijTerminalHostAdapter } from '@/integrations/zellij/adapter';
 import { createWindowsTerminalZellijForegroundClientLauncher } from '@/integrations/zellij/windowsForegroundClient';
 import { configuration } from '@/configuration';
@@ -340,37 +341,64 @@ function createDefaultSessionName(): string {
   return `happier-claude-unified-${sanitizeSessionName(String(process.pid))}-${Date.now()}`;
 }
 
+function normalizeHostPreferenceForCurrentPlatform(
+  preference: ClaudeUnifiedTerminalHostPreference,
+): ClaudeUnifiedTerminalHostPreference {
+  if (process.platform === 'win32' && preference === 'tmux') {
+    return 'auto';
+  }
+  return preference;
+}
+
+export function shouldProbeTmuxForClaudeUnifiedDefaultHost(
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform !== 'win32';
+}
+
 async function resolveDefaultHostAdapter(
   preference: ClaudeUnifiedTerminalHostPreference,
   telemetry: ClaudeUnifiedTelemetrySink,
 ): Promise<TerminalHostResolution> {
-  const tmuxAvailable = await isTmuxAvailable();
-  const zellijBinary = await resolveZellijRuntimeBinary();
-  const zellijWindowsGuard = resolveZellijWindowsGuard({
-    platform: process.platform,
-    arch: process.arch,
-    env: process.env,
-  });
-  if (zellijWindowsGuard.status === 'disabled') {
-    emitClaudeUnifiedWindowsGuardTriggered(telemetry, zellijWindowsGuard.reason);
-    return {
-      status: 'disabled',
-      reason: zellijWindowsGuard.reason,
-      message: zellijWindowsGuard.message,
-    };
+  const tmuxAvailable = shouldProbeTmuxForClaudeUnifiedDefaultHost()
+    ? await isTmuxAvailable()
+    : false;
+  const windowsConsoleAdapter = process.platform === 'win32'
+    ? createPtyTerminalHostAdapter()
+    : null;
+  const shouldConfigureZellij = process.platform !== 'win32' || preference === 'zellij' || !windowsConsoleAdapter;
+  const zellijBinary = shouldConfigureZellij ? await resolveZellijRuntimeBinary() : null;
+  const zellijWindowsGuard = shouldConfigureZellij
+    ? resolveZellijWindowsGuard({
+        platform: process.platform,
+        arch: process.arch,
+        env: process.env,
+      })
+    : { status: 'ok' } as const;
+  if (shouldConfigureZellij) {
+    if (zellijWindowsGuard.status === 'disabled') {
+      emitClaudeUnifiedWindowsGuardTriggered(telemetry, zellijWindowsGuard.reason);
+      return {
+        status: 'disabled',
+        reason: zellijWindowsGuard.reason,
+        message: zellijWindowsGuard.message,
+      };
+    }
+    if (process.platform === 'win32' && zellijWindowsGuard.shell === 'cmd.exe') {
+      emitClaudeUnifiedWindowsGuardTriggered(telemetry, 'windows_default_shell_cmd');
+    }
   }
-  if (process.platform === 'win32' && zellijWindowsGuard.shell === 'cmd.exe') {
-    emitClaudeUnifiedWindowsGuardTriggered(telemetry, 'windows_default_shell_cmd');
-  }
+  const resolvedZellijWindowsGuard = zellijWindowsGuard.status === 'ok' ? zellijWindowsGuard : null;
   const adapters = createTerminalHostRegistry([
+    ...(windowsConsoleAdapter ? [windowsConsoleAdapter] : []),
     ...(tmuxAvailable ? [createTmuxTerminalHostAdapter()] : []),
     ...(zellijBinary
       ? [
           createZellijTerminalHostAdapter({
             zellijBinary,
             happyHomeDir: configuration.happyHomeDir,
-            defaultShell: zellijWindowsGuard.shell,
-            ...(zellijWindowsGuard.launchStrategy === 'foreground_windows_terminal'
+            defaultShell: resolvedZellijWindowsGuard?.shell,
+            ...(resolvedZellijWindowsGuard?.launchStrategy === 'foreground_windows_terminal'
               ? {
                   launchStrategy: {
                     type: 'foregroundAttached',
@@ -692,7 +720,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
     message: '',
     mode: startupMode,
   };
-  const hostPreference = startupMode.claudeUnifiedTerminalHost ?? 'auto';
+  const hostPreference = normalizeHostPreferenceForCurrentPlatform(startupMode.claudeUnifiedTerminalHost ?? 'auto');
   const hostResolution = await (
     opts.resolveHostAdapter
       ? opts.resolveHostAdapter(hostPreference)

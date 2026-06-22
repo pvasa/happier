@@ -637,6 +637,11 @@ describe('materializeClaudeCodeNativeAuth', () => {
         providerId: 'claude',
         serviceId: 'claude-subscription',
         reason: 'missing_required_scope',
+        credentialRefreshFailure: {
+          category: 'provider_403',
+          providerStatus: 403,
+          providerErrorCode: 'claude_subscription_missing_claude_code_scope',
+        },
       }),
     ]);
     expect(JSON.stringify(result.diagnostics)).not.toContain('secret-placeholder');
@@ -678,6 +683,7 @@ describe('materializeClaudeCodeNativeAuth', () => {
         severity: 'blocking',
       }),
     ]);
+    expect(result.diagnostics[0]).not.toHaveProperty('credentialRefreshFailure');
     expect(JSON.stringify(result.diagnostics)).not.toContain('secret-placeholder');
   });
 });

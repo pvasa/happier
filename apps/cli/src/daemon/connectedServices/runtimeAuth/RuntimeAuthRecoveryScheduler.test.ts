@@ -45,7 +45,7 @@ function createDeferred<T>(): {
 }
 
 describe('RuntimeAuthRecoveryScheduler', () => {
-  it('creates durable intake for a classified failure before local repair runs', async () => {
+  it('creates live-daemon intake for a classified failure before local repair runs', async () => {
     const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => 1_000,
@@ -93,20 +93,12 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     expect(diagnostics.map((event) => event.event)).toContain('runtime_auth_recovery_enqueue');
   });
 
-  it('allowlist-sanitizes runtime classifications before durable scheduler persistence', async () => {
-    const stored = new Map<string, unknown>();
+  it('allowlist-sanitizes runtime classifications before retaining recovery state', async () => {
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => 1_000,
       baseBackoffMs: 100,
       maxBackoffMs: 1_000,
       jitterMs: () => 0,
-      store: {
-        read: (key) => stored.get(key) ?? null,
-        readAll: () => Array.from(stored.entries()),
-        write: async (key, intent) => {
-          stored.set(key, intent);
-        },
-      },
       recover: async () => ({ status: 'credential_refreshed' }),
     });
 
@@ -129,16 +121,17 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       } as ConnectedServiceRuntimeFailureClassification & Record<string, unknown>,
     });
 
-    const serialized = JSON.stringify(Array.from(stored.values()));
-    expect(serialized).not.toContain('secret-access-token');
-    expect(serialized).not.toContain('provider-body');
-    expect(serialized).not.toContain('rawProviderPayload');
-    expect(scheduler.readByKey(buildRuntimeAuthRecoveryKey({
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
       sessionId: 'session-1',
       serviceId: 'openai-codex',
       profileId: 'primary',
       groupId: 'team',
-    }))).toMatchObject({
+    });
+    const serialized = JSON.stringify(scheduler.readByKey(recoveryKey));
+    expect(serialized).not.toContain('secret-access-token');
+    expect(serialized).not.toContain('provider-body');
+    expect(serialized).not.toContain('rawProviderPayload');
+    expect(scheduler.readByKey(recoveryKey)).toMatchObject({
       classification: {
         rateLimits: null,
         action: null,
@@ -1473,100 +1466,6 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     expect(scheduler.readByKey(recoveryKey)).toMatchObject({ status: 'exhausted' });
   });
 
-  it('prunes stale terminal durable intents when scheduling new runtime-auth recovery', async () => {
-    const nowMs = 8 * 24 * 60 * 60_000;
-    const oldKey = buildRuntimeAuthRecoveryKey({
-      sessionId: 'session-old',
-      serviceId: 'openai-codex',
-      profileId: 'primary',
-      groupId: 'team',
-    });
-    const freshKey = buildRuntimeAuthRecoveryKey({
-      sessionId: 'session-fresh',
-      serviceId: 'openai-codex',
-      profileId: 'primary',
-      groupId: 'team',
-    });
-    const stored = new Map<string, RuntimeAuthRecoveryIntent>([
-      [oldKey, {
-        v: 1,
-        sessionId: 'session-old',
-        serviceId: 'openai-codex',
-        profileId: 'primary',
-        groupId: 'team',
-        status: 'cancelled',
-        armedAtMs: 1_000,
-        nextRetryAtMs: null,
-        attemptCount: 1,
-        maxAttempts: 3,
-        switchesThisTurn: 1,
-        classification: classification(),
-        failurePhase: 'handler',
-        failureReason: 'handler_transient_failure',
-        lastError: null,
-        lastErrorClassification: null,
-        terminalAtMs: 1_000,
-      }],
-      [freshKey, {
-        v: 1,
-        sessionId: 'session-fresh',
-        serviceId: 'openai-codex',
-        profileId: 'primary',
-        groupId: 'team',
-        status: 'exhausted',
-        armedAtMs: nowMs - 2_000,
-        nextRetryAtMs: null,
-        attemptCount: 3,
-        maxAttempts: 3,
-        switchesThisTurn: 1,
-        classification: classification(),
-        failurePhase: 'handler',
-        failureReason: 'handler_transient_failure',
-        lastError: 'max_attempts_exhausted',
-        lastErrorClassification: null,
-        terminalAtMs: nowMs - 1_000,
-      }],
-    ]);
-    const pruned: string[] = [];
-    const store = {
-      read: (key: string) => stored.get(key) ?? null,
-      readAll: () => [...stored.entries()],
-      write: (key: string, intent: RuntimeAuthRecoveryIntent) => {
-        stored.set(key, intent);
-      },
-      prune: (predicate: (entry: Readonly<{ recoveryKey: string; value: unknown }>) => boolean) => {
-        const removed: string[] = [];
-        for (const [recoveryKey, value] of stored.entries()) {
-          if (!predicate({ recoveryKey, value })) continue;
-          stored.delete(recoveryKey);
-          removed.push(recoveryKey);
-        }
-        pruned.push(...removed);
-        return removed;
-      },
-    };
-    const scheduler = new RuntimeAuthRecoveryScheduler({
-      nowMs: () => nowMs,
-      baseBackoffMs: 100,
-      maxBackoffMs: 1_000,
-      jitterMs: () => 0,
-      store,
-      recover: async () => ({ status: 'credential_refreshed' }),
-    });
-
-    await scheduler.enqueueHandlerFailure({
-      sessionId: 'session-new',
-      switchesThisTurn: 1,
-      classification: classification(),
-      error: new Error('timeout of 5000ms exceeded'),
-    });
-
-    expect(pruned).toEqual([oldKey]);
-    expect(stored.has(oldKey)).toBe(false);
-    expect(stored.has(freshKey)).toBe(true);
-    expect(scheduler.read('session-new')).toMatchObject({ status: 'waiting' });
-  });
-
   it('coalesces duplicate reports while a same-key recovery check is in flight', async () => {
     const recoverStarted = createDeferred<void>();
     const recoverOutcome = createDeferred<unknown>();
@@ -1625,52 +1524,6 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       failureReason: 'session_endpoint_unavailable',
       lastError: 'socket reset',
       lastErrorClassification: { kind: 'network', retryable: true },
-    } satisfies Partial<RuntimeAuthRecoveryIntent>);
-  });
-
-  it('keeps the stricter max-attempt cap when the same recovery key is re-enqueued', async () => {
-    const written = new Map<string, RuntimeAuthRecoveryIntent>();
-    const store = {
-      read: (key: string) => written.get(key) ?? null,
-      write: (key: string, intent: RuntimeAuthRecoveryIntent) => {
-        written.set(key, intent);
-      },
-    };
-    const firstScheduler = new RuntimeAuthRecoveryScheduler({
-      nowMs: () => 5_000,
-      baseBackoffMs: 100,
-      maxBackoffMs: 1_000,
-      jitterMs: () => 0,
-      maxAttempts: 2,
-      store,
-      recover: async () => ({ status: 'credential_refreshed' }),
-    });
-    await firstScheduler.enqueueHandlerFailure({
-      sessionId: 'session-1',
-      switchesThisTurn: 1,
-      classification: classification(),
-      error: new Error('timeout of 5000ms exceeded'),
-    });
-
-    const secondScheduler = new RuntimeAuthRecoveryScheduler({
-      nowMs: () => 5_050,
-      baseBackoffMs: 100,
-      maxBackoffMs: 1_000,
-      jitterMs: () => 0,
-      maxAttempts: 5,
-      store,
-      recover: async () => ({ status: 'credential_refreshed' }),
-    });
-    await secondScheduler.enqueueHandlerFailure({
-      sessionId: 'session-1',
-      switchesThisTurn: 2,
-      classification: classification(),
-      error: new Error('timeout of 5000ms exceeded'),
-    });
-
-    expect(secondScheduler.read('session-1')).toMatchObject({
-      maxAttempts: 2,
-      switchesThisTurn: 2,
     } satisfies Partial<RuntimeAuthRecoveryIntent>);
   });
 

@@ -193,6 +193,58 @@ describe('claudeRemoteAgentSdk work-state projection', () => {
     }));
   });
 
+  it('keeps provider-owned Claude SDK 401 retries out of runtime auth recovery', async () => {
+    const onRateLimitEvent = vi.fn();
+    const onRuntimeAuthFailureEvent = vi.fn();
+    const onMessage = vi.fn();
+    const authError = {
+      type: 'system',
+      subtype: 'api_error',
+      attempt: 1,
+      max_retries: 11,
+      retry_delay_ms: 1_000,
+      error_status: 401,
+      error: 'Connection error.',
+    };
+
+    await runAgentSdkMessagesForRateLimitTest({
+      messages: [authError, { type: 'result' }],
+      onMessage,
+      onRateLimitEvent,
+      onRuntimeAuthFailureEvent,
+    });
+
+    expect(onRateLimitEvent).not.toHaveBeenCalled();
+    expect(onRuntimeAuthFailureEvent).not.toHaveBeenCalled();
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining(authError));
+  });
+
+  it('routes exhausted Claude SDK 401 retry events to runtime auth recovery', async () => {
+    const onRateLimitEvent = vi.fn();
+    const onRuntimeAuthFailureEvent = vi.fn();
+    const onMessage = vi.fn();
+    const authError = {
+      type: 'system',
+      subtype: 'api_error',
+      attempt: 11,
+      max_retries: 11,
+      retry_delay_ms: 1_000,
+      error_status: 401,
+      error: 'Connection error.',
+    };
+
+    await runAgentSdkMessagesForRateLimitTest({
+      messages: [authError, { type: 'result' }],
+      onMessage,
+      onRateLimitEvent,
+      onRuntimeAuthFailureEvent,
+    });
+
+    expect(onRateLimitEvent).not.toHaveBeenCalled();
+    expect(onRuntimeAuthFailureEvent).toHaveBeenCalledWith(authError);
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining(authError));
+  });
+
   it('stops processing provider messages after a connected auth failure', async () => {
     const onRateLimitEvent = vi.fn();
     const onRuntimeAuthFailureEvent = vi.fn();

@@ -234,6 +234,50 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     expect(removeSessionMarker).toHaveBeenCalledWith(24682);
   });
 
+  it('removes a dead connected-service restart marker without a vendor resume id', async () => {
+    vi.mocked(listSessionMarkers).mockResolvedValue([
+      {
+        pid: 24684,
+        happySessionId: 'session-dead-existing-session-restart',
+        happyHomeDir: '/tmp/happy',
+        createdAt: 1,
+        updatedAt: 2,
+        startedBy: 'daemon',
+        cwd: '/tmp/project',
+        metadata: { flavor: 'codex' },
+        respawn: {
+          version: 1,
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          existingSessionId: 'session-dead-existing-session-restart',
+        },
+        connectedServiceRestartIntent: {
+          v: 1,
+          requestedAtMs: 2_750,
+        },
+      } satisfies TestConnectedServiceRestartIntentMarker,
+    ]);
+    vi.mocked(findAllHappyProcesses).mockResolvedValue([]);
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+    });
+
+    const pidToTrackedSession = new Map<number, TrackedSession>();
+    const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
+
+    expect(pidToTrackedSession.size).toBe(0);
+    expect(result).toEqual({
+      orphanedDeadDaemonSessions: [
+        {
+          sessionId: 'session-dead-existing-session-restart',
+          pid: 24684,
+        },
+      ],
+      connectedServiceRestartIntents: [],
+    });
+    expect(removeSessionMarker).toHaveBeenCalledWith(24684);
+  });
+
   it('does not convert a dead resumable terminal-injection daemon marker into startup restart inputs', async () => {
     vi.mocked(listSessionMarkers).mockResolvedValue([
       {

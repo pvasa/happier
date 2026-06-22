@@ -240,6 +240,10 @@ async function readSessionMarkerForPid(pid: number): Promise<DaemonSessionMarker
   return null;
 }
 
+function normalizeSessionId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export async function markSessionMarkerConnectedServiceRestartIntent(params: Readonly<{
   pid: number;
   requestedAtMs?: number;
@@ -282,27 +286,34 @@ export async function promoteSessionMarkerConnectedServiceRestartIntent(params: 
   fromPid: number;
   toPid: number;
 }>): Promise<boolean> {
-  if (params.fromPid === params.toPid) return false;
-  const source = await readSessionMarkerForPid(params.fromPid);
-  const sourceIntent = source?.connectedServiceRestartIntent;
-  if (!sourceIntent) return false;
+  const lockPids = Array.from(new Set([params.fromPid, params.toPid])).sort((left, right) => left - right);
+  const [firstPid, secondPid] = lockPids;
+  return await runWithSessionMarkerMutationLock(firstPid!, async () => {
+    if (secondPid === undefined || secondPid === firstPid) {
+      return await promoteSessionMarkerConnectedServiceRestartIntentUnlocked(params);
+    }
+    return await runWithSessionMarkerMutationLock(secondPid, async () => (
+      await promoteSessionMarkerConnectedServiceRestartIntentUnlocked(params)
+    ));
+  });
+}
 
-  const target = await readSessionMarkerForPid(params.toPid);
-  if (target) {
-    if (target.connectedServiceRestartIntent) return true;
-    const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, ...rest } = target;
-    await writeSessionMarker({
-      ...rest,
-      connectedServiceRestartIntent: sourceIntent,
-    });
-    return true;
+async function promoteSessionMarkerConnectedServiceRestartIntentUnlocked(params: Readonly<{
+  fromPid: number;
+  toPid: number;
+}>): Promise<boolean> {
+  const fromMarker = await readSessionMarkerForPid(params.fromPid);
+  const toMarker = await readSessionMarkerForPid(params.toPid);
+  const restartIntent = fromMarker?.connectedServiceRestartIntent;
+  if (!fromMarker || !toMarker || !restartIntent) return false;
+  if (!normalizeSessionId(fromMarker.happySessionId) || normalizeSessionId(fromMarker.happySessionId) !== normalizeSessionId(toMarker.happySessionId)) {
+    return false;
   }
 
-  const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, pid: _pid, ...rest } = source;
-  await writeSessionMarker({
+  const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, ...rest } = toMarker;
+  await writeSessionMarkerUnlocked({
     ...rest,
-    pid: params.toPid,
-    connectedServiceRestartIntent: sourceIntent,
+    connectedServiceRestartIntent: restartIntent,
   });
   return true;
 }

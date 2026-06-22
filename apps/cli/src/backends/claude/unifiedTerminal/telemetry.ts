@@ -109,6 +109,7 @@ export type ClaudeUnifiedTelemetryEvent =
       properties: Readonly<{
         guard:
           | 'windows_arm64_unsupported'
+          | 'windows_zellij_unvalidated'
           | 'windows_default_shell_cmd';
         hostKind: 'zellij';
         platform: 'win32';
@@ -259,6 +260,7 @@ export function maybeEmitClaudeUnifiedWindowsGuardTriggered(
 ): void {
   if (
     reason === 'windows_arm64_unsupported'
+    || reason === 'windows_zellij_unvalidated'
   ) {
     emitClaudeUnifiedWindowsGuardTriggered(telemetry, reason);
   }

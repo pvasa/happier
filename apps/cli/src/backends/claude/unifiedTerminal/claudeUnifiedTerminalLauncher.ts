@@ -8,7 +8,7 @@ import { createClaudeSessionTranscriptProjector } from '../localControl/createCl
 import type { NormalizedProviderUsageLimitDetailsV1 } from '../connectedServices/mapClaudeRateLimitEventToUsageDetails';
 import { adoptClaudePermissionModeFromMetadata } from '../utils/syncPermissionModeFromMetadata';
 import {
-  surfaceClaudeConnectedServiceRuntimeAuthFailure,
+  surfaceClaudeRuntimeAuthFailure,
   surfaceClaudeRateLimitRuntimeIssue,
 } from '../connectedServices/surfaceClaudeRuntimeIssues';
 import { createClaudeInFlightSteerCapabilityPublisher } from './createClaudeInFlightSteerCapabilityPublisher';
@@ -155,7 +155,7 @@ function asStandaloneUnifiedMode(mode: EnhancedMode): EnhancedMode {
   };
 }
 
-function readActiveUnifiedTerminalHost(session: Session): 'tmux' | null {
+function readActiveUnifiedTerminalHost(session: Session): 'tmux' | 'zellij' | null {
   return readClaudeActiveUnifiedTerminalHost({
     terminalRuntime: session.terminalRuntime,
     metadata: session.client.getMetadataSnapshot?.(),
@@ -613,7 +613,7 @@ export async function claudeUnifiedTerminalLauncher(
       onUsageLimitDetails: surfaceRateLimit,
       onRuntimeAuthFailureEvent: async (error) => {
         try {
-          const surfaced = await surfaceClaudeConnectedServiceRuntimeAuthFailure(session, error, '[unified]');
+          const surfaced = await surfaceClaudeRuntimeAuthFailure(session, error, '[unified]');
           if (surfaced) {
             lastSurfacedRuntimeAuthFailureAtMs = Date.now();
           }

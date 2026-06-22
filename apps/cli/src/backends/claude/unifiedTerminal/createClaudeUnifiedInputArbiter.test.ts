@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { resolveTerminalPromptProviderAcceptanceTimeoutMs } from '@/agent/runtime/terminal/injection/promptWriteTimeout';
+
 import { createClaudeUnifiedInputArbiter } from './createClaudeUnifiedInputArbiter';
 import type { ClaudeUnifiedInputArbiter } from './_types';
 
@@ -118,6 +120,54 @@ describe('createClaudeUnifiedInputArbiter', () => {
 
     expect(accepted).toEqual([['hello', 'new_turn']]);
     expect(arbiter.snapshot()).toMatchObject({ queuedCount: 0, lastDeferredReason: null });
+  });
+
+  it('scales provider acceptance timeout for large injected prompts before retrying', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const message = 'x'.repeat(128_000);
+    const injectPrompt = vi.fn().mockResolvedValue({ status: 'injected', at: nowMs, bytesWritten: 128_000 });
+    const failures: string[] = [];
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 10,
+      injectPrompt,
+      onInjectionFailure: (failure) => failures.push(failure.failureState),
+    });
+
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    await arbiter.enqueueUiMessage({ message, origin: { kind: 'ui_pending' } });
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      headInputState: 'awaiting_provider_acceptance',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(failures).toEqual([]);
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      headInputState: 'awaiting_provider_acceptance',
+    });
+
+    const scaledTimeoutMs = resolveTerminalPromptProviderAcceptanceTimeoutMs(message, {
+      baseTimeoutMs: 10,
+      bytesWritten: 128_000,
+    });
+    await vi.advanceTimersByTimeAsync(scaledTimeoutMs + 1);
+
+    expect(failures).toEqual(['failed_ambiguous']);
+    expect(injectPrompt).toHaveBeenCalledTimes(2);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      headInputState: 'awaiting_provider_acceptance',
+    });
   });
 
   it('injects explicit immediate prompts while Claude is running when the input surface is quiet', async () => {

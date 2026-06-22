@@ -82,6 +82,13 @@ export type RuntimeAccountIdentityEntry = Readonly<{
   groupGeneration: number | null;
 }>;
 
+export type ReconciledRuntimeAccountIdentityEntry = RuntimeAccountIdentityEntry & Readonly<{
+  runtime?: Readonly<{
+    safeToApply?: boolean;
+    inProviderTurn?: boolean;
+  }>;
+}>;
+
 export type RuntimeAccountIdentityRecordResult =
   | Readonly<{ status: 'recorded' }>
   | Readonly<{

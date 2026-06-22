@@ -345,49 +345,6 @@ describe('createOnChildExited', () => {
     killSpy.mockRestore();
   });
 
-  it('promotes durable connected-service restart intent before removing the wrapper marker', async () => {
-    const wrapperPid = 123;
-    const runnerPid = 456;
-    const tracked = { pid: wrapperPid, startedBy: 'daemon', happySessionId: 'session-1', sessionRunnerPid: runnerPid };
-    const calls: string[] = [];
-    const pidToTrackedSession = new Map<number, any>([[wrapperPid, tracked]]);
-    const promoteSessionMarkerConnectedServiceRestartIntentFn = vi.fn(async (input: { fromPid: number; toPid: number }) => {
-      calls.push(`promote:${input.fromPid}->${input.toPid}`);
-    });
-    const removeSessionMarkerFn = vi.fn(async (pid: number) => {
-      calls.push(`remove:${pid}`);
-    });
-    const originalKill = process.kill.bind(process);
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: any) => {
-      if (targetPid === runnerPid && signal === 0) {
-        return true;
-      }
-      return originalKill(targetPid, signal as any);
-    }) as any);
-
-    const onChildExited = createOnChildExited({
-      pidToTrackedSession,
-      spawnResourceCleanupByPid: new Map(),
-      sessionAttachCleanupByPid: new Map(),
-      getApiMachineForSessions: () => null,
-      removeSessionMarkerFn,
-      promoteSessionMarkerConnectedServiceRestartIntentFn,
-    } as any);
-
-    onChildExited(wrapperPid, { reason: 'process-exited', code: 0, signal: null });
-
-    await expect.poll(() => calls).toEqual([
-      `promote:${wrapperPid}->${runnerPid}`,
-      `remove:${wrapperPid}`,
-    ]);
-    expect(promoteSessionMarkerConnectedServiceRestartIntentFn).toHaveBeenCalledWith({
-      fromPid: wrapperPid,
-      toPid: runnerPid,
-    });
-    expect(removeSessionMarkerFn).not.toHaveBeenCalledWith(runnerPid);
-    killSpy.mockRestore();
-  });
-
   it('promotes a live runner even when a connected-service restart marked the wrapper exit as unexpected', async () => {
     const wrapperPid = 123;
     const runnerPid = 456;

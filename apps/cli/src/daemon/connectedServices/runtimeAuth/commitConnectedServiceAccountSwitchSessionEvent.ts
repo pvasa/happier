@@ -7,6 +7,7 @@ import {
   ConnectedServiceSwitchAttemptOutcomeActionV1Schema,
   ConnectedServiceSwitchAttemptOutcomeV1Schema,
   ConnectedServiceSwitchAttemptSessionAdoptionV1Schema,
+  agentEventAttentionImpact,
   type ConnectedServiceId,
   type ConnectedServiceUxDiagnosticV1,
   type ConnectedServiceSwitchAttemptedContinuityModeV1,
@@ -14,6 +15,7 @@ import {
   type ConnectedServiceSwitchAttemptOutcomeV1,
   type ConnectedServiceSwitchAttemptSessionAdoptionV1,
   type SessionStoredMessageContent,
+  type TranscriptRawAgentEventV1,
 } from '@happier-dev/protocol';
 
 import type { Credentials } from '@/persistence';
@@ -89,7 +91,7 @@ type ConnectedServiceRuntimeSwitchAttemptSessionEvent = Readonly<{
 
 type ConnectedServiceRuntimeStateSharingDegradedSessionEvent = Readonly<{
   type: 'provider_state_sharing_degraded';
-  serviceId: string;
+  serviceId: ConnectedServiceId;
   requestedStateMode: string;
   effectiveStateMode: string;
   code: string;
@@ -350,11 +352,13 @@ function parseRuntimeStateSharingDegradedEvent(value: unknown): ConnectedService
   const effectiveStateMode = typeof record.effectiveStateMode === 'string' ? record.effectiveStateMode.trim() : '';
   const code = typeof record.code === 'string' ? record.code.trim() : '';
   if (!serviceId || !requestedStateMode || !effectiveStateMode || !code) return null;
+  const parsedServiceId = ConnectedServiceIdSchema.safeParse(serviceId);
+  if (!parsedServiceId.success) return null;
   const reason = typeof record.reason === 'string' && record.reason.trim() ? record.reason.trim() : undefined;
   const entryName = typeof record.entryName === 'string' && record.entryName.trim() ? record.entryName.trim() : undefined;
   return {
     type: 'provider_state_sharing_degraded',
-    serviceId,
+    serviceId: parsedServiceId.data,
     requestedStateMode,
     effectiveStateMode,
     code,
@@ -411,6 +415,51 @@ function buildStoredContent(params: Readonly<{
   };
 }
 
+function buildAgentEventPayload(params: Readonly<{
+  eventId: string;
+  data: TranscriptRawAgentEventV1;
+}>): Readonly<{
+  role: 'agent';
+  content: {
+    type: 'event';
+    id: string;
+    data: TranscriptRawAgentEventV1;
+  };
+}> {
+  return {
+    role: 'agent',
+    content: {
+      type: 'event',
+      id: params.eventId,
+      data: params.data,
+    },
+  };
+}
+
+async function commitAgentEventStoredMessage(params: Readonly<{
+  credentials: Credentials;
+  sessionId: string;
+  rawSession: Awaited<ReturnType<typeof fetchSessionById>>;
+  eventId: string;
+  data: TranscriptRawAgentEventV1;
+}>): Promise<void> {
+  await commitSessionStoredMessage({
+    token: params.credentials.token,
+    sessionId: params.sessionId,
+    localId: params.eventId,
+    messageRole: 'event',
+    attentionImpact: agentEventAttentionImpact(params.data),
+    content: buildStoredContent({
+      credentials: params.credentials,
+      rawSession: params.rawSession,
+      payload: buildAgentEventPayload({
+        eventId: params.eventId,
+        data: params.data,
+      }),
+    }),
+  });
+}
+
 export async function commitConnectedServiceAccountSwitchSessionEvent(params: Readonly<{
   credentials: Credentials;
   sessionId: string;
@@ -437,28 +486,17 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       deferral.awaitingBoundary ? 'awaiting-boundary' : 'awaiting-idle',
       randomUUID(),
     ].join(':');
-    await commitSessionStoredMessage({
-      token: params.credentials.token,
+    await commitAgentEventStoredMessage({
+      credentials: params.credentials,
       sessionId: params.sessionId,
-      localId: eventId,
-      messageRole: 'event',
-      content: buildStoredContent({
-        credentials: params.credentials,
-        rawSession,
-        payload: {
-          role: 'agent',
-          content: {
-            type: 'event',
-            id: eventId,
-            data: {
-              type: 'connected-service-account-switch-deferral',
-              policy: deferral.policy,
-              awaitingBoundary: deferral.awaitingBoundary,
-              timeoutMs: deferral.timeoutMs,
-            },
-          },
-        },
-      }),
+      rawSession,
+      eventId,
+      data: {
+        type: 'connected-service-account-switch-deferral',
+        policy: deferral.policy,
+        awaitingBoundary: deferral.awaitingBoundary,
+        timeoutMs: deferral.timeoutMs,
+      },
     });
     return;
   }
@@ -476,27 +514,16 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       deferralCompletion.reason,
       randomUUID(),
     ].join(':');
-    await commitSessionStoredMessage({
-      token: params.credentials.token,
+    await commitAgentEventStoredMessage({
+      credentials: params.credentials,
       sessionId: params.sessionId,
-      localId: eventId,
-      messageRole: 'event',
-      content: buildStoredContent({
-        credentials: params.credentials,
-        rawSession,
-        payload: {
-          role: 'agent',
-          content: {
-            type: 'event',
-            id: eventId,
-            data: {
-              type: 'connected-service-account-switch-deferral-completed',
-              policy: deferralCompletion.policy,
-              reason: deferralCompletion.reason,
-            },
-          },
-        },
-      }),
+      rawSession,
+      eventId,
+      data: {
+        type: 'connected-service-account-switch-deferral-completed',
+        policy: deferralCompletion.policy,
+        reason: deferralCompletion.reason,
+      },
     });
     return;
   }
@@ -513,26 +540,15 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       superseded.policy ?? 'unknown',
       randomUUID(),
     ].join(':');
-    await commitSessionStoredMessage({
-      token: params.credentials.token,
+    await commitAgentEventStoredMessage({
+      credentials: params.credentials,
       sessionId: params.sessionId,
-      localId: eventId,
-      messageRole: 'event',
-      content: buildStoredContent({
-        credentials: params.credentials,
-        rawSession,
-        payload: {
-          role: 'agent',
-          content: {
-            type: 'event',
-            id: eventId,
-            data: {
-              type: 'connected-service-account-switch-deferral-superseded',
-              ...(superseded.policy ? { policy: superseded.policy } : {}),
-            },
-          },
-        },
-      }),
+      rawSession,
+      eventId,
+      data: {
+        type: 'connected-service-account-switch-deferral-superseded',
+        ...(superseded.policy ? { policy: superseded.policy } : {}),
+      },
     });
     return;
   }
@@ -550,42 +566,31 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       attempt.ok ? 'ok' : 'failed',
       randomUUID(),
     ].join(':');
-    await commitSessionStoredMessage({
-      token: params.credentials.token,
+    await commitAgentEventStoredMessage({
+      credentials: params.credentials,
       sessionId: params.sessionId,
-      localId: eventId,
-      messageRole: 'event',
-      content: buildStoredContent({
-        credentials: params.credentials,
-        rawSession,
-        payload: {
-          role: 'agent',
-          content: {
-            type: 'event',
-            id: eventId,
-            data: {
-              type: 'connected-service-account-switch-attempt',
-              ok: attempt.ok,
-              action: attempt.action,
-              ...(attempt.reason ? { reason: attempt.reason } : {}),
-              ...(attempt.attemptedContinuityMode ? { attemptedContinuityMode: attempt.attemptedContinuityMode } : {}),
-              ...(attempt.outcome ? { outcome: attempt.outcome } : {}),
-              ...(attempt.outcomeAction ? { outcomeAction: attempt.outcomeAction } : {}),
-              ...(attempt.errorCode ? { errorCode: attempt.errorCode } : {}),
-              ...(attempt.diagnostic ? { diagnostic: attempt.diagnostic } : {}),
-              ...(attempt.groupGeneration === undefined ? {} : { groupGeneration: attempt.groupGeneration }),
-              ...(attempt.sessionAdoption ? { sessionAdoption: attempt.sessionAdoption } : {}),
-              ...(attempt.sessionAdoptedGeneration === undefined
-                ? {}
-                : { sessionAdoptedGeneration: attempt.sessionAdoptedGeneration }),
-              ...(attempt.partialState ? { partialState: attempt.partialState } : {}),
-              ...(attempt.verificationByServiceId
-                ? { verificationByServiceId: attempt.verificationByServiceId }
-                : {}),
-            },
-          },
-        },
-      }),
+      rawSession,
+      eventId,
+      data: {
+        type: 'connected-service-account-switch-attempt',
+        ok: attempt.ok,
+        action: attempt.action,
+        ...(attempt.reason ? { reason: attempt.reason } : {}),
+        ...(attempt.attemptedContinuityMode ? { attemptedContinuityMode: attempt.attemptedContinuityMode } : {}),
+        ...(attempt.outcome ? { outcome: attempt.outcome } : {}),
+        ...(attempt.outcomeAction ? { outcomeAction: attempt.outcomeAction } : {}),
+        ...(attempt.errorCode ? { errorCode: attempt.errorCode } : {}),
+        ...(attempt.diagnostic ? { diagnostic: attempt.diagnostic } : {}),
+        ...(attempt.groupGeneration === undefined ? {} : { groupGeneration: attempt.groupGeneration }),
+        ...(attempt.sessionAdoption ? { sessionAdoption: attempt.sessionAdoption } : {}),
+        ...(attempt.sessionAdoptedGeneration === undefined
+          ? {}
+          : { sessionAdoptedGeneration: attempt.sessionAdoptedGeneration }),
+        ...(attempt.partialState ? { partialState: attempt.partialState } : {}),
+        ...(attempt.verificationByServiceId
+          ? { verificationByServiceId: attempt.verificationByServiceId }
+          : {}),
+      },
     });
     return;
   }
@@ -602,30 +607,19 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       degraded.serviceId,
       randomUUID(),
     ].join(':');
-    await commitSessionStoredMessage({
-      token: params.credentials.token,
+    await commitAgentEventStoredMessage({
+      credentials: params.credentials,
       sessionId: params.sessionId,
-      localId: eventId,
-      messageRole: 'event',
-      content: buildStoredContent({
-        credentials: params.credentials,
-        rawSession,
-        payload: {
-          role: 'agent',
-          content: {
-            type: 'event',
-            id: eventId,
-	            data: {
-	              type: 'provider-state-sharing-degraded',
-	              serviceId: degraded.serviceId,
-	              requestedStateMode: degraded.requestedStateMode,
-	              effectiveStateMode: degraded.effectiveStateMode,
-	              code: degraded.code,
-	              ...(degraded.reason ? { reason: degraded.reason } : {}),
-	            },
-	          },
-	        },
-	      }),
+      rawSession,
+      eventId,
+      data: {
+        type: 'provider-state-sharing-degraded',
+        serviceId: degraded.serviceId,
+        requestedStateMode: degraded.requestedStateMode,
+        effectiveStateMode: degraded.effectiveStateMode,
+        code: degraded.code,
+        ...(degraded.reason ? { reason: degraded.reason } : {}),
+      },
     });
     return;
   }
@@ -664,35 +658,22 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       }).catch(() => null))?.displayName)
       : null)
     ?? readDisplayLabel(parsed.groupId);
-  const payload = {
-    role: 'agent',
-    content: {
-      type: 'event',
-      id: eventId,
-      data: {
-        type: 'connected-service-account-switch',
-        serviceId: parsed.serviceId,
-        groupId: parsed.groupId,
-        ...(groupLabel ? { groupLabel } : {}),
-        fromProfileId: parsed.fromProfileId,
-        toProfileId: parsed.toProfileId,
-        ...(fromProfileLabel ? { fromProfileLabel } : {}),
-        ...(toProfileLabel ? { toProfileLabel } : {}),
-        reason,
-        mode: parsed.mode,
-      },
-    },
-  };
-
-  await commitSessionStoredMessage({
-    token: params.credentials.token,
+  await commitAgentEventStoredMessage({
+    credentials: params.credentials,
     sessionId: params.sessionId,
-    localId: eventId,
-    messageRole: 'event',
-    content: buildStoredContent({
-      credentials: params.credentials,
-      rawSession,
-      payload,
-    }),
+    rawSession,
+    eventId,
+    data: {
+      type: 'connected-service-account-switch',
+      serviceId: parsed.serviceId,
+      groupId: parsed.groupId,
+      ...(groupLabel ? { groupLabel } : {}),
+      fromProfileId: parsed.fromProfileId,
+      toProfileId: parsed.toProfileId,
+      ...(fromProfileLabel ? { fromProfileLabel } : {}),
+      ...(toProfileLabel ? { toProfileLabel } : {}),
+      reason,
+      mode: parsed.mode,
+    },
   });
 }

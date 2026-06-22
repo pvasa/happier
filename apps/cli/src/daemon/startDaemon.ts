@@ -10,6 +10,7 @@ import { ApiClient, isMachineContentPublicKeyMismatchError } from '@/api/api';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { isRpcMethodNotAvailableError } from '@happier-dev/protocol/rpcErrors';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import type { ApiMachineClient } from '@/api/apiMachine';
@@ -138,7 +139,6 @@ import {
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
 import {
   clearSessionMarkerConnectedServiceRestartIntent,
-  markSessionMarkerConnectedServiceRestartIntent,
   refreshSessionMarkerRespawn,
 } from './sessionRegistry';
 import { buildHappySessionControlArgs } from './sessionSpawnArgs';
@@ -170,7 +170,7 @@ import {
 } from './connectedServices/resolveConnectedServiceAuthForSpawn';
 import { buildSpawnResumeUnreachableErrorResult } from './connectedServices/buildSpawnResumeUnreachableErrorResult';
 import {
-  buildConnectedServiceCredentialRefreshSpawnErrorResult,
+  buildConnectedServiceCredentialSpawnErrorResult,
   buildConnectedServiceDiagnosticSpawnValidationErrorResult,
   buildConnectedServiceMaterializationSpawnErrorResult,
 } from './connectedServices/diagnostics/buildConnectedServiceDiagnosticSpawnErrorResult';
@@ -1280,23 +1280,69 @@ async function applyAlreadyRunningExistingSessionRuntimeSnapshot(params: Readonl
   }
 }
 
-function readGuardedPendingMaterializationDidMaterialize(value: unknown): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const record = value as { ok?: unknown; didMaterialize?: unknown; result?: unknown };
-  if (record.ok !== true) return false;
-  if (record.didMaterialize === true) return true;
+type PendingQueueNudgeResult =
+  | Readonly<{ type: 'materialized' }>
+  | Readonly<{ type: 'not_materialized'; reason: 'no_token' | 'shutdown' | 'no_pending' | 'deferred' | 'unknown' }>
+  | Readonly<{
+      type: 'unavailable';
+      reason:
+        | 'transport_unavailable'
+        | 'session_mismatch'
+        | 'rpc_method_unavailable'
+        | 'pending_materializer_unavailable'
+        | 'rpc_failed';
+      error?: unknown;
+    }>;
+
+function readGuardedPendingMaterializationResult(value: unknown): PendingQueueNudgeResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { type: 'not_materialized', reason: 'unknown' };
+  }
+  const record = value as {
+    ok?: unknown;
+    didMaterialize?: unknown;
+    error?: unknown;
+    errorCode?: unknown;
+    result?: unknown;
+  };
+  if (record.ok !== true) {
+    const errorCode = typeof record.errorCode === 'string' ? record.errorCode : '';
+    const error = typeof record.error === 'string' ? record.error : '';
+    if (errorCode === 'pending_materializer_unavailable' || error === 'pending_materializer_unavailable') {
+      return { type: 'unavailable', reason: 'pending_materializer_unavailable' };
+    }
+    return { type: 'not_materialized', reason: 'unknown' };
+  }
+  if (record.didMaterialize === true) return { type: 'materialized' };
   const result = record.result;
-  return Boolean(result && typeof result === 'object' && !Array.isArray(result) && (result as { type?: unknown }).type === 'materialized');
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return { type: 'not_materialized', reason: 'unknown' };
+  }
+  const resultType = (result as { type?: unknown }).type;
+  if (resultType === 'materialized') return { type: 'materialized' };
+  if (resultType === 'no_pending') return { type: 'not_materialized', reason: 'no_pending' };
+  if (typeof resultType === 'string' && resultType.length > 0) return { type: 'not_materialized', reason: 'deferred' };
+  return { type: 'not_materialized', reason: 'unknown' };
+}
+
+function pendingQueueNudgeMeansRunnerCannotServeResume(
+  result: PendingQueueNudgeResult,
+): result is Extract<PendingQueueNudgeResult, { type: 'unavailable' }> {
+  return result.type === 'unavailable'
+    && (
+      result.reason === 'rpc_method_unavailable'
+      || result.reason === 'pending_materializer_unavailable'
+    );
 }
 
 async function nudgeAlreadyRunningExistingSessionPendingQueue(params: Readonly<{
   sessionId: string;
   credentials: Credentials;
   isShutdownRequested?: () => boolean;
-}>): Promise<boolean> {
-  if (params.isShutdownRequested?.() === true) return false;
+}>): Promise<PendingQueueNudgeResult> {
+  if (params.isShutdownRequested?.() === true) return { type: 'not_materialized', reason: 'shutdown' };
   const token = params.credentials.token.trim();
-  if (!token) return false;
+  if (!token) return { type: 'not_materialized', reason: 'no_token' };
 
   try {
     const transport = await resolveSessionTransportContext({
@@ -1308,16 +1354,16 @@ async function nudgeAlreadyRunningExistingSessionPendingQueue(params: Readonly<{
         sessionId: params.sessionId,
         code: transport.code,
       });
-      return false;
+      return { type: 'unavailable', reason: 'transport_unavailable' };
     }
     if (transport.sessionId !== params.sessionId) {
       logger.debug('[DAEMON RUN] Skipping pending queue nudge because resolved transport session id does not match requested session id', {
         requestedSessionId: params.sessionId,
         resolvedSessionId: transport.sessionId,
       });
-      return false;
+      return { type: 'unavailable', reason: 'session_mismatch' };
     }
-    if (params.isShutdownRequested?.() === true) return false;
+    if (params.isShutdownRequested?.() === true) return { type: 'not_materialized', reason: 'shutdown' };
 
     const result = await callSessionRpc({
       token,
@@ -1327,13 +1373,17 @@ async function nudgeAlreadyRunningExistingSessionPendingQueue(params: Readonly<{
       method: `${params.sessionId}:${SESSION_RPC_METHODS.SESSION_PENDING_QUEUE_MATERIALIZE_NEXT}`,
       request: { reconcileWhenEmpty: 'force' },
     });
-    return readGuardedPendingMaterializationDidMaterialize(result);
+    return readGuardedPendingMaterializationResult(result);
   } catch (error) {
     logger.debug('[DAEMON RUN] Failed to nudge pending queue for already-running session resume', {
       sessionId: params.sessionId,
       error: serializeAxiosErrorForLog(error),
     });
-    return false;
+    return {
+      type: 'unavailable',
+      reason: isRpcMethodNotAvailableError(error) ? 'rpc_method_unavailable' : 'rpc_failed',
+      error,
+    };
   }
 }
 
@@ -1349,12 +1399,12 @@ function startPendingQueueBackgroundNudgeLoop(params: Readonly<{
   void (async () => {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       if (params.isShutdownRequested()) return;
-      const didMaterialize = await nudgeAlreadyRunningExistingSessionPendingQueue({
+      const nudgeResult = await nudgeAlreadyRunningExistingSessionPendingQueue({
         sessionId: params.sessionId,
         credentials: params.credentials,
         isShutdownRequested: params.isShutdownRequested,
       });
-      if (didMaterialize) return;
+      if (nudgeResult.type === 'materialized') return;
       if (attempt >= maxAttempts) return;
       const sleepResult = await sleepMsOrShutdown(retryDelayMs, params.shutdownPromise);
       if (sleepResult === 'shutdown') return;
@@ -2006,6 +2056,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             trackedSessions: pidToTrackedSession.values(),
           });
         };
+        const stopSessionCore = createStopSession({ pidToTrackedSession });
 
         // Helper functions
         const getCurrentChildren = () => Array.from(pidToTrackedSession.values());
@@ -2129,31 +2180,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
 
         const connectedServicesRestartRequestedPids = new Set<number>();
 
-        const shouldPreserveConnectedServiceRestartIntentForWebhook = (input: Readonly<{
-          trackedSession: TrackedSession | null;
-          pid: number;
-        }>): boolean => {
-          const candidatePids = new Set<number>();
-          const addCandidatePid = (value: number | null | undefined): void => {
-            if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) return;
-            candidatePids.add(value);
-          };
-
-          addCandidatePid(input.pid);
-          addCandidatePid(input.trackedSession?.pid);
-          addCandidatePid(input.trackedSession?.sessionRunnerPid);
-
-          for (const candidatePid of candidatePids) {
-            if (connectedServicesRestartRequestedPids.has(candidatePid)) return true;
-          }
-          return false;
-        };
-
         // Handle webhook from happy session reporting itself
         const onHappySessionWebhook = createOnHappySessionWebhook({
           pidToTrackedSession,
           pidToAwaiter,
-          shouldPreserveConnectedServiceRestartIntent: shouldPreserveConnectedServiceRestartIntentForWebhook,
           onTrackedSessionReported: (tracked) => {
             const sessionId = typeof tracked.happySessionId === 'string' ? tracked.happySessionId.trim() : '';
             if (!sessionId) return;
@@ -2230,12 +2260,37 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     pidToTrackedSession,
                     credentials,
                   });
-                  await nudgeAlreadyRunningExistingSessionPendingQueue({
+                  const pendingQueueNudge = await nudgeAlreadyRunningExistingSessionPendingQueue({
                     sessionId: normalizedExistingSessionId,
                     credentials,
                     isShutdownRequested: () => shutdownInitiated,
                   });
-                  return { type: 'success', sessionId: normalizedExistingSessionId };
+                  if (pendingQueueNudgeMeansRunnerCannotServeResume(pendingQueueNudge)) {
+                    logger.warn('[DAEMON RUN] Resume target is alive but cannot serve pending queue materialization; retiring stale runner before replacement spawn', {
+                      sessionId: normalizedExistingSessionId,
+                      reason: pendingQueueNudge.reason,
+                    });
+                    const stopped = await stopSessionCore(normalizedExistingSessionId);
+                    if (stopped && configuration.daemonSpawnExistingSessionWaitForExitMs > 0) {
+                      await waitForExistingSessionExitIfStopRequested({
+                        sessionId: normalizedExistingSessionId,
+                        pidToTrackedSession,
+                        isSessionRunnerActive,
+                        timeoutMs: configuration.daemonSpawnExistingSessionWaitForExitMs,
+                        pollIntervalMs: configuration.daemonSpawnExistingSessionWaitForExitPollIntervalMs,
+                      });
+                    }
+
+                    if (await isSessionRunnerActive(normalizedExistingSessionId)) {
+                      return {
+                        type: 'error',
+                        errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+                        errorMessage: 'Existing session runner is alive but cannot accept pending messages.',
+                      };
+                    }
+                  } else {
+                    return { type: 'success', sessionId: normalizedExistingSessionId };
+                  }
                 }
               }
             }
@@ -2631,7 +2686,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
 	                      });
 	                      return buildConnectedServiceMaterializationSpawnErrorResult(error);
 	                    }
-                    const credentialRefreshErrorResult = buildConnectedServiceCredentialRefreshSpawnErrorResult({
+                    const credentialRefreshErrorResult = buildConnectedServiceCredentialSpawnErrorResult({
                       agentId: catalogAgentId,
                       error,
                     });
@@ -3498,7 +3553,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           },
         };
 
-            const stopSessionCore = createStopSession({ pidToTrackedSession });
         const sessionRespawnEnabled = parseBooleanEnv(process.env.HAPPIER_DAEMON_SESSION_RESPAWN_ENABLED, false);
         const sessionRespawnMaxAttempts = resolvePositiveIntEnv(
           process.env.HAPPIER_DAEMON_SESSION_RESPAWN_MAX_ATTEMPTS,
@@ -3573,13 +3627,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
 
         let observeConnectedServiceRestartProcessMissing: ((tracked: TrackedSession) => void) | null = null;
 
-        for (const intent of startupReattachResult.connectedServiceRestartIntents ?? []) {
-          clearConnectedServiceRestartIntentForPid(
-            intent.pid,
-            '[DAEMON RUN] Failed to clear stale connected-service restart intent during startup reconciliation',
-          );
-        }
-
         const connectedServiceTurnDeferralQueue = createConnectedServiceSwitchDeferralQueue({
           timeoutMs: resolvePositiveIntEnv(
             process.env.HAPPIER_CONNECTED_SERVICES_TURN_DEFERRAL_TIMEOUT_MS,
@@ -3635,24 +3682,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               policy: input.policy,
               target: input.target,
               runSwitch: async () => {
-                const didPersistRestartIntent = await markSessionMarkerConnectedServiceRestartIntent({
-                  pid: input.tracked.pid,
-                  requestedAtMs: Date.now(),
-                }).catch((error) => {
-                  logger.debug('[DAEMON RUN] Failed to persist connected-service restart intent before signalling', error);
-                  return false;
-                });
-                if (!didPersistRestartIntent) {
-                  logger.warn('[DAEMON RUN] Suppressed connected-service restart signal because durable restart intent could not be persisted', {
-                    sessionId: input.sessionId,
-                    pid: input.tracked.pid,
-                    source: input.source,
-                    serviceId: input.target.serviceId,
-                    groupId: input.target.groupId,
-                    generation: input.target.generation,
-                  });
-                  return;
-                }
                 connectedServicesRestartRequestedPids.add(input.tracked.pid);
                 let ownerStillCurrent = true;
                 let missingProcessObserved = false;
@@ -4520,7 +4549,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 groupSwitchMode: restartFailure.groupSwitchResult && 'mode' in restartFailure.groupSwitchResult
                   ? restartFailure.groupSwitchResult.mode
                   : undefined,
-                credentialRefreshStatus: restartFailure.credentialRefreshResult?.status,
                 error: serializeAxiosErrorForLog(restartFailure.error),
               });
             },
@@ -4631,18 +4659,13 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             5,
             { min: 1, max: 25 },
           ),
-          store: createRecoveryIntentFileStore(join(
-            configuration.activeServerDir,
-            'connected-services',
-            'runtime-auth-recovery.json',
-          )),
           recover: handleConnectedServiceRuntimeAuthRecovery,
           gate: ({ intent }) => {
             const nowMs = Date.now();
             // Daemon-lifecycle gate: while shutting down, defer the recovery WITHOUT counting an
             // attempt (the gate runs before the attempt increment) and WITHOUT running the handler.
-            // Keep the intent waiting at its current retry time so the next healthy daemon re-drives
-            // it on hydrate. This composes with `dispose()` (which stops the timer) as defense-in-depth.
+            // Keep the live-daemon intent waiting at its current retry time; `dispose()` below stops
+            // timers during teardown and daemon restart intentionally drops the in-memory recovery.
             if (shutdownInitiated) {
               return {
                 status: 'delayed' as const,
@@ -4676,7 +4699,6 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           },
           recordDiagnostic: recordRuntimeAuthRecoveryDiagnostic,
         });
-        runtimeAuthRecoveryScheduler.hydrate();
         connectedServiceRecoverySwitchGuard = createConnectedServiceRecoverySwitchGuard({
           runtimeAuthRecovery: runtimeAuthRecoveryScheduler,
           usageLimitRecovery: inactiveUsageLimitRecoveryScheduler,
@@ -6139,9 +6161,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 const cleanupAndShutdown = async (source: 'happier-app' | 'happier-cli' | 'os-signal' | 'exception', errorMessage?: string) => {
           shutdownInitiated = true;
           connectedServiceTurnDeferralQueue.cancelAll('daemon_shutdown');
-          // Stop the runtime-auth recovery scheduler's timers so a hydrated waiting intent does not
-          // fire a switch/restart into a tearing-down daemon. Persisted `waiting` intents stay on
-          // disk so the next healthy daemon re-hydrates and re-drives them.
+          // Stop runtime-auth recovery timers so live-daemon recovery work cannot fire a
+          // switch/restart into a tearing-down daemon. Daemon restart intentionally drops these
+          // in-memory recovery intents.
           runtimeAuthRecoveryScheduler?.dispose();
           temporaryThrottleRecoveryScheduler.dispose();
           const exitCode = getDaemonShutdownExitCode(source);

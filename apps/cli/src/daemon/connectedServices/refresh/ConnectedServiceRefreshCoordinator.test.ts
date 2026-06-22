@@ -14,7 +14,10 @@ import type { Credentials } from '@/persistence';
 import type { ApiClient } from '@/api/api';
 import { logger } from '@/ui/logger';
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
-import { ConnectedServiceRefreshCoordinator } from './ConnectedServiceRefreshCoordinator';
+import {
+  classifyConnectedServiceMaterializationDiagnosticForCredentialRefresh,
+  ConnectedServiceRefreshCoordinator,
+} from './ConnectedServiceRefreshCoordinator';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '../connectedServiceChildEnvironment';
 import { normalizeMaterializationKeyForPath } from '../materialize/normalizeMaterializationKeyForPath';
 
@@ -23,6 +26,85 @@ function resolveCodexHomeForMaterialization(baseDir: string, materializationKey:
 }
 
 describe('ConnectedServiceRefreshCoordinator', () => {
+  it('keeps provider-specific materialization diagnostic codes out of the generic refresh coordinator', async () => {
+    const source = await readFile(new URL('./ConnectedServiceRefreshCoordinator.ts', import.meta.url), 'utf8');
+
+    expect(source).not.toContain('claude_subscription_');
+    expect(source).not.toContain('resolveMissingClaude');
+    expect(source).not.toContain('missing_claude_code_scope');
+  });
+
+  it('classifies materialization diagnostics without turning local runtime-home failures into provider 403', () => {
+    expect(classifyConnectedServiceMaterializationDiagnosticForCredentialRefresh({
+      code: 'claude_subscription_missing_claude_code_scope',
+      providerId: 'claude',
+      severity: 'blocking',
+      serviceId: 'claude-subscription',
+      reason: 'missing_required_scope',
+      credentialRefreshFailure: {
+        category: 'provider_403',
+        providerStatus: 403,
+        providerErrorCode: 'claude_subscription_missing_claude_code_scope',
+      },
+    })).toEqual({
+      category: 'provider_403',
+      providerStatus: 403,
+      providerErrorCode: 'claude_subscription_missing_claude_code_scope',
+    });
+
+    expect(classifyConnectedServiceMaterializationDiagnosticForCredentialRefresh({
+      code: 'claude_subscription_native_auth_materialization_failed',
+      providerId: 'claude',
+      severity: 'blocking',
+      serviceId: 'claude-subscription',
+      reason: 'credential_file_write_failed',
+    })).toEqual({
+      category: 'unknown',
+      providerErrorCode: 'claude_subscription_native_auth_materialization_failed',
+    });
+
+    expect(classifyConnectedServiceMaterializationDiagnosticForCredentialRefresh({
+      code: 'claude_subscription_native_auth_materialization_failed',
+      providerId: 'claude',
+      severity: 'blocking',
+      serviceId: 'claude-subscription',
+      reason: 'missing_access_token',
+      credentialRefreshFailure: {
+        category: 'missing_access_token',
+        providerErrorCode: 'claude_subscription_native_auth_materialization_failed',
+      },
+    })).toEqual({
+      category: 'missing_access_token',
+      providerErrorCode: 'claude_subscription_native_auth_materialization_failed',
+    });
+
+    expect(classifyConnectedServiceMaterializationDiagnosticForCredentialRefresh({
+      code: 'claude_subscription_native_auth_materialization_failed',
+      providerId: 'claude',
+      severity: 'blocking',
+      serviceId: 'claude-subscription',
+      reason: 'missing_refresh_token',
+      credentialRefreshFailure: {
+        category: 'missing_refresh_token',
+        providerErrorCode: 'claude_subscription_native_auth_materialization_failed',
+      },
+    })).toEqual({
+      category: 'missing_refresh_token',
+      providerErrorCode: 'claude_subscription_native_auth_materialization_failed',
+    });
+
+    expect(classifyConnectedServiceMaterializationDiagnosticForCredentialRefresh({
+      code: 'claude_subscription_native_auth_keychain_write_failed',
+      providerId: 'claude',
+      severity: 'blocking',
+      serviceId: 'claude-subscription',
+      reason: 'keychain_write_failed',
+    })).toEqual({
+      category: 'unknown',
+      providerErrorCode: 'claude_subscription_native_auth_keychain_write_failed',
+    });
+  });
+
   it('refreshes an expiring openai-codex credential and re-materializes for active spawn targets', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-'));
@@ -881,6 +963,360 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     );
     const rootConfig = JSON.parse(await readFile(join(stableConfigDir, '.claude.json'), 'utf8'));
     expect(rootConfig.projects?.[sessionDirectory]).toMatchObject({ hasTrustDialogAccepted: true });
+  });
+
+  it('rematerializes active Claude homes after a runtime-auth forced refresh', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-runtime-auth-remat-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-runtime-auth-remat-'));
+    const sourceHomeDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-source-home-'));
+    const sessionDirectory = await mkdtemp(join(tmpdir(), 'happier-connected-services-project-'));
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
+
+    const now = 1_000_000;
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      // Far outside the scheduled refresh window: this must still rotate and rematerialize because
+      // provider 401 proof is stronger than source-side expiry metadata.
+      expiresAt: now + 10 * 60_000,
+      oauth: {
+        accessToken: 'old-access',
+        refreshToken: 'old-refresh',
+        idToken: null,
+        scope: 'user:inference user:profile user:sessions:claude_code',
+        tokenType: 'Bearer',
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    let sealedCiphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: record,
+      randomBytes: (length) => randomBytes(length),
+    });
+    const api = {
+      getConnectedServiceCredentialSealed: vi.fn(async () => ({
+        sealed: { format: 'account_scoped_v1' as const, ciphertext: sealedCiphertext },
+        metadata: {
+          kind: 'oauth',
+          providerEmail: 'user@example.com',
+          providerAccountId: 'acct',
+          expiresAt: now + 10 * 60_000,
+        },
+      })),
+      acquireConnectedServiceRefreshLease: vi.fn(async () => ({ acquired: true, leaseUntil: now + 60_000 })),
+      registerConnectedServiceCredentialSealed: vi.fn(async (params: { sealed: { ciphertext: string } }) => {
+        sealedCiphertext = params.sealed.ciphertext;
+      }),
+      updateConnectedServiceCredentialHealth: vi.fn(async () => {}),
+    } as unknown as ApiClient;
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        access_token: 'runtime-access',
+        refresh_token: 'runtime-refresh',
+        expires_in: 3600,
+      }),
+    })) as unknown as typeof fetch);
+
+    const onAuthUpdated = vi.fn();
+    const coordinator = new ConnectedServiceRefreshCoordinator({
+      api,
+      credentials,
+      machineIdProvider: () => 'machine-1',
+      activeServerDir,
+      baseDir,
+      refreshWindowMs: 60_000,
+      refreshLeaseMs: 30_000,
+      now: () => now,
+      processEnv: { HOME: sourceHomeDir },
+      onAuthUpdated,
+    });
+
+    coordinator.registerSpawnTarget({
+      pid: 125,
+      agentId: 'claude',
+      sessionDirectory,
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: { 'claude-subscription': { source: 'connected', profileId: 'work' } },
+      },
+      materializationKey: 'session-claude-runtime-refresh',
+    });
+
+    const result = await coordinator.refreshConnectedServiceCredentialForRuntimeAuthFailure({
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+    });
+
+    expect(result.status).toBe('refreshed');
+    const stableConfigDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      'work',
+      'claude',
+      'claude-config',
+    );
+    const credential = JSON.parse(await readFile(join(stableConfigDir, '.credentials.json'), 'utf8'));
+    expect(credential.claudeAiOauth.accessToken).toBe('runtime-access');
+    expect(credential.claudeAiOauth.refreshToken).toBe('runtime-refresh');
+    expect(credential.claudeAiOauth.scopes).toEqual(['user:inference', 'user:profile', 'user:sessions:claude_code']);
+    expect(onAuthUpdated).toHaveBeenCalledWith({
+      binding: { serviceId: 'claude-subscription', profileId: 'work' },
+      affectedTargets: [expect.objectContaining({ pid: 125, agentId: 'claude' })],
+      trigger: 'refresh_triggered_restart',
+    });
+  });
+
+  it('reports runtime-auth refresh as failed when the failing active Claude home cannot be rematerialized', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-runtime-auth-remat-blocked-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-runtime-auth-remat-blocked-'));
+    const sourceHomeDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-source-home-blocked-'));
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
+
+    const now = 1_000_000;
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 10 * 60_000,
+      oauth: {
+        accessToken: 'old-access',
+        refreshToken: 'old-refresh',
+        idToken: null,
+        scope: 'user:inference user:profile user:sessions:claude_code',
+        tokenType: 'Bearer',
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    let sealedCiphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: record,
+      randomBytes: (length) => randomBytes(length),
+    });
+    const updateConnectedServiceCredentialHealth = vi.fn(async () => {});
+    const api = {
+      getConnectedServiceCredentialSealed: vi.fn(async () => ({
+        sealed: { format: 'account_scoped_v1' as const, ciphertext: sealedCiphertext },
+        metadata: {
+          kind: 'oauth',
+          providerEmail: 'user@example.com',
+          providerAccountId: 'acct',
+          expiresAt: now + 10 * 60_000,
+        },
+      })),
+      acquireConnectedServiceRefreshLease: vi.fn(async () => ({ acquired: true, leaseUntil: now + 60_000 })),
+      registerConnectedServiceCredentialSealed: vi.fn(async (params: { sealed: { ciphertext: string } }) => {
+        sealedCiphertext = params.sealed.ciphertext;
+      }),
+      updateConnectedServiceCredentialHealth,
+    } as unknown as ApiClient;
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        access_token: 'runtime-access-without-claude-code',
+        refresh_token: 'runtime-refresh',
+        // Missing user:sessions:claude_code must block active-home rematerialization.
+        scope: 'user:inference user:profile',
+        expires_in: 3600,
+      }),
+    })) as unknown as typeof fetch);
+
+    const onAuthUpdated = vi.fn();
+    const coordinator = new ConnectedServiceRefreshCoordinator({
+      api,
+      credentials,
+      machineIdProvider: () => 'machine-1',
+      activeServerDir,
+      baseDir,
+      refreshWindowMs: 60_000,
+      refreshLeaseMs: 30_000,
+      now: () => now,
+      processEnv: { HOME: sourceHomeDir },
+      onAuthUpdated,
+    });
+
+    coordinator.registerSpawnTarget({
+      pid: 125,
+      agentId: 'claude',
+      sessionId: 'sess_1',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: { 'claude-subscription': { source: 'connected', profileId: 'work' } },
+      },
+      materializationKey: 'session-claude-runtime-refresh',
+    });
+
+    const result = await coordinator.refreshConnectedServiceCredentialForRuntimeAuthFailure({
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      sessionId: 'sess_1',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'refresh_failed',
+      diagnostic: expect.objectContaining({
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+        reason: 'runtime_auth_failure',
+        status: 'refresh_failed',
+        category: 'provider_403',
+        providerStatus: 403,
+        providerErrorCode: 'claude_subscription_missing_claude_code_scope',
+      }),
+    }));
+    expect(onAuthUpdated).not.toHaveBeenCalled();
+    expect(updateConnectedServiceCredentialHealth).toHaveBeenLastCalledWith({
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      health: expect.objectContaining({
+        v: 1,
+        status: 'needs_reauth',
+        reconnectRequired: true,
+        lastRefreshFailureKind: 'provider_403',
+        providerHttpStatus: 403,
+        providerErrorCode: 'claude_subscription_missing_claude_code_scope',
+      }),
+    });
+  });
+
+  it('reports runtime-auth refresh as failed when the requested live session has no registered rematerialization target', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-runtime-auth-missing-target-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-runtime-auth-missing-target-'));
+
+    const credentials: Credentials = {
+      token: 'happy-token',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+    };
+    if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
+
+    const now = 1_000_000;
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      kind: 'oauth',
+      expiresAt: now - 1_000,
+      oauth: {
+        accessToken: 'old-access',
+        refreshToken: 'old-refresh',
+        idToken: null,
+        scope: null,
+        tokenType: 'Bearer',
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    let sealedCiphertext = sealAccountScopedBlobCiphertext({
+      kind: 'connected_service_credential',
+      material: { type: 'legacy', secret: credentials.encryption.secret },
+      payload: record,
+      randomBytes: (length) => randomBytes(length),
+    });
+    const updateConnectedServiceCredentialHealth = vi.fn(async () => {});
+    const api = {
+      getConnectedServiceCredentialSealed: vi.fn(async () => ({
+        sealed: { format: 'account_scoped_v1' as const, ciphertext: sealedCiphertext },
+        metadata: {
+          kind: 'oauth',
+          providerEmail: 'user@example.com',
+          providerAccountId: 'acct',
+          expiresAt: now - 1_000,
+        },
+      })),
+      acquireConnectedServiceRefreshLease: vi.fn(async () => ({ acquired: true, leaseUntil: now + 60_000 })),
+      registerConnectedServiceCredentialSealed: vi.fn(async (params: { sealed: { ciphertext: string } }) => {
+        sealedCiphertext = params.sealed.ciphertext;
+      }),
+      updateConnectedServiceCredentialHealth,
+    } as unknown as ApiClient;
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        access_token: 'new-access',
+        refresh_token: 'new-refresh',
+        expires_in: 3600,
+      }),
+    })) as unknown as typeof fetch);
+
+    const onAuthUpdated = vi.fn();
+    const coordinator = new ConnectedServiceRefreshCoordinator({
+      api,
+      credentials,
+      machineIdProvider: () => 'machine-1',
+      activeServerDir,
+      baseDir,
+      refreshWindowMs: 60_000,
+      refreshLeaseMs: 30_000,
+      now: () => now,
+      onAuthUpdated,
+    });
+
+    coordinator.registerSpawnTarget({
+      pid: 125,
+      agentId: 'codex',
+      sessionId: 'sess_other',
+      connectedServicesBindingsRaw: {
+        v: 1,
+        bindingsByServiceId: { 'openai-codex': { source: 'connected', profileId: 'primary' } },
+      },
+      materializationKey: 'session-codex-runtime-refresh',
+    });
+
+    const result = await coordinator.refreshConnectedServiceCredentialForRuntimeAuthFailure({
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      sessionId: 'sess_missing',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'refresh_failed',
+      diagnostic: expect.objectContaining({
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        reason: 'runtime_auth_failure',
+        status: 'refresh_failed',
+        category: 'unknown',
+        providerErrorCode: 'runtime_auth_target_not_registered',
+      }),
+    }));
+    expect(onAuthUpdated).not.toHaveBeenCalled();
+    expect(updateConnectedServiceCredentialHealth).toHaveBeenLastCalledWith({
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      health: expect.objectContaining({
+        v: 1,
+        status: 'refresh_failed_retryable',
+        reconnectRequired: false,
+        lastRefreshFailureKind: 'unknown',
+        providerErrorCode: 'runtime_auth_target_not_registered',
+      }),
+    });
   });
 
   it('does not restart affected Claude targets when external credential rematerialization is blocking', async () => {
@@ -1747,7 +2183,7 @@ describe('ConnectedServiceRefreshCoordinator', () => {
         accessToken: 'old-access',
         refreshToken: 'rt0',
         idToken: null,
-        scope: null,
+        scope: 'user:inference user:profile user:sessions:claude_code',
         tokenType: null,
         providerAccountId: 'acct',
         providerEmail: null,

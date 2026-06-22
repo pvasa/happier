@@ -3,7 +3,6 @@ import { classifyDaemonServerWorkError } from '@/daemon/serverWork/classifyDaemo
 import {
   DurableBackoffRecoveryScheduler,
   type DurableRecoveryGateResult,
-  type DurableRecoveryStore,
 } from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
 import { CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES, type ConnectedServiceUxDiagnosticV1 } from '@happier-dev/protocol';
 import { buildConnectedServiceUxDiagnostic } from '../diagnostics/connectedServiceUxDiagnostics';
@@ -101,7 +100,6 @@ type RuntimeAuthRecoverySchedulerDeps = Readonly<{
   degradedBackoffMs?: number;
   // RD-REC-15: bounded coalesced stale-profile replay budget (defaults apply).
   maxCoalescedReplays?: number;
-  store?: DurableRecoveryStore<RuntimeAuthRecoveryIntent>;
   recover: (input: Readonly<{
     sessionId: string;
     switchesThisTurn: number;
@@ -1004,7 +1002,6 @@ export class RuntimeAuthRecoveryScheduler {
       baseBackoffMs: deps.baseBackoffMs,
       maxBackoffMs: deps.maxBackoffMs,
       jitterMs: deps.jitterMs,
-      store: deps.store,
       normalizeIntent,
       getStatus: (intent) => intent.status === 'resumed_awaiting_proof' ? 'waiting' : intent.status,
       getNextRetryAtMs: (intent) => intent.nextRetryAtMs,
@@ -1339,13 +1336,9 @@ export class RuntimeAuthRecoveryScheduler {
     return this.scheduler.readForSession(sessionId);
   }
 
-  hydrate(): ReadonlyArray<RuntimeAuthRecoveryIntent> {
-    return this.scheduler.hydrate();
-  }
-
   /**
-   * Daemon-shutdown lifecycle: stop firing recovery timers. Persisted `waiting`
-   * intents stay on disk so a healthy future daemon re-hydrates and re-drives them.
+   * Daemon-shutdown lifecycle: stop firing live-daemon recovery timers so recovery
+   * work cannot switch/restart sessions while this daemon instance is tearing down.
    */
   dispose(): void {
     this.scheduler.dispose();

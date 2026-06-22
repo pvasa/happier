@@ -410,8 +410,18 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
   }
 
   if (daemonSubcommand === 'restart') {
+    const jsonRequested = args.includes('--json');
     if (args.includes('--all')) {
-      console.error('`happier daemon restart --all` is not supported yet.');
+      const message = '`happier daemon restart --all` is not supported yet.';
+      if (jsonRequested) {
+        printDaemonJson({
+          ok: false,
+          error: 'restart_all_unsupported',
+          message,
+        });
+      } else {
+        console.error(message);
+      }
       process.exit(1);
     }
 
@@ -425,9 +435,17 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
         intent: 'daemon-restart',
         owner: ownership.owner,
       });
-      console.error(message.title);
-      for (const line of message.lines) {
-        console.error(`  ${line}`);
+      if (jsonRequested) {
+        printDaemonJson({
+          ok: false,
+          error: 'owner_conflict',
+          message: flattenDaemonMessage(message.title, message.lines),
+        });
+      } else {
+        console.error(message.title);
+        for (const line of message.lines) {
+          console.error(`  ${line}`);
+        }
       }
       process.exit(1);
     }
@@ -443,15 +461,23 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
           action: 'daemon-restart',
           services: startupServiceConflict.services,
         });
-        console.error(message.title);
-        for (const line of message.lines) {
-          console.error(line);
+        if (jsonRequested) {
+          printDaemonJson({
+            ok: false,
+            error: 'installed_background_service_conflict',
+            message: flattenDaemonMessage(message.title, message.lines),
+          });
+        } else {
+          console.error(message.title);
+          for (const line of message.lines) {
+            console.error(line);
+          }
         }
         process.exit(1);
       }
     }
 
-    if (takeoverAllowed) {
+    if (takeoverAllowed && !jsonRequested) {
       const takeoverNotice = buildDaemonTakeoverNotice({ action: 'restart' });
       console.error(takeoverNotice.title);
       for (const line of takeoverNotice.lines) {
@@ -463,16 +489,36 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
     const started = await restartDaemonAndWait({ stopSessions, takeover: takeoverRequested });
 
     if (started) {
-      console.log('Daemon restarted successfully');
-      console.log(`  Relay URL: ${configuration.serverUrl}`);
-      console.log(`  Relay profile: ${configuration.activeServerId}`);
+      if (jsonRequested) {
+        printDaemonJson({
+          ok: true,
+          status: 'restarted',
+          relay: configuration.serverUrl,
+          relayId: configuration.activeServerId,
+        });
+      } else {
+        console.log('Daemon restarted successfully');
+        console.log(`  Relay URL: ${configuration.serverUrl}`);
+        console.log(`  Relay profile: ${configuration.activeServerId}`);
+      }
       process.exit(0);
     }
 
-    console.error('Failed to restart daemon');
     const latestDaemonLog = await getLatestDaemonLog().catch(() => null);
-    if (latestDaemonLog?.path) {
-      console.error(`Latest daemon log: ${latestDaemonLog.path}`);
+    if (jsonRequested) {
+      printDaemonJson({
+        ok: false,
+        error: 'restart_failed',
+        message: 'Failed to restart daemon',
+        relay: configuration.serverUrl,
+        relayId: configuration.activeServerId,
+        ...(latestDaemonLog?.path ? { latestDaemonLogPath: latestDaemonLog.path } : {}),
+      });
+    } else {
+      console.error('Failed to restart daemon');
+      if (latestDaemonLog?.path) {
+        console.error(`Latest daemon log: ${latestDaemonLog.path}`);
+      }
     }
     process.exit(1);
   }

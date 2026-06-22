@@ -8,9 +8,12 @@ import {
 import type { Metadata } from '@/api/types';
 import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import type { SessionEventMessage } from '@/api/session/sessionMessageTypes';
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
-import { projectConnectedServiceRuntimeAuthRecoveryReport } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
-import { isTemporaryRetryOwnedConnectedServiceRuntimeFailure } from '@/daemon/connectedServices/runtimeAuth/ConnectedServiceRecoveryPolicy';
+import {
+    connectedServiceRuntimeAuthRecoveryCanOwnTurnFailure,
+    projectConnectedServiceRuntimeAuthRecoveryReport,
+} from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
 import { findConnectedServiceChildSelection } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { buildNativeQuotaProfileId } from '@/daemon/connectedServices/quotas/nativeQuotaProfileId';
 import { createConnectedServiceQuotaSnapshotDeliveryOutbox } from '@/daemon/connectedServices/quotas/connectedServiceQuotaSnapshotDeliveryOutbox';
@@ -18,6 +21,7 @@ import { notifyDaemonConnectedServiceQuotaSnapshot } from '@/daemon/controlClien
 import { logger } from '@/ui/logger';
 import { resolveConfiguredClaudeConfigDir } from '../utils/resolveConfiguredClaudeConfigDir';
 
+import { resolveClaudeRuntimeAuthRetryDecision } from './claudeRuntimeAuthRetryDecision';
 import { classifyClaudeConnectedServiceRuntimeAuthFailure } from './classifyClaudeConnectedServiceRuntimeAuthFailure';
 import type { NormalizedProviderUsageLimitDetailsV1 } from './mapClaudeRateLimitEventToUsageDetails';
 
@@ -357,7 +361,7 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
         }).catch(() => undefined);
     }
     if (sidechainSourced) return;
-    if (!selection && !isTemporaryRetryOwnedConnectedServiceRuntimeFailure(classification)) return;
+    if (!selection) return;
     const recoveryReport = await reportConnectedServiceRuntimeAuthFailureToDaemon({
         sessionId: session.client.sessionId,
         switchesThisTurn: 0,
@@ -390,7 +394,7 @@ function isSubagentScopedRuntimeAuthEvidence(error: unknown): boolean {
     return typeof parentToolUseId === 'string' && parentToolUseId.trim().length > 0;
 }
 
-export async function surfaceClaudeConnectedServiceRuntimeAuthFailure(
+export async function surfaceClaudeRuntimeAuthFailure(
     session: RuntimeIssueSession,
     error: unknown,
     logPrefix: string,
@@ -400,28 +404,30 @@ export async function surfaceClaudeConnectedServiceRuntimeAuthFailure(
         findConnectedServiceChildSelection(process.env, 'claude-subscription')
         ?? findConnectedServiceChildSelection(process.env, 'anthropic')
         ?? null;
-    if (!selection) return false;
 
     const classification = classifyClaudeConnectedServiceRuntimeAuthFailure({
         error,
-        selection,
+        selection: selection ?? undefined,
     });
     if (!classification) return false;
 
-    const issue: SessionRuntimeIssueV1 = {
-        v: 1,
-        scope: 'primary_session',
-        status: 'failed',
-        code: 'auth_error',
-        source: 'auth_error',
-        occurredAt: Date.now(),
+    const retryDecision = resolveClaudeRuntimeAuthRetryDecision(error);
+    if (retryDecision.action === 'await_provider_retry') {
+        return false;
+    }
+
+    const issue = classifyPrimarySessionRuntimeIssue({
         provider: 'claude',
-        sanitizedPreview: 'Authentication failed',
-    };
-    await session.client.sessionTurnLifecycle?.failTurn?.({
-        provider: 'claude',
-        issue,
+        cause: 'auth_error',
+        error,
     });
+    if (!selection) {
+        await session.client.sessionTurnLifecycle?.failTurn?.({
+            provider: 'claude',
+            issue,
+        });
+        return true;
+    }
 
     const recoveryReport = await reportConnectedServiceRuntimeAuthFailureToDaemon({
         sessionId: session.client.sessionId,
@@ -434,6 +440,13 @@ export async function surfaceClaudeConnectedServiceRuntimeAuthFailure(
         recoveryReport,
         classification,
         logPrefix,
+    });
+    if (connectedServiceRuntimeAuthRecoveryCanOwnTurnFailure(recoveryReport)) {
+        return true;
+    }
+    await session.client.sessionTurnLifecycle?.failTurn?.({
+        provider: 'claude',
+        issue,
     });
     return true;
 }

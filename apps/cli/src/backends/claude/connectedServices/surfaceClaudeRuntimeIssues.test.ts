@@ -6,7 +6,7 @@ import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connected
 import { resetConnectedServiceRuntimeAuthFailureReportDedupeForTests } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
 
 import {
-  surfaceClaudeConnectedServiceRuntimeAuthFailure,
+  surfaceClaudeRuntimeAuthFailure,
   surfaceClaudeRateLimitRuntimeIssue,
 } from './surfaceClaudeRuntimeIssues';
 
@@ -151,7 +151,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     const sendSessionEvent = vi.fn();
     const failTurn = createClaudeFailTurnSpy();
     try {
-      const surfaced = await surfaceClaudeConnectedServiceRuntimeAuthFailure({
+      const surfaced = await surfaceClaudeRuntimeAuthFailure({
         client: {
           sessionId: 'sess_claude_sidechain_auth',
           sendSessionEvent,
@@ -183,7 +183,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     const sendSessionEvent = vi.fn();
     const failTurn = createClaudeFailTurnSpy();
     try {
-      const surfaced = await surfaceClaudeConnectedServiceRuntimeAuthFailure({
+      const surfaced = await surfaceClaudeRuntimeAuthFailure({
         client: {
           sessionId: 'sess_claude_subagent_sdk_auth',
           sendSessionEvent,
@@ -208,15 +208,56 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     }
   });
 
-  it('still surfaces parent-scoped transient 401 evidence as an auth failure (honest classification)', async () => {
+  it('lets connected-service recovery own parent-scoped 401 evidence while recovery is retryable', async () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
     const sendSessionEvent = vi.fn();
     const failTurn = createClaudeFailTurnSpy();
     try {
-      const surfaced = await surfaceClaudeConnectedServiceRuntimeAuthFailure({
+      const surfaced = await surfaceClaudeRuntimeAuthFailure({
         client: {
           sessionId: 'sess_claude_parent_auth',
+          sendSessionEvent,
+          sessionTurnLifecycle: { failTurn },
+        },
+      } as any, {
+        type: 'assistant',
+        isApiErrorMessage: true,
+        apiErrorStatus: 401,
+        error: 'authentication_failed',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Please run /login · API Error: 401 Invalid authentication credentials' }],
+        },
+      }, '[claude-test]');
+
+      expect(surfaced).toBe(true);
+      expect(failTurn).not.toHaveBeenCalled();
+      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalled();
+    } finally {
+      restoreClaudeSelectionEnv(previousSelectionEnv);
+    }
+  });
+
+  it('surfaces parent-scoped 401 evidence when connected-service recovery requires user action', async () => {
+    const previousSelectionEnv = installClaudeSelectionEnv();
+    mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce({
+      ok: true,
+      result: {
+        status: 'recovery_action_required',
+        action: {
+          kind: 'reconnect_profile',
+          serviceId: 'claude-subscription',
+          profileId: 'claude-main',
+        },
+      },
+    });
+    const sendSessionEvent = vi.fn();
+    const failTurn = createClaudeFailTurnSpy();
+    try {
+      const surfaced = await surfaceClaudeRuntimeAuthFailure({
+        client: {
+          sessionId: 'sess_claude_parent_auth_action_required',
           sendSessionEvent,
           sessionTurnLifecycle: { failTurn },
         },
@@ -242,13 +283,82 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     }
   });
 
-  it('does not re-emit daemon typed runtime-auth recovery projection for Claude auth failures', async () => {
+  it('lets Claude SDK provider-owned native 401 retries continue without surfacing an auth failure', async () => {
+    const previousSelectionEnv = process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
+    delete process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
+    const sendSessionEvent = vi.fn();
+    const failTurn = createClaudeFailTurnSpy();
+    try {
+      const surfaced = await surfaceClaudeRuntimeAuthFailure({
+        client: {
+          sessionId: 'sess_claude_native_oauth_provider_retrying',
+          sendSessionEvent,
+          sessionTurnLifecycle: { failTurn },
+        },
+      } as any, {
+        type: 'system',
+        subtype: 'api_error',
+        attempt: 1,
+        max_retries: 11,
+        retry_delay_ms: 1_000,
+        error_status: 401,
+        error: 'Connection error.',
+      }, '[claude-test]');
+
+      expect(surfaced).toBe(false);
+      expect(failTurn).not.toHaveBeenCalled();
+      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).not.toHaveBeenCalled();
+      expect(sendSessionEvent).not.toHaveBeenCalled();
+    } finally {
+      restoreClaudeSelectionEnv(previousSelectionEnv);
+    }
+  });
+
+  it('surfaces native Claude OAuth SDK 401 evidence without connected-service recovery', async () => {
+    const previousSelectionEnv = process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
+    delete process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
+    const sendSessionEvent = vi.fn();
+    const failTurn = createClaudeFailTurnSpy();
+    try {
+      const surfaced = await surfaceClaudeRuntimeAuthFailure({
+        client: {
+          sessionId: 'sess_claude_native_oauth_auth',
+          sendSessionEvent,
+          sessionTurnLifecycle: { failTurn },
+        },
+      } as any, {
+        type: 'system',
+        subtype: 'api_error',
+        attempt: 11,
+        max_retries: 11,
+        retry_delay_ms: 1_000,
+        error_status: 401,
+        error: 'Connection error.',
+      }, '[claude-test]');
+
+      expect(surfaced).toBe(true);
+      expect(failTurn).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'claude',
+        issue: expect.objectContaining({
+          code: 'auth_error',
+          source: 'auth_error',
+          provider: 'claude',
+        }),
+      }));
+      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).not.toHaveBeenCalled();
+      expect(sendSessionEvent).not.toHaveBeenCalled();
+    } finally {
+      restoreClaudeSelectionEnv(previousSelectionEnv);
+    }
+  });
+
+  it('does not re-emit daemon typed runtime-auth recovery projection for retryable Claude auth recovery', async () => {
     const previousSelectionEnv = installClaudeSelectionEnv();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
     const sendSessionEvent = vi.fn();
     const failTurn = createClaudeFailTurnSpy();
     try {
-      await surfaceClaudeConnectedServiceRuntimeAuthFailure({
+      await surfaceClaudeRuntimeAuthFailure({
         client: {
           sessionId: 'sess_claude_1',
           sendSessionEvent,
@@ -256,15 +366,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
         },
       } as any, { status: 401, message: 'OAuth token has expired' }, '[claude-test]');
 
-      expect(failTurn).toHaveBeenCalledWith({
-        provider: 'claude',
-        issue: expect.objectContaining({
-          code: 'auth_error',
-          source: 'auth_error',
-          provider: 'claude',
-          sanitizedPreview: expect.any(String),
-        }),
-      });
+      expect(failTurn).not.toHaveBeenCalled();
       expect(sendSessionEvent).not.toHaveBeenCalled();
     } finally {
       restoreClaudeSelectionEnv(previousSelectionEnv);
@@ -524,7 +626,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     }
   });
 
-  it('reports native Claude temporary throttles so the daemon can arm retry recovery', async () => {
+  it('surfaces native Claude temporary throttles without connected-service recovery when no connected selection exists', async () => {
     const previousSelectionEnv = process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
     delete process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
     const previousHome = process.env.HOME;
@@ -565,18 +667,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
       });
       const issue = (failTurn.mock.calls[0]?.[0] as { issue?: Record<string, unknown> } | undefined)?.issue;
       expect(issue).not.toHaveProperty('usageLimit');
-      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).toHaveBeenCalledWith({
-        sessionId: 'sess_native_claude_throttle',
-        switchesThisTurn: 0,
-        classification: expect.objectContaining({
-          kind: 'temporary_throttle',
-          serviceId: 'claude-subscription',
-          profileId: null,
-          groupId: null,
-          retryAfterMs: 1_250,
-          providerLimitId: 'transient',
-        }),
-      }, expect.anything());
+      expect(mockNotifyDaemonConnectedServiceRuntimeAuthFailure).not.toHaveBeenCalled();
     } finally {
       if (previousSelectionEnv === undefined) {
         delete process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
@@ -599,7 +690,7 @@ describe('surfaceClaudeRuntimeIssues runtime-auth projection', () => {
     const sendSessionEvent = vi.fn();
     const failTurn = createClaudeFailTurnSpy();
     try {
-      await surfaceClaudeConnectedServiceRuntimeAuthFailure({
+      await surfaceClaudeRuntimeAuthFailure({
         client: {
           sessionId: 'sess_claude_1',
           sendSessionEvent,

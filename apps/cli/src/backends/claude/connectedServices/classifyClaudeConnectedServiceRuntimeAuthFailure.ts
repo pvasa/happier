@@ -44,7 +44,7 @@ function collectEvidenceText(value: unknown, output: string[]): void {
 function collectStatuses(value: unknown, output: number[]): void {
     const record = readRecord(value);
     if (!record) return;
-    for (const key of ['api_error_status', 'status', 'statusCode', 'status_code']) {
+    for (const key of ['apiErrorStatus', 'api_error_status', 'errorStatus', 'error_status', 'status', 'statusCode', 'status_code']) {
         const status = readStatus(record[key]);
         if (status !== null) output.push(status);
     }

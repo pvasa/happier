@@ -75,6 +75,36 @@ describe('createClaudeUnifiedPromptInjector', () => {
     });
   });
 
+  it('scales the terminal write timeout for large prompts', async () => {
+    const injectUserPrompt = vi.fn().mockResolvedValue({
+      status: 'injected',
+      at: 123,
+      bytesWritten: 128_000,
+    });
+    const injector = createClaudeUnifiedPromptInjector({
+      inputInjection: {
+        hostKind: 'tmux',
+        injectUserPrompt,
+      },
+      createNonce: () => 'nonce-1',
+    });
+
+    await expect(
+      injector.injectPrompt({
+        message: 'x'.repeat(128_000),
+        origin: { kind: 'ui_pending', clientId: 'client-1' },
+      }),
+    ).resolves.toMatchObject({ status: 'injected' });
+
+    expect(injectUserPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      scheduling: expect.objectContaining({
+        timeoutMs: expect.any(Number),
+      }),
+    }));
+    const input = injectUserPrompt.mock.calls[0]?.[0];
+    expect(input?.scheduling.timeoutMs).toBeGreaterThan(15_000);
+  });
+
   it('rejects terminal control bytes before prompt text reaches the terminal injector', async () => {
     const unsafePrompts = [
       ['nul', 'alpha\x00beta'],

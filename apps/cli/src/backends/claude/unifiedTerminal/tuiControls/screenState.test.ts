@@ -229,6 +229,17 @@ describe('parseClaudeScreenState — empty-composer placeholder hint (2.1.174 fr
     expect(resolveClaudeScreenInFlightSteerVeto(state)).toBeNull();
   });
 
+  it('treats a segmented dim placeholder as an EMPTY composer even when spaces reset styling', () => {
+    const segmentedDim = CLAUDE_2_1_174_FRESH_PLACEHOLDER.replace(
+      '❯ Try "refactor <filepath>"',
+      '❯ \x1b[2mstart\x1b[0m \x1b[2mthe\x1b[0m \x1b[2mdev\x1b[0m \x1b[2mserver\x1b[0m \x1b[2mso\x1b[0m \x1b[2mI\x1b[0m \x1b[2mcan\x1b[0m \x1b[2msee\x1b[0m \x1b[2mit\x1b[0m',
+    );
+    const state = parseClaudeScreenState(segmentedDim, { cursor: { x: 2, y: 6 } });
+    expect(state.composerContent).toBe('');
+    expect(state.userDraftPresent).toBe(false);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBeNull();
+  });
+
   it('still treats REAL typed text starting with Try but not quote-wrapped as a draft', () => {
     const typed = CLAUDE_2_1_174_FRESH_PLACEHOLDER.replace(
       '❯ Try "refactor <filepath>"',

@@ -15,7 +15,7 @@ const claudeConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCrede
   providerId: 'claude',
   serviceIds: AGENTS_CORE.claude.connectedServices.supportedServiceIds,
   spawnPreflightOauthRefresh: { mode: 'force' },
-  refreshedCredentialApplication: { mode: 'restart_required' },
+  refreshedCredentialApplication: { mode: 'no_restart_required' },
   predictiveSoftSwitch: { mode: 'unsupported', liveSessionRequirement: { kind: 'none' } },
   sameAccountFanoutStrategy: 'shared_group_auth_surface',
   runtimeAuthApply: { directLiveHotAuth: 'unsupported' },

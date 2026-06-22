@@ -1,6 +1,8 @@
 import type { ConnectedServiceId } from '@happier-dev/protocol';
 
+import { resolveRuntimeAccountIdentityFanoutMatch } from './resolveRuntimeAccountIdentityFanoutMatch';
 import type {
+  ReconciledRuntimeAccountIdentityEntry,
   RuntimeAccountIdentityEntry,
   RuntimeAccountIdentityProbeResult,
   RuntimeAccountIdentityRecordInput,
@@ -14,13 +16,6 @@ export type RuntimeAccountIdentityReader = (input: Readonly<{
   profileId: string;
   expectedGroupGeneration: number | null;
 }>) => Promise<RuntimeAccountIdentityProbeResult>;
-
-export type ReconciledRuntimeAccountIdentityEntry = RuntimeAccountIdentityEntry & Readonly<{
-  runtime?: Readonly<{
-    safeToApply?: boolean;
-    inProviderTurn?: boolean;
-  }>;
-}>;
 
 type SameAccountFanoutDiagnostic = Readonly<{
   event: 'quota_work_deferred' | 'quota_work_suppressed';
@@ -38,17 +33,6 @@ function recordSuppression(
     phase: 'same_account_fanout',
     reason,
   });
-}
-
-function readNonEmptyString(value: string | null | undefined): string | null {
-  const trimmed = typeof value === 'string' ? value.trim() : '';
-  return trimmed ? trimmed : null;
-}
-
-function readGeneration(value: number | null | undefined): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-    ? Math.trunc(value)
-    : null;
 }
 
 export async function reconcileIndexedSameAccountFanoutCandidates(input: Readonly<{
@@ -83,58 +67,25 @@ export async function reconcileIndexedSameAccountFanoutCandidates(input: Readonl
       continue;
     }
 
-    const strategy = result.status === 'verified' ? result.strategy ?? 'provider_account_id' : null;
-    const providerAccountId = result.status === 'verified' ? readNonEmptyString(result.providerAccountId) : null;
-    if (
-      result.status !== 'verified'
-      || result.proofStrength !== 'exact'
-      || strategy !== 'provider_account_id'
-      || !providerAccountId
-    ) {
-      recordSuppression(input.recordDiagnostic, 'runtime_identity_probe_missing_exact_identity');
+    const match = resolveRuntimeAccountIdentityFanoutMatch({
+      strategy: 'provider_account_id',
+      serviceId: input.serviceId,
+      groupId: input.groupId,
+      providerAccountId: input.providerAccountId,
+      candidate,
+      result,
+      observedAtMs: input.now(),
+    });
+    if (match.status === 'suppressed') {
+      recordSuppression(input.recordDiagnostic, match.reason);
       input.invalidateRuntimeAccountIdentity(candidate.sessionId);
       continue;
     }
-    if (providerAccountId !== input.providerAccountId) {
-      recordSuppression(input.recordDiagnostic, 'runtime_identity_probe_account_mismatch');
-      input.invalidateRuntimeAccountIdentity(candidate.sessionId);
-      continue;
-    }
-
-    const runtimeProfileId = readNonEmptyString(result.profileId);
-    const runtimeGroupId = readNonEmptyString(result.groupId);
-    const runtimeGroupGeneration = readGeneration(result.groupGeneration);
-    if (runtimeGroupId && runtimeGroupId !== input.groupId) {
-      recordSuppression(input.recordDiagnostic, 'runtime_identity_probe_account_mismatch');
-      input.invalidateRuntimeAccountIdentity(candidate.sessionId);
-      continue;
-    }
-    const nextProfileId = runtimeProfileId ?? candidate.profileId;
-    const nextGroupId = runtimeGroupId ?? candidate.groupId ?? input.groupId;
-    const nextGroupGeneration = runtimeGroupGeneration ?? candidate.groupGeneration;
-    if (
-      nextProfileId !== candidate.profileId
-      || nextGroupId !== (candidate.groupId ?? input.groupId)
-      || nextGroupGeneration !== candidate.groupGeneration
-    ) {
+    if (match.staleExpectedStateReconciled) {
       recordSuppression(input.recordDiagnostic, 'runtime_identity_probe_stale_expected_state_reconciled');
     }
-
-    const entry: ReconciledRuntimeAccountIdentityEntry = {
-      ...candidate,
-      groupId: nextGroupId,
-      profileId: nextProfileId,
-      providerAccountId,
-      accountLabel: typeof result.accountLabel === 'string' && result.accountLabel.trim()
-        ? result.accountLabel.trim()
-        : candidate.accountLabel,
-      observedAtMs: input.now(),
-      source: result.source ?? 'runtime_identity_probe',
-      groupGeneration: nextGroupGeneration,
-      ...(result.runtime ? { runtime: result.runtime } : {}),
-    };
-    input.recordRuntimeAccountIdentity(entry);
-    reconciled.push(entry);
+    input.recordRuntimeAccountIdentity(match.entry);
+    reconciled.push(match.entry);
   }
   return reconciled;
 }

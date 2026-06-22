@@ -107,13 +107,6 @@ function findPendingWindowsTerminalTrackedSession(params: Readonly<{
   return matches.length === 1 ? matches[0] : null;
 }
 
-type ConnectedServiceRestartIntentPreservationDecision = (input: Readonly<{
-  trackedSession: TrackedSession | null;
-  pid: number;
-  sessionId: string;
-  metadata: Metadata;
-}>) => boolean;
-
 export function createOnHappySessionWebhook(params: Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
   pidToAwaiter: Map<number, (session: TrackedSession) => void>;
@@ -122,7 +115,6 @@ export function createOnHappySessionWebhook(params: Readonly<{
   getParentPidFn?: (pid: number) => number | null;
   readCredentialsFn?: typeof readCredentials;
   onTrackedSessionReported?: (tracked: TrackedSession) => Promise<void> | void;
-  shouldPreserveConnectedServiceRestartIntent?: ConnectedServiceRestartIntentPreservationDecision;
 }>): (sessionId: string, sessionMetadata: Metadata) => void {
   const {
     pidToTrackedSession,
@@ -132,7 +124,6 @@ export function createOnHappySessionWebhook(params: Readonly<{
     getParentPidFn = getParentPid,
     readCredentialsFn = readCredentials,
     onTrackedSessionReported,
-    shouldPreserveConnectedServiceRestartIntent,
   } = params;
 
   return (sessionId: string, sessionMetadata: Metadata) => {
@@ -362,27 +353,16 @@ export function createOnHappySessionWebhook(params: Readonly<{
             storedCredentials ? { encryptionMaterial: storedCredentials.encryption } : undefined,
           )
           : null;
-      const preserveConnectedServiceRestartIntent =
-        shouldPreserveConnectedServiceRestartIntent?.({
-          trackedSession: trackedForPid,
-          pid,
-          sessionId,
-          metadata: normalizedMetadata,
-        }) === true;
-
-      await writeSessionMarkerFn(
-        {
-          pid,
-          happySessionId: sessionId,
-          startedBy: normalizedMetadata.startedBy ?? 'terminal',
-          cwd: normalizedPath,
-          processCommandHash,
-          processCommand,
-          metadata: normalizedMetadata,
-          ...(respawn ? { respawn } : {}),
-        },
-        { preserveConnectedServiceRestartIntent },
-      );
+      await writeSessionMarkerFn({
+        pid,
+        happySessionId: sessionId,
+        startedBy: normalizedMetadata.startedBy ?? 'terminal',
+        cwd: normalizedPath,
+        processCommandHash,
+        processCommand,
+        metadata: normalizedMetadata,
+        ...(respawn ? { respawn } : {}),
+      });
     })().catch((e) => {
       logger.debug('[DAEMON RUN] Failed to write session marker', e);
     });

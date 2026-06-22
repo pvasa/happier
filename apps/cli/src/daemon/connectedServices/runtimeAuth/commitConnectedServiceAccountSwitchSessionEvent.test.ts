@@ -327,6 +327,10 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
       expect.stringMatching(/\/v2\/sessions\/sess-attempt\/messages$/),
       expect.objectContaining({
         localId: expect.stringMatching(/^connected-service-account-switch-attempt:/),
+        attentionImpact: {
+          affectsUnread: false,
+          affectsMeaningfulActivity: false,
+        },
         content: expect.objectContaining({
           t: 'plain',
           v: expect.objectContaining({
@@ -427,6 +431,10 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
     expect(postSpy).toHaveBeenCalledWith(
       expect.stringMatching(/\/v2\/sessions\/sess-attempt\/messages$/),
       expect.objectContaining({
+        attentionImpact: {
+          affectsUnread: false,
+          affectsMeaningfulActivity: false,
+        },
         content: expect.objectContaining({
           t: 'plain',
           v: expect.objectContaining({
@@ -982,6 +990,10 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
       expect.stringMatching(/\/v2\/sessions\/sess-4\/messages$/),
       expect.objectContaining({
         localId: 'connected-service-account-switch:openai-codex:codex-main:8',
+        attentionImpact: {
+          affectsUnread: false,
+          affectsMeaningfulActivity: false,
+        },
         content: expect.objectContaining({
           t: 'plain',
           v: expect.objectContaining({
@@ -1049,6 +1061,10 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
       expect.stringMatching(/\/v2\/sessions\/sess-deferral\/messages$/),
       expect.objectContaining({
         localId: expect.stringMatching(/^connected-service-account-switch-deferral:defer_until_turn_boundary:/),
+        attentionImpact: {
+          affectsUnread: false,
+          affectsMeaningfulActivity: false,
+        },
         content: expect.objectContaining({
           t: 'plain',
           v: expect.objectContaining({

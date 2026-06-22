@@ -430,7 +430,7 @@ describe('sessionRegistry', () => {
     await expect(listSessionMarkers()).resolves.toHaveLength(0);
   });
 
-  it('promotes connected-service restart intent from a wrapper marker to an existing runner marker', async () => {
+  it('promotes a connected-service restart intent from a wrapper marker to an existing runner marker', async () => {
     const registry = await import('./sessionRegistry');
     const {
       listSessionMarkers,
@@ -468,12 +468,15 @@ describe('sessionRegistry', () => {
         cwd: '/tmp/runner',
         processCommandHash: 'c'.repeat(64),
         metadata: { owner: 'runner' },
-        connectedServiceRestartIntent: {
-          v: 1,
-          requestedAtMs: 44_000,
-        },
       }),
     ]));
+    const runnerMarker = (await listSessionMarkers()).find((marker) => marker.pid === 9994);
+    expect(runnerMarker).toMatchObject({
+      connectedServiceRestartIntent: {
+        v: 1,
+        requestedAtMs: 44_000,
+      },
+    });
   });
 
   it('writes valid JSON payload shape to disk', async () => {

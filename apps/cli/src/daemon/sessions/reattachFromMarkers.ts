@@ -1,7 +1,11 @@
 import { logger } from '@/ui/logger';
 import type { Credentials } from '@/persistence';
 import { parseOptionalBooleanEnv } from '@happier-dev/protocol';
-import { AGENT_IDS, supportsAgentTerminalPromptInjection, type AgentId } from '@happier-dev/agents';
+import {
+  AGENT_IDS,
+  supportsAgentTerminalPromptInjection,
+  type AgentId,
+} from '@happier-dev/agents';
 import { resolveCatalogAgentIdForCliSubcommand } from '@/backends/catalog';
 import { buildSessionRunnerRespawnDescriptorV1FromSpawnOptions } from '../processSupervision/sessionRunnerRespawnDescriptor';
 import {
@@ -365,25 +369,9 @@ type OrphanedDeadDaemonSession = Readonly<{
   pid: number;
 }>;
 
-export type ReattachedConnectedServiceRestartIntent =
-  | Readonly<{
-    kind: 'live';
-    sessionId: string;
-    pid: number;
-    requestedAtMs: number;
-  }>
-  | Readonly<{
-    kind: 'dead';
-    sessionId: string;
-    pid: number;
-    requestedAtMs: number;
-    spawnOptions: SpawnSessionOptions;
-    vendorResumeId: string;
-  }>;
-
 export type ReattachTrackedSessionsFromMarkersResult = Readonly<{
   orphanedDeadDaemonSessions: ReadonlyArray<OrphanedDeadDaemonSession>;
-  connectedServiceRestartIntents: ReadonlyArray<ReattachedConnectedServiceRestartIntent>;
+  connectedServiceRestartIntents: ReadonlyArray<never>;
 }>;
 
 export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
@@ -407,15 +395,6 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
         aliveMarkers.push(marker);
       } catch {
         const sessionId = normalizeSessionId(marker.happySessionId);
-        const restartIntent = readConnectedServiceRestartIntent(marker);
-        if (marker.startedBy === 'daemon' && sessionId && restartIntent) {
-          orphanedDeadDaemonSessions.push({
-            sessionId,
-            pid: marker.pid,
-          });
-          await removeSessionMarker(marker.pid);
-          continue;
-        }
         if (marker.startedBy === 'daemon' && sessionId) {
           orphanedDeadDaemonSessions.push({
             sessionId,
@@ -512,7 +491,8 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
         .map((sessionId) => sessionId.trim()),
     );
     for (const marker of aliveMarkers) {
-      if (!readConnectedServiceRestartIntent(marker)) continue;
+      const restartIntent = readConnectedServiceRestartIntent(marker);
+      if (!restartIntent) continue;
       await clearSessionMarkerConnectedServiceRestartIntent(marker.pid).catch((error) => {
         logger.debug('[DAEMON RUN] Failed to clear stale connected-service restart intent during startup reattach reconciliation', error);
       });
@@ -543,7 +523,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
       new Map(
         orphanedDeadDaemonSessions
           .filter((session) => !recoveredLiveSessionIds.has(session.sessionId))
-          .map((session) => [session.sessionId, session] as const),
+        .map((session) => [session.sessionId, session] as const),
       ).values(),
     ),
     connectedServiceRestartIntents: [],

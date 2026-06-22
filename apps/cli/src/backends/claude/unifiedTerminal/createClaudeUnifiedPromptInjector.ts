@@ -5,9 +5,9 @@ import type {
   TerminalInputInjectionV1,
 } from '@/agent/runtime/terminal/TerminalInputInjectionV1';
 import { hasMultilinePayload } from '@/agent/runtime/terminal/injection/bracketedPaste';
+import { resolveTerminalPromptWriteTimeoutMs } from '@/agent/runtime/terminal/injection/promptWriteTimeout';
 import { prepareTerminalPromptTextForInjection } from '@/agent/runtime/terminal/injection/promptTextSafety';
 import {
-  TERMINAL_INPUT_MAX_WAIT_MS,
   TERMINAL_INPUT_QUIET_PERIOD_MS,
 } from '@/agent/runtime/terminal/injection/arbiter';
 
@@ -193,7 +193,7 @@ export function createClaudeUnifiedPromptInjector<Mode = unknown>(opts: Readonly
         // adapter-level quiet-screen deferral must be skipped for them.
         scheduling: {
           ...(inFlightSteer ? {} : { deferredUntilQuietMs: TERMINAL_INPUT_QUIET_PERIOD_MS }),
-          timeoutMs: TERMINAL_INPUT_MAX_WAIT_MS,
+          timeoutMs: resolveTerminalPromptWriteTimeoutMs(text),
         },
       } as const;
       const result = await opts.inputInjection.injectUserPrompt(input);

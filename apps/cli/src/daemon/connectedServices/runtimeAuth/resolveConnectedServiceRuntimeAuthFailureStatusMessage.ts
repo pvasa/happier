@@ -53,8 +53,8 @@ export function resolveConnectedServiceRuntimeAuthFailureStatusMessage(
         'Connected-service credential refreshed; restarting session.',
       )
       : toStatusNote(
-        'credential_refreshed_restart_maybe_required',
-        'Connected-service credential refreshed; restart may be required.',
+        'credential_refreshed_awaiting_provider_outcome',
+        'Connected-service credential refreshed; waiting for provider confirmation.',
       );
   }
   if (outerResult?.status === 'recovery_action_required') {

@@ -93,13 +93,46 @@ function diagnosticCodeForHealth(health: ClaudeCodeCredentialHealth): string {
   }
 }
 
+function credentialRefreshFailureForHealth(
+  health: ClaudeCodeCredentialHealth,
+): ConnectedServicesMaterializationDiagnostic['credentialRefreshFailure'] {
+  switch (health.status) {
+    case 'missing_required_scope':
+      return {
+        category: 'provider_403',
+        providerStatus: 403,
+        providerErrorCode: 'claude_subscription_missing_claude_code_scope',
+      };
+    case 'unsupported_credential_kind':
+      return {
+        category: 'missing_refresh_token',
+        providerErrorCode: 'claude_subscription_setup_token_not_supported_for_unified',
+      };
+    case 'missing_access_token':
+      return {
+        category: 'missing_access_token',
+        providerErrorCode: 'claude_subscription_native_auth_materialization_failed',
+      };
+    case 'missing_refresh_token':
+      return {
+        category: 'missing_refresh_token',
+        providerErrorCode: 'claude_subscription_native_auth_materialization_failed',
+      };
+    case 'unsupported_service':
+    case 'ok':
+      return undefined;
+  }
+}
+
 function diagnosticForHealth(health: ClaudeCodeCredentialHealth): ConnectedServicesMaterializationDiagnostic {
+  const credentialRefreshFailure = credentialRefreshFailureForHealth(health);
   return {
     code: diagnosticCodeForHealth(health),
     providerId: 'claude',
     severity: 'blocking',
     serviceId: 'claude-subscription',
     reason: health.status,
+    ...(credentialRefreshFailure ? { credentialRefreshFailure } : {}),
     ...(health.missingScopes.length > 0 ? { entryName: health.missingScopes.join(' ') } : {}),
   };
 }

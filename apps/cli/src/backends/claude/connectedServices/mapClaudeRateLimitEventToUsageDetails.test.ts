@@ -174,6 +174,27 @@ describe('mapClaudeRateLimitEventToUsageDetails', () => {
     });
   });
 
+  it('maps synthetic Claude assistant API-error rate-limit records that report 429 via error_status', () => {
+    expect(mapClaudeRateLimitEventToUsageDetails({
+      type: 'assistant',
+      uuid: 'api-error-assistant-1',
+      isApiErrorMessage: true,
+      error: {
+        type: 'api_error',
+        message: 'Connection error.',
+        error_status: 429,
+        reset_at: '2026-05-17T12:00:00.000Z',
+      },
+    })).toMatchObject({
+      v: 1,
+      resetAtMs: Date.parse('2026-05-17T12:00:00.000Z'),
+      retryAfterMs: null,
+      quotaScope: 'account',
+      recoverability: 'wait',
+      providerLimitId: 'rate_limit',
+    });
+  });
+
   it('marks sidechain-sourced api-error rows so consumers can keep them out of turn failure and recovery (FIX-3)', () => {
     // Subagent transcript rows are imported into the parent stream with isSidechain:true. A
     // sidechain limit is still real account-level evidence (quota snapshots may consume it),
