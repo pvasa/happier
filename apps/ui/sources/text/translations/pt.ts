@@ -2695,6 +2695,7 @@ export const pt: TranslationStructure = {
       },
     },
     account: {
+      refreshA11y: "Atualizar uso e limites",
       usageCaption: "Uso",
       resetsCaption: "Redefinições de cota",
       usedDetail: ({ used, limit }: { used: string; limit: string }) => `${used}/${limit} usado`,

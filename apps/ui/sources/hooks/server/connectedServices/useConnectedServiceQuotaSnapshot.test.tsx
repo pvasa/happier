@@ -33,6 +33,7 @@ const {
   requestConnectedServiceQuotaSnapshotRefreshSpy,
   requestConnectedServiceQuotaSnapshotRefreshV3Spy,
   machineState,
+  consumeQuotaRecoveryCreditSpy,
 } = vi.hoisted(() => ({
   fetchAccountEncryptionModeSpy: vi.fn<
     (...args: Parameters<typeof fetchAccountEncryptionMode>) => ReturnType<typeof fetchAccountEncryptionMode>
@@ -50,6 +51,7 @@ const {
     (...args: Parameters<typeof requestConnectedServiceQuotaSnapshotRefreshV3>) => ReturnType<typeof requestConnectedServiceQuotaSnapshotRefreshV3>
   >(async () => false),
   machineState: { machines: [{ id: 'machine-1', active: true }] },
+  consumeQuotaRecoveryCreditSpy: vi.fn(async () => ({ ok: true, snapshot: null })),
 }));
 vi.mock('@/sync/api/account/apiAccountEncryptionMode', () => ({
   fetchAccountEncryptionMode: fetchAccountEncryptionModeSpy,
@@ -66,6 +68,9 @@ vi.mock('@/sync/domains/state/storage', async () => {
   const actual = await vi.importActual<typeof import('@/sync/domains/state/storage')>('@/sync/domains/state/storage');
   return { ...actual, useAllMachines: () => machineState.machines };
 });
+vi.mock('@/sync/ops/connectedServiceQuotaRecoveryCredits', () => ({
+  connectedServiceQuotaRecoveryCreditConsume: consumeQuotaRecoveryCreditSpy,
+}));
 
 // Reactive settings boundary: the apply spy persists to a fixture that the
 // mocked `useSetting` reads back, so the hook's pin-ownership round-trips
@@ -98,7 +103,12 @@ function createDeferredAccountMode() {
   return { promise, resolve } as const;
 }
 
-function snapshotFor(profileId: string, fetchedAt: number, planLabel: string | null = null) {
+function snapshotFor(
+  profileId: string,
+  fetchedAt: number,
+  planLabel: string | null = null,
+  overrides: Record<string, unknown> = {},
+) {
   return ConnectedServiceQuotaSnapshotV1Schema.parse({
     v: 1,
     serviceId: 'anthropic',
@@ -108,6 +118,7 @@ function snapshotFor(profileId: string, fetchedAt: number, planLabel: string | n
     planLabel,
     accountLabel: null,
     meters: [],
+    ...overrides,
   });
 }
 
@@ -131,6 +142,7 @@ describe('useConnectedServiceQuotaSnapshot', () => {
     getConnectedServiceQuotaSnapshotSealedSpy.mockResolvedValue(null);
     requestConnectedServiceQuotaSnapshotRefreshSpy.mockResolvedValue(true);
     requestConnectedServiceQuotaSnapshotRefreshV3Spy.mockResolvedValue(false);
+    consumeQuotaRecoveryCreditSpy.mockResolvedValue({ ok: true, snapshot: null });
     machineState.machines = [{ id: 'machine-1', active: true }];
   });
 
@@ -315,5 +327,35 @@ describe('useConnectedServiceQuotaSnapshot', () => {
 
     await hook.rerender();
     expect(hook.getCurrent().pinnedMeterIds).toEqual([]);
+  });
+
+  it('clears transient recovery-credit action errors after a successful manual refresh', async () => {
+    fetchAccountEncryptionModeSpy.mockResolvedValue({ mode: 'plain', updatedAt: 0 });
+    const recoveryCredits = {
+      kind: 'usage_limit_resets',
+      availableCount: 1,
+      totalCount: 1,
+      credits: [{
+        kind: 'usage_limit_reset',
+        status: 'available',
+        providerCreditId: 'pc-1',
+      }],
+    };
+    getConnectedServiceQuotaSnapshotPlainSpy
+      .mockResolvedValueOnce(snapshotFor('work', 1, null, { recoveryCredits }))
+      .mockResolvedValue(snapshotFor('work', 2, null, { recoveryCredits }));
+    requestConnectedServiceQuotaSnapshotRefreshV3Spy.mockResolvedValue(true);
+    machineState.machines = [];
+
+    const hook = await mountHook({ serviceId: 'anthropic', profileId: 'work' });
+    await act(async () => { await hook.getCurrent().consumeRecoveryCredit('pc-1'); });
+    expect(hook.getCurrent().error).toBeTruthy();
+
+    machineState.machines = [{ id: 'machine-1', active: true }];
+    await hook.rerender();
+    await act(async () => { await hook.getCurrent().refresh(); });
+    await flushHookEffects({ turns: 3 });
+
+    expect(hook.getCurrent().error).toBeNull();
   });
 });

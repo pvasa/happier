@@ -116,6 +116,9 @@ function buildQuotaView(hook: UseConnectedServiceQuotaSnapshotResult): AccountBl
         loading: hook.loading,
         hasSnapshot: snapshot != null,
         isStale: hook.isStale,
+        isRefreshing: hook.isRefreshing,
+        error: hook.error,
+        refresh: hook.refresh,
         planLabel: snapshot?.planLabel ?? null,
         usageRows,
         capacityPct,
@@ -125,6 +128,7 @@ function buildQuotaView(hook: UseConnectedServiceQuotaSnapshotResult): AccountBl
         togglePinnedMeter: hook.togglePinnedMeter,
         consumeRecoveryCredit: hook.consumeRecoveryCredit,
         consumeRecoveryCreditPending: hook.consumeRecoveryCreditPending,
+        consumeRecoveryCreditPendingTarget: hook.consumeRecoveryCreditPendingTarget,
         // A reset can only be consumed when a target machine is resolved.
         canConsume: hook.recoveryCreditMachineId != null,
     };

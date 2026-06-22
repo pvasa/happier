@@ -32,6 +32,8 @@ export type UseConnectedServiceQuotaSnapshotResult = Readonly<{
     nowMs: number;
     recoveryCreditSummary: ConnectedServiceQuotaRecoveryCreditSummary | null;
     recoveryCreditMachineId: string | null;
+    /** True while a force-refresh (server refresh + reload poll) is in flight. */
+    isRefreshing: boolean;
     refresh: () => Promise<void>;
     /**
      * Consume a recovery credit. Pass a `providerCreditId` to redeem THAT
@@ -40,6 +42,7 @@ export type UseConnectedServiceQuotaSnapshotResult = Readonly<{
      */
     consumeRecoveryCredit: (providerCreditId?: string | null) => Promise<void>;
     consumeRecoveryCreditPending: boolean;
+    consumeRecoveryCreditPendingTarget: Readonly<{ providerCreditId: string | null }> | null;
     pinnedMeterIds: ReadonlyArray<string>;
     togglePinnedMeter: (meterId: string) => void;
 }>;
@@ -93,10 +96,21 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
     ), [machines]);
 
     const [actionError, setActionError] = React.useState<string | null>(null);
-    const [consumeRecoveryCreditPending, setConsumeRecoveryCreditPending] = React.useState(false);
+    const [consumeRecoveryCreditPendingTarget, setConsumeRecoveryCreditPendingTarget] = React.useState<Readonly<{
+        providerCreditId: string | null;
+    }> | null>(null);
+
+    const snapshotSuccessKey = snapshot
+        ? `${snapshot.serviceId}:${snapshot.profileId}:${snapshot.fetchedAt}`
+        : null;
+
+    React.useEffect(() => {
+        if (snapshotSuccessKey) setActionError(null);
+    }, [snapshotSuccessKey]);
 
     const refresh = React.useCallback(async () => {
         if (!key || !loadContext) return;
+        setActionError(null);
         await refreshQuotaSnapshot(key, loadContext);
     }, [key, loadContext]);
 
@@ -111,7 +125,7 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
         const targetCreditId = providerCreditId !== undefined
             ? providerCreditId
             : recoveryCreditSummary.providerCreditId;
-        setConsumeRecoveryCreditPending(true);
+        setConsumeRecoveryCreditPendingTarget({ providerCreditId: targetCreditId });
         setActionError(null);
         try {
             const result = await consumeQuotaRecoveryCredit(key, {
@@ -121,7 +135,7 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
             });
             if (!result.ok) setActionError(result.error);
         } finally {
-            setConsumeRecoveryCreditPending(false);
+            setConsumeRecoveryCreditPendingTarget(null);
         }
     }, [key, loadContext, recoveryCreditMachineId, recoveryCreditSummary]);
 
@@ -151,9 +165,11 @@ export function useConnectedServiceQuotaSnapshot(params: Readonly<{
         nowMs,
         recoveryCreditSummary,
         recoveryCreditMachineId,
+        isRefreshing: entry.refreshing,
         refresh,
         consumeRecoveryCredit,
-        consumeRecoveryCreditPending,
+        consumeRecoveryCreditPending: consumeRecoveryCreditPendingTarget !== null,
+        consumeRecoveryCreditPendingTarget,
         pinnedMeterIds,
         togglePinnedMeter,
     };

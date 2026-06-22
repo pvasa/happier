@@ -2523,6 +2523,7 @@ export const ca: TranslationStructure = {
             },
         },
         account: {
+            refreshA11y: 'Actualitza l’ús i els límits',
             usageCaption: 'Ús',
             resetsCaption: 'Restabliments de quota',
             usedDetail: ({ used, limit }: { used: string; limit: string }) => `${used}/${limit} usat`,

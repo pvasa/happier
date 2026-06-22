@@ -51,6 +51,10 @@ import {
 } from '@/sync/domains/session/listing/sessionListRenderable';
 import { computeHasUnreadActivity } from '@/sync/domains/messages/unread';
 import {
+    storedSessionMessageContentAttentionImpact,
+    storedSessionMessageContentAttentionImpactOrNull,
+} from '@/sync/domains/messages/messageUserAttention';
+import {
     handleTranscriptStreamSegmentEphemeralUpdate,
     type TranscriptStreamSegmentEphemeralUpdate,
     type TranscriptStreamSegmentSessionMessageEncryption,
@@ -343,15 +347,16 @@ function buildCacheOnlySessionProjectionPatch(params: Readonly<{
 function computeCacheOnlySessionRenderableHasUnreadMessages(
     renderable: SessionListRenderableSession,
     patch: Readonly<Partial<Omit<SessionListRenderableSession, 'id'>>>,
-    readableSeqOverride?: number | null,
+    readableSeqOverride?: Readonly<{ seq: number | null; affectsUnread: boolean }> | null,
 ): boolean {
     const nextMetadata = patch.metadata === undefined ? renderable.metadata : patch.metadata;
     const nextLastViewedSessionSeq = patch.lastViewedSessionSeq === undefined
         ? renderable.lastViewedSessionSeq
         : patch.lastViewedSessionSeq;
+    const shouldUsePatchedSessionSeq = readableSeqOverride?.affectsUnread !== false;
     const projectedReadableSeq = resolveSessionReadableSeq({
         messages: null,
-        sessionSeq: patch.seq ?? renderable.seq,
+        sessionSeq: shouldUsePatchedSessionSeq ? patch.seq ?? renderable.seq : renderable.seq,
         latestReadyEventSeq: patch.latestReadyEventSeq === undefined
             ? renderable.latestReadyEventSeq
             : patch.latestReadyEventSeq,
@@ -360,9 +365,10 @@ function computeCacheOnlySessionRenderableHasUnreadMessages(
             : patch.latestTurnStatus,
         includeTerminalSessionSeq: true,
     }) ?? 0;
-    const readableSeq = readableSeqOverride === null || readableSeqOverride === undefined
+    const explicitReadableSeq = readableSeqOverride?.affectsUnread === true ? readableSeqOverride.seq : null;
+    const readableSeq = explicitReadableSeq === null || explicitReadableSeq === undefined
         ? projectedReadableSeq
-        : Math.max(projectedReadableSeq, Math.max(0, Math.trunc(readableSeqOverride)));
+        : Math.max(projectedReadableSeq, Math.max(0, Math.trunc(explicitReadableSeq)));
 
     return computeHasUnreadActivity({
         sessionSeq: readableSeq,
@@ -568,6 +574,7 @@ function buildCacheOnlyDurableMessageProjectionPatch(params: Readonly<{
     messageSeq: number | null;
 }>): Readonly<Partial<Omit<SessionListRenderableSession, 'id'>>> {
     const { renderable, updateData, rawMessage, messageSeq } = params;
+    const attentionImpact = storedSessionMessageContentAttentionImpact(rawMessage?.content);
     const nextSessionSeq = computeNextSessionSeqFromUpdate({
         currentSessionSeq: renderable.seq ?? 0,
         updateType: 'new-message',
@@ -576,7 +583,9 @@ function buildCacheOnlyDurableMessageProjectionPatch(params: Readonly<{
     });
     const updateCreatedAt = finiteNumber(updateData.createdAt);
     const messageCreatedAt = finiteNumber(rawMessage?.createdAt);
-    const meaningfulActivityCandidate = messageCreatedAt ?? updateCreatedAt;
+    const meaningfulActivityCandidate = attentionImpact.affectsMeaningfulActivity
+        ? messageCreatedAt ?? updateCreatedAt
+        : null;
     const currentUpdatedAt = finiteNumber(renderable.updatedAt);
     const currentMeaningfulActivityAt = finiteNumber(renderable.meaningfulActivityAt);
     const patch: Partial<Omit<SessionListRenderableSession, 'id'>> = {
@@ -591,7 +600,7 @@ function buildCacheOnlyDurableMessageProjectionPatch(params: Readonly<{
     patch.hasUnreadMessages = computeCacheOnlySessionRenderableHasUnreadMessages(
         renderable,
         patch,
-        messageSeq,
+        { seq: messageSeq, affectsUnread: attentionImpact.affectsUnread },
     );
     return patch;
 }
@@ -688,6 +697,10 @@ function applyCacheOnlyDurableMessageProjectionPatch(params: Readonly<{
     messageSeq: number | null;
     shouldContinue?: () => boolean;
 }>): boolean {
+    if (storedSessionMessageContentAttentionImpactOrNull(params.rawMessage?.content) === null) {
+        return false;
+    }
+
     const renderable = storage.getState().sessionListRenderables[params.sessionId];
     if (!renderable) return false;
     const leadingPatch = buildCacheOnlyDurableMessageProjectionPatch({

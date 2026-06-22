@@ -1238,6 +1238,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             addServiceMessage: '選擇要連接帳號的服務。',
         },
         account: {
+            refreshA11y: '重新整理用量與限額',
             usageCaption: '用量',
             resetsCaption: '配額重設',
             usedDetail: ({ used, limit }: { used: string; limit: string }) => `已用 ${used}/${limit}`,

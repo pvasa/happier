@@ -3001,6 +3001,7 @@ export const it: TranslationStructure = {
       },
     },
     account: {
+      refreshA11y: "Aggiorna utilizzo e limiti",
       usageCaption: "Utilizzo",
       resetsCaption: "Ripristini quota",
       usedDetail: ({ used, limit }: { used: string; limit: string }) => `${used}/${limit} usati`,

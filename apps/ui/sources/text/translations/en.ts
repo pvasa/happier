@@ -2492,6 +2492,7 @@ export const en = {
             },
         },
         account: {
+            refreshA11y: 'Refresh usage and limits',
             usageCaption: 'Usage',
             resetsCaption: 'Quota resets',
             usedDetail: ({ used, limit }: { used: string; limit: string }) => `${used}/${limit} used`,

@@ -11,7 +11,7 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Text } from '@/components/ui/text/Text';
-import type { ItemAction } from '@/components/ui/lists/itemActions';
+import { buildConnectedServiceAccountRowActions, CONNECTED_SERVICE_RECONNECT_ICON } from '../account/buildConnectedServiceAccountRowActions';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { useAuth } from '@/auth/context/AuthContext';
@@ -67,11 +67,11 @@ function formatLastRefreshed(fetchedAtMs: number | null | undefined): string | n
 }
 
 /**
- * "Connection" + "Last refreshed" + "Refresh quota now" rows. Reads the SHARED
+ * "Connection" + "Last refreshed" rows. Reads the SHARED
  * quota snapshot hook (deduped by the shared store, so this does not double-fetch
  * the snapshot the {@link AccountBlock} above already mounts) to surface the
- * last-refreshed timestamp and drive the quota refresh action. Only rendered for
- * connected accounts where a quota snapshot is meaningful.
+ * last-refreshed timestamp. Only rendered for connected accounts where a quota
+ * snapshot is meaningful.
  */
 const ConnectionSection = React.memo(function ConnectionSection(props: Readonly<{
   serviceId: ConnectedServiceId;
@@ -80,8 +80,7 @@ const ConnectionSection = React.memo(function ConnectionSection(props: Readonly<
   connectedVia: string;
   testID: string;
 }>) {
-  const { theme } = useUnistyles();
-  const { snapshot, refresh } = useConnectedServiceQuotaSnapshot({
+  const { snapshot } = useConnectedServiceQuotaSnapshot({
     serviceId: props.serviceId,
     profileId: props.profileId,
   });
@@ -113,13 +112,6 @@ const ConnectionSection = React.memo(function ConnectionSection(props: Readonly<
           showChevron={false}
         />
       ) : null}
-      <Item
-        testID={`${props.testID}:refresh-quota`}
-        title={t('connectedServices.profile.refreshQuotaNow')}
-        subtitle={t('connectedServices.profile.refreshQuotaNowSubtitle')}
-        icon={<Ionicons name="refresh-outline" size={22} color={theme.colors.accent.blue} />}
-        onPress={() => void refresh()}
-      />
     </ItemGroup>
   );
 });
@@ -354,23 +346,12 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
 
   // Header kebab actions reuse the canonical mutation flows (replace token,
   // reconnect). The connected/needs-re-auth split mirrors the actions section.
-  const headerActions: ItemAction[] = [];
-  if (kind === 'token') {
-    headerActions.push({
-      id: 'replace-token',
-      title: t('connectedServices.detail.actions.replaceToken'),
-      icon: 'key-outline',
-      onPress: () => void handleReplaceToken(),
-    });
-  }
-  if (kind === 'oauth') {
-    headerActions.push({
-      id: 'reconnect',
-      title: t('connectedServices.detail.actions.reconnect'),
-      icon: 'refresh-outline',
-      onPress: handleReconnect,
-    });
-  }
+  const headerActions = buildConnectedServiceAccountRowActions({
+    kind,
+    status,
+    onReplaceToken: () => void handleReplaceToken(),
+    onReconnect: handleReconnect,
+  });
 
   return (
     <ItemList>
@@ -500,7 +481,7 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
             testID="connected-services-profile-action:reconnect"
             title={t('connectedServices.detail.actions.reconnect')}
             subtitle={t('connectedServices.profile.reconnectSubtitle')}
-            icon={<Ionicons name="refresh-outline" size={22} color={theme.colors.accent.blue} />}
+            icon={<Ionicons name={CONNECTED_SERVICE_RECONNECT_ICON} size={22} color={theme.colors.accent.blue} />}
             onPress={handleReconnect}
           />
         </ItemGroup>

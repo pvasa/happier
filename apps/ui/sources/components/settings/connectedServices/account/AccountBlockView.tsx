@@ -16,6 +16,7 @@ import { ItemSection } from '@/components/ui/lists/ItemSection';
 import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Switch } from '@/components/ui/forms/Switch';
 import { StatusPill } from '@/components/ui/status/StatusPill';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Eyebrow } from '@/components/ui/text/Eyebrow';
 import { Text } from '@/components/ui/text/Text';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
@@ -31,7 +32,7 @@ import type { ConnectedServiceCredentialHealthStatusV1, ConnectedServiceId } fro
 import { t } from '@/text';
 
 import { resolveAccountCapacityRings, type AccountUsageRow } from './accountBlockModel';
-import { ConnectedServiceCapacityAvatar, CONNECTED_SERVICE_GAUGE_BOX } from '../ConnectedServiceCapacityAvatar';
+import { ConnectedServiceCapacityAvatar, CONNECTED_SERVICE_GAUGE_BOX, CONNECTED_SERVICE_GAUGE_SIZE } from '../ConnectedServiceCapacityAvatar';
 
 export type AccountBlockVariant = 'detail' | 'poolMember';
 
@@ -45,6 +46,12 @@ export type AccountBlockQuotaView = Readonly<{
     loading: boolean;
     hasSnapshot: boolean;
     isStale: boolean;
+    /** True while a force-refresh is in flight (drives the refreshing indicator). */
+    isRefreshing: boolean;
+    /** Latest action/load error (consume failure, load failure) for inline display. */
+    error: string | null;
+    /** Trigger a force-refresh of this account's quota snapshot. */
+    refresh: () => Promise<void>;
     planLabel: string | null;
     usageRows: ReadonlyArray<AccountUsageRow>;
     capacityPct: number | null;
@@ -54,6 +61,7 @@ export type AccountBlockQuotaView = Readonly<{
     togglePinnedMeter: (meterId: string) => void;
     consumeRecoveryCredit: (providerCreditId?: string | null) => Promise<void>;
     consumeRecoveryCreditPending: boolean;
+    consumeRecoveryCreditPendingTarget: Readonly<{ providerCreditId: string | null }> | null;
     canConsume: boolean;
 }>;
 
@@ -146,6 +154,33 @@ const stylesheet = StyleSheet.create((theme) => ({
         height: 44,
         borderRadius: 12,
         backgroundColor: theme.colors.surface.pressedOverlay,
+    },
+    // Spinner box that replaces the capacity gauge while a force-refresh runs.
+    avatarRefreshing: {
+        width: CONNECTED_SERVICE_GAUGE_SIZE,
+        height: CONNECTED_SERVICE_GAUGE_SIZE,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    // Live USAGE/RESETS dim (+ become non-interactive) during a refresh.
+    refreshingDim: {
+        opacity: 0.5,
+    },
+    // Inter-section spacing (USAGE ↔ RESETS ↔ error). This wrapper sits between the
+    // body and the sections, so it must carry the gap itself — otherwise the sections
+    // collapse flush (the body's gap only spaces this wrapper from the Pools section).
+    usageSections: {
+        gap: 12,
+    },
+    resetsHint: {
+        paddingHorizontal: 16,
+        paddingBottom: 6,
+    },
+    errorText: {
+        color: theme.colors.state.danger.foreground,
+        fontSize: 13,
+        paddingHorizontal: 16,
+        paddingTop: 4,
     },
     usageHeaderRow: {
         flexDirection: 'row',
@@ -267,7 +302,14 @@ export const AccountBlockView = React.memo<AccountBlockViewProps>((props) => {
     // number is the overall capacity. No brand glyph/dot — every row here is the
     // same provider, so the logo would be noise.
     const capacityRings = resolveAccountCapacityRings(quota?.usageRows ?? []);
-    const leadingIcon = (
+    // While a force-refresh is in flight, the capacity gauge is replaced by a
+    // spinner in place (the live USAGE/RESETS below dim) — so the user sees the
+    // refresh working and then the new values land directly when it resolves.
+    const leadingIcon = quota?.isRefreshing ? (
+        <View testID={`${testID}:refreshing`} style={styles.avatarRefreshing}>
+            <ActivitySpinner size={20} />
+        </View>
+    ) : (
         <ConnectedServiceCapacityAvatar
             testID={`${testID}:avatar`}
             rings={capacityRings}
@@ -391,24 +433,47 @@ export const AccountBlockView = React.memo<AccountBlockViewProps>((props) => {
                     />
                 </Pressable>
             ) : null}
+            {!isPoolMember && quota ? (
+                // Dedicated force-refresh control: pulls a fresh quota snapshot
+                // (server refresh + poll) and the row's gauge/USAGE/RESETS update
+                // directly when it lands. This is the ONLY refresh affordance — the
+                // reconnect action lives in the overflow menu with its own glyph, so
+                // a refresh icon now means refresh.
+                <Pressable
+                    testID={`${testID}:refresh`}
+                    hitSlop={10}
+                    disabled={quota.isRefreshing}
+                    onPress={(event) => {
+                        event?.stopPropagation?.();
+                        void quota.refresh();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: quota.isRefreshing, busy: quota.isRefreshing }}
+                    accessibilityLabel={t('connectedServices.account.refreshA11y')}
+                >
+                    {quota.isRefreshing ? (
+                        <ActivitySpinner size={16} />
+                    ) : (
+                        <Ionicons name="reload" size={17} color={theme.colors.text.secondary} />
+                    )}
+                </Pressable>
+            ) : null}
             {actions.length > 0 ? (
-                isPoolMember ? (
-                    // Pool members keep the row clean: every secondary action
-                    // (Move up / Move down / Set active) collapses into a single
-                    // ⋮ overflow menu instead of inline icons. `compactThreshold:
-                    // Infinity` forces the always-overflow layout (the canonical
-                    // kebab pattern shared with the repository-tree row menu).
-                    <ItemRowActions
-                        title={props.title}
-                        actions={[...actions]}
-                        iconSize={18}
-                        compactThreshold={Number.POSITIVE_INFINITY}
-                        compactActionIds={[]}
-                        overflowTriggerTestID={`${testID}:actions-menu`}
-                    />
-                ) : (
-                    <ItemRowActions title={props.title} actions={[...actions]} iconSize={18} />
-                )
+                // Every account-row secondary action (open / edit label / replace
+                // token / RECONNECT / disconnect for accounts; move / set-active /
+                // remove for pool members) collapses into ONE ⋮ overflow menu rather
+                // than inline icons, so the row stays clean and the advanced reconnect
+                // action reads as a menu item — never a refresh-looking inline glyph
+                // competing with the dedicated refresh control. `compactThreshold:
+                // Infinity` forces the always-overflow layout (the canonical kebab).
+                <ItemRowActions
+                    title={props.title}
+                    actions={[...actions]}
+                    iconSize={18}
+                    compactThreshold={Number.POSITIVE_INFINITY}
+                    compactActionIds={[]}
+                    overflowTriggerTestID={`${testID}:actions-menu`}
+                />
             ) : null}
             {isPoolMember && props.reorderGesture ? (
                 // Rendered INLINE (not threaded as a pre-built element) so the
@@ -486,7 +551,10 @@ export const AccountBlockView = React.memo<AccountBlockViewProps>((props) => {
     const usageContent = quota && quota.loading && !quota.hasSnapshot ? (
         <View testID={`${testID}:usage-skeleton`} style={styles.skeleton} />
     ) : quota ? (
-        <>
+        <View
+            style={[styles.usageSections, quota.isRefreshing && styles.refreshingDim]}
+            pointerEvents={quota.isRefreshing ? 'none' : 'auto'}
+        >
             {quota.usageRows.length > 0 ? (
                 <ItemSection testID={`${testID}:usage`} caption={t('connectedServices.account.usageCaption')}>
                     {quota.usageRows.map((row) => (
@@ -524,7 +592,16 @@ export const AccountBlockView = React.memo<AccountBlockViewProps>((props) => {
 
             {quota.resetRows.length > 0 ? (
                 <ItemSection testID={`${testID}:resets`} caption={t('connectedServices.account.resetsCaption')}>
+                    {!quota.canConsume ? (
+                        // Explain WHY "Use" is inert (the reachable disabled cause is
+                        // no resolvable target machine) instead of a silent dead button.
+                        <Eyebrow testID={`${testID}:resets-hint`} style={styles.resetsHint}>
+                            {t('connectedServices.quota.recoveryCreditMachineUnavailable')}
+                        </Eyebrow>
+                    ) : null}
                     {quota.resetRows.map((row) => {
+                        const rowPending = quota.consumeRecoveryCreditPendingTarget !== null
+                            && quota.consumeRecoveryCreditPendingTarget.providerCreditId === row.consumableCreditId;
                         const useDisabled = !row.canUse || !quota.canConsume || quota.consumeRecoveryCreditPending;
                         return (
                             <ItemGroupColumn key={row.key}>
@@ -538,9 +615,13 @@ export const AccountBlockView = React.memo<AccountBlockViewProps>((props) => {
                                         accessibilityState={{ disabled: useDisabled }}
                                         accessibilityLabel={t('connectedServices.account.resets.use')}
                                     >
-                                        <Text style={useDisabled ? styles.useActionDisabled : styles.useAction}>
-                                            {t('connectedServices.account.resets.use')}
-                                        </Text>
+                                        {rowPending ? (
+                                            <ActivitySpinner size={14} />
+                                        ) : (
+                                            <Text style={useDisabled ? styles.useActionDisabled : styles.useAction}>
+                                                {t('connectedServices.account.resets.use')}
+                                            </Text>
+                                        )}
                                     </Pressable>
                                 </View>
                             </ItemGroupColumn>
@@ -548,7 +629,11 @@ export const AccountBlockView = React.memo<AccountBlockViewProps>((props) => {
                     })}
                 </ItemSection>
             ) : null}
-        </>
+
+            {quota.error ? (
+                <Text testID={`${testID}:quota-error`} style={styles.errorText}>{quota.error}</Text>
+            ) : null}
+        </View>
     ) : null;
 
     const body = (usageContent || poolLabels.length > 0) ? (

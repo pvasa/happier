@@ -43,8 +43,10 @@ export function ConnectedServiceCapacityAvatar(props: ConnectedServiceCapacityAv
     const styles = stylesheet;
     const size = props.size ?? CONNECTED_SERVICE_GAUGE_SIZE;
     const arcs = props.rings.map((ring) => ({ ratio: ring.ratio, color: resolveQuotaToneColor(theme, ring.tone) }));
-    // Center number tone follows the most-constrained (outermost) ring.
-    const centerColor = arcs.length > 0 ? arcs[0].color : theme.colors.text.secondary;
+    // Neutral high-contrast center number so it stays readable regardless of ring
+    // count/tone (the rings already carry the health color; a tone-matched number
+    // disappears against same-colored rings, e.g. a Claude account with 3 green rings).
+    const centerColor = theme.colors.text.primary;
 
     return (
         <CapacityRing

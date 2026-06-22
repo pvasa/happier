@@ -2959,6 +2959,7 @@ localTailscale: {
       },
     },
     account: {
+      refreshA11y: "使用状況と制限を更新",
       usageCaption: "使用状況",
       resetsCaption: "クォータのリセット",
       usedDetail: ({ used, limit }: { used: string; limit: string }) => `${used}/${limit} 使用`,

@@ -133,9 +133,11 @@ function buildQuotaResult(overrides: Partial<UseConnectedServiceQuotaSnapshotRes
         nowMs: NOW_MS,
         recoveryCreditSummary: { availableCount: 1, nextExpiresAtMs: NOW_MS + 3 * DAY_MS, providerCreditId: 'pc-1' },
         recoveryCreditMachineId: 'machine-1',
+        isRefreshing: false,
         refresh: vi.fn(async () => {}),
         consumeRecoveryCredit: vi.fn(async () => {}),
         consumeRecoveryCreditPending: false,
+        consumeRecoveryCreditPendingTarget: null,
         pinnedMeterIds: [],
         togglePinnedMeter: vi.fn(),
         ...overrides,
@@ -278,6 +280,33 @@ describe('AccountBlock', () => {
         await screen.pressByTestIdAsync('acct:reset-use:aggregate');
 
         expect(quota.consumeRecoveryCredit).toHaveBeenCalledWith(null);
+    });
+
+    it('keeps non-selected reset rows readable while one credit is being consumed', async () => {
+        quotaHookState.value = {
+            ...buildQuotaResult({
+                consumeRecoveryCreditPending: true,
+                snapshot: buildSnapshot({
+                    recoveryCredits: {
+                        kind: 'usage_limit_resets',
+                        availableCount: 2,
+                        nextExpiresAtMs: NOW_MS + 3 * DAY_MS,
+                        credits: [
+                            { kind: 'usage_limit_reset', status: 'available', providerCreditId: 'pc-1', expiresAtMs: NOW_MS + 3 * DAY_MS },
+                            { kind: 'usage_limit_reset', status: 'available', providerCreditId: 'pc-2', expiresAtMs: NOW_MS + 3 * DAY_MS },
+                        ],
+                    },
+                }),
+            }),
+            consumeRecoveryCreditPendingTarget: { providerCreditId: 'pc-1' },
+        } as UseConnectedServiceQuotaSnapshotResult;
+
+        const screen = await renderAccountBlock();
+        const secondRow = screen.findByTestId('acct:reset-row:pc-2');
+
+        expect(secondRow?.findAll((node) =>
+            node.children.includes('connectedServices.account.resets.use'),
+        ).length).toBeGreaterThan(0);
     });
 
     it('disables the reset Use action when the credit is not individually consumable', async () => {

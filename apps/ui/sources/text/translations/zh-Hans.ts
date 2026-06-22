@@ -2495,6 +2495,7 @@ export const zhHans: TranslationStructure = {
       },
     },
     account: {
+      refreshA11y: "刷新用量和限额",
       usageCaption: "用量",
       resetsCaption: "配额重置",
       usedDetail: ({ used, limit }: { used: string; limit: string }) => `已用 ${used}/${limit}`,

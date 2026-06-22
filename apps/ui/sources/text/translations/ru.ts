@@ -2537,6 +2537,7 @@ export const ru: TranslationStructure = {
       },
     },
     account: {
+      refreshA11y: "Обновить использование и лимиты",
       usageCaption: "Использование",
       resetsCaption: "Сбросы квоты",
       usedDetail: ({ used, limit }: { used: string; limit: string }) => `${used}/${limit} использовано`,

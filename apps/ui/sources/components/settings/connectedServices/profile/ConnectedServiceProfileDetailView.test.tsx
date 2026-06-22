@@ -177,9 +177,11 @@ function buildQuotaResult(overrides: Partial<UseConnectedServiceQuotaSnapshotRes
     nowMs: NOW_MS,
     recoveryCreditSummary: null,
     recoveryCreditMachineId: 'machine-1',
+    isRefreshing: false,
     refresh: quotaHookState.refresh,
     consumeRecoveryCredit: vi.fn(async () => {}),
     consumeRecoveryCreditPending: false,
+    consumeRecoveryCreditPendingTarget: null,
     pinnedMeterIds: [],
     togglePinnedMeter: vi.fn(),
     ...overrides,
@@ -313,7 +315,8 @@ describe('ConnectedServiceProfileDetailView', () => {
 
     expect(findByTestId(screen.tree, 'connected-service-profile-action:set-default')).toBeTruthy();
     expect(findByTestId(screen.tree, 'connected-service-profile-action:edit-label')).toBeTruthy();
-    expect(findByTestId(screen.tree, 'connected-service-profile:refresh-quota')).toBeTruthy();
+    expect(findByTestId(screen.tree, 'connected-service-profile-account:refresh')).toBeTruthy();
+    expect(findByTestId(screen.tree, 'connected-service-profile:refresh-quota')).toBeNull();
     expect(findByTestId(screen.tree, 'connected-service-profile-action:disconnect')).toBeTruthy();
   });
 
@@ -342,7 +345,7 @@ describe('ConnectedServiceProfileDetailView', () => {
     const screen = await renderScreen(<ConnectedServiceProfileDetailView />);
 
     await act(async () => {
-      findByTestId(screen.tree, 'connected-service-profile:refresh-quota')?.props.onPress?.();
+      findByTestId(screen.tree, 'connected-service-profile-account:refresh')?.props.onPress?.();
       await flushAsyncHandlers();
     });
 

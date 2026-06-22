@@ -27,12 +27,19 @@ export function resolveLatestUnreadAffectingCommittedMessageSeq(
 }
 
 export function resolveSessionReadableSeq(input: ResolveSessionReadableSeqInput): number | null {
+    const hasCommittedMessageAttentionProjection = Array.isArray(input.messages) && input.messages.length > 0;
     let readableSeq = resolveLatestUnreadAffectingCommittedMessageSeq(input.messages);
-    readableSeq = maxReadSeq(readableSeq, normalizeReadSeq(input.latestMessageSeq));
+    if (!hasCommittedMessageAttentionProjection) {
+        readableSeq = maxReadSeq(readableSeq, normalizeReadSeq(input.latestMessageSeq));
+    }
 
     readableSeq = maxReadSeq(readableSeq, normalizeReadSeq(input.latestReadyEventSeq));
 
-    if (input.includeTerminalSessionSeq && isTerminalTurnStatus(input.latestTurnStatus)) {
+    if (
+        !hasCommittedMessageAttentionProjection
+        && input.includeTerminalSessionSeq
+        && isTerminalTurnStatus(input.latestTurnStatus)
+    ) {
         readableSeq = maxReadSeq(readableSeq, normalizeReadSeq(input.sessionSeq));
     }
 

@@ -33,7 +33,7 @@ import {
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 
 import { AccountBlock } from './account/AccountBlock';
-import type { ItemAction } from '@/components/ui/lists/itemActions';
+import { buildConnectedServiceAccountRowActions } from './account/buildConnectedServiceAccountRowActions';
 import { ConnectedServiceDetailActionsGroup } from './detail/ConnectedServiceDetailActionsGroup';
 import {
   ConnectedServiceSegmentedShell,
@@ -560,45 +560,15 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
           });
           const title = identityDisplay.primaryLabel;
           const poolLabels = resolveProfileGroupReferenceLabels(profileId);
-          const actions: ItemAction[] = [
-            {
-              id: 'open',
-              title: t('connectedServices.detail.actions.openAccount'),
-              icon: 'open-outline',
-              onPress: () => handleOpenProfile(profileId),
-            },
-            {
-              id: 'label',
-              title: t('connectedServices.detail.actions.editLabel'),
-              icon: 'pencil-outline',
-              onPress: () => void handleEditProfileLabel(profileId),
-            },
-            ...(kind === 'token'
-              ? [{
-                id: 'replace-token',
-                title: t('connectedServices.detail.actions.replaceToken'),
-                icon: 'key-outline',
-                onPress: () => void handleReplaceToken(profileId),
-              } satisfies ItemAction]
-              : []),
-            ...(kind === 'oauth'
-              ? [{
-                id: 'reconnect',
-                title: t('connectedServices.detail.actions.reconnect'),
-                icon: 'refresh-outline',
-                onPress: () => void handleConnectOauth(profileId),
-              } satisfies ItemAction]
-              : []),
-            ...(status === 'connected'
-              ? [{
-                id: 'disconnect',
-                title: t('modals.disconnect'),
-                icon: 'trash-outline',
-                destructive: true,
-                onPress: () => void handleDisconnect(profileId),
-              } satisfies ItemAction]
-              : []),
-          ];
+          const actions = buildConnectedServiceAccountRowActions({
+            kind,
+            status,
+            onOpen: () => handleOpenProfile(profileId),
+            onEditLabel: () => void handleEditProfileLabel(profileId),
+            onReplaceToken: () => void handleReplaceToken(profileId),
+            onReconnect: () => void handleConnectOauth(profileId),
+            onDisconnect: () => void handleDisconnect(profileId),
+          });
           return (
             <AccountBlock
               key={profileId}
