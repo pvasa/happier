@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { applyEnvValues, snapshotEnv, restoreEnv } from "../testkit/env";
@@ -22,6 +22,37 @@ describe('enableErrorHandlers', () => {
 
             const res = await app.inject({ method: 'GET', url: '/' });
             expect(res.statusCode).toBe(404);
+        } finally {
+            await app.close().catch(() => {});
+            restoreEnv(envSnapshot);
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('does not serve the SPA shell for unknown versioned API routes', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'happy-ui-api-404-'));
+        const app = Fastify();
+        const envSnapshot = snapshotEnv();
+        applyEnvValues({
+            HAPPIER_SERVER_UI_DIR: dir,
+            HAPPIER_SERVER_UI_PREFIX: '/',
+        });
+
+        try {
+            await writeFile(join(dir, 'index.html'), '<!doctype html><html><body>ok</body></html>\n', 'utf-8');
+            enableErrorHandlers(app as any);
+            await app.ready();
+
+            for (const url of [
+                '/v1/unknown-route',
+                '/v2/connect/openai-codex/profiles/work/refresh-lease',
+                '/v3/connect/openai-codex/groups/happier',
+            ]) {
+                const res = await app.inject({ method: 'GET', url });
+                expect(res.statusCode).toBe(404);
+                expect(res.headers['content-type']).toMatch(/application\/json/i);
+                expect(res.body).toContain('Not found');
+            }
         } finally {
             await app.close().catch(() => {});
             restoreEnv(envSnapshot);

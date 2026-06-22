@@ -5,6 +5,7 @@ import { readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { resolveUiConfig } from "@/app/api/uiConfig";
 import { captureFastifyExceptionForSentry } from "@/app/monitoring/sentry";
+import { isServerApiRequestPath } from "./serverApiPath";
 
 export function enableErrorHandlers(app: Fastify) {
     // Global error handler
@@ -91,8 +92,7 @@ export function enableErrorHandlers(app: Fastify) {
         if (uiDirRaw && uiMountedAtRoot && request.method === 'GET') {
             // Don't SPA-fallback for API and asset paths.
             if (
-                url.startsWith('/v1/') ||
-                url === '/v1' ||
+                isServerApiRequestPath(url) ||
                 url.startsWith('/files/') ||
                 url === '/files' ||
                 url.startsWith('/_expo/') ||
