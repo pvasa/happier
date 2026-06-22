@@ -15,6 +15,7 @@ import { waitForTranscriptEncryptedMessageByLocalId } from '@/api/session/transc
 import type { Credentials } from '@/persistence';
 import {
   detectSessionTurnActivity,
+  isMemoryArtifactDecryptedRow,
   isSessionUserMessage,
   type SessionTurnActivity,
 } from '@/session/query/detectSessionTurnInFlight';
@@ -27,6 +28,7 @@ import {
   encryptSessionPayload,
   tryDecryptSessionMetadata,
 } from '@/session/transport/encryption/sessionEncryptionContext';
+import { detectSessionTurnLifecycleEvent, isBareSessionReadyEvent } from '@/session/shared/sessionTurnLifecycle';
 
 import { resolveSessionTransportContext } from './resolveSessionTransportContext';
 
@@ -117,6 +119,40 @@ function unknownCurrentUserTurnActivity(): SessionTurnActivity {
   };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(1, Math.trunc(ms))));
+}
+
+function decryptTranscriptRowContent(params: Readonly<{
+  content: { t: 'encrypted'; c: string } | { t: 'plain'; v: unknown };
+  ctx: Readonly<{
+    encryptionKey: Uint8Array;
+    encryptionVariant: 'legacy' | 'dataKey';
+  }>;
+}>): unknown | null {
+  if (params.content.t === 'plain') {
+    return params.content.v;
+  }
+  try {
+    return decryptSessionPayload({
+      ctx: params.ctx,
+      ciphertextBase64: params.content.c,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function isAssistantTurnActivity(value: unknown): boolean {
+  if (!value || isMemoryArtifactDecryptedRow(value) || isSessionUserMessage(value)) {
+    return false;
+  }
+  if (isBareSessionReadyEvent(value)) {
+    return false;
+  }
+  return detectSessionTurnLifecycleEvent(value) !== null;
+}
+
 async function resolveCurrentTurnAfterSeqExclusive(params: Readonly<{
   token: string;
   sessionId: string;
@@ -173,6 +209,79 @@ async function resolveCurrentTurnAfterSeqExclusive(params: Readonly<{
   } catch {
     return fallbackAfterSeqExclusive;
   }
+}
+
+async function hasAssistantActivityAfterCurrentUserTurn(params: Readonly<{
+  token: string;
+  sessionId: string;
+  localId: string;
+  materializedSeq: number;
+  ctx: Readonly<{
+    encryptionKey: Uint8Array;
+    encryptionVariant: 'legacy' | 'dataKey';
+  }>;
+}>): Promise<boolean> {
+  const afterSeq = Math.max(0, Math.trunc(params.materializedSeq) - 1);
+  const rows = await fetchEncryptedTranscriptPageAfterSeq({
+    token: params.token,
+    sessionId: params.sessionId,
+    afterSeq,
+    limit: 100,
+  });
+  const orderedRows = [...rows].sort((a, b) => a.seq - b.seq);
+  const currentUserSeq = orderedRows.find((row) => row.localId === params.localId)?.seq ?? params.materializedSeq;
+
+  for (const row of orderedRows) {
+    if (row.seq <= currentUserSeq) {
+      continue;
+    }
+    const decrypted = decryptTranscriptRowContent({
+      content: row.content,
+      ctx: params.ctx,
+    });
+    if (isAssistantTurnActivity(decrypted)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function waitForAssistantActivityAfterCurrentUserTurn(params: Readonly<{
+  token: string;
+  sessionId: string;
+  localId: string;
+  materializedSeq: number;
+  ctx: Readonly<{
+    encryptionKey: Uint8Array;
+    encryptionVariant: 'legacy' | 'dataKey';
+  }>;
+  maxWaitMs: number;
+}>): Promise<boolean> {
+  const deadlineMs = Date.now() + Math.max(1, Math.trunc(params.maxWaitMs));
+  let lastAttempt = false;
+
+  while (Date.now() <= deadlineMs) {
+    lastAttempt = true;
+    try {
+      if (await hasAssistantActivityAfterCurrentUserTurn(params)) {
+        return true;
+      }
+    } catch {
+      // Missing proof is not success. Keep polling until the caller's wait budget expires.
+    }
+
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(100, remainingMs));
+  }
+
+  if (!lastAttempt) {
+    return hasAssistantActivityAfterCurrentUserTurn(params).catch(() => false);
+  }
+  return false;
 }
 
 export async function sendSessionMessage(params: Readonly<{
@@ -377,6 +486,20 @@ export async function sendSessionMessage(params: Readonly<{
       initialAgentStateCiphertextBase64:
         agentStateCiphertext && agentStateCiphertext.length > 0 ? agentStateCiphertext : null,
     });
+    const observedAssistantActivity = await waitForAssistantActivityAfterCurrentUserTurn({
+      token: params.credentials.token,
+      sessionId: sessionId,
+      localId,
+      materializedSeq: materialized.seq,
+      ctx: sessionTarget.ctx,
+      maxWaitMs: Math.max(1, deadlineMs - Date.now()),
+    });
+    if (!observedAssistantActivity) {
+      return {
+        ok: false,
+        code: 'timeout',
+      };
+    }
     return {
       ok: true,
       sessionId: sessionId,

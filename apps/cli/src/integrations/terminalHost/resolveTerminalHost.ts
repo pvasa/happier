@@ -8,19 +8,11 @@ import type {
 export function resolveTerminalHost(params: Readonly<{
   preference: TerminalHostPreference;
   platform: TerminalHostResolverPlatform;
-  adapters: Readonly<Partial<Record<'tmux' | 'zellij', TerminalHostAdapter>>>;
+  adapters: Readonly<Partial<Record<TerminalHostAdapter['kind'], TerminalHostAdapter>>>;
   tmuxAvailable: boolean;
   zellijAvailable: boolean;
 }>): TerminalHostResolution {
   const { preference, platform, adapters } = params;
-
-  if (platform.os === 'win32' && platform.arch === 'arm64') {
-    return {
-      status: 'disabled',
-      reason: 'windows_arm64_unsupported',
-      message: 'Bundled zellij has no upstream Windows ARM64 binary; install WSL2 or use Agent SDK runner.',
-    };
-  }
 
   if (preference === 'tmux') {
     if (platform.os === 'win32') {
@@ -37,8 +29,22 @@ export function resolveTerminalHost(params: Readonly<{
   }
 
   if (preference === 'zellij') {
+    if (platform.os === 'win32') {
+      if (platform.arch === 'arm64') {
+        return {
+          status: 'disabled',
+          reason: 'windows_arm64_unsupported',
+          message: 'Bundled zellij has no upstream Windows ARM64 binary; install WSL2 or use Agent SDK runner.',
+        };
+      }
+      return {
+        status: 'disabled',
+        reason: 'windows_zellij_unvalidated',
+        message: 'Bundled zellij is not validated on native Windows; use auto with the Windows console host or install WSL2.',
+      };
+    }
     if (!params.zellijAvailable || !adapters.zellij) {
-      if (platform.os !== 'win32' && params.tmuxAvailable && adapters.tmux) {
+      if (params.tmuxAvailable && adapters.tmux) {
         return { status: 'resolved', adapter: adapters.tmux, reason: 'zellij_unavailable_tmux_fallback' };
       }
       return { status: 'disabled', reason: 'zellij_unavailable', message: 'Bundled zellij is unavailable.' };
@@ -46,11 +52,33 @@ export function resolveTerminalHost(params: Readonly<{
     return { status: 'resolved', adapter: adapters.zellij, reason: 'zellij_forced' };
   }
 
-  if (platform.os === 'win32') {
-    if (!params.zellijAvailable || !adapters.zellij) {
-      return { status: 'disabled', reason: 'zellij_unavailable', message: 'Bundled zellij is unavailable.' };
+  if (preference === 'windows_console') {
+    if (!adapters.windows_console) {
+      return {
+        status: 'disabled',
+        reason: 'windows_console_unavailable',
+        message: 'Windows console terminal host is unavailable.',
+      };
     }
-    return { status: 'resolved', adapter: adapters.zellij, reason: 'windows_zellij' };
+    return { status: 'resolved', adapter: adapters.windows_console, reason: 'windows_console_forced' };
+  }
+
+  if (platform.os === 'win32') {
+    if (adapters.windows_console) {
+      return { status: 'resolved', adapter: adapters.windows_console, reason: 'windows_console_available' };
+    }
+    if (platform.arch === 'arm64') {
+      return {
+        status: 'disabled',
+        reason: 'windows_arm64_unsupported',
+        message: 'Bundled zellij has no upstream Windows ARM64 binary; install WSL2 or use Agent SDK runner.',
+      };
+    }
+    return {
+      status: 'disabled',
+      reason: 'windows_zellij_unvalidated',
+      message: 'Bundled zellij is not validated on native Windows; use the Windows console host or install WSL2.',
+    };
   }
 
   if (params.tmuxAvailable && adapters.tmux) {

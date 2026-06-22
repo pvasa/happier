@@ -2,7 +2,7 @@ export type ZellijWindowsGuardResult =
   | Readonly<{ status: 'ok'; shell?: string; launchStrategy?: 'foreground_windows_terminal' }>
   | Readonly<{
     status: 'disabled';
-    reason: 'windows_arm64_unsupported';
+    reason: 'windows_arm64_unsupported' | 'windows_zellij_unvalidated';
     message: string;
   }>;
 
@@ -24,5 +24,9 @@ export function resolveZellijWindowsGuard(params: Readonly<{
     };
   }
 
-  return { status: 'ok', shell: 'cmd.exe', launchStrategy: 'foreground_windows_terminal' };
+  return {
+    status: 'disabled',
+    reason: 'windows_zellij_unvalidated',
+    message: 'Bundled zellij is not validated on native Windows; use the Windows console host or install WSL2.',
+  };
 }

@@ -46,4 +46,27 @@ describe('buildTerminalAttachmentMetadataFromHostHandle', () => {
       },
     });
   });
+
+  it('builds non-focusable Windows console metadata from a PTY host handle', () => {
+    const handle: TerminalHostHandle = {
+      kind: 'windows_console',
+      sessionName: 'happy-windows-pty',
+      paneId: 'happy-windows-pty',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+        requiresLocalAttachmentInfo: false,
+      },
+    };
+
+    expect(buildTerminalAttachmentMetadataFromHostHandle(handle)).toEqual({
+      mode: 'windows_console',
+      requested: 'console',
+      windows: {
+        host: 'console',
+      },
+    });
+  });
 });

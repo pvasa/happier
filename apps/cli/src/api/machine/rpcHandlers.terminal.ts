@@ -22,7 +22,7 @@ import {
 import { resolveMachineRpcWorkingDirectory } from './resolveMachineRpcWorkingDirectory';
 import { readDaemonTerminalPtyConfig } from '@/daemon/terminalPty/terminalPtyConfig';
 import { createTerminalPtySessionManager, type TerminalPtySessionManager } from '@/daemon/terminalPty/terminalPtySessionManager';
-import { createNodePtyProvider } from '@/daemon/terminalPty/ptyProvider';
+import { createNodePtyProvider } from '@/integrations/pty/ptyProvider';
 
 function err(errorCode: DaemonTerminalErrorCode): { ok: false; errorCode: DaemonTerminalErrorCode; error: DaemonTerminalErrorCode } {
   return { ok: false, errorCode, error: errorCode };

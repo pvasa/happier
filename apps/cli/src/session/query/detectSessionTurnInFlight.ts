@@ -76,7 +76,7 @@ export function detectSessionTurnActivityFromProjection(value: unknown): Session
     };
 }
 
-function isMemoryArtifactDecryptedRow(value: unknown): boolean {
+export function isMemoryArtifactDecryptedRow(value: unknown): boolean {
     const obj = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
     if (!obj) return false;
     const meta = obj.meta;

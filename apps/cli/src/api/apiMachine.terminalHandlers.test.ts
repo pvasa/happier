@@ -11,7 +11,7 @@ const { spawnedPtys } = vi.hoisted(() => ({
   spawnedPtys: [] as unknown[],
 }));
 
-vi.mock('@/daemon/terminalPty/ptyProvider', () => ({
+vi.mock('@/integrations/pty/ptyProvider', () => ({
   createNodePtyProvider: () => ({
     spawn: (params: unknown) => {
       spawnedPtys.push(params);

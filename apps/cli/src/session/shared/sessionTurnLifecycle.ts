@@ -54,6 +54,25 @@ export function detectSessionTurnLifecycleEvent(value: unknown): SessionTurnLife
     return null;
 }
 
+export function isBareSessionReadyEvent(value: unknown): boolean {
+    const obj = value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null;
+    if (!obj || obj.role !== 'agent') return false;
+
+    const content = obj.content;
+    const contentObj = content && typeof content === 'object' && !Array.isArray(content)
+        ? (content as Record<string, unknown>)
+        : null;
+    if (contentObj?.type !== 'event') return false;
+
+    const data = contentObj.data;
+    const dataObj = data && typeof data === 'object' && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : null;
+    return dataObj?.type === 'ready';
+}
+
 export function applySessionTurnLifecycleEvent(params: Readonly<{
     pendingUserTurns: number;
     activeTaskInFlight: boolean;

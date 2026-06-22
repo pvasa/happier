@@ -30,5 +30,15 @@ export function buildTerminalAttachmentMetadataFromHostHandle(
     };
   }
 
+  if (handle.kind === 'windows_console') {
+    return {
+      mode: 'windows_console',
+      requested: 'console',
+      windows: {
+        host: 'console',
+      },
+    };
+  }
+
   return null;
 }
