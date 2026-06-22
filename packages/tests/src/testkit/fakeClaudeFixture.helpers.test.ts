@@ -258,7 +258,7 @@ describe('fake Claude fixture helpers', () => {
           child.stdout.setEncoding('utf8');
           child.stdout.on('data', (chunk: string) => {
             output += chunk;
-            if (/>\s*Try\s+"/.test(output)) {
+            if (/Try "refactor <filepath>"/.test(output)) {
               clearTimeout(timeout);
               resolve(output);
             }
@@ -273,7 +273,7 @@ describe('fake Claude fixture helpers', () => {
           });
         });
 
-        expect(stdout).toMatch(/>\s*Try\s+"/);
+        expect(stdout).toMatch(/Try "refactor <filepath>"/);
       } finally {
         child.kill('SIGTERM');
       }
