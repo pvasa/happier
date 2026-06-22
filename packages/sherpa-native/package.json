@@ -6,6 +6,7 @@
   "types": "./src/index.ts",
   "files": [
     "src",
+    "scripts",
     "ios",
     "android",
     "expo-module.config.json",

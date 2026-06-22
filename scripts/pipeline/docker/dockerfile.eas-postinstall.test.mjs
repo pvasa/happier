@@ -42,6 +42,28 @@ test("Dockerfile deps stages copy the shared yarn-install-with-retry helper from
   }
 });
 
+test("Dockerfile deps stages copy shared workspace build tooling for derived workspace postinstall builds", () => {
+  const dockerfilePath = path.join(repoRoot, "Dockerfile");
+  const raw = fs.readFileSync(dockerfilePath, "utf8");
+
+  for (const marker of [
+    "FROM node:${NODE_VERSION}-alpine AS deps-alpine",
+    "FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS deps-alpine-build",
+    "FROM node:${NODE_VERSION} AS deps-debian",
+  ]) {
+    const section = extractStageSection(raw, marker);
+    const installIndex = section.indexOf("yarn-install-with-retry --frozen-lockfile");
+    const copyIndex = section.indexOf("COPY scripts/workspaces ./scripts/workspaces");
+
+    assert.ok(installIndex >= 0, `${marker} must install dependencies`);
+    assert.ok(copyIndex >= 0, `${marker} must copy scripts/workspaces`);
+    assert.ok(
+      installIndex < copyIndex,
+      `${marker} must copy scripts/workspaces after dependency install so helper edits do not invalidate the install cache`,
+    );
+  }
+});
+
 test("dev-box Dockerfile includes the root postinstall script (eas-postinstall.mjs) so yarn install can run in minimal build contexts", () => {
   const dockerfilePath = path.join(repoRoot, "docker", "dev-box", "Dockerfile");
   const raw = fs.readFileSync(dockerfilePath, "utf8");

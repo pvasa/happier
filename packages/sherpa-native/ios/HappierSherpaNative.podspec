@@ -25,6 +25,7 @@ Pod::Spec.new do |s|
   sherpa_archive = "sherpa-onnx-#{sherpa_version}-ios.tar.bz2"
   sherpa_base_url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/#{sherpa_version}"
   sherpa_vendor_dir = File.join(__dir__, 'vendor', 'sherpa-onnx', sherpa_version)
+  sherpa_checksum_resolver = File.expand_path('../scripts/resolve-sherpa-checksum.mjs', __dir__)
 
   s.prepare_command = <<-CMD
     set -euo pipefail
@@ -35,11 +36,11 @@ Pod::Spec.new do |s|
       curl -L --retry 3 --retry-delay 1 -o "#{sherpa_vendor_dir}/checksum.txt" "#{sherpa_base_url}/checksum.txt"
       curl -L --retry 3 --retry-delay 1 -o "#{sherpa_vendor_dir}/#{sherpa_archive}" "#{sherpa_base_url}/#{sherpa_archive}"
 
-      expected=$(grep " #{sherpa_archive}$" "#{sherpa_vendor_dir}/checksum.txt" | awk '{print $1}' | tr -d '\\r\\n')
-      if [ -z "${expected}" ]; then
-        echo "[HappierSherpaNative] Failed to locate sha256 for #{sherpa_archive} in checksum.txt"
+      if [ ! -f "#{sherpa_checksum_resolver}" ]; then
+        echo "[HappierSherpaNative] Missing checksum resolver at #{sherpa_checksum_resolver}"
         exit 1
       fi
+      expected=$(node "#{sherpa_checksum_resolver}" "#{sherpa_vendor_dir}/checksum.txt" "#{sherpa_archive}" | tr -d '\\r\\n')
 
       actual=$(shasum -a 256 "#{sherpa_vendor_dir}/#{sherpa_archive}" | awk '{print $1}' | tr -d '\\r\\n')
       if [ "${expected}" != "${actual}" ]; then
