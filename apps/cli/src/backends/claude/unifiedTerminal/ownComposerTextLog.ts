@@ -1,3 +1,5 @@
+import { normalizeClaudeUnifiedPromptIdentityText } from './promptIdentity';
+
 const DEFAULT_LIMIT = 32;
 const DEFAULT_PREFIX_RESIDUE_WINDOW_MS = 2 * 60_000;
 const MIN_PREFIX_RESIDUE_CHARS = 256;
@@ -14,7 +16,7 @@ export type ClaudeOwnComposerTextLog = Readonly<{
 }>;
 
 function normalize(value: string): string {
-  return value.replace(/\r\n?/g, '\n').trim();
+  return normalizeClaudeUnifiedPromptIdentityText(value);
 }
 
 /**

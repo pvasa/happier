@@ -23,15 +23,18 @@ export type ClaudeUnifiedTelemetryEvent =
       }>;
     }>
     | Readonly<{
-        name: 'unified.injection.outcome';
-        properties: Readonly<{
-        status: TerminalInputInjectionResult['status'];
-        reason?: TelemetryReason | undefined;
-        phase?: string | undefined;
-        duplicateRisk?: string | undefined;
-        recoverable?: boolean | undefined;
-        hostKind: TerminalHostKind;
-        multiline: boolean;
+      name: 'unified.injection.outcome';
+      properties: Readonly<{
+          status: TerminalInputInjectionResult['status'];
+          reason?: TelemetryReason | undefined;
+          phase?: string | undefined;
+          duplicateRisk?: string | undefined;
+          recoverable?: boolean | undefined;
+          hostKind: TerminalHostKind;
+          multiline: boolean;
+          inputByteLength?: number | undefined;
+          inputNewlineCount?: number | undefined;
+          writeTimeoutMs?: number | undefined;
           originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
           inFlightSteer?: boolean | undefined;
         }>;
@@ -136,6 +139,13 @@ function buildLogPayload(event: ClaudeUnifiedTelemetryEvent): Record<string, unk
   return payload;
 }
 
+function normalizeNonNegativeInteger(value: number | undefined): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
 export function createClaudeUnifiedTelemetrySink(params?: Readonly<{
   logger?: LoggerLike | undefined;
 }>): ClaudeUnifiedTelemetrySink {
@@ -153,10 +163,17 @@ export function emitClaudeUnifiedInjectionOutcome(
     result: TerminalInputInjectionResult;
     hostKind: TerminalHostKind;
     multiline: boolean;
+    inputByteLength?: number | undefined;
+    inputNewlineCount?: number | undefined;
+    writeTimeoutMs?: number | undefined;
     originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
     inFlightSteer?: boolean | undefined;
   }>,
 ): void {
+  const inputByteLength = normalizeNonNegativeInteger(params.inputByteLength);
+  const inputNewlineCount = normalizeNonNegativeInteger(params.inputNewlineCount);
+  const writeTimeoutMs = normalizeNonNegativeInteger(params.writeTimeoutMs);
+
   telemetry.emit({
     name: 'unified.injection.outcome',
     properties: {
@@ -171,6 +188,9 @@ export function emitClaudeUnifiedInjectionOutcome(
         : {}),
       hostKind: params.hostKind,
       multiline: params.multiline,
+      ...(inputByteLength !== undefined ? { inputByteLength } : {}),
+      ...(inputNewlineCount !== undefined ? { inputNewlineCount } : {}),
+      ...(writeTimeoutMs !== undefined ? { writeTimeoutMs } : {}),
       originKind: params.originKind,
       ...(params.inFlightSteer ? { inFlightSteer: true } : {}),
     },

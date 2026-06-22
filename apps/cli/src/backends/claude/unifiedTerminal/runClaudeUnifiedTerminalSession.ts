@@ -44,6 +44,7 @@ import {
 } from './createClaudeUnifiedInFlightSteerEvaluator';
 import { createClaudeOwnComposerTextLog, type ClaudeOwnComposerTextLog } from './ownComposerTextLog';
 import { createClaudeUnifiedAcceptedPromptTranscriptDiscovery } from './acceptedPromptTranscriptDiscovery';
+import { doesClaudeUnifiedPromptBatchMatchAcceptedTranscript } from './acceptedPromptDeliveryIdentity';
 import { ClaudeUnifiedTerminalInjectionFailureError } from './terminalInjectionFailureError';
 import {
   buildClaudeUnifiedRuntimeControlDisabledOutcomeEvents,
@@ -72,6 +73,7 @@ import type {
   ClaudeUnifiedInputConsumer,
   ClaudeUnifiedInputArbiter,
   ClaudeUnifiedPromptAcceptance,
+  ClaudeUnifiedPromptBatch,
   ClaudeUnifiedStartableDisposable,
 } from './_types';
 import type { EnhancedMode } from '../loop';
@@ -213,6 +215,8 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
   allowFirstInputBeforeSessionStart?: boolean | undefined;
   /** Canonical session-turn lifecycle probe for the arbiter's stale-turn recovery (Lane N2). */
   isCanonicalTurnActive?: (() => boolean) | undefined;
+  /** Canonical session delivery-state probe used to suppress ambiguous retries already accepted by the provider. */
+  isPromptDeliveryAccepted?: ((batch: ClaudeUnifiedPromptBatch<Mode>) => boolean) | undefined;
   /**
    * Lane P (O-design Seam A): de-duplicated session-level steer availability tee from the steer
    * evaluator. Launchers publish it to agentState via the capability publisher.
@@ -1034,12 +1038,6 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
         // can be exact-match classified as OUR OWN residue (vs an untouchable genuine user draft).
         ownComposerTextLog.record(input.text);
         const result = await hostResolution.adapter.injectUserPrompt(activeHandle, input);
-        if (result.status === 'injected') {
-          acceptedPromptTranscriptDiscovery.recordAcceptedPrompt({
-            message: input.text,
-            acceptedAtMs: result.at,
-          });
-        }
         return result;
       },
     };
@@ -1154,6 +1152,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
         evaluateInFlightSteer: steerWiring.evaluateInFlightSteer,
         onSteerAcceptanceArmed: steerWiring.onSteerAcceptanceArmed,
         isCanonicalTurnActive: opts.isCanonicalTurnActive,
+        isPromptDeliveryAccepted: opts.isPromptDeliveryAccepted,
         onInjectionFailure: (failure) => {
           const error = new ClaudeUnifiedTerminalInjectionFailureError(failure);
           if (failure.failureState === 'failed_terminal') {
@@ -1177,8 +1176,16 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             logger.debug('[unified]: failed to surface Claude unified terminal injection failure (non-fatal)', notifyError);
           });
         },
-        onPromptInjected: (batch, acceptance) => {
+        onPromptInjected: (batch, acceptance, result) => {
           steerWiring.observeInjectedPrompt(batch, acceptance);
+          acceptedPromptTranscriptDiscovery.recordAcceptedPrompt({
+            message: batch.message,
+            acceptedAtMs: result.at,
+            deliveryIdentity: {
+              localIds: batch.userMessageLocalIds ?? [],
+              userMessageSeq: batch.maxUserMessageSeq ?? null,
+            },
+          });
           if (batch.mode === undefined) return undefined;
           endStartupHostLivenessGrace();
           return opts.onTerminalPromptInjected?.({
@@ -1189,6 +1196,11 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
           });
         },
         onPromptAccepted: (batch) => {
+          acceptedPromptTranscriptDiscovery.consumeAcceptedPromptByBatch({
+            message: batch.message,
+            maxUserMessageSeq: batch.maxUserMessageSeq ?? null,
+            userMessageLocalIds: batch.userMessageLocalIds ?? [],
+          });
           opts.onPromptAcceptedByProvider?.({
             message: batch.message,
             maxUserMessageSeq: batch.maxUserMessageSeq ?? null,
@@ -1222,10 +1234,34 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
         notifyTerminalComposerCleared();
       }
       arbiterForPromptCustody = arbiter;
+      let acceptedTranscriptConfirmationTail = Promise.resolve();
+      const pendingAcceptedTranscriptMatchKeys = new Set<string>();
+      const buildAcceptedTranscriptMatchKey = (match: Readonly<{
+        acceptedPromptId: string;
+        transcriptKey?: string | null | undefined;
+      }>): string => `${match.acceptedPromptId}:${match.transcriptKey ?? 'unkeyed'}`;
       const confirmPromptAcceptedFromTranscript = (messages: readonly unknown[]): boolean => {
-        if (!acceptedPromptTranscriptDiscovery.consumeMatchingTranscript(messages)) return false;
+        const match = acceptedPromptTranscriptDiscovery.findMatchingTranscript(messages);
+        if (!match) return false;
+        const matchKey = buildAcceptedTranscriptMatchKey(match);
+        if (pendingAcceptedTranscriptMatchKeys.has(matchKey)) return true;
+        pendingAcceptedTranscriptMatchKeys.add(matchKey);
         observeTrustedProviderProgress();
-        void arbiter.confirmPromptAcceptedByProvider().catch(() => undefined);
+        acceptedTranscriptConfirmationTail = acceptedTranscriptConfirmationTail
+          .catch(() => undefined)
+          .then(async () => {
+            try {
+              const confirmed = await arbiter.confirmPromptAcceptedByProviderIf((batch) => (
+                doesClaudeUnifiedPromptBatchMatchAcceptedTranscript({ batch, match })
+              ));
+              if (confirmed) {
+                acceptedPromptTranscriptDiscovery.consumeAcceptedPromptMatch(match);
+              }
+            } finally {
+              pendingAcceptedTranscriptMatchKeys.delete(matchKey);
+            }
+          });
+        void acceptedTranscriptConfirmationTail.catch(() => undefined);
         return true;
       };
       const confirmCompactBoundaryPromptAcceptedFromTranscript = (message: RawJSONLines): boolean => {

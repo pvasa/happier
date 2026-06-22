@@ -312,6 +312,20 @@ export function reconcileMemberRuntimeStateWithFreshQuotaEvidence(params: Readon
   } = { ...state };
 
   const quotaUsable = snapshotProvesQuotaUsable(quotaSnapshot);
+  if (
+    quotaUsable
+    && (
+      numberOrNull(state.cooldownStartedAtMs) !== null
+      || numberOrNull(state.cooldownUntilMs) !== null
+      || numberOrNull(state.exhaustedUntilMs) !== null
+    )
+  ) {
+    delete next.cooldownStartedAtMs;
+    delete next.cooldownUntilMs;
+    delete next.exhaustedUntilMs;
+    changed = true;
+  }
+
   if (quotaUsable && (numberOrNull(state.quotaExhaustedUntilMs) !== null || state.lastFailureKind === 'usage_limit')) {
     delete next.quotaExhaustedUntilMs;
     delete next.providerResetsAtMs;

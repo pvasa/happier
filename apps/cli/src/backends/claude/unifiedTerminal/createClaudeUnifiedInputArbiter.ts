@@ -16,6 +16,7 @@ import type {
   ClaudeUnifiedPromptInjector,
 } from './_types';
 import { classifyClaudeUnifiedInjectionFailure } from './injectionFailurePolicy';
+import { normalizeClaudeUnifiedPromptIdentityText } from './promptIdentity';
 
 type HeadInputState = ClaudeUnifiedInputArbiterSnapshot['headInputState'];
 type PendingProviderAcceptance<Mode> = Readonly<{
@@ -39,7 +40,7 @@ const DEFAULT_BUSY_TURN_FALLBACK_WAKE_MS = 15_000;
 const DEFAULT_STALE_TURN_RECOVERY_MS = 30_000;
 
 function normalizePromptText(value: string): string {
-  return value.replace(/\r\n?/g, '\n').trim();
+  return normalizeClaudeUnifiedPromptIdentityText(value);
 }
 
 function isCompactPrompt(batch: Readonly<{ message: string }>): boolean {
@@ -103,6 +104,12 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
    * (the queued prompt's UserPromptSubmit/JSONL row arrives only after the steered turn ends).
    */
   onSteerAcceptanceArmed?: ((batch: ClaudeUnifiedPromptBatch<Mode>) => void) | undefined;
+  /**
+   * Canonical delivery-state probe. The arbiter owns Claude's terminal retry loop, but the
+   * session client owns provider-acceptance truth; consult it before replaying an ambiguous
+   * head so a provider-confirmed prompt cannot be injected a second time.
+   */
+  isPromptDeliveryAccepted?: ((batch: ClaudeUnifiedPromptBatch<Mode>) => boolean) | undefined;
 }>): ClaudeUnifiedInputArbiter<Mode> {
   const queue: Array<ClaudeUnifiedPromptBatch<Mode>> = [];
   const nowMs = opts.nowMs ?? Date.now;
@@ -429,6 +436,15 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     }
   }
 
+  function readPromptDeliveryAccepted(batch: ClaudeUnifiedPromptBatch<Mode>): boolean {
+    if (!opts.isPromptDeliveryAccepted) return false;
+    try {
+      return opts.isPromptDeliveryAccepted(batch) === true;
+    } catch {
+      return false;
+    }
+  }
+
   async function acceptBatch(
     batch: ClaudeUnifiedPromptBatch<Mode>,
     acceptance: ClaudeUnifiedPromptAcceptance,
@@ -552,6 +568,21 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
         return;
       }
       if (headInputState === 'failed_ambiguous' || headInputState === 'failed_terminal') {
+        if (
+          headInputState === 'failed_ambiguous'
+          && ambiguousProviderAcceptanceFailure
+          && queue[0] === ambiguousProviderAcceptanceFailure.batch
+          && readPromptDeliveryAccepted(ambiguousProviderAcceptanceFailure.batch)
+        ) {
+          const acceptedFailure = ambiguousProviderAcceptanceFailure;
+          pendingProviderAcceptance = null;
+          pendingAcceptanceCompletedCompaction = false;
+          ambiguousProviderAcceptanceFailure = null;
+          lastFailureReason = null;
+          queue.shift();
+          await acceptBatch(acceptedFailure.batch, acceptedFailure.acceptance);
+          continue;
+        }
         if (
           headInputState === 'failed_ambiguous'
           && ambiguousProviderAcceptanceFailure

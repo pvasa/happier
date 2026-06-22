@@ -201,6 +201,40 @@ describe('bindClaudeUnifiedTerminalSession', () => {
     expect(consumedMessages).toEqual([expect.objectContaining({ type: 'user' })]);
   });
 
+  it('suppresses a steered prompt echo using the canonical prompt identity, not raw bytes', async () => {
+    let nowMs = 1_000;
+    const { binding, consumedMessages, observedMessages } = createBinding({ nowMs: () => nowMs });
+
+    binding.noteNextInjectedPromptShouldSuppressEcho();
+    await binding.sessionOptions.onTerminalPromptInjected?.({
+      message: [
+        '  please review this',
+        'and continue   ',
+        '',
+        '[attachments]',
+        '- screenshot.png (screenshot.png, image/png, 262290 bytes)   ',
+        '[/attachments]   ',
+      ].join('\r\n'),
+      mode: { permissionMode: 'default', claudeUnifiedTerminalEnabled: true },
+      acceptedAs: 'in_flight_steer',
+      turnStateAtInjection: 'running',
+    });
+
+    nowMs = 120_000;
+    await binding.sessionOptions.onReady?.();
+    binding.sessionOptions.onMessage?.(userMessage([
+      'please review this',
+      'and continue',
+      '',
+      '[attachments]',
+      '- screenshot.png (screenshot.png, image/png, 262290 bytes)',
+      '[/attachments]',
+    ].join('\n'), new Date(120_010).toISOString()));
+
+    expect(observedMessages).toEqual([]);
+    expect(consumedMessages).toEqual([expect.objectContaining({ type: 'user' })]);
+  });
+
   it('does not suppress later identical prompts once a steered echo expires after turn end', async () => {
     let nowMs = 1_000;
     const { binding, observedMessages } = createBinding({ nowMs: () => nowMs });

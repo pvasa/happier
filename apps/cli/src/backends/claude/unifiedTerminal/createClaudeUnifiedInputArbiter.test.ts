@@ -1027,6 +1027,58 @@ describe('createClaudeUnifiedInputArbiter', () => {
     });
   });
 
+  it('does not retry an ambiguous prompt that core delivery state already accepted', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    let deliveryAccepted = false;
+    const accepted: string[] = [];
+    const onInjectionFailure = vi.fn();
+    const injectPrompt = vi.fn(async (batch) => ({
+      status: 'injected' as const,
+      at: nowMs,
+      bytesWritten: batch.message.length,
+    }));
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 40,
+      injectPrompt,
+      isPromptDeliveryAccepted: () => deliveryAccepted,
+      onPromptAccepted: async (batch) => {
+        accepted.push(batch.message);
+      },
+      onInjectionFailure,
+    });
+
+    await arbiter.enqueueUiMessage({
+      message: 'prompt accepted by transcript before retry',
+      origin: { kind: 'ui_pending' },
+      maxUserMessageSeq: 739,
+      userMessageLocalIds: ['prompt-739'],
+    });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    deliveryAccepted = true;
+    nowMs += 40;
+    await vi.advanceTimersByTimeAsync(40);
+    await vi.advanceTimersByTimeAsync(0);
+    await arbiter.drainWhenSafe();
+
+    expect(onInjectionFailure).toHaveBeenCalledWith(expect.objectContaining({
+      failureState: 'failed_ambiguous',
+      batch: expect.objectContaining({ message: 'prompt accepted by transcript before retry' }),
+    }));
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+    expect(accepted).toEqual(['prompt accepted by transcript before retry']);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 0,
+      lastFailureReason: null,
+      headInputState: 'submitted',
+    });
+  });
+
   it('retries a host-level injected prompt once after provider confirmation never arrives', async () => {
     vi.useFakeTimers();
     let nowMs = 10_000;

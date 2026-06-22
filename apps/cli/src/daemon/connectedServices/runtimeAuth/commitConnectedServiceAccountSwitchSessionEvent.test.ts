@@ -514,6 +514,60 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
     expect(postSpy).not.toHaveBeenCalled();
   });
 
+  it('suppresses same-provider fanout switch attempt transcript events as background maintenance', async () => {
+    process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+    vi.resetModules();
+    const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
+
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess-attempt-fanout',
+          seq: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          active: true,
+          activeAt: 1,
+          encryptionMode: 'plain',
+          metadata: '{}',
+          metadataVersion: 1,
+          agentState: null,
+          agentStateVersion: 1,
+          dataEncryptionKey: null,
+        },
+      },
+    });
+    const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        didWrite: true,
+        message: { id: 'msg-attempt', seq: 2, localId: 'local-attempt', createdAt: 2 },
+      },
+    });
+
+    await commitConnectedServiceAccountSwitchSessionEvent({
+      credentials: {
+        token: 'token-1',
+        encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
+      },
+      sessionId: 'sess-attempt-fanout',
+      event: {
+        type: 'connected_service_account_switch_attempt',
+        ok: true,
+        action: 'hot_applied',
+        attemptedContinuityMode: 'hot_apply',
+        outcome: 'succeeded',
+        outcomeAction: 'hot_applied',
+        errorCode: null,
+        partialState: null,
+        reason: 'same_provider_account_exhausted',
+      },
+    });
+
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
   it('drops exact switch verification proof details without identity material', async () => {
     process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
     vi.resetModules();
@@ -921,6 +975,63 @@ describe('commitConnectedServiceAccountSwitchSessionEvent', () => {
         fromProfileId: 'primary',
         toProfileId: 'backup',
         reason: 'soft_threshold',
+        fromGeneration: 3,
+        toGeneration: 4,
+        resultStatus: 'switched',
+        success: true,
+        latencyMs: 12,
+      },
+    });
+
+    expect(getSpy).not.toHaveBeenCalled();
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('suppresses same-provider fanout switch coordinator events as background maintenance', async () => {
+    process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+    vi.resetModules();
+    const { commitConnectedServiceAccountSwitchSessionEvent } = await import('./commitConnectedServiceAccountSwitchSessionEvent');
+
+    const getSpy = vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess-fanout',
+          seq: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          active: true,
+          activeAt: 1,
+          encryptionMode: 'plain',
+          metadata: '{}',
+          metadataVersion: 1,
+          agentState: null,
+          agentStateVersion: 1,
+          dataEncryptionKey: null,
+        },
+      },
+    });
+    const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        didWrite: true,
+        message: { id: 'msg-fanout', seq: 2, localId: 'local-fanout', createdAt: 2 },
+      },
+    });
+
+    await commitConnectedServiceAccountSwitchSessionEvent({
+      credentials: {
+        token: 'token-1',
+        encryption: { type: 'legacy', secret: new Uint8Array([1, 2, 3, 4]) },
+      },
+      sessionId: 'sess-fanout',
+      event: {
+        type: 'connected_service_auth_group_switch',
+        serviceId: 'openai-codex',
+        groupId: 'codex-main',
+        fromProfileId: 'primary',
+        toProfileId: 'backup',
+        reason: 'same_provider_account_exhausted',
         fromGeneration: 3,
         toGeneration: 4,
         resultStatus: 'switched',

@@ -235,6 +235,7 @@ describe('createOpenAiCodexQuotaFetcher', () => {
       record,
       now,
       idempotencyKey: 'reset-req-1',
+      providerCreditId: 'credit-1',
       signal: new AbortController().signal,
     });
 
@@ -246,10 +247,43 @@ describe('createOpenAiCodexQuotaFetcher', () => {
         headers: expect.objectContaining({
           Authorization: 'Bearer at',
           'ChatGPT-Account-Id': 'acct',
-          'Idempotency-Key': 'reset-req-1',
+          'Content-Type': 'application/json',
         }),
+        body: JSON.stringify({ credit_id: 'credit-1', redeem_request_id: 'reset-req-1' }),
       }),
     );
+  });
+
+  it('fails reset-credit consume when no provider credit id is supplied', async () => {
+    const now = 1_768_000_000_000;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createOpenAiCodexQuotaFetcher();
+    await expect(fetcher.consumeRecoveryCredit?.({
+      record,
+      now,
+      idempotencyKey: 'reset-req-1',
+      signal: new AbortController().signal,
+    })).rejects.toMatchObject({ providerCode: 'missing_credit_id' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('allows an explicitly configured ChatGPT wham usage endpoint', async () => {

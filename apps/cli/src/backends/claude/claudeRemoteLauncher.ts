@@ -1454,6 +1454,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                                 });
                                 resetUnifiedParkRelaunchBudget();
                             },
+                            isPromptDeliveryAccepted: (batch) => session.client.hasUserMessageProviderAcceptance?.({
+                                userMessageSeq: batch.maxUserMessageSeq ?? null,
+                                localIds: batch.userMessageLocalIds ?? [],
+                            }) === true,
                             registerTerminalComposerClearRuntimeControl: (clearTerminalComposer) =>
                                 session.client.registerSessionRuntimeControls?.({ clearTerminalComposer }) ?? (() => undefined),
                             // C11 (incident cmq8y3nlx): binding-owned registry, seeded from the

@@ -398,6 +398,21 @@ export async function runCodex(opts: {
     };
     const providerPromptLocalIdsOption = (localIds: readonly string[]): { localIds?: readonly string[] } =>
         localIds.length > 0 ? { localIds } : {};
+    const confirmProviderAcceptedPrompt = (message: Readonly<{
+        maxUserMessageSeq?: number | null;
+        userMessageLocalIds?: readonly string[] | null;
+        mode?: Readonly<{ localId?: string | null }> | null;
+    }>): void => {
+        const localIds = normalizeProviderPromptLocalIds([
+            ...(message.userMessageLocalIds ?? []),
+            message.mode?.localId ?? null,
+        ]);
+        if (localIds.length > 0) {
+            session.confirmUserMessageDeliveredToProvider?.(message.maxUserMessageSeq ?? null, { localIds });
+            return;
+        }
+        session.confirmUserMessageDeliveredToProvider?.(message.maxUserMessageSeq ?? null);
+    };
     const registerUndeliverableProviderPromptReplay = (
         input: PendingProviderPromptReplay,
     ): void => {
@@ -902,6 +917,7 @@ export async function runCodex(opts: {
             text,
             mode: enhancedMode,
             userMessageSeq,
+            userMessageLocalIds: normalizeProviderPromptLocalIds([message.localId ?? null]),
         });
     });
 
@@ -1674,6 +1690,7 @@ export async function runCodex(opts: {
                     isolate: boolean;
                     hash: string;
                     maxUserMessageSeq?: number | null;
+                    userMessageLocalIds?: readonly string[];
                 } | null = null;
 
 	        const codexRemoteRuntimeForSync = getCodexRemoteRuntime();
@@ -2025,7 +2042,7 @@ export async function runCodex(opts: {
                     shouldExit,
                     sendReady,
                 });
-                session.confirmUserMessageDeliveredToProvider?.(message.maxUserMessageSeq ?? null);
+                confirmProviderAcceptedPrompt(message);
                 continue;
             }
 
@@ -2251,7 +2268,7 @@ export async function runCodex(opts: {
                         if (shouldLogAcpDebug) {
                             logger.debug('[CodexACP] compactContext complete');
                         }
-                        session.confirmUserMessageDeliveredToProvider?.(message.maxUserMessageSeq ?? null);
+                        confirmProviderAcceptedPrompt(message);
                         continue;
                     }
 

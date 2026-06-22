@@ -585,6 +585,10 @@ export async function claudeUnifiedTerminalLauncher(
         ?? { keys: new Set<string>(), complete: true, oldestCoveredAtMs: null },
       // Unknown canonical state (no accessor) counts as ACTIVE (fail-closed).
       isCanonicalTurnActive: () => session.client.hasActiveCanonicalTurn?.() ?? true,
+      isPromptDeliveryAccepted: (batch) => session.client.hasUserMessageProviderAcceptance?.({
+        userMessageSeq: batch.maxUserMessageSeq ?? null,
+        localIds: batch.userMessageLocalIds ?? [],
+      }) === true,
       // Persist a consumed marker for controller-command echoes the runner suppresses, so they
       // join the committed baseline and cannot replay as "new" messages after a respawn
       // (resume-replay leak, 2026-06-11).

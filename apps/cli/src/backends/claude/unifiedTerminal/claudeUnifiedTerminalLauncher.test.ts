@@ -98,6 +98,7 @@ function createSession(overrides: Readonly<{
       recordClaudeJsonlMessageConsumed: vi.fn(),
       deferDeliveredUserMessageWatermarkToProviderAcceptance: vi.fn(),
       confirmUserMessageDeliveredToProvider: vi.fn(),
+      hasUserMessageProviderAcceptance: vi.fn(() => false),
       registerSessionRuntimeControls: vi.fn(() => vi.fn()),
       updateAgentState: vi.fn((updater: (state: unknown) => unknown) => updater({ capabilities: {} })),
       fetchCommittedClaudeJsonlMessageBaseline: vi.fn(async () => ({ keys: new Set<string>(), complete: true, oldestCoveredAtMs: null })),
@@ -507,6 +508,40 @@ describe('claudeUnifiedTerminalLauncher', () => {
     );
     expect(client.confirmUserMessageDeliveredToProvider).toHaveBeenCalledTimes(1);
     expect(client.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(17, { localIds: ['l17'] });
+  });
+
+  it('passes core provider-acceptance state to the unified terminal runner', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    const client = session.client as unknown as {
+      hasUserMessageProviderAcceptance: ReturnType<typeof vi.fn>;
+    };
+    client.hasUserMessageProviderAcceptance.mockReturnValueOnce(true);
+    mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (opts: {
+      isPromptDeliveryAccepted?: (batch: {
+        message: string;
+        maxUserMessageSeq?: number | null;
+        userMessageLocalIds?: readonly string[];
+      }) => boolean;
+    }) => {
+      expect(opts.isPromptDeliveryAccepted?.({
+        message: 'already accepted',
+        maxUserMessageSeq: 739,
+        userMessageLocalIds: ['prompt-739'],
+      })).toBe(true);
+    });
+
+    await claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'tmux',
+      },
+    });
+
+    expect(client.hasUserMessageProviderAcceptance).toHaveBeenCalledWith({
+      userMessageSeq: 739,
+      localIds: ['prompt-739'],
+    });
   });
 
   it('registers terminal composer clear through additive session runtime controls', async () => {

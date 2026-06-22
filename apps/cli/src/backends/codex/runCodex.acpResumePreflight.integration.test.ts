@@ -1492,7 +1492,8 @@ describe('runCodex CodexACP resume behavior', () => {
           },
           isolate: false,
           hash: 'hash-compact',
-          maxUserMessageSeq: 63,
+          maxUserMessageSeq: null,
+          userMessageLocalIds: ['codex-compact-63'],
         };
       }
       return null;
@@ -1518,7 +1519,9 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(compactContext).toHaveBeenCalledWith('/compact');
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(flushTurn).toHaveBeenCalled();
-    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(63);
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(null, {
+      localIds: ['codex-compact-63'],
+    });
   });
 
   it('confirms locally consumed /clear commands when provider delivery is deferred', async () => {
@@ -1559,7 +1562,8 @@ describe('runCodex CodexACP resume behavior', () => {
           },
           isolate: false,
           hash: 'hash-clear',
-          maxUserMessageSeq: 64,
+          maxUserMessageSeq: null,
+          userMessageLocalIds: ['codex-clear-64'],
         };
       }
       return null;
@@ -1583,7 +1587,9 @@ describe('runCodex CodexACP resume behavior', () => {
 
     expect(reset).toHaveBeenCalled();
     expect(sendPrompt).not.toHaveBeenCalled();
-    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(64);
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(null, {
+      localIds: ['codex-clear-64'],
+    });
   });
 
   it('passes the requested directory to the Codex app-server runtime', async () => {

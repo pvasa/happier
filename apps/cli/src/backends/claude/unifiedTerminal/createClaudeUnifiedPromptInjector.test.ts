@@ -237,6 +237,9 @@ describe('createClaudeUnifiedPromptInjector', () => {
         hostKind: 'zellij',
         multiline: true,
         originKind: 'ui_pending',
+        inputByteLength: 25,
+        inputNewlineCount: 1,
+        writeTimeoutMs: 15_000,
       },
     });
     expect(JSON.stringify(telemetry.emit.mock.calls)).not.toContain('secret prompt');

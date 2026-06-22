@@ -89,13 +89,17 @@ export async function fetchCodexRateLimitResetCredits(params: Readonly<{
 export async function consumeCodexRateLimitResetCredit(params: Readonly<{
   accessToken: string;
   accountId?: string | null;
-  idempotencyKey: string;
+  /** Id of the rate-limit-reset credit to redeem (from the credits inventory `id`). */
+  creditId: string;
+  /** Per-redeem dedup id sent as `redeem_request_id`. Stable retries reuse the same value. */
+  redeemRequestId: string;
   consumeUrl?: string;
   fetchRuntime?: CodexRateLimitResetCreditsFetch;
   signal?: AbortSignal;
 }>): Promise<ConsumeCodexRateLimitResetCreditResult> {
   const accessToken = params.accessToken.trim();
-  const idempotencyKey = params.idempotencyKey.trim();
+  const creditId = params.creditId.trim();
+  const redeemRequestId = params.redeemRequestId.trim();
   if (!accessToken) {
     return {
       ok: false,
@@ -103,11 +107,11 @@ export async function consumeCodexRateLimitResetCredit(params: Readonly<{
       providerCode: 'missing_access_token',
     };
   }
-  if (!idempotencyKey) {
+  if (!creditId) {
     return {
       ok: false,
       errorCode: 'codex_reset_credit_consume_failed',
-      providerCode: 'missing_idempotency_key',
+      providerCode: 'missing_credit_id',
     };
   }
 
@@ -121,9 +125,13 @@ export async function consumeCodexRateLimitResetCredit(params: Readonly<{
         headers: {
           Authorization: `Bearer ${accessToken}`,
           ...(params.accountId ? { 'ChatGPT-Account-Id': params.accountId } : {}),
-          'Idempotency-Key': idempotencyKey,
+          'Content-Type': 'application/json',
           Accept: 'application/json',
         },
+        body: JSON.stringify({
+          credit_id: creditId,
+          ...(redeemRequestId ? { redeem_request_id: redeemRequestId } : {}),
+        }),
       },
     );
     const json = await readJsonBestEffort(response);

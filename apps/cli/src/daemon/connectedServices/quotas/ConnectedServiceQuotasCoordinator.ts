@@ -268,7 +268,14 @@ type GroupSwitchTargetEligibility =
       status: 'unknown';
       reason: 'missing_runtime_quota_snapshots' | 'missing_group_reader' | 'group_resolution_failed' | 'selection_unknown' | 'source_quota_unavailable';
     }>
-  | Readonly<{ status: 'eligible' }>
+  | Readonly<{
+      status: 'eligible';
+      sourceProfileId?: string | null;
+      sourceRemainingPercent?: number;
+      sourceThresholdPercent?: number;
+      selectedProfileId?: string;
+      selectedRemainingPercent?: number | null;
+    }>
   | Readonly<{ status: 'no_eligible_target'; retryAfterMs: number | null }>
   | Readonly<{ status: 'no_meaningfully_better_target'; retryAfterMs: number | null }>;
 
@@ -308,6 +315,11 @@ export type ConnectedServiceQuotaCoordinatorDiagnostic = Readonly<{
   groupId?: string;
   activeProfileId?: string;
   eligibilityStatus?: GroupSwitchTargetEligibility['status'];
+  sourceProfileId?: string | null;
+  sourceRemainingPercent?: number;
+  sourceThresholdPercent?: number;
+  selectedProfileId?: string;
+  selectedRemainingPercent?: number | null;
   targetCount?: number;
   allowedTargetCount?: number;
 }>;
@@ -1405,6 +1417,10 @@ export class ConnectedServiceQuotasCoordinator {
       nowMs: now,
     });
     const activeProfileId = input.activeProfileId?.trim() || switchState.activeProfileId;
+    let softSwitchSourceEvidence: Extract<
+      ReturnType<typeof resolveConnectedServiceAuthGroupSoftSwitchSourceEvidence>,
+      { status: 'at_or_below_threshold' }
+    > | null = null;
     if (input.purpose === 'soft_switch') {
       const sourceEvidence = resolveConnectedServiceAuthGroupSoftSwitchSourceEvidence({
         activeProfileId,
@@ -1419,6 +1435,7 @@ export class ConnectedServiceQuotasCoordinator {
       if (sourceEvidence.status === 'above_threshold') {
         return { status: 'no_meaningfully_better_target', retryAfterMs: null };
       }
+      softSwitchSourceEvidence = sourceEvidence;
     }
     const selection = selectConnectedServiceAuthGroupCandidate({
       nowMs: now,
@@ -1445,7 +1462,18 @@ export class ConnectedServiceQuotasCoordinator {
             : null,
         };
       }
-      return { status: 'eligible' };
+      return {
+        status: 'eligible',
+        ...(input.purpose === 'soft_switch'
+          ? {
+              sourceProfileId: activeProfileId,
+              sourceRemainingPercent: softSwitchSourceEvidence?.remainingPercent,
+              sourceThresholdPercent: softSwitchSourceEvidence?.thresholdPercent,
+              selectedProfileId: selection.selected.profileId,
+              selectedRemainingPercent: selection.selected.leastLimitedScore,
+            }
+          : {}),
+      };
     }
     if (selection.reason !== 'no_eligible_members') return { status: 'unknown', reason: 'selection_unknown' };
 
@@ -2213,6 +2241,21 @@ export class ConnectedServiceQuotasCoordinator {
           groupId: target.groupId,
           activeProfileId: target.activeProfileId,
           eligibilityStatus: targetEligibility.status,
+          ...(targetEligibility.sourceProfileId === undefined
+            ? {}
+            : { sourceProfileId: targetEligibility.sourceProfileId }),
+          ...(targetEligibility.sourceRemainingPercent === undefined
+            ? {}
+            : { sourceRemainingPercent: targetEligibility.sourceRemainingPercent }),
+          ...(targetEligibility.sourceThresholdPercent === undefined
+            ? {}
+            : { sourceThresholdPercent: targetEligibility.sourceThresholdPercent }),
+          ...(targetEligibility.selectedProfileId === undefined
+            ? {}
+            : { selectedProfileId: targetEligibility.selectedProfileId }),
+          ...(targetEligibility.selectedRemainingPercent === undefined
+            ? {}
+            : { selectedRemainingPercent: targetEligibility.selectedRemainingPercent }),
           targetCount: targets.length,
           allowedTargetCount: allowedTargets.length,
         });

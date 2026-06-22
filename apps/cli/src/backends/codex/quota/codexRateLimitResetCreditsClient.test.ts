@@ -36,7 +36,7 @@ describe('codexRateLimitResetCreditsClient', () => {
     );
   });
 
-  it('posts to the Codex reset-credit consume endpoint with connected account headers', async () => {
+  it('posts to the Codex reset-credit consume endpoint with a credit-id JSON body', async () => {
     const fetchRuntime = vi.fn(async (_url: string, _init: RequestInit): Promise<Response> => ({
       ok: true,
       status: 200,
@@ -46,7 +46,8 @@ describe('codexRateLimitResetCreditsClient', () => {
     await expect(consumeCodexRateLimitResetCredit({
       accessToken: 'access-token',
       accountId: 'acct-1',
-      idempotencyKey: 'reset-req-1',
+      creditId: 'credit-1',
+      redeemRequestId: 'reset-req-1',
       consumeUrl: 'https://chatgpt.example.test/backend-api/wham/rate-limit-reset-credits/consume',
       fetchRuntime,
     })).resolves.toEqual({
@@ -61,12 +62,30 @@ describe('codexRateLimitResetCreditsClient', () => {
         headers: expect.objectContaining({
           Authorization: 'Bearer access-token',
           'ChatGPT-Account-Id': 'acct-1',
-          'Idempotency-Key': 'reset-req-1',
+          'Content-Type': 'application/json',
           Accept: 'application/json',
         }),
+        body: JSON.stringify({ credit_id: 'credit-1', redeem_request_id: 'reset-req-1' }),
       }),
     );
-    expect(fetchRuntime.mock.calls[0]?.[1]).not.toHaveProperty('body');
+  });
+
+  it('rejects a consume request with no credit id', async () => {
+    const fetchRuntime = vi.fn();
+
+    await expect(consumeCodexRateLimitResetCredit({
+      accessToken: 'access-token',
+      accountId: 'acct-1',
+      creditId: '   ',
+      redeemRequestId: 'reset-req-1',
+      consumeUrl: 'https://chatgpt.example.test/backend-api/wham/rate-limit-reset-credits/consume',
+      fetchRuntime,
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'codex_reset_credit_consume_failed',
+      providerCode: 'missing_credit_id',
+    });
+    expect(fetchRuntime).not.toHaveBeenCalled();
   });
 
   it('returns provider status details for rejected reset-credit consume requests', async () => {
@@ -80,7 +99,8 @@ describe('codexRateLimitResetCreditsClient', () => {
     await expect(consumeCodexRateLimitResetCredit({
       accessToken: 'access-token',
       accountId: null,
-      idempotencyKey: 'reset-req-1',
+      creditId: 'credit-1',
+      redeemRequestId: 'reset-req-1',
       consumeUrl: 'https://chatgpt.example.test/backend-api/wham/rate-limit-reset-credits/consume',
       fetchRuntime,
     })).resolves.toEqual({

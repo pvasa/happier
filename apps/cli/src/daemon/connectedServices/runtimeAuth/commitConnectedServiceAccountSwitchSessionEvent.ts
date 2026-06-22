@@ -33,6 +33,7 @@ import {
   resolveConnectedServiceNotificationProfileLabel,
   type ConnectedServiceNotificationProfileSummary,
 } from '../notifications/connectedServiceNotificationLabels';
+import { isBackgroundConnectedServiceSwitchReason } from '../connectedServiceSwitchEventVisibility';
 
 type ConnectedServiceRuntimeSwitchSessionEvent = Readonly<{
   type: 'connected_service_account_switch' | 'connected_service_auth_group_switch';
@@ -68,6 +69,7 @@ type ConnectedServiceRuntimeSwitchAttemptSessionEvent = Readonly<{
   type: 'connected_service_account_switch_attempt';
   ok: boolean;
   action: 'restart_requested' | 'hot_applied' | 'metadata_updated';
+  rawReason?: string;
   reason?: TranscriptSwitchReason;
   attemptedContinuityMode?: ConnectedServiceSwitchAttemptedContinuityModeV1;
   outcome?: ConnectedServiceSwitchAttemptOutcomeV1;
@@ -178,10 +180,6 @@ function isSameProfileRuntimeSwitchEvent(event: ConnectedServiceRuntimeSwitchSes
   );
 }
 
-function isBackgroundMaintenanceSwitchReason(reason: TranscriptSwitchReason): boolean {
-  return reason === 'soft_threshold';
-}
-
 function parseDeferralPolicy(value: unknown): 'defer_until_turn_boundary' | 'defer_until_idle' | null {
   return value === 'defer_until_turn_boundary' || value === 'defer_until_idle' ? value : null;
 }
@@ -256,12 +254,14 @@ function parseRuntimeSwitchAttemptEvent(value: unknown): ConnectedServiceRuntime
     || record.partialState === 'runtime_auth_partially_applied'
       ? record.partialState
       : null;
-  const reason = typeof record.reason === 'string' ? mapSwitchReason(record.reason) : null;
+  const rawReason = typeof record.reason === 'string' ? record.reason.trim() : '';
+  const reason = rawReason ? mapSwitchReason(rawReason) : null;
   const verificationByServiceId = parseSwitchAttemptVerificationByServiceId(record.verificationByServiceId);
   return {
     type: 'connected_service_account_switch_attempt',
     ok: record.ok,
     action,
+    ...(rawReason ? { rawReason } : {}),
     ...(reason ? { reason } : {}),
     ...(attemptedContinuityMode.success ? { attemptedContinuityMode: attemptedContinuityMode.data } : {}),
     ...(outcome.success ? { outcome: outcome.data } : {}),
@@ -555,7 +555,7 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
 
   const attempt = parseRuntimeSwitchAttemptEvent(params.event);
   if (attempt) {
-    if (attempt.reason && isBackgroundMaintenanceSwitchReason(attempt.reason)) return;
+    if (isBackgroundConnectedServiceSwitchReason(attempt.rawReason ?? attempt.reason)) return;
     const rawSession = await fetchSessionById({
       token: params.credentials.token,
       sessionId: params.sessionId,
@@ -625,10 +625,10 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
   }
 
   const parsed = parseRuntimeSwitchEvent(params.event);
+  if (parsed && isBackgroundConnectedServiceSwitchReason(parsed.reason)) return;
   const reason = parsed ? mapSwitchReason(parsed.reason) : null;
   if (!parsed || !reason) return;
   if (isSameProfileRuntimeSwitchEvent(parsed)) return;
-  if (isBackgroundMaintenanceSwitchReason(reason)) return;
 
   const rawSession = await fetchSessionById({
     token: params.credentials.token,

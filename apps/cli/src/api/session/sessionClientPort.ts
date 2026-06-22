@@ -15,6 +15,12 @@ export type MaterializeNextPendingResult =
   | { type: 'no_pending' }
   | { type: 'deferred'; reason: 'supervisor_offline' | 'supervisor_auth_failed' };
 
+export type UserMessageProviderAcceptanceQuery = Readonly<{
+  userMessageSeq?: number | null | undefined;
+  userMessageSeqs?: readonly number[] | null | undefined;
+  localIds?: readonly string[] | null | undefined;
+}>;
+
 export interface SessionClientPort {
   sessionId: string;
   rpcHandlerManager: RpcHandlerManagerLike;
@@ -54,6 +60,7 @@ export interface SessionClientPort {
     seq: number | null | undefined,
     opts?: { localIds?: readonly string[] | null },
   ): void;
+  hasUserMessageProviderAcceptance?(query: UserMessageProviderAcceptanceQuery): boolean;
   getLastObservedMessageSeq?(): number;
   getCommittedUserMessageSeq?(localId: string): number | null;
   waitForCommittedUserMessageSeq?(

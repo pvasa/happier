@@ -302,11 +302,12 @@ describe('ApiSessionClient session.userMessage.send delivery', () => {
     });
 
     expect(received).toHaveLength(1);
-    expect((client as any).highestDeliveredUserMessageSeq).toBeNull();
+    expect(client.getMetadataSnapshot()?.deliveredUserMessageSeqV1).toBeUndefined();
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeq: 1 })).toBe(false);
 
     client.confirmUserMessageDeliveredToProvider(1);
 
-    expect((client as any).highestDeliveredUserMessageSeq).toBe(1);
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeq: 1 })).toBe(true);
   });
 
   it('persists a deferred delivered watermark when provider acceptance resolves a prior echo seq by localId', async () => {
@@ -350,11 +351,12 @@ describe('ApiSessionClient session.userMessage.send delivery', () => {
       },
     });
 
-    expect((client as any).highestDeliveredUserMessageSeq).toBeNull();
+    expect(client.getMetadataSnapshot()?.deliveredUserMessageSeqV1).toBeUndefined();
+    expect(client.hasUserMessageProviderAcceptance({ localIds: ['l1'] })).toBe(false);
 
     client.confirmUserMessageDeliveredToProvider(null, { localIds: ['l1'] });
 
-    expect((client as any).highestDeliveredUserMessageSeq).toBe(1);
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeq: 1 })).toBe(true);
   });
 
   it('persists a deferred delivered watermark when a committed echo arrives after provider acceptance by localId', async () => {
@@ -557,11 +559,12 @@ describe('ApiSessionClient session.userMessage.send delivery', () => {
       },
     });
 
-    expect((client as any).highestDeliveredUserMessageSeq).toBeNull();
+    expect(client.getMetadataSnapshot()?.deliveredUserMessageSeqV1).toBeUndefined();
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeq: 1 })).toBe(false);
 
     client.confirmUserMessageDeliveredToProvider(1);
 
-    expect((client as any).highestDeliveredUserMessageSeq).toBe(1);
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeq: 1 })).toBe(true);
   });
 
   it('does not wait for daemon lifecycle notification before delivering the prompt', async () => {

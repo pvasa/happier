@@ -117,6 +117,39 @@ async function createClient(sessionOverrides: Record<string, unknown>) {
   return client;
 }
 
+function triggerCommittedUserMessage(params: Readonly<{
+  seq: number;
+  localId: string;
+  text?: string;
+}>): void {
+  if (!userSocketStub) throw new Error('Missing user socket stub');
+  userSocketStub.trigger('update', {
+    id: `update-${params.seq}`,
+    createdAt: Date.now(),
+    body: {
+      t: 'new-message',
+      sid: 's1',
+      message: {
+        id: `m${params.seq}`,
+        seq: params.seq,
+        content: {
+          t: 'plain',
+          v: {
+            role: 'user',
+            content: { type: 'text', text: params.text ?? `prompt ${params.seq}` },
+            localId: params.localId,
+            meta: { source: 'ui', sentFrom: 'web' },
+          },
+        },
+        localId: params.localId,
+        messageRole: 'user',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    },
+  });
+}
+
 describe('ApiSessionClient pending-queue turn-end drain', () => {
   beforeAll(async () => {
     sessionClientModulePromise ??= import('./sessionClient');
@@ -321,6 +354,92 @@ describe('ApiSessionClient pending-queue turn-end drain', () => {
 
     expect(catchUpMock).toHaveBeenCalledTimes(1);
     expect(catchUpMock).toHaveBeenCalledWith(expect.objectContaining({ afterSeq: 0 }));
+  });
+
+  it('does not replay a same-process provider-accepted user row when durable metadata is stale', async () => {
+    const client = await createClient({
+      pendingCount: 0,
+      pendingVersion: 0,
+      metadata: { deliveredUserMessageSeqV1: 737 },
+    });
+    client.deferDeliveredUserMessageWatermarkToProviderAcceptance();
+
+    triggerCommittedUserMessage({ seq: 739, localId: 'prompt-739' });
+    client.confirmUserMessageDeliveredToProvider(739, { localIds: ['prompt-739'] });
+
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeq: 739 })).toBe(true);
+    expect(client.hasUserMessageProviderAcceptance({ localIds: ['prompt-739'] })).toBe(true);
+
+    await client.sessionTurnLifecycle.beginTurn({ provider: 'claude' });
+    catchUpMock.mockClear();
+    await client.sessionTurnLifecycle.completeTurn({ provider: 'claude' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(catchUpMock).toHaveBeenCalledTimes(1);
+    expect(catchUpMock).toHaveBeenCalledWith(expect.objectContaining({ afterSeq: 739 }));
+  });
+
+  it('does not persist a volatile handoff-only seq when a lower provider-accepted seq is confirmed', async () => {
+    const client = await createClient({
+      pendingCount: 0,
+      pendingVersion: 0,
+      metadata: { deliveredUserMessageSeqV1: 737 },
+    });
+    client.deferDeliveredUserMessageWatermarkToProviderAcceptance();
+    let metadata = client.getMetadataSnapshot()!;
+    const updateMetadata = vi.spyOn(client, 'updateMetadata').mockImplementation(async (updater) => {
+      metadata = updater(metadata);
+      (client as any).metadata = metadata;
+    });
+    const received: unknown[] = [];
+    client.onUserMessage((message) => {
+      received.push(message);
+    });
+
+    triggerCommittedUserMessage({ seq: 740, localId: 'prompt-handoff-only-740' });
+    expect(received).toHaveLength(1);
+    expect(updateMetadata).not.toHaveBeenCalled();
+    client.confirmUserMessageDeliveredToProvider(739);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateMetadata).toHaveBeenCalledTimes(1);
+    expect(metadata).toEqual(expect.objectContaining({
+      deliveredUserMessageSeqV1: 739,
+    }));
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeq: 739 })).toBe(true);
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeq: 740 })).toBe(false);
+  });
+
+  it('recognizes provider acceptance joined by local id before the committed seq exists', async () => {
+    const client = await createClient({
+      pendingCount: 0,
+      pendingVersion: 0,
+      metadata: { deliveredUserMessageSeqV1: 737 },
+    });
+    client.deferDeliveredUserMessageWatermarkToProviderAcceptance();
+
+    client.confirmUserMessageDeliveredToProvider(null, { localIds: ['prompt-late-seq'] });
+
+    expect(client.hasUserMessageProviderAcceptance({ localIds: ['prompt-late-seq'] })).toBe(true);
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeq: 740 })).toBe(false);
+
+    triggerCommittedUserMessage({ seq: 740, localId: 'prompt-late-seq' });
+
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeq: 740 })).toBe(true);
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeqs: [740] })).toBe(true);
+    expect(client.hasUserMessageProviderAcceptance({ userMessageSeqs: [740, 741] })).toBe(false);
+    expect(client.hasUserMessageProviderAcceptance({
+      userMessageSeqs: [740, 741],
+      localIds: ['prompt-late-seq'],
+    })).toBe(false);
+
+    await client.sessionTurnLifecycle.beginTurn({ provider: 'claude' });
+    catchUpMock.mockClear();
+    await client.sessionTurnLifecycle.completeTurn({ provider: 'claude' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(catchUpMock).toHaveBeenCalledTimes(1);
+    expect(catchUpMock).toHaveBeenCalledWith(expect.objectContaining({ afterSeq: 740 }));
   });
 
   it('waits for terminal turn writes to settle before turn-end owed catch-up', async () => {

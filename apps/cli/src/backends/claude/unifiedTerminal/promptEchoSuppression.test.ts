@@ -36,6 +36,19 @@ describe('createClaudeUnifiedPromptEchoSuppressor', () => {
     expect(suppressor.shouldSuppressTranscriptMessage(userMessage('same text', 16_001))).toBe(false);
   });
 
+  it('suppresses normalized accepted prompt echoes, not only byte-identical text', () => {
+    const suppressor = createClaudeUnifiedPromptEchoSuppressor({
+      nowMs: () => 1_000,
+      acceptedPromptEchoWindowMs: 5_000,
+    });
+
+    suppressor.recordAcceptedPrompt({
+      message: '  first line\r\nsecond line  ',
+    });
+
+    expect(suppressor.shouldSuppressTranscriptMessage(userMessage('first line\nsecond line', 1_100))).toBe(true);
+  });
+
   it('bounds the persisted prompt-text registry by evicting the oldest entries', () => {
     const suppressor = createClaudeUnifiedPromptEchoSuppressor({ nowMs: () => 1_000 });
 
@@ -49,5 +62,33 @@ describe('createClaudeUnifiedPromptEchoSuppressor', () => {
     expect(suppressor.shouldSuppressTranscriptMessage(userMessage('persisted prompt 0', 2_000))).toBe(false);
     // The newest entry still suppresses.
     expect(suppressor.shouldSuppressTranscriptMessage(userMessage(`persisted prompt ${total - 1}`, 2_000))).toBe(true);
+  });
+
+  it('suppresses persisted prompt text using the normalized prompt identity', () => {
+    const suppressor = createClaudeUnifiedPromptEchoSuppressor({ nowMs: () => 1_000 });
+
+    suppressor.recordPersistedUserPromptTexts([{
+      text: '  persisted prompt\r\nwith trailing spaces   ',
+      suppressBeforeMs: 5_000,
+    }]);
+
+    expect(suppressor.shouldSuppressTranscriptMessage(userMessage('persisted prompt\nwith trailing spaces', 2_000))).toBe(true);
+  });
+
+  it('removes consumed normalized persisted prompt buckets so stale empty entries cannot evict live prompts', () => {
+    const suppressor = createClaudeUnifiedPromptEchoSuppressor({ nowMs: () => 1_000 });
+
+    suppressor.recordPersistedUserPromptTexts([
+      { text: 'oldest live prompt', suppressBeforeMs: 1_000_000 },
+      { text: 'normalized persisted prompt', suppressBeforeMs: 1_000_000 },
+    ]);
+
+    expect(suppressor.shouldSuppressTranscriptMessage(userMessage('  normalized persisted prompt  ', 2_000))).toBe(true);
+
+    for (let i = 0; i < 2_047; i += 1) {
+      suppressor.recordPersistedUserPromptTexts([{ text: `new prompt ${i}`, suppressBeforeMs: 1_000_000 }]);
+    }
+
+    expect(suppressor.shouldSuppressTranscriptMessage(userMessage('oldest live prompt', 2_000))).toBe(true);
   });
 });

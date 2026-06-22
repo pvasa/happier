@@ -120,7 +120,7 @@ import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
 import { updateMetadataBestEffort } from './sessionWritesBestEffort';
 import { normalizeAgentPromptPayload } from '@/agent/core/AgentPromptPayload';
-import type { MaterializeNextPendingResult } from './sessionClientPort';
+import type { MaterializeNextPendingResult, UserMessageProviderAcceptanceQuery } from './sessionClientPort';
 import {
     CommittedUserMessageSeqTracker,
     type CommittedUserMessageSeqWaitOptions,
@@ -297,6 +297,7 @@ export class ApiSessionClient extends EventEmitter {
     private lastObservedUserMessageSeq = 0;
     /** Owed-delivery watermark (A-F2/D15b): highest user-row seq handed to the agent loop this process. */
     private highestDeliveredUserMessageSeq: number | null = null;
+    private highestProviderAcceptedUserMessageSeq: number | null = null;
     private deliveredUserMessageSeqPersistInFlight = false;
     /**
      * A3-HIGH-1: when true (launchers wired for provider-acceptance confirmation), the watermark
@@ -929,16 +930,16 @@ export class ApiSessionClient extends EventEmitter {
             return;
         }
         this.lastOwedUserMessageCatchUpAt = now;
-        const watermark = readDeliveredUserMessageSeqV1(this.metadata as unknown as Record<string, unknown> | null);
+        const watermarkState = this.readDeliveredUserMessageWatermarkState();
         const afterSeq = Math.max(0, Math.min(
-            watermark ?? Number.MAX_SAFE_INTEGER,
+            watermarkState.effective ?? Number.MAX_SAFE_INTEGER,
             this.lastObservedUserMessageSeq,
         ));
         this.owedUserMessageCatchUpInFlight = true;
         logger.debug('[pendingQueue] owed user-message turn-end catch-up', {
             sessionId: this.sessionId,
             afterSeq,
-            deliveredWatermark: watermark,
+            deliveredWatermark: watermarkState.effective,
             lastObservedUserMessageSeq: this.lastObservedUserMessageSeq,
         });
         try {
@@ -1255,6 +1256,10 @@ export class ApiSessionClient extends EventEmitter {
             return;
         }
         this.clearProviderAcceptedUserMessageLocalIdAwaitingSeq(localId);
+        this.highestProviderAcceptedUserMessageSeq = Math.max(
+            this.highestProviderAcceptedUserMessageSeq ?? -1,
+            seq,
+        );
         this.persistDeliveredUserMessageWatermark(seq);
     }
 
@@ -3120,8 +3125,10 @@ export class ApiSessionClient extends EventEmitter {
      * behind, which only widens redelivery (never loses messages).
      */
     private recordDeliveredUserMessageSeq(seq: number): void {
+        if (!Number.isInteger(seq) || seq < 0) return;
         if (this.deliveredUserMessageWatermarkDeferredToProviderAcceptance) {
             // Volatile custody only (queue residency, parked locals): wait for provider acceptance.
+            this.highestDeliveredUserMessageSeq = Math.max(this.highestDeliveredUserMessageSeq ?? -1, seq);
             return;
         }
         this.persistDeliveredUserMessageWatermark(seq);
@@ -3170,23 +3177,107 @@ export class ApiSessionClient extends EventEmitter {
         }
 
         if (highestAcceptedSeq !== null) {
+            this.highestProviderAcceptedUserMessageSeq = Math.max(
+                this.highestProviderAcceptedUserMessageSeq ?? -1,
+                highestAcceptedSeq,
+            );
             this.persistDeliveredUserMessageWatermark(highestAcceptedSeq);
         }
     }
 
+    hasUserMessageProviderAcceptance(query: UserMessageProviderAcceptanceQuery): boolean {
+        const providerAccepted = this.readDeliveredUserMessageWatermarkState().providerAccepted;
+        const explicitSeqs = new Set<number>();
+        for (const seq of query.userMessageSeqs ?? []) {
+            if (Number.isInteger(seq) && seq >= 0) {
+                explicitSeqs.add(seq);
+            }
+        }
+        const scalarSeq = Number.isInteger(query.userMessageSeq) && query.userMessageSeq! >= 0
+            ? query.userMessageSeq!
+            : null;
+        if (providerAccepted !== null) {
+            if (explicitSeqs.size > 0) {
+                return [...explicitSeqs].every((seq) => seq <= providerAccepted);
+            } else if (scalarSeq !== null && scalarSeq <= providerAccepted) {
+                return true;
+            }
+        } else if (explicitSeqs.size > 0) {
+            return false;
+        }
+
+        for (const localId of this.normalizeProviderAcceptedUserMessageLocalIds(query.localIds)) {
+            if (this.providerAcceptedUserMessageLocalIdsAwaitingSeq.has(localId)) return true;
+            const committedSeq = this.committedUserMessageSeqTracker.get(localId);
+            if (committedSeq !== null && providerAccepted !== null && committedSeq <= providerAccepted) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private readDeliveredUserMessageWatermarkState(): Readonly<{
+        persisted: number | null;
+        inMemory: number | null;
+        effective: number | null;
+        providerAccepted: number | null;
+    }> {
+        const persisted = readDeliveredUserMessageSeqV1(this.metadata as unknown as Record<string, unknown> | null);
+        const inMemory = this.highestDeliveredUserMessageSeq;
+        const providerAccepted = Math.max(
+            persisted ?? -1,
+            this.highestProviderAcceptedUserMessageSeq ?? -1,
+            this.deliveredUserMessageWatermarkDeferredToProviderAcceptance ? -1 : inMemory ?? -1,
+        );
+        const effective = this.deliveredUserMessageWatermarkDeferredToProviderAcceptance
+            ? providerAccepted
+            : Math.max(persisted ?? -1, inMemory ?? -1);
+        return {
+            persisted,
+            inMemory,
+            effective: effective >= 0 ? effective : null,
+            providerAccepted: providerAccepted >= 0 ? providerAccepted : null,
+        };
+    }
+
     private persistDeliveredUserMessageWatermark(seq: number): void {
         if (!Number.isInteger(seq) || seq < 0) return;
+        if (this.deliveredUserMessageWatermarkDeferredToProviderAcceptance) {
+            this.highestProviderAcceptedUserMessageSeq = Math.max(
+                this.highestProviderAcceptedUserMessageSeq ?? -1,
+                seq,
+            );
+        }
         this.highestDeliveredUserMessageSeq = Math.max(this.highestDeliveredUserMessageSeq ?? -1, seq);
         void this.persistDeliveredUserMessageSeq();
     }
 
+    private readDeliveredUserMessagePersistTarget(): number | null {
+        const target = this.deliveredUserMessageWatermarkDeferredToProviderAcceptance
+            ? this.highestProviderAcceptedUserMessageSeq
+            : this.highestDeliveredUserMessageSeq;
+        return target !== null && Number.isInteger(target) && target >= 0 ? target : null;
+    }
+
+    private canPersistDeliveredUserMessageTarget(target: number): boolean {
+        if (!this.deliveredUserMessageWatermarkDeferredToProviderAcceptance) return true;
+        return (this.highestProviderAcceptedUserMessageSeq ?? -1) >= target;
+    }
+
     private async persistDeliveredUserMessageSeq(): Promise<void> {
         if (this.deliveredUserMessageSeqPersistInFlight) return;
-        const target = this.highestDeliveredUserMessageSeq;
+        const target = this.readDeliveredUserMessagePersistTarget();
         if (target === null) return;
+        if (!this.canPersistDeliveredUserMessageTarget(target)) return;
         this.deliveredUserMessageSeqPersistInFlight = true;
+        let persistedTarget = false;
         try {
-            await this.updateMetadata((metadata) => mergeDeliveredUserMessageSeqV1(metadata, target).metadata);
+            await this.updateMetadata((metadata) => {
+                if (!this.canPersistDeliveredUserMessageTarget(target)) return metadata;
+                persistedTarget = true;
+                return mergeDeliveredUserMessageSeqV1(metadata, target).metadata;
+            });
         } catch (error) {
             logger.debug('[API] Failed to persist delivered user-message watermark (best-effort)', error);
             return;
@@ -3194,7 +3285,12 @@ export class ApiSessionClient extends EventEmitter {
             this.deliveredUserMessageSeqPersistInFlight = false;
         }
         // A newer delivery may have arrived while the write was in flight; converge.
-        if (this.highestDeliveredUserMessageSeq !== null && this.highestDeliveredUserMessageSeq > target) {
+        const nextTarget = this.readDeliveredUserMessagePersistTarget();
+        if (
+            nextTarget !== null
+            && this.canPersistDeliveredUserMessageTarget(nextTarget)
+            && (nextTarget > target || (nextTarget === target && !persistedTarget))
+        ) {
             void this.persistDeliveredUserMessageSeq();
         }
     }

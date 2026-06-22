@@ -250,6 +250,7 @@ function createRemoteHarness(options?: {
     sendClaudeSessionMessage,
     deferDeliveredUserMessageWatermarkToProviderAcceptance: vi.fn(),
     confirmUserMessageDeliveredToProvider: vi.fn(),
+    hasUserMessageProviderAcceptance: vi.fn(() => false),
     registerSessionRuntimeControls: vi.fn(() => vi.fn()),
     fetchRecentTranscriptTextItemsForAcpImport: vi.fn(async () => []),
     sendSessionEvent: vi.fn(),
@@ -857,6 +858,56 @@ function createRemoteHarness(options?: {
       localIds: ['remote-local-31'],
     });
 
+    const switchHandler = await harness.switchHandlerReady;
+    await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  });
+
+  it('passes provider-accepted delivery state into remote unified terminal ambiguous-retry gating', async () => {
+    const harness = createRemoteHarness({ sessionId: 'sess_unified_remote_delivery_gate' });
+    const runnerCompleted = createDeferred<void>();
+    const hasUserMessageProviderAcceptance = harness.client.hasUserMessageProviderAcceptance as ReturnType<typeof vi.fn>;
+    hasUserMessageProviderAcceptance.mockReturnValueOnce(true);
+    let capturedIsPromptDeliveryAccepted:
+      | ((batch: {
+        maxUserMessageSeq?: number | null;
+        userMessageLocalIds?: readonly string[] | null;
+      }) => boolean)
+      | undefined;
+
+    const runClaudeUnifiedTerminalSession = vi.fn(async (opts: {
+      isPromptDeliveryAccepted?: (batch: {
+        maxUserMessageSeq?: number | null;
+        userMessageLocalIds?: readonly string[] | null;
+      }) => boolean;
+    }) => {
+      capturedIsPromptDeliveryAccepted = opts.isPromptDeliveryAccepted;
+      runnerCompleted.resolve(undefined);
+    });
+    vi.doMock('./unifiedTerminal/runClaudeUnifiedTerminalSession', () => ({
+      runClaudeUnifiedTerminalSession,
+    }));
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown, deps?: unknown) => {
+      const dispatchDeps = deps as UnifiedTerminalDispatchDeps | undefined;
+      expect(dispatchDeps?.claudeUnifiedTerminal).toEqual(expect.any(Function));
+      await dispatchDeps?.claudeUnifiedTerminal?.(opts);
+      await waitForAbort((opts as UnifiedTerminalDispatchMockOptions).signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(harness.session);
+    vi.doUnmock('./unifiedTerminal/runClaudeUnifiedTerminalSession');
+
+    await runnerCompleted.promise;
+    expect(typeof capturedIsPromptDeliveryAccepted).toBe('function');
+    expect(capturedIsPromptDeliveryAccepted?.({
+      maxUserMessageSeq: 44,
+      userMessageLocalIds: ['remote-local-44'],
+    })).toBe(true);
+    expect(hasUserMessageProviderAcceptance).toHaveBeenCalledWith({
+      userMessageSeq: 44,
+      localIds: ['remote-local-44'],
+    });
     const switchHandler = await harness.switchHandlerReady;
     await expect(switchHandler({ to: 'local' })).resolves.toBe(true);
     await expect(launcherPromise).resolves.toBe('switch');

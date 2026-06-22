@@ -144,6 +144,16 @@ function buildRecoveryIntentFromLatestUsageLimitIssue(
   };
 }
 
+function selectAvailableResetCreditId(
+  recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1 | null | undefined,
+): string | null {
+  const credits = recoveryCredits?.credits ?? [];
+  const available = credits.find(
+    (credit) => credit.status === 'available' && typeof credit.providerCreditId === 'string' && credit.providerCreditId.trim().length > 0,
+  );
+  return available?.providerCreditId?.trim() ?? null;
+}
+
 function buildNextIntent(params: Readonly<{
   intent: SessionUsageLimitRecoveryV1;
   exhausted: boolean;
@@ -323,10 +333,21 @@ export function createCodexAppServerUsageLimitRecoveryControlAdapter(deps: Reado
           : 'codex_reset_credit_connected_service_auth_unavailable');
       }
 
+      // Resolve the concrete credit to redeem. Prefer a freshly fetched available
+      // credit id; fall back to the persisted intent's credits when the live fetch
+      // is unavailable. The provider rejects a consume with no credit_id.
+      const liveRecoveryCredits = await readRecoveryCreditsForIntent(params, intent);
+      const creditId = selectAvailableResetCreditId(liveRecoveryCredits)
+        ?? selectAvailableResetCreditId(intent.recoveryCredits);
+      if (!creditId) {
+        return stableError('codex_reset_credit_no_available_credit');
+      }
+
       const consumed = await consumeCodexRateLimitResetCredit({
         accessToken: auth.accessToken,
         accountId: auth.accountId,
-        idempotencyKey: `${intent.issueFingerprint}:reset-credit`,
+        creditId,
+        redeemRequestId: `${intent.issueFingerprint}:reset-credit`,
         ...(deps.fetchRuntime ? { fetchRuntime: deps.fetchRuntime } : {}),
       });
       if (!consumed.ok) return stableError(consumed.providerCode ?? consumed.errorCode);

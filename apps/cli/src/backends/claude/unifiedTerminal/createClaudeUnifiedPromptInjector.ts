@@ -5,7 +5,7 @@ import type {
   TerminalInputInjectionV1,
 } from '@/agent/runtime/terminal/TerminalInputInjectionV1';
 import { hasMultilinePayload } from '@/agent/runtime/terminal/injection/bracketedPaste';
-import { resolveTerminalPromptWriteTimeoutMs } from '@/agent/runtime/terminal/injection/promptWriteTimeout';
+import { resolveTerminalPromptWriteBudget } from '@/agent/runtime/terminal/injection/promptWriteTimeout';
 import { prepareTerminalPromptTextForInjection } from '@/agent/runtime/terminal/injection/promptTextSafety';
 import {
   TERMINAL_INPUT_QUIET_PERIOD_MS,
@@ -140,6 +140,7 @@ export function createClaudeUnifiedPromptInjector<Mode = unknown>(opts: Readonly
       }
 
       const text = preparedPrompt.text;
+      const writeBudget = resolveTerminalPromptWriteBudget(text);
 
       if (opts.composerDraftGuard && !inFlightSteer) {
         const guard = await opts.composerDraftGuard();
@@ -193,7 +194,7 @@ export function createClaudeUnifiedPromptInjector<Mode = unknown>(opts: Readonly
         // adapter-level quiet-screen deferral must be skipped for them.
         scheduling: {
           ...(inFlightSteer ? {} : { deferredUntilQuietMs: TERMINAL_INPUT_QUIET_PERIOD_MS }),
-          timeoutMs: resolveTerminalPromptWriteTimeoutMs(text),
+          timeoutMs: writeBudget.timeoutMs,
         },
       } as const;
       const result = await opts.inputInjection.injectUserPrompt(input);
@@ -202,6 +203,9 @@ export function createClaudeUnifiedPromptInjector<Mode = unknown>(opts: Readonly
           result,
           hostKind: opts.inputInjection.hostKind,
           multiline,
+          inputByteLength: writeBudget.byteLength,
+          inputNewlineCount: writeBudget.newlineCount,
+          writeTimeoutMs: writeBudget.timeoutMs,
           originKind: batch.origin.kind,
           ...(inFlightSteer ? { inFlightSteer: true } : {}),
         });

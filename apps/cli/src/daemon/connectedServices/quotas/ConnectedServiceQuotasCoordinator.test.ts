@@ -1202,6 +1202,11 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       groupId: 'team',
       activeProfileId: 'active',
       eligibilityStatus: 'eligible',
+      sourceProfileId: 'active',
+      sourceRemainingPercent: 5,
+      sourceThresholdPercent: 15,
+      selectedProfileId: 'backup',
+      selectedRemainingPercent: 90,
       targetCount: 1,
       allowedTargetCount: 1,
     }));
