@@ -175,16 +175,17 @@ test('planProviderCliInstall uses managed-package installs for qwen', () => {
   assert.equal(qwen.plan.commands.length, 0);
 });
 
-test('planProviderCliInstall exposes a Windows vendor recipe for opencode', () => {
+test('planProviderCliInstall uses a managed package for opencode', () => {
   const opencode = planProviderCliInstall({ providerId: 'opencode', platform: 'win32' });
   assert.equal(opencode.ok, true);
-  assert.equal(opencode.plan.installMode, 'vendor_recipe');
-  assert.deepEqual(opencode.plan.commands, [{
-    cmd: 'cmd.exe',
-    args: ['/c', 'npm install -g opencode-ai'],
-    requiresAdmin: false,
-    note: null,
-  }]);
+  assert.equal(opencode.plan.installMode, 'managed_package');
+  assert.equal(opencode.plan.commands.length, 0);
+  assert.deepEqual(opencode.plan.managedInstall, {
+    kind: 'managed_package',
+    packageName: 'opencode-ai',
+    binaryName: 'opencode',
+    packageBinarySetup: { kind: 'opencode_platform_binary' },
+  });
 });
 
 test('resolvePlatformFromNodePlatform maps supported node platforms and rejects unsupported ones', () => {
@@ -549,7 +550,7 @@ test('installProviderCli gives vendor recipes a managed scratch TMPDIR on Unix',
     const homeDir = join(dir, 'home');
     const binDir = join(dir, 'bin');
     const envLogPath = join(dir, 'vendor-env.log');
-    const expectedScratchRoot = join(homeDir, 'tools', 'providers', 'opencode', '.tmp');
+    const expectedScratchRoot = join(homeDir, 'tools', 'providers', 'claude', '.tmp');
     await mkdir(homeDir, { recursive: true });
     await mkdir(binDir, { recursive: true });
 
@@ -565,7 +566,7 @@ exit 0
     await chmod(bashPath, 0o755);
 
     const res = await installProviderCli({
-      providerId: 'opencode',
+      providerId: 'claude',
       platform: 'linux',
       skipIfInstalled: false,
       allowVendorRecipeExecution: true,
@@ -584,7 +585,7 @@ exit 0
   }
 });
 
-test('installProviderCli prepends common and provider-specific user bin dirs for vendor recipes on Unix', async () => {
+test('installProviderCli prepends common user bin dirs for vendor recipes on Unix', async () => {
   if (process.platform === 'win32') {
     return;
   }
@@ -609,7 +610,7 @@ exit 0
     await chmod(bashPath, 0o755);
 
     const res = await installProviderCli({
-      providerId: 'opencode',
+      providerId: 'claude',
       platform: 'linux',
       skipIfInstalled: false,
       allowVendorRecipeExecution: true,
@@ -625,7 +626,6 @@ exit 0
     const loggedPath = (await readFile(envLogPath, 'utf8')).trim();
     const entries = loggedPath.split(':');
     assert.equal(entries[0], join(homeDir, '.local', 'bin'));
-    assert.equal(entries[1], join(homeDir, '.opencode', 'bin'));
     assert.ok(entries.includes(binDir));
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -742,7 +742,7 @@ test('installProviderCli writes default install logs under HAPPIER_HOME instead 
     await chmod(bashPath, 0o755);
 
     const res = await installProviderCli({
-      providerId: 'opencode',
+      providerId: 'claude',
       platform: 'linux',
       skipIfInstalled: false,
       allowVendorRecipeExecution: true,
@@ -800,8 +800,8 @@ exit 0
 
     const managedPath = resolveProviderCliManagedCommandPath('gemini', { happyHomeDir: homeDir });
     const wrapper = await readFile(managedPath, 'utf8');
-    assert.match(wrapper, /pnpm.*exec/);
-    assert.match(wrapper, /exec\s+"gemini"/);
+    assert.doesNotMatch(wrapper, /pnpm.*exec/);
+    assert.match(wrapper, /node_modules\/\.bin\/gemini/);
     assert.doesNotMatch(wrapper, /\/next\/workspace/);
     assert.match(wrapper, /\/current\/workspace/);
     assert.match(wrapper, new RegExp(runtimeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -1447,12 +1447,15 @@ test('resolveExistingPnpmCommand ignores a non-executable override on Unix', asy
 
   const dir = await mkdtemp(join(tmpdir(), 'happier-pnpm-override-nonexec-'));
   try {
+    const homeDir = join(dir, 'home');
     const overridePath = join(dir, 'pnpm');
+    await mkdir(homeDir, { recursive: true });
     await writeFile(overridePath, '#!/bin/sh\necho fake\n', 'utf8');
     await chmod(overridePath, 0o644);
 
     const command = resolveExistingPnpmCommand({
       ...process.env,
+      HAPPIER_HOME_DIR: homeDir,
       HAPPIER_PNPM_BIN: overridePath,
       PATH: '',
     });

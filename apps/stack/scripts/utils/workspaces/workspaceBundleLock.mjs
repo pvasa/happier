@@ -12,6 +12,13 @@ import {
 import { dirname } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+function sleepSync(ms) {
+  if (!ms || ms <= 0) return;
+  const buffer = new SharedArrayBuffer(4);
+  const view = new Int32Array(buffer);
+  Atomics.wait(view, 0, 0, ms);
+}
+
 function createLockOwner() {
   const createdAtMs = Date.now();
   return {
@@ -259,5 +266,52 @@ export async function withWorkspaceBundleLock(fn, options = {}) {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     releaseWorkspaceBundleLock(lockPath, fd, owner);
     fd = null;
+  }
+}
+
+export function withWorkspaceBundleLockSync(fn, options = {}) {
+  const lockPath = options.lockPath;
+  if (!String(lockPath ?? '').trim()) {
+    throw new Error('Missing workspace bundle lock path');
+  }
+
+  mkdirSync(dirname(lockPath), { recursive: true });
+
+  const startedAt = Date.now();
+  const timeoutMs = options.timeoutMs ?? 240_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 250;
+  const staleAfterMs = options.staleAfterMs ?? timeoutMs;
+
+  let fd = null;
+  let owner = null;
+  while (true) {
+    try {
+      fd = openSync(lockPath, 'wx');
+      owner = createLockOwner();
+      writeLockOwnerToFd(fd, owner);
+      break;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      if (reclaimWorkspaceBundleLockIfStale(lockPath, { staleAfterMs, nowMs: Date.now() })) {
+        continue;
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        const owner = parseLockOwner(readFileSync(lockPath, 'utf8'));
+        const ownerLabel =
+          owner.pid != null
+            ? `pid=${owner.pid}, createdAtMs=${owner.createdAtMs ?? 'unknown'}`
+            : owner.createdAtMs != null
+              ? `createdAtMs=${owner.createdAtMs}`
+              : 'unknown owner';
+        throw new Error(`Timed out waiting for workspace bundle lock: ${lockPath} (${ownerLabel})`);
+      }
+      sleepSync(pollIntervalMs);
+    }
+  }
+
+  try {
+    return fn();
+  } finally {
+    releaseWorkspaceBundleLock(lockPath, fd, owner);
   }
 }

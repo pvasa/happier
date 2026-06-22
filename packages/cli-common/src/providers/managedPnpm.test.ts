@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { chmod, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ensureManagedPnpmCommand, managedPnpmBinPath, managedPnpmInstallDir } from './managedPnpm.js';
 
@@ -16,6 +16,12 @@ vi.mock('@happier-dev/release-runtime', () => ({
       },
     ],
   }),
+  planArchiveExtraction: (params: Readonly<{ destDir: string }>) => ({
+    command: {
+      cmd: 'mock-pnpm-archive-extract',
+      args: [params.destDir],
+    },
+  }),
 }));
 
 vi.mock('./downloadGitHubReleaseAsset.js', async () => {
@@ -24,18 +30,35 @@ vi.mock('./downloadGitHubReleaseAsset.js', async () => {
   return {
     downloadGitHubReleaseAsset: async (params: Readonly<{ destinationPath: string }>) => {
       await mkdir(dirname(params.destinationPath), { recursive: true });
-      await writeFile(params.destinationPath, 'managed-pnpm', 'utf8');
+      await writeFile(params.destinationPath, 'managed-pnpm-archive', 'utf8');
+    },
+  };
+});
+
+vi.mock('../process/runCommandStreaming.js', async () => {
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  return {
+    runCommandStreaming: async (params: Readonly<{ args: ReadonlyArray<string> }>) => {
+      const destDir = params.args[0];
+      if (!destDir) {
+        throw new Error('Expected archive extract destination');
+      }
+      await mkdir(destDir, { recursive: true });
+      await writeFile(join(destDir, process.platform === 'win32' ? 'pnpm.exe' : 'pnpm'), 'managed-pnpm-extracted', 'utf8');
+      await mkdir(join(destDir, 'dist'), { recursive: true });
+      await writeFile(join(destDir, 'dist', 'index.js'), 'managed-pnpm-support', 'utf8');
     },
   };
 });
 
 function currentPnpmReleaseAssetName(): string {
-  if (process.platform === 'darwin' && process.arch === 'arm64') return 'pnpm-macos-arm64';
+  if (process.platform === 'darwin' && process.arch === 'arm64') return 'pnpm-darwin-arm64.tar.gz';
   if (process.platform === 'darwin' && process.arch === 'x64') return 'pnpm-macos-x64';
-  if (process.platform === 'linux' && process.arch === 'arm64') return 'pnpm-linuxstatic-arm64';
-  if (process.platform === 'linux' && process.arch === 'x64') return 'pnpm-linuxstatic-x64';
-  if (process.platform === 'win32' && process.arch === 'arm64') return 'pnpm-win-arm64.exe';
-  if (process.platform === 'win32' && process.arch === 'x64') return 'pnpm-win-x64.exe';
+  if (process.platform === 'linux' && process.arch === 'arm64') return 'pnpm-linux-arm64-musl.tar.gz';
+  if (process.platform === 'linux' && process.arch === 'x64') return 'pnpm-linux-x64-musl.tar.gz';
+  if (process.platform === 'win32' && process.arch === 'arm64') return 'pnpm-win32-arm64.zip';
+  if (process.platform === 'win32' && process.arch === 'x64') return 'pnpm-win32-x64.zip';
   throw new Error(`Unsupported pnpm platform: ${process.platform}/${process.arch}`);
 }
 
@@ -146,6 +169,14 @@ describe('managedPnpm bootstrap race protection', () => {
       setTimeoutSpy.mockRestore();
     }
   }, 60000);
+
+  it('extracts the current archive asset and preserves pnpm support files before promoting', async () => {
+    const command = await ensureManagedPnpmCommand(testEnv);
+
+    expect(command).toBe(managedPnpmBinPath(testEnv));
+    await expect(readFile(managedPnpmBinPath(testEnv), 'utf8')).resolves.toBe('managed-pnpm-extracted');
+    await expect(readFile(join(dirname(managedPnpmBinPath(testEnv)), 'dist', 'index.js'), 'utf8')).resolves.toBe('managed-pnpm-support');
+  });
 
   it('does not bootstrap managed pnpm when HAPPIER_MANAGED_PNPM_BOOTSTRAP is disabled', async () => {
     testEnv = {

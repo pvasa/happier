@@ -67,6 +67,58 @@ describe('bundleWorkspacePackage', () => {
     expect(siblingNames.some((name) => name.startsWith('.protocol.__sync_tmp__.'))).toBe(false);
     expect(siblingNames.some((name) => name.startsWith('.protocol.__sync_backup__.'))).toBe(false);
   });
+
+  it('bundles external runtime dependencies inside the same workspace replacement', async () => {
+    rootDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-bundle-workspace-'));
+
+    const workspaceModule = await import('./index');
+    const bundleWorkspacePackageWithRuntimeDependencies =
+      (workspaceModule as Record<string, unknown>).bundleWorkspacePackageWithRuntimeDependencies;
+    expect(bundleWorkspacePackageWithRuntimeDependencies).toBeTypeOf('function');
+
+    const srcPackageDir = resolve(rootDir, 'packages/agents');
+    const srcDistDir = resolve(srcPackageDir, 'dist');
+    const zodPackageDir = resolve(srcPackageDir, 'node_modules/zod');
+    mkdirSync(srcDistDir, { recursive: true });
+    mkdirSync(resolve(zodPackageDir, 'v4/core'), { recursive: true });
+    writeFileSync(
+      resolve(srcPackageDir, 'package.json'),
+      JSON.stringify(
+        {
+          name: '@happier-dev/agents',
+          version: '0.0.0',
+          type: 'module',
+          exports: { '.': { default: './dist/index.js' } },
+          dependencies: { zod: '4.3.6' },
+        },
+        null,
+        2,
+      ),
+    );
+    writeFileSync(resolve(srcDistDir, 'index.js'), 'export {};');
+    writeFileSync(
+      resolve(zodPackageDir, 'package.json'),
+      JSON.stringify({ name: 'zod', version: '4.3.6', type: 'module', dependencies: {} }, null, 2),
+    );
+    writeFileSync(resolve(zodPackageDir, 'v4/core/schemas.js'), 'export const schemas = {};\n');
+
+    const destPackageDir = resolve(rootDir, 'apps/cli/node_modules/@happier-dev/agents');
+
+    (bundleWorkspacePackageWithRuntimeDependencies as (params: {
+      packageName: string;
+      srcDir: string;
+      destDir: string;
+    }) => void)({
+      packageName: '@happier-dev/agents',
+      srcDir: srcPackageDir,
+      destDir: destPackageDir,
+    });
+
+    expect(readFileSync(resolve(destPackageDir, 'dist/index.js'), 'utf8')).toBe('export {};');
+    expect(readFileSync(resolve(destPackageDir, 'node_modules/zod/v4/core/schemas.js'), 'utf8')).toBe(
+      'export const schemas = {};\n',
+    );
+  });
 });
 
 describe('atomicReplaceDirSync', () => {
@@ -163,6 +215,40 @@ describe('atomicReplaceDirSync', () => {
     expect(renameCalls).toBe(1);
     expect(readFileSync(resolve(destDir, tempFileName), 'utf8')).toBe('new');
     expect(existsSync(resolve(destDir, previousFileName))).toBe(false);
+  });
+
+  it('does not remove the live destination when backup rename is blocked', () => {
+    rootDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-atomic-replace-'));
+
+    const destDir = resolve(rootDir, 'apps/cli/node_modules/@happier-dev/protocol');
+    const previousFileName = 'previous.txt';
+
+    mkdirSync(destDir, { recursive: true });
+    writeFileSync(resolve(destDir, previousFileName), 'old');
+
+    let stagedDir = '';
+
+    expect(() => atomicReplaceDirSync({
+      destDir,
+      buildInto(tempDir) {
+        stagedDir = tempDir;
+        mkdirSync(tempDir, { recursive: true });
+        writeFileSync(resolve(tempDir, 'next.txt'), 'new');
+      },
+      fsOps: {
+        renameSync(source, target) {
+          if (source === destDir && target !== destDir) {
+            const error = new Error('EPERM');
+            Reflect.set(error, 'code', 'EPERM');
+            throw error;
+          }
+          return renameSync(source, target);
+        },
+      },
+    })).toThrow(/EPERM/);
+
+    expect(existsSync(stagedDir)).toBe(false);
+    expect(readFileSync(resolve(destDir, previousFileName), 'utf8')).toBe('old');
   });
 });
 

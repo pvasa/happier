@@ -7,7 +7,7 @@ import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, resolveExecutableName, 
 import { commandExists, compileBunBinary, ensureFileExists, execOrThrow, resolveBunCommand, resolveYarnCommand, type RunCommand } from './commands.js';
 import {
   bundleInstalledPackageWithRuntimeDependencies,
-  bundleWorkspacePackages,
+  bundleWorkspacePackageWithRuntimeDependencies,
   resolveWorkspaceBundlesFromPackageJson,
   vendorBundledPackageRuntimeDependencies,
 } from '../workspaces/index.js';
@@ -112,34 +112,21 @@ async function copyCliNodeRuntimePayload(
     srcPackageJsonPath: join(cliDir, 'package.json'),
     destPackageDir: payloadDir,
   });
-  bundleWorkspacePackages({
-    bundles: workspaceBundles.map(({ packageName, srcDir }) => ({
+  for (const { packageName, srcDir } of workspaceBundles) {
+    bundleWorkspacePackageWithRuntimeDependencies({
       packageName,
       srcDir,
       destDir: join(payloadDir, 'node_modules', ...packageName.split('/')),
-    })),
-  });
-  for (const { packageName, srcDir } of workspaceBundles) {
-    vendorBundledPackageRuntimeDependencies({
-      srcPackageJsonPath: join(srcDir, 'package.json'),
-      destPackageDir: join(payloadDir, 'node_modules', ...packageName.split('/')),
     });
   }
 }
 
 function syncCliBundledWorkspacePackagesForCompile(cliDir: string, workspaceBundles: readonly BundledWorkspacePackage[]): void {
-  bundleWorkspacePackages({
-    bundles: workspaceBundles.map(({ packageName, srcDir }) => ({
+  for (const { packageName, srcDir } of workspaceBundles) {
+    bundleWorkspacePackageWithRuntimeDependencies({
       packageName,
       srcDir,
       destDir: join(cliDir, 'node_modules', ...packageName.split('/')),
-    })),
-  });
-
-  for (const { packageName, srcDir } of workspaceBundles) {
-    vendorBundledPackageRuntimeDependencies({
-      srcPackageJsonPath: join(srcDir, 'package.json'),
-      destPackageDir: join(cliDir, 'node_modules', ...packageName.split('/')),
     });
   }
 }

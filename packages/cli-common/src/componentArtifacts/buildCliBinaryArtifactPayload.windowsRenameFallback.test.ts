@@ -94,6 +94,20 @@ describe('buildCliBinaryArtifactPayload Windows rename fallback', () => {
         ]) {
             await writeRepoFile(join(repoRoot, ...sidecarPath), 'placeholder\n', older);
         }
+        await writeRepoFile(join(cliDir, 'tools', 'archives', 'checksums.sha256'), '', older);
+        await writeRepoFile(join(cliDir, 'scripts', 'unpack-tools.cjs'), `
+const fs = require('fs');
+const path = require('path');
+
+function unpackTools(options = {}) {
+    const toolsDir = options.toolsDir || path.resolve(__dirname, '..', 'tools');
+    const unpackedPath = path.join(toolsDir, 'unpacked');
+    fs.mkdirSync(unpackedPath, { recursive: true });
+    fs.writeFileSync(path.join(unpackedPath, 'zellij.exe'), 'zellij fixture\\n');
+}
+
+module.exports = { unpackTools };
+`, older);
 
         for (const packageName of [
             '@huggingface/transformers',

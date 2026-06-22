@@ -26,6 +26,7 @@ export type ProviderCliManagedInstallSpec =
       kind: 'managed_package';
       packageName: string;
       binaryName: string;
+      packageBinarySetup?: Readonly<{ kind: 'opencode_platform_binary' }> | null;
     }>;
 
 export type ProviderCliKnownCommandCandidate =
@@ -77,15 +78,6 @@ function powershellInstall(command: string): ProviderCliInstallCommand {
   return {
     cmd: 'powershell',
     args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
-  };
-}
-
-function cmdInstall(command: string, opts: Readonly<{ requiresAdmin?: boolean; note?: string | null }> = {}): ProviderCliInstallCommand {
-  return {
-    cmd: 'cmd.exe',
-    args: ['/c', command],
-    requiresAdmin: opts.requiresAdmin,
-    note: opts.note ?? null,
   };
 }
 
@@ -146,13 +138,14 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
       { kind: 'homePath', relativePath: 'AppData/Roaming/npm/opencode.cmd' },
     ],
     sourcePreferenceDefault: 'system-first',
-    managedInstall: null,
-    manualInstallKind: 'vendor_recipe',
-    manualInstallRecipes: {
-      darwin: [bashCurlPipe('https://opencode.ai/install')],
-      linux: [bashCurlPipe('https://opencode.ai/install')],
-      win32: [cmdInstall('npm install -g opencode-ai')],
+    managedInstall: {
+      kind: 'managed_package',
+      packageName: 'opencode-ai',
+      binaryName: 'opencode',
+      packageBinarySetup: { kind: 'opencode_platform_binary' },
     },
+    manualInstallKind: 'command',
+    manualInstallRecipes: null,
     acceptsJavaScriptFileOverride: false,
     installGuideUrl: 'https://opencode.ai/docs',
     docsUrl: 'https://opencode.ai',

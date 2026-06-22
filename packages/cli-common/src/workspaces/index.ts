@@ -182,16 +182,18 @@ export function atomicReplaceDirSync(params: Readonly<{
     params.buildInto(tempDir);
 
     if (exists(params.destDir)) {
-      try {
-        rename(params.destDir, backupDir);
-        didRenameDestToBackup = true;
-      } catch (error) {
-        if (isMissingPathError(error)) {
-          // Another process already removed/replaced the destination after our existence check.
-        } else if (!isRetryableRenameError(error)) {
-          throw error;
-        } else {
-          rmDirSafeSync(params.destDir, { rmSyncImpl: rm });
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          rename(params.destDir, backupDir);
+          didRenameDestToBackup = true;
+          break;
+        } catch (error) {
+          if (isMissingPathError(error)) {
+            // Another process already removed/replaced the destination after our existence check.
+            break;
+          }
+          if (!isRetryableRenameError(error) || attempt === 3) throw error;
+          sleepSync(25);
         }
       }
     }
@@ -218,21 +220,21 @@ export function atomicReplaceDirSync(params: Readonly<{
   } catch (error) {
     // Best-effort cleanup and rollback. Never leave a half-populated destination.
     try {
-      if (existsSync(tempDir)) rmDirSafeSync(tempDir);
+      if (exists(tempDir)) rmDirSafeSync(tempDir, { rmSyncImpl: rm });
     } catch {
       // ignore
     }
 
     if (didRenameDestToBackup) {
       try {
-        if (!existsSync(params.destDir) && existsSync(backupDir)) {
-          renameSync(backupDir, params.destDir);
+        if (!exists(params.destDir) && exists(backupDir)) {
+          rename(backupDir, params.destDir);
         }
       } catch {
         // ignore rollback errors; we'll still rethrow original
       }
       try {
-        if (existsSync(backupDir)) rmDirSafeSync(backupDir);
+        if (exists(backupDir)) rmDirSafeSync(backupDir, { rmSyncImpl: rm });
       } catch {
         // ignore
       }
@@ -301,6 +303,30 @@ export function bundleWorkspacePackage(params: Readonly<{
   destDir: string;
   includeFiles?: string[];
 }>): void {
+  const packageDetails = readWorkspacePackageDetails(params);
+
+  atomicReplaceDirSync({
+    destDir: params.destDir,
+    buildInto: (tempDir) => {
+      copyBundledWorkspacePackageContents({
+        srcDir: params.srcDir,
+        tempDir,
+        rawPackageJson: packageDetails.rawPackageJson,
+        distDir: packageDetails.distDir,
+        includeFiles: params.includeFiles,
+      });
+    },
+  });
+}
+
+function readWorkspacePackageDetails(params: Readonly<{
+  packageName: string;
+  srcDir: string;
+}>): Readonly<{
+  srcPackageJsonPath: string;
+  rawPackageJson: any;
+  distDir: string;
+}> {
   const srcPackageJsonPath = resolve(params.srcDir, 'package.json');
   if (!existsSync(srcPackageJsonPath)) {
     throw new Error(`Missing workspace package.json for ${params.packageName}: ${srcPackageJsonPath}`);
@@ -318,17 +344,50 @@ export function bundleWorkspacePackage(params: Readonly<{
     throw new Error(`Missing dist/ for ${params.packageName}. Run its build first.`);
   }
 
+  return { srcPackageJsonPath, rawPackageJson, distDir };
+}
+
+function copyBundledWorkspacePackageContents(params: Readonly<{
+  srcDir: string;
+  tempDir: string;
+  rawPackageJson: any;
+  distDir: string;
+  includeFiles?: string[];
+}>): void {
+  resetDir(params.tempDir);
+  copyDirSafeSync(params.distDir, resolve(params.tempDir, 'dist'));
+  writeJson(resolve(params.tempDir, 'package.json'), sanitizeBundledPackageJson(params.rawPackageJson));
+
+  const files = params.includeFiles ?? ['README.md'];
+  for (const f of files) {
+    copyIfExists(resolve(params.srcDir, f), resolve(params.tempDir, f));
+  }
+}
+
+export function bundleWorkspacePackageWithRuntimeDependencies(params: Readonly<{
+  packageName: string;
+  srcDir: string;
+  destDir: string;
+  includeFiles?: string[];
+  resolveFromPackageJsonPath?: string;
+}>): void {
+  const packageDetails = readWorkspacePackageDetails(params);
+
   atomicReplaceDirSync({
     destDir: params.destDir,
     buildInto: (tempDir) => {
-      resetDir(tempDir);
-      copyDirSafeSync(distDir, resolve(tempDir, 'dist'));
-      writeJson(resolve(tempDir, 'package.json'), sanitizeBundledPackageJson(rawPackageJson));
-
-      const files = params.includeFiles ?? ['README.md'];
-      for (const f of files) {
-        copyIfExists(resolve(params.srcDir, f), resolve(tempDir, f));
-      }
+      copyBundledWorkspacePackageContents({
+        srcDir: params.srcDir,
+        tempDir,
+        rawPackageJson: packageDetails.rawPackageJson,
+        distDir: packageDetails.distDir,
+        includeFiles: params.includeFiles,
+      });
+      vendorRuntimeDependencyTree({
+        packageJsonPath: packageDetails.srcPackageJsonPath,
+        resolveFromPackageJsonPath: params.resolveFromPackageJsonPath,
+        destNodeModulesDir: resolve(tempDir, 'node_modules'),
+      });
     },
   });
 }

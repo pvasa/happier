@@ -8,6 +8,7 @@ import {
 } from '@happier-dev/cli-common/firstPartyRuntime';
 import { projectPath } from '@/projectPath';
 import { isEmbeddedBunBundlePath } from '@/runtime/js/isEmbeddedBunBundlePath';
+import { resolveRuntimeRootsFromLaunchedProcess } from '@/runtime/resolveRuntimeEntrypointArgv';
 
 const MANAGED_CLI_SHIM_INSTALLS = new Map(
   (['stable', 'preview', 'publicdev'] as const).flatMap((channel) => {
@@ -94,28 +95,6 @@ function resolveRuntimeRootFromInstalledShimPath(pathLike: string): string | nul
     ?? join(dirname(binaryDir), shimInstall.installRootName, 'current');
 }
 
-function resolveRuntimeRootFromScriptPath(pathLike: string): string | null {
-  const normalized = normalizePathLike(pathLike);
-  if (!normalized || isEmbeddedBunBundlePath(normalized)) {
-    return null;
-  }
-  if (basename(normalized).toLowerCase() !== 'index.mjs') {
-    return null;
-  }
-
-  const packageDistMarker = `${String.raw`/`}package-dist${String.raw`/`}`;
-  const distMarker = `${String.raw`/`}dist${String.raw`/`}`;
-  const packageDistIndex = normalized.indexOf(packageDistMarker);
-  if (packageDistIndex >= 0) {
-    return normalized.slice(0, packageDistIndex);
-  }
-  const distIndex = normalized.indexOf(distMarker);
-  if (distIndex >= 0) {
-    return normalized.slice(0, distIndex);
-  }
-  return null;
-}
-
 function resolveManagedInstalledCliProjectRoot(): string | null {
   const channels: Array<'stable' | 'preview' | 'publicdev'> = [];
   try {
@@ -139,9 +118,8 @@ function resolveManagedInstalledCliProjectRoot(): string | null {
 
 export function resolvePackagedRuntimeProjectRoots(): string[] {
   const roots: string[] = [];
-  const launchedScriptRuntimeRoot = resolveRuntimeRootFromScriptPath(process.argv[1]);
   const candidateRoots = [
-    launchedScriptRuntimeRoot,
+    ...resolveRuntimeRootsFromLaunchedProcess(),
     resolveRuntimeRootFromInstalledShimPath(process.execPath),
     resolveRuntimeRootFromInstalledShimPath(process.argv[0]),
     resolveManagedInstalledCliProjectRoot(),

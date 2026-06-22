@@ -29,6 +29,14 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
   });
 
   it('declares managed package sources for package-backed CLIs', () => {
+    expect(getProviderCliRuntimeSpec('opencode')).toMatchObject({
+      managedInstall: {
+        kind: 'managed_package',
+        packageName: 'opencode-ai',
+        binaryName: 'opencode',
+        packageBinarySetup: { kind: 'opencode_platform_binary' },
+      },
+    });
     expect(getProviderCliRuntimeSpec('gemini')).toMatchObject({
       managedInstall: {
         kind: 'managed_package',
@@ -69,8 +77,6 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
 
   it('keeps upstream manual install hints on the runtime catalog for vendor-recipe providers', () => {
     expect(JSON.stringify(getProviderCliRuntimeSpec('claude'))).toContain('claude.ai/install.sh');
-    expect(JSON.stringify(getProviderCliRuntimeSpec('opencode'))).toContain('opencode.ai/install');
-    expect(JSON.stringify(getProviderCliRuntimeSpec('opencode'))).toContain('npm install -g opencode-ai');
     expect(JSON.stringify(getProviderCliRuntimeSpec('kimi'))).toContain('code.kimi.com/install.sh');
   });
 
@@ -142,17 +148,16 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
     })).toEqual(['cursor-agent', 'agent']);
   });
 
-  it('declares a Windows manual install recipe for OpenCode', () => {
+  it('does not keep a system npm install recipe for OpenCode', () => {
     expect(getProviderCliRuntimeSpec('opencode')).toMatchObject({
-      manualInstallKind: 'vendor_recipe',
-      manualInstallRecipes: {
-        win32: [
-          {
-            cmd: 'cmd.exe',
-            args: ['/c', 'npm install -g opencode-ai'],
-          },
-        ],
+      managedInstall: {
+        kind: 'managed_package',
+        packageName: 'opencode-ai',
+        binaryName: 'opencode',
+        packageBinarySetup: { kind: 'opencode_platform_binary' },
       },
+      manualInstallKind: 'command',
+      manualInstallRecipes: null,
     });
   });
 
@@ -161,6 +166,7 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
     expect(getProviderCliRuntimeSpec('gemini').manualInstallRecipes).toBeNull();
     expect(getProviderCliRuntimeSpec('auggie').manualInstallRecipes).toBeNull();
     expect(getProviderCliRuntimeSpec('kilo').manualInstallRecipes).toBeNull();
+    expect(getProviderCliRuntimeSpec('opencode').manualInstallRecipes).toBeNull();
     expect(getProviderCliRuntimeSpec('pi').manualInstallRecipes).toBeNull();
     expect(getProviderCliRuntimeSpec('copilot').manualInstallRecipes).toBeNull();
     expect(getProviderCliRuntimeSpec('qwen').manualInstallRecipes).toBeNull();
