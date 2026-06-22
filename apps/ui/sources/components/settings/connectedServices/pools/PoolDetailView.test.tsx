@@ -223,6 +223,8 @@ type ReorderGesture = {
 
 type AccountBlockNodeProps = {
     profileId: string;
+    title?: string;
+    identityLabel?: string | null;
     variant?: string;
     enabled?: boolean;
     onToggleEnabled?: (next: boolean) => void;
@@ -414,6 +416,20 @@ describe('PoolDetailView', () => {
         expect(blocks.find((block) => block.profileId === 'backup')?.isActive).toBe(false);
 
         expect(screen.findByTestId('connected-services-pool-detail:summary')).toBeTruthy();
+    });
+
+    it('keeps stable profile ids visible for labelled pool members with provider email', async () => {
+        settingsState.current.connectedServicesProfileLabelByKey = {
+            'openai-codex/work': 'batiplus',
+        };
+
+        const screen = await renderPoolDetail();
+        const work = findMemberBlocks(screen).find((block) => block.profileId === 'work');
+
+        expect(work).toMatchObject({
+            title: 'batiplus',
+            identityLabel: 'work@example.com · work',
+        });
     });
 
     it('toggles a member enable Switch through the member patch API with the generation', async () => {

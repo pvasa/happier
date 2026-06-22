@@ -56,6 +56,7 @@ import {
     CONNECTED_SERVICE_GROUP_DEFAULT_POLICY,
     normalizeConnectedServiceGroupMember,
     resolveConnectedServiceGroupProbeIfSnapshotOlderThanMs,
+    resolveConnectedServiceGroupMemberIdentity,
     resolveConnectedServiceGroupProfileTitle,
     resolveConnectedServiceGroupRecoveryMode,
     resolveConnectedServiceGroupSoftSwitchRemainingPercent,
@@ -802,9 +803,12 @@ export const PoolDetailView = React.memo(function PoolDetailView() {
                             labelsByKey: settings.connectedServicesProfileLabelByKey,
                             profiles,
                         });
-                        const memberProfile = profiles.find(
-                            (candidate) => (typeof candidate.profileId === 'string' ? candidate.profileId : '') === memberModel.profileId,
-                        );
+                        const memberIdentity = resolveConnectedServiceGroupMemberIdentity({
+                            serviceId,
+                            profileId: memberModel.profileId,
+                            labelsByKey: settings.connectedServicesProfileLabelByKey,
+                            profiles,
+                        });
                         const isActive = memberModel.profileId === group.activeProfileId;
                         // Bind the inline-reorder pan gesture for this row. The gesture
                         // is created once per row here and handed to `AccountBlock`,
@@ -863,7 +867,7 @@ export const PoolDetailView = React.memo(function PoolDetailView() {
                                     serviceId={serviceId}
                                     profileId={memberModel.profileId}
                                     title={memberTitle}
-                                    identityLabel={memberProfile?.providerEmail ?? null}
+                                    identityLabel={memberIdentity.secondaryLabel ?? null}
                                     status={memberModel.blocker?.kind === 'auth_invalid' ? 'needs_reauth' : 'connected'}
                                     variant="poolMember"
                                     groupId={group.groupId}

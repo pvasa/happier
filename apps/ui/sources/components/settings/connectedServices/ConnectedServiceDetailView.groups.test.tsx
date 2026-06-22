@@ -62,7 +62,7 @@ const authoritativeGroupState = vi.hoisted(() => ({
 }));
 const settingsState = vi.hoisted(() => ({
     current: {
-        connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'work' },
+        connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'work' } as Record<string, string>,
         connectedServicesProfileLabelByKey: {} as Record<string, string>,
         connectedServicesQuotaPinnedMeterIdsByKey: {},
         connectedServicesQuotaSummaryStrategyByKey: {},
@@ -82,8 +82,8 @@ function createProfileSnapshot(groups: unknown[] = []) {
             {
                 serviceId: 'openai-codex',
                 profiles: [
-                    { profileId: 'work', status: 'connected', providerEmail: 'work@example.com' },
-                    { profileId: 'backup', status: 'connected', providerEmail: 'backup@example.com' },
+                    { profileId: 'work', status: 'connected', kind: 'oauth', providerEmail: 'work@example.com' },
+                    { profileId: 'backup', status: 'connected', kind: 'oauth', providerEmail: 'backup@example.com' },
                 ],
                 groups,
             },
@@ -224,7 +224,7 @@ vi.mock('@/sync/sync', () => ({
 }));
 
 vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplySettings: () => vi.fn(),
+    useApplySettings: () => syncSpies.applySettings,
 }));
 
 vi.mock('@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount', () => ({
@@ -344,6 +344,19 @@ describe('ConnectedServiceDetailView pools segment', () => {
         expect(titles.length).toBeGreaterThan(0);
     });
 
+    it('offers reconnect for a healthy OAuth account from the accounts list', async () => {
+        const screen = await renderGroupsScreen();
+
+        expect(screen.tree.root.findAll((node) => node.props?.children === 'work').length).toBeGreaterThan(0);
+
+        const workActionHost = screen.tree.root
+            .findAll((node) => (node.type as unknown) === 'ItemRowActions')
+            .find((host) => host.props?.title === 'work@example.com');
+        const actions = ((workActionHost?.props?.actions ?? []) as ReadonlyArray<{ id: string }>);
+
+        expect(actions.some((action) => action.id === 'reconnect')).toBe(true);
+    });
+
     it('opens pool detail when a pool row is pressed', async () => {
         const screen = await renderGroupsScreen();
         await selectPoolsSegment(screen);
@@ -407,8 +420,13 @@ describe('ConnectedServiceDetailView pools segment', () => {
         const { ConnectedServiceDetailView } = await import('./ConnectedServiceDetailView');
         settingsState.current = {
             ...settingsState.current,
+            connectedServicesDefaultProfileByServiceId: {
+                'openai-codex': 'work',
+                'claude-subscription': 'leeroy',
+            },
             connectedServicesProfileLabelByKey: {
                 'openai-codex/work': 'Work account',
+                'openai-codex/backup': 'Backup account',
             },
         };
         authoritativeGroupState.groups = [createAuthoritativeGroup({ displayName: 'Initial pool' })];
@@ -463,6 +481,12 @@ describe('ConnectedServiceDetailView pools segment', () => {
         expect(connectedServiceCredentialSpies.deleteConnectedServiceCredentialForAccount).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
             { serviceId: 'openai-codex', profileId: 'work', cleanupGroupReferences: true },
+        );
+        expect(syncSpies.applySettings).toHaveBeenCalledWith(
+            expect.objectContaining({
+                connectedServicesDefaultProfileByServiceId: { 'claude-subscription': 'leeroy' },
+                connectedServicesProfileLabelByKey: { 'openai-codex/backup': 'Backup account' },
+            }),
         );
         expect(authGroupApiSpies.listConnectedServiceAuthGroupsV3.mock.calls.length).toBeGreaterThan(
             listCallsBeforeDisconnect,

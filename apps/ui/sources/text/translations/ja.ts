@@ -7818,6 +7818,7 @@ settingsSession: {
           scrollPinSubtitle: "最下部にいる間、新しいメッセージに追従します。",
           jumpToBottomTitle: "最下部へジャンプ",
           jumpToBottomButtonLabel: "最下部へ移動",
+          jumpToBottomButtonNewActivityLabel: ({ count }: { count: number }) => `${count}件の新しいアクティビティ、最下部へ移動`,
             jumpToBottomSubtitle:
               "上にスクロールしている間に新しいアクティビティが来たら表示します。",
             advancedScrollTitle: "詳細スクロール…",

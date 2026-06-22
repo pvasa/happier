@@ -7904,6 +7904,7 @@ settingsSession: {
             "Segui i nuovi messaggi quando sei in fondo.",
             jumpToBottomTitle: "Vai in fondo",
             jumpToBottomButtonLabel: "Vai in fondo",
+            jumpToBottomButtonNewActivityLabel: ({ count }: { count: number }) => `${count} ${count === 1 ? "nuova attività" : "nuove attività"}, vai in fondo`,
             jumpToBottomSubtitle:
               "Mostra un pulsante quando scorri su e arriva nuova attività.",
             advancedScrollTitle: "Scorrimento avanzato…",

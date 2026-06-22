@@ -21,6 +21,9 @@ const authGroupApiSpies = vi.hoisted(() => ({
     listConnectedServiceAuthGroupsV3: vi.fn(),
     createConnectedServiceAuthGroupV3: vi.fn(),
 }));
+const modalSpies = vi.hoisted(() => ({
+    prompt: vi.fn(async () => 'Created Team'),
+}));
 
 vi.mock('@/auth/context/AuthContext', () => ({
     useAuth: () => authState,
@@ -30,7 +33,7 @@ vi.mock('@/sync/api/account/apiConnectedServiceAuthGroupsV3', () => authGroupApi
 
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock().module;
+    return createModalModuleMock({ spies: { prompt: modalSpies.prompt } }).module;
 });
 
 vi.mock('@/sync/sync', () => ({
@@ -90,6 +93,8 @@ describe('useConnectedServiceAuthGroups', () => {
         authState.credentials = { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') };
         authGroupApiSpies.listConnectedServiceAuthGroupsV3.mockReset();
         authGroupApiSpies.createConnectedServiceAuthGroupV3.mockReset();
+        modalSpies.prompt.mockClear();
+        modalSpies.prompt.mockResolvedValue('Created Team');
         authGroupApiSpies.listConnectedServiceAuthGroupsV3.mockResolvedValue([buildGroup()]);
     });
 
@@ -200,5 +205,57 @@ describe('useConnectedServiceAuthGroups', () => {
             groups: [],
             loadStatus: 'loaded',
         });
+    });
+
+    it('keeps the created group visible when the immediate post-create refetch is stale', async () => {
+        const existingGroup = buildGroup({ groupId: 'primary', displayName: 'Existing pool' });
+        const createdGroup = buildGroup({ groupId: 'created-team', displayName: 'Created Team' });
+        authGroupApiSpies.listConnectedServiceAuthGroupsV3.mockResolvedValue([existingGroup]);
+        authGroupApiSpies.createConnectedServiceAuthGroupV3.mockResolvedValue(createdGroup);
+
+        const hook = await renderHook(() => useConnectedServiceAuthGroups(defaultParams));
+
+        await act(async () => {
+            await hook.getCurrent().createPool();
+            await flushHookEffects({ cycles: 2, turns: 2 });
+        });
+
+        expect(authGroupApiSpies.createConnectedServiceAuthGroupV3).toHaveBeenCalledWith(
+            expect.objectContaining({ token: 't' }),
+            expect.objectContaining({
+                serviceId: 'openai-codex',
+                groupId: 'created-team',
+                displayName: 'Created Team',
+            }),
+        );
+        expect(hook.getCurrent().groups.map((group) => group.groupId)).toEqual([
+            'primary',
+            'created-team',
+        ]);
+    });
+
+    it('creates pools for services that support pool configuration even without runtime fallback', async () => {
+        const createdGroup = buildGroup({ groupId: 'created-team', displayName: 'Created Team' });
+        authGroupApiSpies.createConnectedServiceAuthGroupV3.mockResolvedValue(createdGroup);
+
+        const hook = await renderHook(() => useConnectedServiceAuthGroups({
+            ...defaultParams,
+            runtimeGroupFallbackSupported: false,
+        }));
+
+        await act(async () => {
+            await hook.getCurrent().createPool();
+            await flushHookEffects({ cycles: 2, turns: 2 });
+        });
+
+        expect(modalSpies.prompt).toHaveBeenCalled();
+        expect(authGroupApiSpies.createConnectedServiceAuthGroupV3).toHaveBeenCalledWith(
+            expect.objectContaining({ token: 't' }),
+            expect.objectContaining({
+                serviceId: 'openai-codex',
+                groupId: 'created-team',
+                displayName: 'Created Team',
+            }),
+        );
     });
 });

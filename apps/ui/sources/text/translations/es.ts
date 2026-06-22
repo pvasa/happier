@@ -7587,6 +7587,7 @@ settingsSession: {
             "Seguir mensajes nuevos mientras estás al final.",
           jumpToBottomTitle: "Ir al final",
           jumpToBottomButtonLabel: "Ir al final",
+          jumpToBottomButtonNewActivityLabel: ({ count }: { count: number }) => `${count} ${count === 1 ? "elemento nuevo de actividad" : "elementos nuevos de actividad"}, ir al final`,
             jumpToBottomSubtitle:
               "Mostrar un botón cuando subes y llega actividad nueva.",
             advancedScrollTitle: "Desplazamiento avanzado…",

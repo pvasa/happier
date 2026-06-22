@@ -13,7 +13,6 @@ import type { ConnectedServiceAuthGroupV1, ConnectedServiceId } from '@happier-d
 
 import { resolveConnectedServiceSettingsErrorMessage } from '../errors/connectedServiceSettingsErrors';
 import {
-    invalidateConnectedServiceGroupsRefreshSignal,
     useConnectedServiceGroupsRefreshSignal,
 } from '../connectedServiceGroupsRefreshSignal';
 
@@ -105,7 +104,6 @@ export function useConnectedServiceAuthGroups(
         serviceId,
         accountGroupsEnabled,
         groupConfigurationSupported,
-        runtimeGroupFallbackSupported,
         serviceProjectionSignature,
     } = params;
     const auth = useAuth();
@@ -203,7 +201,7 @@ export function useConnectedServiceAuthGroups(
     }, []);
 
     const createPool = React.useCallback(async () => {
-        if (!serviceId || !accountGroupsEnabled || !groupConfigurationSupported || !runtimeGroupFallbackSupported) {
+        if (!serviceId || !accountGroupsEnabled || !groupConfigurationSupported) {
             return;
         }
         const res = await Modal.prompt(
@@ -235,10 +233,9 @@ export function useConnectedServiceAuthGroups(
                 members: [],
                 activeProfileId: null,
             });
-            upsertGroup(created);
             await sync.refreshProfile().catch(() => undefined);
             await refresh().catch(() => undefined);
-            invalidateConnectedServiceGroupsRefreshSignal();
+            upsertGroup(created);
         } catch (e: unknown) {
             await Modal.alert(t('common.error'), resolveConnectedServiceSettingsErrorMessage(e));
         }
@@ -248,7 +245,6 @@ export function useConnectedServiceAuthGroups(
         groupConfigurationSupported,
         groups,
         refresh,
-        runtimeGroupFallbackSupported,
         serviceId,
         upsertGroup,
     ]);

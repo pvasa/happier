@@ -21,7 +21,11 @@ import { useApplySettings } from '@/sync/store/settingsWriters';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useConnectedServiceQuotaSnapshot } from '@/hooks/server/connectedServices/useConnectedServiceQuotaSnapshot';
 import { deleteConnectedServiceCredentialForAccount } from '@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount';
-import { connectedServiceProfileKey, resolveConnectedServiceProfileLabel } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
+import {
+  connectedServiceProfileKey,
+  pruneConnectedServiceProfilePreferencesForDeletedProfile,
+  resolveConnectedServiceProfileLabel,
+} from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
 import { getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { resolveConnectedServiceCredentialHealthStatus } from '@/sync/domains/connectedServices/resolveConnectedServiceCredentialHealthStatus';
 import { buildConnectedServiceCredentialRecord, ConnectedServiceIdSchema, type ConnectedServiceCredentialHealthStatusV1, type ConnectedServiceId } from '@happier-dev/protocol';
@@ -72,6 +76,7 @@ function formatLastRefreshed(fetchedAtMs: number | null | undefined): string | n
 const ConnectionSection = React.memo(function ConnectionSection(props: Readonly<{
   serviceId: ConnectedServiceId;
   profileId: string;
+  providerEmail?: string | null;
   connectedVia: string;
   testID: string;
 }>) {
@@ -84,6 +89,18 @@ const ConnectionSection = React.memo(function ConnectionSection(props: Readonly<
 
   return (
     <ItemGroup title={t('connectedServices.profile.connectionGroupTitle')}>
+      <Item
+        title={t('connectedServices.profile.profileId')}
+        subtitle={props.profileId}
+        showChevron={false}
+      />
+      {props.providerEmail ? (
+        <Item
+          title={t('connectedServices.profile.email')}
+          subtitle={props.providerEmail}
+          showChevron={false}
+        />
+      ) : null}
       <Item
         title={t('connectedServices.profile.connectedVia')}
         subtitle={props.connectedVia}
@@ -177,12 +194,13 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
     serviceId,
     profileId,
   });
-  const title = label || profileId;
-  const profileConfirmationLabel = resolveConnectedServiceProfileIdentityDisplay({
+  const identityDisplay = resolveConnectedServiceProfileIdentityDisplay({
     profileId,
     label,
     providerEmail,
-  }).diagnosticLabel;
+  });
+  const title = identityDisplay.primaryLabel;
+  const profileConfirmationLabel = identityDisplay.diagnosticLabel;
 
   const isDefault = (settings.connectedServicesDefaultProfileByServiceId[serviceId] ?? '') === profileId;
   const isConnected = status === 'connected';
@@ -225,6 +243,12 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
         profileId,
         ...(cleanup ? { cleanupGroupReferences: true } : {}),
       });
+      applySettings(pruneConnectedServiceProfilePreferencesForDeletedProfile({
+        serviceId,
+        profileId,
+        connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
+        connectedServicesProfileLabelByKey: settings.connectedServicesProfileLabelByKey,
+      }));
       await sync.refreshProfile();
       router.back();
     };
@@ -339,7 +363,7 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
       onPress: () => void handleReplaceToken(),
     });
   }
-  if (!isConnected && kind !== 'token' && status === 'needs_reauth') {
+  if (kind === 'oauth') {
     headerActions.push({
       id: 'reconnect',
       title: t('connectedServices.detail.actions.reconnect'),
@@ -357,7 +381,7 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
             serviceId={serviceId}
             profileId={profileId}
             title={title}
-            identityLabel={providerEmail || profileId}
+            identityLabel={identityDisplay.secondaryLabel}
             status={status}
             isDefault={isDefault}
             onToggleDefault={handleSetDefault}
@@ -386,6 +410,11 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
               showChevron={false}
             />
           ) : null}
+          <Item
+            title={t('connectedServices.profile.profileId')}
+            subtitle={profileId}
+            showChevron={false}
+          />
           {providerAccountId ? (
             <Item
               title={t('connectedServices.profile.accountId')}
@@ -459,12 +488,13 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
         <ConnectionSection
           serviceId={serviceId}
           profileId={profileId}
+          providerEmail={providerEmail}
           connectedVia={kind === 'token'
             ? t('connectedServices.profile.connectedViaToken')
             : t('connectedServices.profile.connectedViaOauth')}
           testID="connected-service-profile"
         />
-      ) : kind !== 'token' && status === 'needs_reauth' ? (
+      ) : kind === 'oauth' && status === 'needs_reauth' ? (
         <ItemGroup title={t('connectedServices.profile.connectionGroupTitle')}>
           <Item
             testID="connected-services-profile-action:reconnect"

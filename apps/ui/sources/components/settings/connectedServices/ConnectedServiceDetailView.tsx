@@ -16,7 +16,11 @@ import { useProfile, useSettings } from '@/sync/store/hooks';
 import { useApplySettings } from '@/sync/store/settingsWriters';
 import { deleteConnectedServiceCredentialForAccount } from '@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount';
 import { getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
-import { connectedServiceProfileKey, resolveConnectedServiceProfileLabel } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
+import {
+  connectedServiceProfileKey,
+  pruneConnectedServiceProfilePreferencesForDeletedProfile,
+  resolveConnectedServiceProfileLabel,
+} from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
 import { deriveAccountHealth, type AccountHealth } from '@/sync/domains/connectedServices/deriveAccountHealth';
 import { resolveConnectedServiceCredentialHealthStatus } from '@/sync/domains/connectedServices/resolveConnectedServiceCredentialHealthStatus';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
@@ -182,9 +186,20 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
       profileId,
       ...(opts?.cleanupGroupReferences ? { cleanupGroupReferences: true } : {}),
     });
+    applySettings(pruneConnectedServiceProfilePreferencesForDeletedProfile({
+      serviceId: serviceId!,
+      profileId,
+      connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
+      connectedServicesProfileLabelByKey: settings.connectedServicesProfileLabelByKey,
+    }));
     await sync.refreshProfile();
     invalidateConnectedServiceGroupsRefreshSignal();
-  }, [serviceId]);
+  }, [
+    applySettings,
+    serviceId,
+    settings.connectedServicesDefaultProfileByServiceId,
+    settings.connectedServicesProfileLabelByKey,
+  ]);
 
   const promptProfileId = async (opts?: { defaultValue?: string }) => {
     const res = await Modal.prompt(
@@ -538,7 +553,12 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
             serviceId,
             profileId,
           });
-          const title = label ?? profileId;
+          const identityDisplay = resolveConnectedServiceProfileIdentityDisplay({
+            profileId,
+            label,
+            providerEmail: typeof record.providerEmail === 'string' ? record.providerEmail : '',
+          });
+          const title = identityDisplay.primaryLabel;
           const poolLabels = resolveProfileGroupReferenceLabels(profileId);
           const actions: ItemAction[] = [
             {
@@ -561,6 +581,14 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
                 onPress: () => void handleReplaceToken(profileId),
               } satisfies ItemAction]
               : []),
+            ...(kind === 'oauth'
+              ? [{
+                id: 'reconnect',
+                title: t('connectedServices.detail.actions.reconnect'),
+                icon: 'refresh-outline',
+                onPress: () => void handleConnectOauth(profileId),
+              } satisfies ItemAction]
+              : []),
             ...(status === 'connected'
               ? [{
                 id: 'disconnect',
@@ -569,14 +597,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
                 destructive: true,
                 onPress: () => void handleDisconnect(profileId),
               } satisfies ItemAction]
-              : status === 'needs_reauth' && kind !== 'token'
-                ? [{
-                  id: 'reconnect',
-                  title: t('connectedServices.detail.actions.reconnect'),
-                  icon: 'refresh-outline',
-                  onPress: () => void handleConnectOauth(profileId),
-                } satisfies ItemAction]
-                : []),
+              : []),
           ];
           return (
             <AccountBlock
@@ -584,7 +605,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
               serviceId={serviceId}
               profileId={profileId}
               title={title}
-              identityLabel={typeof record.providerEmail === 'string' ? record.providerEmail : null}
+              identityLabel={identityDisplay.secondaryLabel}
               status={status}
               isDefault={isDefault}
               onToggleDefault={() => void handleToggleDefaultProfile(profileId)}

@@ -6308,6 +6308,7 @@ settingsSession: {
             scrollPinSubtitle: '當你位於底部時跟隨新訊息。',
             jumpToBottomTitle: '跳到底部',
             jumpToBottomButtonLabel: '跳到底部',
+            jumpToBottomButtonNewActivityLabel: ({ count }: { count: number }) => `${count} 則新活動，跳到底部`,
             jumpToBottomSubtitle: '當你向上捲動且有新活動時顯示按鈕。',
               advancedScrollTitle: '進階捲動…',
               advancedScrollSubtitle: '微調固定閾值與計數器。',

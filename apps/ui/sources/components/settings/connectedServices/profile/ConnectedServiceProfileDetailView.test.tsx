@@ -112,6 +112,10 @@ const quotaHookState = vi.hoisted(() => ({
   callSpy: vi.fn(),
   value: null as unknown,
 }));
+const connectedServiceCredentialSpies = vi.hoisted(() => ({
+  storeConnectedServiceCredentialForAccount: vi.fn(async () => {}),
+  deleteConnectedServiceCredentialForAccount: vi.fn(async () => {}),
+}));
 vi.mock('@/hooks/server/connectedServices/useConnectedServiceQuotaSnapshot', () => ({
   useConnectedServiceQuotaSnapshot: (params: unknown) => {
     quotaHookState.callSpy(params);
@@ -143,8 +147,8 @@ vi.mock('@/sync/store/settingsWriters', () => ({
 }));
 
 vi.mock('@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount', () => ({
-  storeConnectedServiceCredentialForAccount: vi.fn(async () => {}),
-  deleteConnectedServiceCredentialForAccount: vi.fn(async () => {}),
+  storeConnectedServiceCredentialForAccount: connectedServiceCredentialSpies.storeConnectedServiceCredentialForAccount,
+  deleteConnectedServiceCredentialForAccount: connectedServiceCredentialSpies.deleteConnectedServiceCredentialForAccount,
 }));
 
 vi.mock('@/components/ui/lists/ItemRowActions', () => {
@@ -197,6 +201,8 @@ beforeEach(() => {
   quotaHookState.refresh.mockClear();
   quotaHookState.callSpy.mockClear();
   quotaHookState.value = buildQuotaResult();
+  connectedServiceCredentialSpies.storeConnectedServiceCredentialForAccount.mockClear();
+  connectedServiceCredentialSpies.deleteConnectedServiceCredentialForAccount.mockClear();
   reducedMotionRef.value = true;
   featureState.connectedServices = true;
   featureState.quotas = true;
@@ -227,6 +233,78 @@ describe('ConnectedServiceProfileDetailView', () => {
     expect(findByTestId(screen.tree, 'connected-service-profile-account')).toBeTruthy();
     // The shared quota hook is mounted for the connected account.
     expect(quotaHookState.callSpy).toHaveBeenCalled();
+  });
+
+  it('keeps the stable profile id visible when a custom label masks the profile identity', async () => {
+    routeParams.profileId = 'leeroy';
+    profileState.current = {
+      connectedServicesV2: [
+        {
+          serviceId: 'openai-codex',
+          profiles: [{
+            profileId: 'leeroy',
+            status: 'connected',
+            kind: 'oauth',
+            providerEmail: 'leeroy.brun@gmail.com',
+            providerAccountId: 'acct-1',
+          }],
+          groups: [],
+        },
+      ],
+    };
+    settingsState.current = {
+      ...settingsState.current,
+      connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'leeroy' },
+      connectedServicesProfileLabelByKey: { 'openai-codex/leeroy': 'batiplus' },
+    };
+
+    const { ConnectedServiceProfileDetailView } = await import('./ConnectedServiceProfileDetailView');
+    const screen = await renderScreen(<ConnectedServiceProfileDetailView />);
+
+    expect(screen.getTextContent()).toContain('batiplus');
+    expect(screen.getTextContent()).toContain('leeroy.brun@gmail.com');
+    expect(screen.getTextContent()).toContain('leeroy');
+  });
+
+  it('does not repeat an unlabeled token profile id in the account subtitle', async () => {
+    featureState.quotas = false;
+    routeParams.profileId = 'native-token';
+    profileState.current = {
+      connectedServicesV2: [
+        {
+          serviceId: 'openai-codex',
+          profiles: [{
+            profileId: 'native-token',
+            status: 'connected',
+            kind: 'token',
+            providerEmail: null,
+            providerAccountId: null,
+          }],
+          groups: [],
+        },
+      ],
+    };
+    settingsState.current = {
+      ...settingsState.current,
+      connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'native-token' },
+      connectedServicesProfileLabelByKey: {},
+    };
+
+    const { ConnectedServiceProfileDetailView } = await import('./ConnectedServiceProfileDetailView');
+    const screen = await renderScreen(<ConnectedServiceProfileDetailView />);
+    const header = findByTestId(screen.tree, 'connected-service-profile-account:header');
+
+    expect(header?.props.accessibilityLabel).toBe('native-token');
+    expect(header?.props.subtitle).toBeUndefined();
+  });
+
+  it('offers reconnect for a healthy OAuth profile', async () => {
+    const { ConnectedServiceProfileDetailView } = await import('./ConnectedServiceProfileDetailView');
+    const screen = await renderScreen(<ConnectedServiceProfileDetailView />);
+
+    const actionHost = screen.tree.root.findAll((node) => (node.type as unknown) === 'ItemRowActions')[0];
+    const actions = (actionHost?.props?.actions ?? []) as ReadonlyArray<{ id: string }>;
+    expect(actions.some((action) => action.id === 'reconnect')).toBe(true);
   });
 
   it('renders the Settings, Connection, and Remove sections with stable testIDs', async () => {
@@ -316,6 +394,39 @@ describe('ConnectedServiceProfileDetailView', () => {
       expect.objectContaining({
         confirmText: 'modals.disconnect',
         cancelText: 'common.cancel',
+      }),
+    );
+  });
+
+  it('prunes stale profile preferences after disconnecting a connected profile', async () => {
+    settingsState.current = {
+      ...settingsState.current,
+      connectedServicesDefaultProfileByServiceId: {
+        'openai-codex': 'work',
+        'claude-subscription': 'leeroy',
+      },
+      connectedServicesProfileLabelByKey: {
+        'openai-codex/work': 'Work laptop',
+        'openai-codex/backup': 'Backup',
+      },
+    };
+    modalSpies.confirm.mockResolvedValueOnce(true);
+    const { ConnectedServiceProfileDetailView } = await import('./ConnectedServiceProfileDetailView');
+    const screen = await renderScreen(<ConnectedServiceProfileDetailView />);
+
+    await act(async () => {
+      findByTestId(screen.tree, 'connected-service-profile-action:disconnect')?.props.onPress?.();
+      await flushAsyncHandlers();
+    });
+
+    expect(connectedServiceCredentialSpies.deleteConnectedServiceCredentialForAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 't' }),
+      { serviceId: 'openai-codex', profileId: 'work' },
+    );
+    expect(applySettingsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectedServicesDefaultProfileByServiceId: { 'claude-subscription': 'leeroy' },
+        connectedServicesProfileLabelByKey: { 'openai-codex/backup': 'Backup' },
       }),
     );
   });

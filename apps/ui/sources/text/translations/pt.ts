@@ -7700,6 +7700,7 @@ settingsSession: {
           scrollPinSubtitle: "Seguir novas mensagens enquanto você estiver no final.",
           jumpToBottomTitle: "Pular para o final",
           jumpToBottomButtonLabel: "Pular para o final",
+          jumpToBottomButtonNewActivityLabel: ({ count }: { count: number }) => `${count} ${count === 1 ? "novo item de atividade" : "novos itens de atividade"}, pular para o final`,
           jumpToBottomSubtitle:
             "Mostrar um botão quando você rolar para cima e novas atividades chegarem.",
             advancedScrollTitle: "Rolagem avançada…",

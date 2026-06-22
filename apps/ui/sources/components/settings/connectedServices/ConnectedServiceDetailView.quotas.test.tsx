@@ -91,6 +91,16 @@ const { getConnectedServiceQuotaSnapshotPlainSpy } = vi.hoisted(() => ({
     (...args: Parameters<typeof getConnectedServiceQuotaSnapshotPlain>) => ReturnType<typeof getConnectedServiceQuotaSnapshotPlain>
   >(async () => null),
 }));
+const profileState = vi.hoisted(() => ({
+  current: {
+    connectedServicesV2: [
+      {
+        serviceId: 'openai-codex',
+        profiles: [{ profileId: 'work', status: 'connected', kind: 'oauth', providerEmail: null }],
+      },
+    ],
+  },
+}));
 vi.mock('@/sync/api/account/apiConnectedServicesQuotasV3', () => ({
   getConnectedServiceQuotaSnapshotPlain: getConnectedServiceQuotaSnapshotPlainSpy,
   requestConnectedServiceQuotaSnapshotRefreshV3: vi.fn(async () => true),
@@ -100,14 +110,7 @@ vi.mock('@/sync/store/hooks', async () => {
   const actual = await vi.importActual<typeof import('@/sync/store/hooks')>('@/sync/store/hooks');
   return {
     ...actual,
-    useProfile: () => ({
-      connectedServicesV2: [
-        {
-          serviceId: 'openai-codex',
-          profiles: [{ profileId: 'work', status: 'connected', providerEmail: null }],
-        },
-      ],
-    }),
+    useProfile: () => profileState.current,
     useSettings: () => ({
       connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'work' },
       connectedServicesProfileLabelByKey: {},
@@ -158,6 +161,14 @@ describe('ConnectedServiceDetailView quotas', () => {
     getConnectedServiceQuotaSnapshotPlainSpy.mockResolvedValue(null);
     fetchAccountEncryptionModeSpy.mockReset();
     fetchAccountEncryptionModeSpy.mockResolvedValue({ mode: 'e2ee', updatedAt: 0 });
+    profileState.current = {
+      connectedServicesV2: [
+        {
+          serviceId: 'openai-codex',
+          profiles: [{ profileId: 'work', status: 'connected', kind: 'oauth', providerEmail: null }],
+        },
+      ],
+    };
   });
 
   const setFeatureFlags = (flags: Record<string, boolean>) => {
@@ -236,6 +247,26 @@ describe('ConnectedServiceDetailView quotas', () => {
     expect(screen.findByTestId('account-block:work:header')).toBeTruthy();
     expect(screen.findAllByTestId('account-block:work:usage')).toHaveLength(0);
     expect(screen.findAllByTestId('account-block:work:meter:weekly')).toHaveLength(0);
+  });
+
+  it('does not repeat an unlabeled token profile id in the account subtitle', async () => {
+    setFeatureFlags({ connectedServices: true, 'connectedServices.quotas': false });
+    fetchAccountEncryptionModeSpy.mockResolvedValue({ mode: 'e2ee', updatedAt: 0 });
+    profileState.current = {
+      connectedServicesV2: [
+        {
+          serviceId: 'openai-codex',
+          profiles: [{ profileId: 'native-token', status: 'connected', kind: 'token', providerEmail: null }],
+        },
+      ],
+    };
+
+    const { ConnectedServiceDetailView } = await import('./ConnectedServiceDetailView');
+    const screen = await renderScreen(<ConnectedServiceDetailView />);
+
+    const header = screen.findByTestId('account-block:native-token:header');
+    expect(header?.props.accessibilityLabel).toBe('native-token');
+    expect(header?.props.subtitle).toBeUndefined();
   });
 
   it('does not expose connected services detail when the feature is disabled', async () => {
