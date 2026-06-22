@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { resolveRuntimeEntrypoint } from './_resolveRuntimeEntrypoint.mjs';
+import { withOptionalCliSharedDepsBuildLock } from '../scripts/optionalWorkspaceBundleLock.mjs';
 
 const DEFAULT_HOST_APPS = ['cli'];
 
@@ -36,14 +37,22 @@ export async function maybeRefreshLocalBundledWorkspacePackages(projectRoot, opt
   if (!syncModulePath) return;
 
   const repoRoot = resolve(projectRoot, '..', '..');
-  const { syncBundledWorkspacePackages } = await import(pathToFileURL(syncModulePath).href);
+  await withOptionalCliSharedDepsBuildLock(async () => {
+    const { syncBundledWorkspacePackages } = await import(pathToFileURL(syncModulePath).href);
 
-  syncBundledWorkspacePackages({
+    syncBundledWorkspacePackages({
+      repoRoot,
+      hostApps: Array.isArray(opts.hostApps) && opts.hostApps.length > 0 ? opts.hostApps : DEFAULT_HOST_APPS,
+      // Preflight should be "presence-only" and avoid swapping an existing `dist/**` directory out from
+      // under other running processes in a dev checkout.
+      replaceExisting: false,
+    });
+  }, {
     repoRoot,
-    hostApps: Array.isArray(opts.hostApps) && opts.hostApps.length > 0 ? opts.hostApps : DEFAULT_HOST_APPS,
-    // Preflight should be "presence-only" and avoid swapping an existing `dist/**` directory out from
-    // under other running processes in a dev checkout.
-    replaceExisting: false,
+    lockPath: opts.lockPath,
+    lockTimeoutMs: opts.lockTimeoutMs,
+    lockPollIntervalMs: opts.lockPollIntervalMs,
+    lockStaleAfterMs: opts.lockStaleAfterMs,
   });
 }
 

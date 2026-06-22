@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { withWorkspaceBundleLock } from './workspaceBundleLock.mjs';
+import { withWorkspaceBundleLock, withWorkspaceBundleLockSync } from './workspaceBundleLock.mjs';
 
 async function waitForFile(path, { timeoutMs = 1_000 } = {}) {
   const startedAt = Date.now();
@@ -88,6 +88,35 @@ test('withWorkspaceBundleLock does not remove a lock file that was replaced by a
 
     assert.equal(existsSync(lockPath), true);
     assert.deepEqual(JSON.parse(readFileSync(lockPath, 'utf8')), successorOwner);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('withWorkspaceBundleLockSync uses the shared workspace bundle lock owner format', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'happier-workspace-bundle-lock-sync-'));
+  try {
+    const lockPath = join(tempRoot, 'workspace-bundling.lock');
+    let observedOwner = null;
+
+    const result = withWorkspaceBundleLockSync(
+      () => {
+        observedOwner = JSON.parse(readFileSync(lockPath, 'utf8'));
+        return 'ok';
+      },
+      {
+        lockPath,
+        timeoutMs: 2_000,
+        pollIntervalMs: 10,
+        staleAfterMs: 1_000,
+      },
+    );
+
+    assert.equal(result, 'ok');
+    assert.equal(observedOwner.pid, process.pid);
+    assert.equal(typeof observedOwner.createdAtMs, 'number');
+    assert.equal(typeof observedOwner.token, 'string');
+    assert.equal(existsSync(lockPath), false);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

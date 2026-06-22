@@ -6,6 +6,7 @@ import { createTempDirSync, removeTempDirSync } from '../../../src/testkit/fs/te
 import { ensureDirectorySync, writeTextFileSync } from '../../../src/testkit/fs/fileHelpers';
 
 const runtimeBinFiles = ['happier.mjs', '_resolveRuntimeEntrypoint.mjs', '_prepareRuntimeEntrypoint.mjs'];
+const runtimeScriptFiles = ['optionalWorkspaceBundleLock.mjs'];
 
 export function createCliBinPreflightSandbox(prefix: string): { rootDir: string; cleanup: () => void } {
   const rootDir = createTempDirSync(prefix);
@@ -25,11 +26,18 @@ export function copyCliBinRuntimeFiles(options: {
 }): void {
   const cliRoot = options.cliRoot ?? (options.repoRoot ? resolve(options.repoRoot, 'apps', 'cli') : process.cwd());
   const runtimeBinDir = resolve(cliRoot, 'bin');
+  const runtimeScriptsDir = resolve(cliRoot, 'scripts');
+  const targetScriptsDir = resolve(options.binDir, '..', 'scripts');
 
   ensureDirectorySync(options.binDir);
+  ensureDirectorySync(targetScriptsDir);
 
   for (const file of runtimeBinFiles) {
     cpSync(resolve(runtimeBinDir, file), join(options.binDir, file));
+  }
+
+  for (const file of runtimeScriptFiles) {
+    cpSync(resolve(runtimeScriptsDir, file), join(targetScriptsDir, file));
   }
 }
 

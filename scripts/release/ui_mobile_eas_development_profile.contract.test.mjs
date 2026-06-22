@@ -12,7 +12,7 @@ function collectExpectedUiInstallScopeWorkspaces() {
     .map((name) => name.split('/')[1])
     .filter(Boolean);
 
-  const requiresBuiltDist = internalDeps.filter((workspace) => {
+  const requiresBuildInput = internalDeps.filter((workspace) => {
     const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'packages', workspace, 'package.json'), 'utf8'));
     const candidates = [];
     for (const key of ['main', 'module', 'types']) {
@@ -34,10 +34,14 @@ function collectExpectedUiInstallScopeWorkspaces() {
     };
     visit(pkg?.exports);
 
-    return candidates.some((candidate) => /^\.?\/?dist\//.test(String(candidate)));
+    const hasDistExports = candidates.some((candidate) => /^\.?\/?dist\//.test(String(candidate)));
+    const hasExpoNativeModuleConfig = fs.existsSync(
+      path.join(repoRoot, 'packages', workspace, 'expo-module.config.json'),
+    );
+    return hasDistExports || hasExpoNativeModuleConfig;
   });
 
-  return new Set(['ui', ...requiresBuiltDist]);
+  return new Set(['ui', ...requiresBuildInput]);
 }
 
 function resolveCanonicalUiInstallScope() {

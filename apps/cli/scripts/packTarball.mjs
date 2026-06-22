@@ -138,6 +138,12 @@ function resolveNpmCacheDir({ destDir, env }) {
   return path.join(os.tmpdir(), `happier-npm-cache-${process.pid}`);
 }
 
+function setFunctionOption(target, key, value) {
+  if (typeof value === 'function') {
+    target[key] = value;
+  }
+}
+
 export function packTarball(options = {}) {
   const packageRoot = resolve(String(options.packageRoot ?? resolveCliPackageRoot()));
   const spawn = options.spawnSync ?? spawnSync;
@@ -147,14 +153,17 @@ export function packTarball(options = {}) {
   const destDirRaw = String(options.destDir ?? '').trim();
   const destDir = destDirRaw ? resolve(destDirRaw) : packageRoot;
 
-  syncPackageDist({
+  const syncPackageDistOptions = {
     packageRoot,
     distDir: options.distDir,
     packageDistDir: options.packageDistDir,
     existsSync: exists,
-    cpSync: options.cpSync,
-    rmSync: options.rmSync,
-  });
+  };
+  setFunctionOption(syncPackageDistOptions, 'cpSync', options.cpSync);
+  setFunctionOption(syncPackageDistOptions, 'mkdirSync', options.mkdirSync);
+  setFunctionOption(syncPackageDistOptions, 'renameSync', options.renameSync);
+  setFunctionOption(syncPackageDistOptions, 'rmSync', options.rmSync);
+  syncPackageDist(syncPackageDistOptions);
 
   const env = { ...process.env, ...(options.env ?? {}) };
   const timeoutMs = resolvePackTarballTimeoutMs(env, options.timeoutMs);
