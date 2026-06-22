@@ -5,3 +5,10 @@ node_modules
 **/dist
 **/.turbo
 **/.next
+
+# hermes-happier: keep native build artifacts out of docker context
+**/android/.gradle
+**/android/.cxx
+**/android/build
+**/android/app/build
+**/android/app/.cxx
