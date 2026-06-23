@@ -942,4 +942,54 @@ describe('runStandardAcpProvider', () => {
     );
     expect(observedGetAccountSettingsSecretsReadKeys?.()).toEqual(settingsSecretsReadKeys);
   });
+
+  it('runs on an injected session without bootstrapping a new backend run session', async () => {
+    const harness = createHarness();
+
+    let initializeCalls = 0;
+    harness.deps.initializeBackendRunSessionFn = async () => {
+      initializeCalls += 1;
+      throw new Error('initializeBackendRunSession must not run when a session is injected');
+    };
+
+    const injectedSession: any = {
+      ...harness.session,
+      sessionId: 'injected-session-1',
+    };
+
+    let runtimeSession: unknown = null;
+    harness.config.createRuntime = (params: any) => {
+      runtimeSession = params.session;
+      return harness.runtime;
+    };
+
+    harness.opts.injectedSession = injectedSession;
+
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+
+    expect(initializeCalls).toBe(0);
+    expect(runtimeSession).toBe(injectedSession);
+  });
+
+  it('runs the prompt loop on the injected session so phone messages are consumed', async () => {
+    const harness = createHarness();
+    harness.deps.initializeBackendRunSessionFn = async () => {
+      throw new Error('initializeBackendRunSession must not run when a session is injected');
+    };
+
+    const injectedSession: any = {
+      ...harness.session,
+      sessionId: 'injected-session-2',
+    };
+    harness.opts.injectedSession = injectedSession;
+
+    let loopSession: unknown = null;
+    harness.deps.runPermissionModePromptLoopFn = async (params: any) => {
+      loopSession = params.session;
+    };
+
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+
+    expect(loopSession).toBe(injectedSession);
+  });
 });

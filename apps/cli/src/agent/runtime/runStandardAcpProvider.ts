@@ -95,6 +95,23 @@ export type StandardAcpProviderRunOptions = {
   existingSessionId?: string;
   resume?: string;
   accountSettingsContext?: import('@/settings/accountSettings/bootstrapAccountSettingsContext').AccountSettingsContext | null;
+  /**
+   * Optional: run the runtime + message loop on a session the caller already
+   * created and owns, instead of bootstrapping a new one via
+   * {@link initializeBackendRunSession}.
+   *
+   * When provided, session bootstrap (and the `existingSessionId` attach path,
+   * which would otherwise require a per-session attach secret) is skipped
+   * entirely: the runtime is created on, and the prompt loop drives, this exact
+   * session. Used by the terminal-started Hermes host to run the ACP runtime on
+   * its single long-lived host-owned session in remote mode (so the host -- not a
+   * daemon-spawned driver -- consumes the phone's messages). The caller retains
+   * ownership of the session lifecycle (creation and teardown); this run does not
+   * archive or close it.
+   *
+   * Leaving this unset preserves the default behavior for every other provider.
+   */
+  injectedSession?: ApiSessionClient;
 };
 
 export type StandardAcpProviderConfig = {
@@ -232,35 +249,46 @@ export async function runStandardAcpProvider(
   // Used by the message-queue binding to optionally steer additional user input into an in-flight turn.
   // This is late-bound because the queue binding is initialized before the runtime is created.
   let runtimeForInFlightSteer: RuntimeForLoop | null = null;
-  const initializedSession = await initializeBackendRunSessionFn({
-    api,
-    sessionTag,
-    metadata,
-    state,
-    existingSessionId: opts.existingSessionId,
-    uiLogPrefix: config.uiLogPrefix,
-    startupMetadataOverrides: createStartupMetadataOverrides(opts),
-    onSessionSwap: async (newSession) => {
-      session = newSession;
-      if (permissionHandler) {
-        permissionHandler.updateSession(newSession);
-      }
-      if (rebindPermissionModeQueueSession) {
-        rebindPermissionModeQueueSession(newSession);
-      } else {
-        pendingPermissionModeQueueSessionSwap = newSession;
-      }
-      if (runtimeForInFlightSteer) {
-        newSession.setSessionRuntimeControls?.(runtimeForInFlightSteer);
-      }
-      await config.onSessionSwap?.({ session: newSession });
-    },
-    onAttachMetadataSnapshotMissing: config.onAttachMetadataSnapshotMissing,
-    onAttachMetadataSnapshotError: config.onAttachMetadataSnapshotError,
-  });
+  let reconnectionHandle: { cancel: () => void } | null;
+  if (opts.injectedSession) {
+    // Caller owns the session lifecycle: run the runtime + message loop on the
+    // session it already created. No bootstrap, no attach secret, and no
+    // reconnection handle (the caller owns reconnection too). This is the
+    // terminal-started Hermes host driving its single long-lived session in
+    // remote mode.
+    session = opts.injectedSession;
+    reconnectionHandle = null;
+  } else {
+    const initializedSession = await initializeBackendRunSessionFn({
+      api,
+      sessionTag,
+      metadata,
+      state,
+      existingSessionId: opts.existingSessionId,
+      uiLogPrefix: config.uiLogPrefix,
+      startupMetadataOverrides: createStartupMetadataOverrides(opts),
+      onSessionSwap: async (newSession) => {
+        session = newSession;
+        if (permissionHandler) {
+          permissionHandler.updateSession(newSession);
+        }
+        if (rebindPermissionModeQueueSession) {
+          rebindPermissionModeQueueSession(newSession);
+        } else {
+          pendingPermissionModeQueueSessionSwap = newSession;
+        }
+        if (runtimeForInFlightSteer) {
+          newSession.setSessionRuntimeControls?.(runtimeForInFlightSteer);
+        }
+        await config.onSessionSwap?.({ session: newSession });
+      },
+      onAttachMetadataSnapshotMissing: config.onAttachMetadataSnapshotMissing,
+      onAttachMetadataSnapshotError: config.onAttachMetadataSnapshotError,
+    });
 
-  session = initializedSession.session;
-  const reconnectionHandle = initializedSession.reconnectionHandle;
+    session = initializedSession.session;
+    reconnectionHandle = initializedSession.reconnectionHandle;
+  }
 
   let abortRequestedCallback: (() => void | Promise<void>) | null = null;
   permissionHandler = createProviderEnforcedPermissionHandlerFn({
