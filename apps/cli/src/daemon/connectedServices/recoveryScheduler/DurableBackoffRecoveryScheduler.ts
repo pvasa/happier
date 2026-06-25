@@ -204,11 +204,10 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
    * Stop the scheduler's in-memory lifecycle: clear every per-key timer and set a
    * disposed flag so no timer fires and no new wake/schedule runs after disposal.
    *
-   * This is a daemon-shutdown lifecycle method. It deliberately does NOT mutate the
-   * durable store: persisted `waiting` intents stay on disk with their `nextRetryAtMs`
-   * so a healthy future daemon re-hydrates and re-drives them. Disposal only prevents
-   * a tearing-down daemon from firing hydrated-intent timers into a dying control
-   * endpoint.
+   * This is a daemon-shutdown lifecycle method. It deliberately does NOT mutate any
+   * optional store; callers choose whether their recovery records are process-local or
+   * durable. Disposal only prevents a tearing-down daemon from firing timers into a
+   * dying control endpoint.
    */
   dispose(): void {
     this.disposed = true;
@@ -312,8 +311,8 @@ export class DurableBackoffRecoveryScheduler<TIntent> {
     reason: string;
     sessionId?: string;
   }>): Promise<Readonly<{ status: string }>> {
-    // Disposed (daemon shutting down): never run recovery work. The persisted intent
-    // stays `waiting` on disk for the next healthy daemon to re-drive.
+    // Disposed (daemon shutting down): never run recovery work. Any optional store is
+    // left untouched; caller wiring decides whether those records outlive the process.
     if (this.disposed) return { status: 'disposed' };
     const intent = this.readByKey(input.recoveryKey);
     if (!intent) return { status: 'inactive' };

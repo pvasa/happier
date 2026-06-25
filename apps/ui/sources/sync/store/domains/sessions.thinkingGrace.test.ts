@@ -122,15 +122,18 @@ describe('sessions domain: thinking grace', () => {
     it('starts thinkingGraceUntil only after thinking turns off (prevents UI flicker without streaming churn)', async () => {
         mockSessionsDomainBoundaries();
 
-        const scheduledTimeouts = new Map<number, () => void>();
+        const scheduledTimeouts = new Map<number, { callback: () => void; delay: number }>();
         let nextTimeoutId = 1;
         let nowMs = Date.parse('2026-02-05T00:00:00.000Z');
 
         vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
-        vi.spyOn(globalThis, 'setTimeout').mockImplementation((((callback: TimerHandler) => {
+        vi.spyOn(globalThis, 'setTimeout').mockImplementation((((callback: TimerHandler, delay?: number) => {
             const timeoutId = nextTimeoutId++;
             if (typeof callback === 'function') {
-                scheduledTimeouts.set(timeoutId, callback as () => void);
+                scheduledTimeouts.set(timeoutId, {
+                    callback: callback as () => void,
+                    delay: typeof delay === 'number' ? delay : 0,
+                });
             }
             return timeoutId as unknown as ReturnType<typeof setTimeout>;
         }) as typeof setTimeout));
@@ -189,11 +192,12 @@ describe('sessions domain: thinking grace', () => {
         expect(typeof graceUntil).toBe('number');
         expect(graceUntil).toBeGreaterThan(t1);
         expect(get().sessionListRenderables.s1?.thinkingGraceUntil ?? null).toBe(graceUntil);
-        expect(scheduledTimeouts.size).toBe(1);
+        const graceTimers = [...scheduledTimeouts.values()].filter((timeout) => timeout.delay === 3_000);
+        expect(graceTimers).toHaveLength(1);
 
         // Once the grace timer expires, the marker clears without polling.
         nowMs = (graceUntil as number) + 1;
-        const expireThinkingGrace = scheduledTimeouts.values().next().value;
+        const expireThinkingGrace = graceTimers[0]?.callback;
         expect(typeof expireThinkingGrace).toBe('function');
         expireThinkingGrace?.();
 
@@ -256,6 +260,6 @@ describe('sessions domain: thinking grace', () => {
         expect(get().sessions.s1?.thinkingGraceUntil ?? null).toBeNull();
         expect(get().sessionListRenderables.s1?.thinking).toBe(false);
         expect(get().sessionListRenderables.s1?.thinkingGraceUntil ?? null).toBeNull();
-        expect(globalThis.setTimeout).toHaveBeenCalledTimes(0);
+        expect(vi.mocked(globalThis.setTimeout).mock.calls.filter((call) => call[1] === 3_000)).toHaveLength(0);
     });
 });

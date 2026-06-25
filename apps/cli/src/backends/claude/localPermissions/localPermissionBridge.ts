@@ -25,6 +25,7 @@ import { computeLocalPermissionPolicyDecision } from './permissionPolicyDecision
 import { shouldSuppressProviderPermissionForHappierApproval } from '@/agent/tools/happierTools/resolveHappierActionForMcpToolName';
 import {
     CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
+    CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
     isClaudeLocalPermissionBridgeAgentStateRequest,
 } from '@happier-dev/agents';
 import { withAskUserQuestionUiFreeformDefault } from './askUserQuestionFreeformDefault';
@@ -201,10 +202,10 @@ export class ClaudeLocalPermissionBridge {
                 toolInput: pending.toolInput,
                 createdAt: pending.createdAt,
                 status: 'canceled',
-                reason: 'Local permission bridge stopped',
+                reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
                 hookResponse: DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE,
             });
-            this.permissionCoordinator.cancelRequest(pending.id, 'Local permission bridge stopped');
+            this.permissionCoordinator.cancelRequest(pending.id, CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON);
         }
         this.pendingRequests.clear();
         this.localWaitersByRequestId.clear();
@@ -485,7 +486,7 @@ export class ClaudeLocalPermissionBridge {
                 this.requestStore.completeRequest(params);
             },
             cancelAllRequests: (params) => {
-                this.cancelLocalOutstandingRequests(params.reason);
+        this.cancelLocalOutstandingRequests(params.reason);
             },
             hasOutstandingRequest: (requestId) => this.readLocalOutstandingRequest(requestId) !== null,
             readOutstandingRequest: (requestId) => this.readLocalOutstandingRequest(requestId),

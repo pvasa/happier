@@ -48,6 +48,14 @@ const boxedInteractiveClaudeScreen = [
   '  ? for shortcuts',
 ].join('\n');
 
+const resumeChoiceDialogScreen = [
+  'This session is 18h 2m old and 560.4k tokens.',
+  'To reduce startup time, Claude can resume from the saved summary or load the full session.',
+  '',
+  '❯ 1. Resume from summary',
+  '  2. Resume full session',
+].join('\n');
+
 async function flushMicrotasks(times = 6): Promise<void> {
   for (let i = 0; i < times; i += 1) {
     await Promise.resolve();
@@ -417,6 +425,101 @@ describe('createClaudeUnifiedTerminalReadinessBridge', () => {
     expect(onStartupReady).toHaveBeenCalledTimes(1);
     expect(arbiter.observeLifecycle).toHaveBeenCalledWith({ type: 'output', observedAtMs: 10 });
 
+    bridge.dispose();
+  });
+
+  it('lets a startup dialog resolver handle the resume-choice interstitial before reporting readiness', async () => {
+    vi.useFakeTimers();
+    let nowMs = 0;
+    const arbiter = createArbiter();
+    const onStartupReady = vi.fn();
+    const resolveStartupDialog = vi.fn()
+      .mockResolvedValueOnce({ status: 'handled' })
+      .mockResolvedValue({ status: 'unhandled' });
+    const captureInputState = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stable: true,
+        currentInput: resumeChoiceDialogScreen,
+        observedAt: 0,
+      })
+      .mockResolvedValueOnce({
+        stable: true,
+        currentInput: boxedInteractiveClaudeScreen,
+        observedAt: 10,
+      });
+    const bridge = createClaudeUnifiedTerminalReadinessBridge({
+      hostAdapter: {
+        evaluateLiveness: vi.fn().mockResolvedValue({ paneAlive: true, observedAt: 0 }),
+        captureInputState,
+      },
+      handle,
+      arbiter,
+      pollIntervalMs: 10,
+      quietPeriodMs: 25,
+      timeoutMs: 100,
+      nowMs: () => nowMs,
+      onStartupReady,
+      resolveStartupDialog,
+    });
+
+    bridge.start({ abortSignal: new AbortController().signal });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(resolveStartupDialog).toHaveBeenCalledTimes(1);
+    expect(onStartupReady).not.toHaveBeenCalled();
+
+    nowMs += 10;
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(onStartupReady).toHaveBeenCalledTimes(1);
+    expect(arbiter.observeLifecycle).toHaveBeenCalledWith({ type: 'output', observedAtMs: 10 });
+    bridge.dispose();
+  });
+
+  it('pauses startup timeout while the resume-choice resolver is waiting for a user action', async () => {
+    vi.useFakeTimers();
+    let nowMs = 0;
+    const arbiter = createArbiter();
+    const abortController = new AbortController();
+    const resolveStartupDialog = vi.fn().mockResolvedValue({ status: 'waiting_for_user' });
+    const bridge = createClaudeUnifiedTerminalReadinessBridge({
+      hostAdapter: {
+        evaluateLiveness: vi.fn().mockResolvedValue({ paneAlive: true, observedAt: 0 }),
+        captureInputState: vi.fn().mockResolvedValue({
+          stable: true,
+          currentInput: resumeChoiceDialogScreen,
+          observedAt: 0,
+        }),
+      },
+      handle,
+      arbiter,
+      pollIntervalMs: 10,
+      timeoutMs: 20,
+      extendedTimeoutMs: 30,
+      progressGraceMs: 1,
+      nowMs: () => nowMs,
+      resolveStartupDialog,
+    });
+
+    let settled = false;
+    const started = Promise.resolve(bridge.start({ abortSignal: abortController.signal }))
+      .then(() => { settled = true; });
+
+    await Promise.resolve();
+    for (let i = 0; i < 5; i += 1) {
+      nowMs += 10;
+      await vi.advanceTimersByTimeAsync(10);
+    }
+
+    expect(settled).toBe(false);
+    expect(resolveStartupDialog).toHaveBeenCalled();
+    expect(arbiter.observeLifecycle).not.toHaveBeenCalled();
+
+    abortController.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await started;
+    expect(settled).toBe(true);
     bridge.dispose();
   });
 

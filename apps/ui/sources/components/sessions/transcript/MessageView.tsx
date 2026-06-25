@@ -15,7 +15,7 @@ import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/present
 import { resolveInactiveSessionToolCallFailure } from '@/components/tools/shell/permissions/resolveInactiveSessionToolCallFailure';
 import { resolveMessageRouteIdForDisplay } from '@/sync/domains/messages/messageRouteIds';
 import { sync } from '@/sync/sync';
-import { Option } from '@/components/markdown/MarkdownView';
+import { Option, type OptionLongPressHandler } from '@/components/markdown/MarkdownView';
 import { isCommittedMessageDiscarded } from "@/utils/sessions/discardedCommittedMessages";
 import { shouldShowMessageCopyButton, shouldShowMessageSelectButton } from '@/components/sessions/transcript/messageCopyVisibility';
 import { renderStructuredMessage, StructuredMessageBlock } from '@/components/sessions/transcript/structured/StructuredMessageBlock';
@@ -309,7 +309,7 @@ function RenderBlock(props: {
       />;
 
     case 'agent-event':
-      return <TranscriptEventRow event={props.message.event} />;
+      return <TranscriptEventRow event={props.message.event} sessionId={props.sessionId} />;
 
 
     default:
@@ -397,6 +397,14 @@ function UserTextBlock(props: {
       }
     })(), { tag: 'MessageView.handleOptionPress.userMessage' });
   }, [props.canSendMessages, props.sessionId]);
+  const handleOptionLongPress = React.useCallback<OptionLongPressHandler>(async (option) => {
+    const ok = await setClipboardStringSafe(option.title);
+    if (!ok) {
+      Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
+      return false;
+    }
+    return true;
+  }, []);
 
   const selectableMessage = isDiscarded ? null : resolveSelectableMessageText({
     message: props.message,
@@ -580,32 +588,34 @@ function UserTextBlock(props: {
           style={styles.userMessageWrapper}
           {...(isWeb ? {} : { pointerEvents: 'box-none' as const })}
         >
-          <View style={[styles.userMessageBubble, isDiscarded && styles.userMessageBubbleDiscarded]}>
-            <StructuredMessageBlock
-              message={props.message as any}
-              sessionId={props.sessionId}
-              onJumpToAnchor={handleJumpToAnchor}
-            />
-            <MarkdownView markdown={renderedMarkdownText} onOptionPress={handleOptionPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
-            {sessionMediaInlineImages.length > 0 ? (
-              <SessionMediaInlineImages
+          <View style={styles.userMessageBubbleAligner}>
+            <View style={[styles.userMessageBubble, isDiscarded && styles.userMessageBubbleDiscarded]}>
+              <StructuredMessageBlock
+                message={props.message as any}
                 sessionId={props.sessionId}
-                media={sessionMediaInlineImages}
-                onOpenPath={handleOpenAttachmentPath}
+                onJumpToAnchor={handleJumpToAnchor}
               />
-            ) : null}
-            {nonImageAttachments.length > 0 ? (
-              <AttachmentsMessageRow
-                attachments={nonImageAttachments}
-                onOpenPath={handleOpenAttachmentPath}
-              />
-            ) : null}
-            {linkedWorkspaceFiles.length > 0 ? (
-              <LinkedWorkspaceFilesRow sessionId={props.sessionId} paths={linkedWorkspaceFiles} />
-            ) : null}
-            {isDiscarded && (
-              <Text selectable style={styles.discardedCommittedMessageLabel}>{t('message.discarded')}</Text>
-            )}
+              <MarkdownView markdown={renderedMarkdownText} onOptionPress={handleOptionPress} onOptionLongPress={handleOptionLongPress} onLinkPress={handleMarkdownLinkPress} selectable={true} profile="transcript" textStyle={styles.transcriptMarkdownText} />
+              {sessionMediaInlineImages.length > 0 ? (
+                <SessionMediaInlineImages
+                  sessionId={props.sessionId}
+                  media={sessionMediaInlineImages}
+                  onOpenPath={handleOpenAttachmentPath}
+                />
+              ) : null}
+              {nonImageAttachments.length > 0 ? (
+                <AttachmentsMessageRow
+                  attachments={nonImageAttachments}
+                  onOpenPath={handleOpenAttachmentPath}
+                />
+              ) : null}
+              {linkedWorkspaceFiles.length > 0 ? (
+                <LinkedWorkspaceFilesRow sessionId={props.sessionId} paths={linkedWorkspaceFiles} />
+              ) : null}
+              {isDiscarded && (
+                <Text selectable style={styles.discardedCommittedMessageLabel}>{t('message.discarded')}</Text>
+              )}
+            </View>
           </View>
           <MessageActionRow
             messageId={props.message.id}
@@ -762,6 +772,14 @@ function AgentTextBlock(props: {
       }
     })(), { tag: 'MessageView.handleOptionPress.agentMessage' });
   }, [props.canSendMessages, props.sessionId]);
+  const handleOptionLongPress = React.useCallback<OptionLongPressHandler>(async (option) => {
+    const ok = await setClipboardStringSafe(option.title);
+    if (!ok) {
+      Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
+      return false;
+    }
+    return true;
+  }, []);
 
   const selectionRow = useOptionalTranscriptSelectionRow(props.message.id);
   const selectionModeActionsVisible = selectionEnabled && selectionRow.isSelectionMode;
@@ -958,6 +976,7 @@ function AgentTextBlock(props: {
                     testID="transcript-thinking-body-markdown"
                     markdown={markdown}
                     onOptionPress={handleOptionPress}
+                    onOptionLongPress={handleOptionLongPress}
                     onLinkPress={handleMarkdownLinkPress}
                     selectable={true}
                     profile="thinking"
@@ -969,6 +988,7 @@ function AgentTextBlock(props: {
                 <MarkdownView
                   markdown={streamingMarkdownText}
                   onOptionPress={handleOptionPress}
+                  onOptionLongPress={handleOptionLongPress}
                   onLinkPress={handleMarkdownLinkPress}
                   selectable={true}
                   profile="transcript"
@@ -989,6 +1009,7 @@ function AgentTextBlock(props: {
                 <MarkdownView
                   markdown={markdown}
                   onOptionPress={handleOptionPress}
+                  onOptionLongPress={handleOptionLongPress}
                   onLinkPress={handleMarkdownLinkPress}
                   selectable={true}
                   profile={props.message.isThinking ? 'thinking' : 'transcript'}
@@ -1404,10 +1425,22 @@ const styles = StyleSheet.create((theme) => ({
     maxWidth: '100%',
   },
     userMessageWrapper: {
-      maxWidth: '100%',
-      alignSelf: 'flex-end',
+      // Stretch the wrapper to the full row width so the absolutely positioned
+      // MessageActionRow is measured against the full width — its timestamp/actions can
+      // then grow past a small bubble's width instead of being constrained to it (which
+      // made short messages wrap the timestamp vertically). The bubble is right-aligned
+      // and hugged by userMessageBubbleAligner below.
+      alignSelf: 'stretch',
       position: 'relative',
       paddingBottom: 22,
+    },
+    userMessageBubbleAligner: {
+      // Hug + right-align the bubble within the full-width wrapper. The bubble itself stays
+      // a default-stretch child of this aligner so its text wraps at a bounded width on
+      // native (a flex-end/auto-width bubble would measure text at max-content and overflow
+      // on one line, since maxWidth:'100%' only clamps the box, it does not bound the text).
+      alignSelf: 'flex-end',
+      maxWidth: '100%',
     },
     userMessageBubble: {
       backgroundColor: theme.colors.message.user.background,

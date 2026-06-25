@@ -397,6 +397,149 @@ describe('MonacoEditorSurface (web)', () => {
         expect(blurHandler).not.toBeNull();
     });
 
+    it('applies external value changes through editor edits so selection and scroll position are preserved', async () => {
+        let currentValue = 'first line\nsecond line';
+        const setValueSpy = vi.fn((next: string) => {
+            currentValue = next;
+        });
+        const executeEditsSpy = vi.fn((_source: string, edits: Array<{ text: string }>) => {
+            currentValue = edits[0]?.text ?? currentValue;
+        });
+        const getSelectionsSpy = vi.fn(() => [{ startLineNumber: 2, startColumn: 4, endLineNumber: 2, endColumn: 4 }]);
+        const setSelectionsSpy = vi.fn();
+        const getScrollTopSpy = vi.fn(() => 42);
+        const getScrollLeftSpy = vi.fn(() => 7);
+        const setScrollTopSpy = vi.fn();
+        const setScrollLeftSpy = vi.fn();
+
+        (globalThis as any).window = (globalThis as any).window ?? {};
+        (globalThis as any).document = (globalThis as any).document ?? {};
+
+        (globalThis as any).window.require = (deps: any, onOk?: any, _onErr?: any) => {
+            if (typeof onOk === 'function') onOk();
+        };
+        (globalThis as any).window.monaco = {
+            editor: {
+                createModel: () => ({
+                    getValue: () => currentValue,
+                    getFullModelRange: () => ({ startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 12 }),
+                    setValue: setValueSpy,
+                    dispose: () => {},
+                }),
+                create: () => ({
+                    onDidChangeModelContent: () => ({ dispose: () => {} }),
+                    onDidBlurEditorText: () => ({ dispose: () => {} }),
+                    updateOptions: () => {},
+                    executeEdits: executeEditsSpy,
+                    getSelections: getSelectionsSpy,
+                    setSelections: setSelectionsSpy,
+                    getScrollTop: getScrollTopSpy,
+                    getScrollLeft: getScrollLeftSpy,
+                    setScrollTop: setScrollTopSpy,
+                    setScrollLeft: setScrollLeftSpy,
+                    dispose: () => {},
+                }),
+            },
+        };
+
+        const onChange = vi.fn();
+        const screen = await renderScreen(React.createElement(MonacoEditorSurface, {
+            resetKey: '1',
+            value: currentValue,
+            language: 'markdown',
+            onChange,
+        }));
+
+        await act(async () => {
+            screen.tree.update(React.createElement(MonacoEditorSurface, {
+                resetKey: '1',
+                value: 'first line\nchanged second line',
+                language: 'markdown',
+                onChange,
+            }));
+            await flushHookEffects();
+        });
+
+        expect(executeEditsSpy).toHaveBeenCalledWith(
+            'happier.external-value',
+            [expect.objectContaining({ text: 'first line\nchanged second line' })],
+            expect.anything(),
+        );
+        expect(setValueSpy).not.toHaveBeenCalled();
+        expect(setSelectionsSpy).toHaveBeenCalledWith([{ startLineNumber: 2, startColumn: 4, endLineNumber: 2, endColumn: 4 }]);
+        expect(setScrollTopSpy).toHaveBeenCalledWith(42);
+        expect(setScrollLeftSpy).toHaveBeenCalledWith(7);
+    });
+
+    it('cancels a pending debounced edit when an external value is synced', async () => {
+        vi.useFakeTimers();
+        try {
+            let currentValue = 'start';
+            let changeHandler: null | ((..._args: any[]) => void) = null;
+
+            (globalThis as any).window = (globalThis as any).window ?? {};
+            (globalThis as any).document = (globalThis as any).document ?? {};
+
+            (globalThis as any).window.require = (deps: any, onOk?: any, _onErr?: any) => {
+                if (typeof onOk === 'function') onOk();
+            };
+            (globalThis as any).window.monaco = {
+                editor: {
+                    createModel: () => ({
+                        getValue: () => currentValue,
+                        setValue: (next: string) => {
+                            currentValue = next;
+                        },
+                        dispose: () => {},
+                    }),
+                    create: () => ({
+                        onDidChangeModelContent: (handler: (..._args: any[]) => void) => {
+                            changeHandler = handler;
+                            return { dispose: () => {} };
+                        },
+                        onDidBlurEditorText: () => ({ dispose: () => {} }),
+                        updateOptions: () => {},
+                        dispose: () => {},
+                    }),
+                },
+            };
+
+            const onChange = vi.fn();
+            const screen = await renderScreen(React.createElement(MonacoEditorSurface, {
+                resetKey: '1',
+                value: currentValue,
+                language: 'markdown',
+                onChange,
+                changeDebounceMs: 100,
+            }));
+
+            const triggerChange = assertCallable(changeHandler, 'change handler');
+
+            currentValue = 'local edit';
+            triggerChange({});
+
+            await act(async () => {
+                screen.tree.update(React.createElement(MonacoEditorSurface, {
+                    resetKey: '1',
+                    value: 'external sync',
+                    language: 'markdown',
+                    onChange,
+                    changeDebounceMs: 100,
+                }));
+                await flushHookEffects();
+            });
+
+            await act(async () => {
+                vi.advanceTimersByTime(100);
+            });
+
+            expect(currentValue).toBe('external sync');
+            expect(onChange).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('updates editor readOnly mode when the prop changes after mount', async () => {
         const updateOptionsSpy = vi.fn();
 

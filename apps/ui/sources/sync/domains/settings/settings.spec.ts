@@ -1115,7 +1115,7 @@ describe('settings', () => {
             expect((parsed as any).transcriptScrollAutoFollowWhenPinned).toBe(true);
             expect((parsed as any).transcriptScrollJumpToBottomEnabled).toBe(true);
             expect((parsed as any).transcriptScrollJumpToBottomMinNewCount).toBe(1);
-            expect((parsed as any).transcriptScrollJumpToBottomRevealViewportRatio).toBe(0.75);
+            expect((parsed as any).transcriptScrollJumpToBottomRevealViewportRatio).toBe(0.4);
             expect((parsed as any).transcriptScrollJumpToBottomAnimateScroll).toBe(true);
         });
 

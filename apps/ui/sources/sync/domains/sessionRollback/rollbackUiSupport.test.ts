@@ -10,13 +10,14 @@ function createActiveSession(params: Readonly<{
     metadata: Metadata;
     sessionTurns?: SessionTurnsProjectionV1 | null;
     rollbackEligibleTurnStarts?: readonly number[] | null;
+    active?: boolean;
 }>): Session & { sessionTurns?: SessionTurnsProjectionV1 | null } {
     return {
         id: 'session-1',
         seq: 4,
         createdAt: 1,
         updatedAt: 1,
-        active: true,
+        active: params.active ?? true,
         activeAt: 1,
         metadata: params.metadata,
         metadataVersion: 1,
@@ -335,6 +336,35 @@ describe('resolveTranscriptRollbackActions', () => {
             u1: {
                 target: { type: 'before_user_message', userMessageSeq: 1 },
                 restoredDraftText: 'initial prompt',
+            },
+        });
+    });
+
+    it('keeps completed app-server turn rollback actions after the session is no longer active', () => {
+        const session = createActiveSession({
+            active: false,
+            metadata: {
+                path: '/workspace',
+                host: 'localhost',
+                flavor: 'codex',
+                codexBackendMode: 'appServer',
+            },
+            rollbackEligibleTurnStarts: [3],
+        });
+        const messagesById: Record<string, Message> = {
+            u1: userTextMessage('u1', 1, 'initial prompt'),
+            u2: userTextMessage('u2', 3, 'second prompt'),
+        };
+
+        expect(resolveTranscriptRollbackActions({
+            session,
+            messageIdsOldestFirst: ['u1', 'u2'],
+            messagesById,
+            rollbackRanges: [],
+        })).toEqual({
+            u2: {
+                target: { type: 'before_user_message', userMessageSeq: 3 },
+                restoredDraftText: 'second prompt',
             },
         });
     });

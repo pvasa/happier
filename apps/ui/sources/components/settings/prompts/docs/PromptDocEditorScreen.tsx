@@ -21,7 +21,18 @@ import { createPromptDoc, updatePromptDoc } from '@/sync/ops/promptLibrary/promp
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { PromptExternalLinksGroup } from '@/components/settings/prompts/shared/PromptExternalLinksGroup';
 import { PromptOrganizationFields } from '@/components/settings/prompts/shared/PromptOrganizationFields';
+import { usePromptEditorDraftField } from '@/components/settings/prompts/shared/usePromptEditorDraftField';
 import { ensurePromptFolderByName, findPromptFolderById, formatPromptTags, normalizePromptTags } from '@/sync/ops/promptLibrary/promptFolders';
+
+function readPromptDocMarkdown(bodyText: string | null): string {
+  if (!bodyText) return '';
+  try {
+    const parsed = PromptDocBodyV1Schema.safeParse(JSON.parse(bodyText));
+    return parsed.success ? parsed.data.markdown : '';
+  } catch {
+    return '';
+  }
+}
 
 const styles = StyleSheet.create((theme) => ({
   container: {
@@ -64,53 +75,88 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
   const navigation = useNavigation();
   const [promptFoldersV1, setPromptFoldersV1] = useSettingMutable('promptFoldersV1');
   const [isLoading, setIsLoading] = React.useState<boolean>(Boolean(props.artifactId));
-  const [title, setTitle] = React.useState('');
-  const [markdown, setMarkdown] = React.useState('');
-  const [folderName, setFolderName] = React.useState('');
-  const [tagsText, setTagsText] = React.useState('');
+  const {
+    value: title,
+    setValue: setTitle,
+    setPristineValue: setPristineTitle,
+    applyExternalValue: applyExternalTitle,
+  } = usePromptEditorDraftField('');
+  const {
+    value: markdown,
+    setValue: setMarkdown,
+    setPristineValue: setPristineMarkdown,
+    applyExternalValue: applyExternalMarkdown,
+  } = usePromptEditorDraftField('');
+  const {
+    value: folderName,
+    setValue: setFolderName,
+    setPristineValue: setPristineFolderName,
+    applyExternalValue: applyExternalFolderName,
+  } = usePromptEditorDraftField('');
+  const {
+    value: tagsText,
+    setValue: setTagsText,
+    setPristineValue: setPristineTagsText,
+    applyExternalValue: applyExternalTagsText,
+  } = usePromptEditorDraftField('');
   const [saving, setSaving] = React.useState(false);
   // Flushed before reading `markdown` on save so the latest rich/raw edit (which
   // may still be debounced inside the active editor surface) is captured.
   const editorRef = React.useRef<CodeEditorHandle | null>(null);
+  const promptFoldersRef = React.useRef(promptFoldersV1);
+  promptFoldersRef.current = promptFoldersV1;
+  const loadedArtifactIdRef = React.useRef<string | null>(null);
+
+  const applyArtifactState = React.useCallback((artifactId: string, options?: Readonly<{
+    preserveDirtyFields?: boolean;
+  }>) => {
+    const next = storage.getState().artifacts[artifactId] ?? null;
+    const headerTitle = typeof next?.header?.title === 'string' ? next.header.title : next?.title;
+    const headerFolder = findPromptFolderById(
+      promptFoldersRef.current,
+      typeof next?.header?.folderId === 'string' ? next.header.folderId : null,
+    );
+    const headerTags = Array.isArray(next?.header?.tags)
+      ? next.header.tags.filter((tag): tag is string => typeof tag === 'string')
+      : [];
+    const bodyText = typeof next?.body === 'string' ? next.body : null;
+    const preserveDirty = options?.preserveDirtyFields === true && loadedArtifactIdRef.current === artifactId;
+    const applyOptions = { preserveDirty };
+
+    applyExternalTitle(headerTitle ?? '', applyOptions);
+    applyExternalFolderName(headerFolder?.name ?? '', applyOptions);
+    applyExternalTagsText(formatPromptTags(headerTags), applyOptions);
+    applyExternalMarkdown(readPromptDocMarkdown(bodyText), applyOptions);
+    loadedArtifactIdRef.current = artifactId;
+  }, [applyExternalFolderName, applyExternalMarkdown, applyExternalTagsText, applyExternalTitle]);
 
   React.useEffect(() => {
     if (!props.artifactId) {
+      loadedArtifactIdRef.current = null;
+      setPristineTitle('');
+      setPristineMarkdown('');
+      setPristineFolderName('');
+      setPristineTagsText('');
       setIsLoading(false);
       return;
     }
 
     let cancelled = false;
+    const artifactId = props.artifactId;
+    setIsLoading(true);
 
     (async () => {
       try {
-        const local = storage.getState().artifacts[props.artifactId!] ?? null;
+        const local = storage.getState().artifacts[artifactId] ?? null;
         if (local?.body === undefined) {
           const credentials = sync.getCredentials();
           if (!credentials) throw new Error('Not authenticated');
-          const full = await sync.fetchArtifactWithBody(props.artifactId!);
+          const full = await sync.fetchArtifactWithBody(artifactId);
           if (full) storage.getState().updateArtifact(full);
         }
 
-        const next = storage.getState().artifacts[props.artifactId!] ?? null;
-        const headerTitle = typeof next?.header?.title === 'string' ? next.header.title : next?.title;
-        const headerFolder = findPromptFolderById(
-          promptFoldersV1,
-          typeof next?.header?.folderId === 'string' ? next.header.folderId : null,
-        );
-        const headerTags = Array.isArray(next?.header?.tags)
-          ? next.header.tags.filter((tag): tag is string => typeof tag === 'string')
-          : [];
         if (!cancelled) {
-          setTitle(headerTitle ?? '');
-          setFolderName(headerFolder?.name ?? '');
-          setTagsText(formatPromptTags(headerTags));
-          const bodyText = typeof next?.body === 'string' ? next.body : null;
-          if (bodyText) {
-            const parsed = PromptDocBodyV1Schema.safeParse(JSON.parse(bodyText));
-            setMarkdown(parsed.success ? parsed.data.markdown : '');
-          } else {
-            setMarkdown('');
-          }
+          applyArtifactState(artifactId);
         }
       } catch (err) {
       } finally {
@@ -121,7 +167,14 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
     return () => {
       cancelled = true;
     };
-  }, [promptFoldersV1, props.artifactId]);
+  }, [applyArtifactState, props.artifactId, setPristineFolderName, setPristineMarkdown, setPristineTagsText, setPristineTitle]);
+
+  React.useEffect(() => {
+    const artifactId = props.artifactId;
+    if (!artifactId) return;
+    if (loadedArtifactIdRef.current !== artifactId) return;
+    applyArtifactState(artifactId, { preserveDirtyFields: true });
+  }, [applyArtifactState, promptFoldersV1, props.artifactId]);
 
   const canSave = title.trim().length > 0 && !saving;
 

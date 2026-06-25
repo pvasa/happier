@@ -16,6 +16,19 @@ import type { ConnectedServiceCredentialApi } from '@/api/connectedServices/conn
 import type { Credentials } from '@/persistence';
 import { resolveConnectedServiceAccountMode } from './resolveConnectedServiceAccountMode';
 
+export class ConnectedServiceCredentialResolutionError extends Error {
+  readonly name = 'ConnectedServiceCredentialResolutionError';
+  readonly kind = 'missing_credential' as const;
+  readonly serviceId: ConnectedServiceId;
+  readonly profileId: string;
+
+  constructor(binding: Readonly<{ serviceId: ConnectedServiceId; profileId: string }>) {
+    super(`Missing connected service credential (${binding.serviceId}/${binding.profileId})`);
+    this.serviceId = binding.serviceId;
+    this.profileId = binding.profileId;
+  }
+}
+
 function parseConnectedServiceCredentialRecord(params: Readonly<{
   binding: { serviceId: ConnectedServiceId; profileId: string };
   value: unknown;
@@ -106,7 +119,7 @@ export async function resolveConnectedServiceCredentials(params: Readonly<{
         continue;
       }
       if (accountMode === 'plain') {
-        throw new Error(`Missing connected service credential (${binding.serviceId}/${binding.profileId})`);
+        throw new ConnectedServiceCredentialResolutionError(binding);
       }
     }
 
@@ -116,7 +129,7 @@ export async function resolveConnectedServiceCredentials(params: Readonly<{
       binding,
     });
     if (!sealed) {
-      throw new Error(`Missing connected service credential (${binding.serviceId}/${binding.profileId})`);
+      throw new ConnectedServiceCredentialResolutionError(binding);
     }
     out.set(binding.serviceId, sealed);
   }

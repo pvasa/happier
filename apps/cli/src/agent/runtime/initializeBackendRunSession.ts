@@ -43,6 +43,7 @@ export interface InitializeBackendRunSessionOptions {
   onAttachMetadataSnapshotError?: (error: unknown) => void
   onAttachMetadataSnapshotMissing?: (error: unknown | null) => void
   onAttachMetadataSnapshotReady?: (snapshot: unknown, session: ApiSessionClient) => void | Promise<void>
+  onDaemonSessionReported?: (opts: { sessionId: string }) => void | Promise<void>
   startupSideEffectsOrder?: 'report-first' | 'persist-first'
 }
 
@@ -92,7 +93,16 @@ export async function initializeBackendRunSession(
     ?? null
   const terminal = opts.metadata.terminal
   const startDaemonReport = (sessionId: string, metadata: Metadata, mode: DaemonReportMode): Promise<void> => {
-    const reportPromise = reportSessionToDaemonIfRunningFn({ sessionId, metadata })
+    const reportPromise = reportSessionToDaemonIfRunningFn(
+      { sessionId, metadata },
+      opts.onDaemonSessionReported
+        ? {
+            onReported: async () => {
+              await opts.onDaemonSessionReported?.({ sessionId })
+            },
+          }
+        : undefined,
+    )
     if (mode === 'background') {
       void reportPromise.catch(() => {})
       return Promise.resolve()

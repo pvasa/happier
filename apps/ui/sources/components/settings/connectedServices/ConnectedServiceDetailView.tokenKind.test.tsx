@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import {
     connectedServicesModuleState,
+    installConnectedServiceDetailShellMocks,
     installConnectedServicesCommonModuleMocks,
 } from './connectedServicesTestHelpers';
 
@@ -50,6 +51,7 @@ installConnectedServicesCommonModuleMocks({
     },
     searchParams: { serviceId: 'claude-subscription' },
 });
+installConnectedServiceDetailShellMocks();
 
 vi.mock('@/utils/url/openExternalUrl', () => ({
   openExternalUrl: (url: string) => openExternalUrlSpy(url),

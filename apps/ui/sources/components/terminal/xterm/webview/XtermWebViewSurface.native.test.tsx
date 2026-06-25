@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const postMessageSpy = vi.fn();
+const requestFocusSpy = vi.fn();
 let lastWebViewProps: any = null;
 let webViewRenderCount = 0;
 
@@ -24,6 +25,7 @@ vi.mock('react-native-webview', () => ({
         if (ref) {
             ref.current = {
                 postMessage: postMessageSpy,
+                requestFocus: requestFocusSpy,
             };
         }
         return React.createElement('WebView', props, props.children);
@@ -116,6 +118,48 @@ describe('XtermWebViewSurface (native)', () => {
 
         emitEnvelope({ v: 1, type: 'input', payload: { data: 'ls' } });
         expect(onInput).toHaveBeenCalledWith('ls');
+    });
+
+    it('opts into native keyboard focus and requests WebView focus for ready and focus transitions', async () => {
+        postMessageSpy.mockClear();
+        requestFocusSpy.mockClear();
+        lastWebViewProps = null;
+        webViewRenderCount = 0;
+
+        const onInput = vi.fn();
+        const onResize = vi.fn();
+        const onReady = vi.fn();
+        const ref = React.createRef<any>();
+
+        await renderScreen(React.createElement(XtermWebViewSurface, {
+                    ref,
+                    fontSize: 12,
+                    lineHeightPx: 18,
+                    onInput,
+                    onResize,
+                    onReady,
+                    bridgeMaxChunkBytes: 64_000,
+                }));
+
+        expect(lastWebViewProps?.keyboardDisplayRequiresUserAction).toBe(false);
+
+        ref.current.focus();
+        expect(requestFocusSpy).toHaveBeenCalledTimes(1);
+        expect(findPostedEnvelopeByType('focus')).toBeNull();
+
+        emitEnvelope({ v: 1, type: 'ready', payload: { cols: 80, rows: 24 } });
+        expect(requestFocusSpy).toHaveBeenCalledTimes(2);
+        postMessageSpy.mockClear();
+        requestFocusSpy.mockClear();
+
+        ref.current.focus();
+        expect(requestFocusSpy).toHaveBeenCalledTimes(1);
+        expect(findPostedEnvelopeByType('focus')).toEqual(
+            expect.objectContaining({
+                v: 1,
+                type: 'focus',
+            }),
+        );
     });
 
     it('decodes chunked incoming messages', async () => {

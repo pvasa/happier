@@ -105,6 +105,187 @@ describe('createOpenAiCodexQuotaFetcher', () => {
     }
   });
 
+  it('fetches Codex reset-credit collection details with connected account headers', async () => {
+    const now = 1_768_000_000_000;
+    const usageUrl = 'https://quota.happier.dev/openai-codex/usage';
+    const resetCreditsUrl = 'https://quota.happier.dev/openai-codex/rate-limit-reset-credits';
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url === usageUrl) {
+        return {
+          ok: true,
+          json: async () => ({
+            plan_type: 'pro',
+            rate_limit: {
+              primary_window: { used_percent: 100, reset_at: '2026-06-17T12:00:00.000Z' },
+            },
+            rate_limit_reset_credits: { available_count: 1 },
+          }),
+        };
+      }
+      if (url === resetCreditsUrl) {
+        return {
+          ok: true,
+          json: async () => ({
+            available_count: 1,
+            credits: [
+              {
+                id: 'credit-1',
+                reset_type: 'codex_rate_limits',
+                status: 'available',
+                granted_at: '2026-06-12T01:51:02.745763Z',
+                expires_at: '2026-07-12T01:51:02.745763Z',
+                redeem_started_at: null,
+                redeemed_at: null,
+                title: 'One free rate limit reset',
+                description: 'Granted by the provider',
+              },
+            ],
+          }),
+        };
+      }
+      throw new Error(`unexpected URL ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createOpenAiCodexQuotaFetcher({
+      usageUrl,
+      resetCreditsUrl,
+      staleAfterMs: 300_000,
+    });
+
+    const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
+
+    expect(snapshot?.recoveryCredits).toEqual({
+      kind: 'usage_limit_resets',
+      availableCount: 1,
+      totalCount: 1,
+      nextExpiresAtMs: Date.parse('2026-07-12T01:51:02.745Z'),
+      source: 'provider_api',
+      confidence: 'exact',
+      credits: [
+        {
+          providerCreditId: 'credit-1',
+          kind: 'rate_limit_reset',
+          status: 'available',
+          providerResetType: 'codex_rate_limits',
+          title: 'One free rate limit reset',
+          description: 'Granted by the provider',
+          grantedAtMs: Date.parse('2026-06-12T01:51:02.745Z'),
+          expiresAtMs: Date.parse('2026-07-12T01:51:02.745Z'),
+          redeemStartedAtMs: null,
+          redeemedAtMs: null,
+        },
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenLastCalledWith(resetCreditsUrl, expect.objectContaining({
+      method: 'GET',
+      headers: expect.objectContaining({
+        Authorization: 'Bearer at',
+        'ChatGPT-Account-Id': 'acct',
+      }),
+    }));
+  });
+
+  it('consumes Codex reset credits with connected account headers', async () => {
+    const now = 1_768_000_000_000;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createOpenAiCodexQuotaFetcher();
+    const result = await fetcher.consumeRecoveryCredit?.({
+      record,
+      now,
+      idempotencyKey: 'reset-req-1',
+      providerCreditId: 'credit-1',
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual(expect.objectContaining({ ok: true }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer at',
+          'ChatGPT-Account-Id': 'acct',
+          'Content-Type': 'application/json',
+        }),
+        body: JSON.stringify({ credit_id: 'credit-1', redeem_request_id: 'reset-req-1' }),
+      }),
+    );
+  });
+
+  it('fails reset-credit consume when no provider credit id is supplied', async () => {
+    const now = 1_768_000_000_000;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createOpenAiCodexQuotaFetcher();
+    await expect(fetcher.consumeRecoveryCredit?.({
+      record,
+      now,
+      idempotencyKey: 'reset-req-1',
+      signal: new AbortController().signal,
+    })).rejects.toMatchObject({ providerCode: 'missing_credit_id' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('allows an explicitly configured ChatGPT wham usage endpoint', async () => {
     const now = 1_000_000;
     const fetchMock = vi.fn(async () => ({
@@ -141,7 +322,13 @@ describe('createOpenAiCodexQuotaFetcher', () => {
 
     const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
     expect(snapshot?.meters.find((meter) => meter.meterId === 'session')?.utilizationPct).toBe(55);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://chatgpt.com/backend-api/wham/usage', expect.objectContaining({
+      method: 'GET',
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits', expect.objectContaining({
+      method: 'GET',
+    }));
   });
 
   it('exposes Retry-After backoff from non-ok provider responses', async () => {

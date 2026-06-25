@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import {
     connectedServicesModuleState,
+    installConnectedServiceDetailShellMocks,
     installConnectedServicesCommonModuleMocks,
 } from './connectedServicesTestHelpers';
 
@@ -30,6 +31,7 @@ installConnectedServicesCommonModuleMocks({
     },
     searchParams: { serviceId: 'openai-codex' },
 });
+installConnectedServiceDetailShellMocks();
 
 vi.mock('@/sync/store/settingsWriters', () => ({
   useApplySettings: () => applySettingsSpy,

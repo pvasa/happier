@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createTerminalPtySessionManager, type TerminalPtySessionManagerConfig } from './terminalPtySessionManager';
-import type { Disposable, PtyExitEvent, PtyProcess, PtyProvider, PtySpawnParams } from './ptyProvider';
+import type { Disposable, PtyExitEvent, PtyProcess, PtyProvider, PtySpawnParams } from '@/integrations/pty/ptyProvider';
 
 function createFakeDisposable(): Disposable {
   return { dispose: () => { } };

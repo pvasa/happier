@@ -2,6 +2,7 @@ import {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   SESSION_USAGE_LIMIT_RECOVERY_STATE_FIELD_ID,
   SessionUsageLimitRecoveryV1Schema,
+  type ConnectedServiceQuotaRecoveryCreditsV1,
   type SessionUsageLimitRecoveryAuthSelectionV1,
   type SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
@@ -26,14 +27,23 @@ export const METADATA_SESSION_USAGE_LIMIT_RECOVERY_V1_KEY = SESSION_USAGE_LIMIT_
 export type UsageLimitRecoveryIntent = SessionUsageLimitRecoveryV1;
 
 type RecoveryResult =
-  | Readonly<{ status: 'ready'; selectedAuth?: SessionUsageLimitRecoveryAuthSelectionV1 }>
+  | Readonly<{
+      status: 'ready';
+      selectedAuth?: SessionUsageLimitRecoveryAuthSelectionV1;
+      recoveryCredits?: ConnectedServiceQuotaRecoveryCreditsV1;
+    }>
   | Readonly<{
       status: 'wait';
       nextCheckAtMs: number;
       lastProbeError?: string | null;
       selectedAuth?: SessionUsageLimitRecoveryAuthSelectionV1;
+      recoveryCredits?: ConnectedServiceQuotaRecoveryCreditsV1;
     }>
-  | Readonly<{ status: 'exhausted'; lastProbeError?: string | null }>
+  | Readonly<{
+      status: 'exhausted';
+      lastProbeError?: string | null;
+      recoveryCredits?: ConnectedServiceQuotaRecoveryCreditsV1;
+    }>
   /**
    * The probe proved the intent is stale (e.g. the interrupted turn later
    * completed normally): cancel terminally without resuming.
@@ -180,12 +190,14 @@ export class UsageLimitRecoveryScheduler {
           ? await deps.recover(intent, { sessionId: context.sessionId })
           : { status: 'wait' as const, nextCheckAtMs: intent.nextCheckAtMs ?? intent.resetAtMs ?? deps.nowMs() };
         if (recovery.status === 'ready') {
+          const recoveryCredits = recovery.recoveryCredits ?? intent.recoveryCredits;
           return {
             status: 'success',
             intent: {
               ...intent,
               status: 'cancelled' as const,
               selectedAuth: recovery.selectedAuth ?? intent.selectedAuth,
+              ...(recoveryCredits ? { recoveryCredits } : {}),
             },
           };
         }
@@ -201,6 +213,7 @@ export class UsageLimitRecoveryScheduler {
             lastError: recovery.lastProbeError ?? null,
           };
         }
+        const recoveryCredits = recovery.recoveryCredits ?? intent.recoveryCredits;
         return {
           status: 'wait',
           nextRetryAtMs: recovery.nextCheckAtMs,
@@ -211,6 +224,7 @@ export class UsageLimitRecoveryScheduler {
             nextCheckAtMs: recovery.nextCheckAtMs,
             lastProbeError: recovery.lastProbeError ?? null,
             selectedAuth: recovery.selectedAuth ?? intent.selectedAuth,
+            ...(recoveryCredits ? { recoveryCredits } : {}),
           },
         };
       },
@@ -249,6 +263,7 @@ export class UsageLimitRecoveryScheduler {
     maxAttempts?: number;
     resumePromptMode?: 'standard' | 'off' | 'custom';
     selectedAuth: SessionUsageLimitRecoveryAuthSelectionV1;
+    recoveryCredits?: ConnectedServiceQuotaRecoveryCreditsV1;
   }>): Promise<UsageLimitRecoveryIntent> {
     const nowMs = this.deps.nowMs();
     const maxAttempts = typeof input.maxAttempts === 'number' && Number.isFinite(input.maxAttempts)
@@ -270,6 +285,7 @@ export class UsageLimitRecoveryScheduler {
       lastProbeError: null,
       resumePromptMode,
       selectedAuth: input.selectedAuth,
+      ...(input.recoveryCredits ? { recoveryCredits: input.recoveryCredits } : {}),
     };
     // Merge against any existing intent so a same-fingerprint resurfacing converges with the
     // existing backoff/dead-letter lifecycle instead of resetting attemptCount to 0 every time.

@@ -22,6 +22,7 @@ import { isPlainObject, normalizeSpawnSessionResult } from './_shared';
 import { isSocketIoAckTimeoutError } from '@/sync/runtime/socketIoAckTimeout';
 import { mergeMachineMetadataForVersionMismatch } from './machineMetadataMerge';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { stopSessionViaDaemonMachineRpc } from './sessionStopStrategy';
 import {
@@ -596,7 +597,7 @@ export async function machineUpdateMetadata(
     let currentMetadata = { ...metadata };
     let retryCount = 0;
 
-    const { sync } = await import('../sync');
+    const sync = getSyncSingleton();
     const machineEncryption = sync.encryption.getMachineEncryption(machineId);
     if (!machineEncryption) {
         throw new Error(`Machine encryption not found for ${machineId}`);

@@ -88,6 +88,51 @@ describe('MessageQueue2', () => {
         expect(result?.mode).toBe('local');
     });
 
+    it('rejects overlapping waits without replacing the active waiter', async () => {
+        const queue = new MessageQueue2<string>(mode => mode);
+        const firstAbortController = new AbortController();
+        const secondAbortController = new AbortController();
+
+        const firstWait = queue.waitForMessagesAndGetAsString(firstAbortController.signal);
+        const secondWait = queue.waitForMessagesAndGetAsString(secondAbortController.signal);
+
+        try {
+            const secondOutcome = await Promise.race([
+                secondWait.then(
+                    () => ({ status: 'resolved' as const }),
+                    (error: unknown) => ({
+                        status: 'rejected' as const,
+                        message: error instanceof Error ? error.message : String(error),
+                    }),
+                ),
+                new Promise<{ status: 'timed-out' }>((resolve) => setTimeout(() => resolve({ status: 'timed-out' }), 25)),
+            ]);
+
+            expect(secondOutcome).toEqual({
+                status: 'rejected',
+                message: expect.stringContaining('already has an active waiter'),
+            });
+
+            queue.push('delivered-to-first-waiter', 'local');
+
+            const firstOutcome = await Promise.race([
+                firstWait.then((batch) => ({
+                    status: 'resolved' as const,
+                    message: batch?.message,
+                })),
+                new Promise<{ status: 'timed-out' }>((resolve) => setTimeout(() => resolve({ status: 'timed-out' }), 25)),
+            ]);
+
+            expect(firstOutcome).toEqual({
+                status: 'resolved',
+                message: 'delivered-to-first-waiter',
+            });
+        } finally {
+            firstAbortController.abort();
+            secondAbortController.abort();
+        }
+    });
+
     it('should return null when waiting and queue closes', async () => {
         const queue = new MessageQueue2<string>(mode => mode);
         
@@ -449,22 +494,24 @@ describe('MessageQueue2', () => {
     });
 });
 
-describe('MessageQueue2 user-message seq attribution (A3-HIGH-1 owed-delivery watermark)', () => {
-    it('returns the max user-message seq of the consumed items on a batch', async () => {
+describe('MessageQueue2 user-message delivery attribution (A3-HIGH-1 owed-delivery watermark)', () => {
+    it('returns the max user-message seq and local ids of the consumed items on a batch', async () => {
         const queue = new MessageQueue2<string>(mode => mode);
 
-        queue.push('m1', 'local', { userMessageSeq: 10 });
-        queue.push('m2', 'local'); // no seq (e.g. RPC-direct delivery)
-        queue.push('m3', 'local', { userMessageSeq: 12 });
-        queue.push('other-mode', 'remote', { userMessageSeq: 99 });
+        queue.push('m1', 'local', { userMessageSeq: 10, userMessageLocalId: 'l1' });
+        queue.push('m2', 'local', { userMessageLocalId: 'l2' }); // no seq yet (e.g. socket echo races provider acceptance)
+        queue.push('m3', 'local', { userMessageSeq: 12, userMessageLocalIds: ['l1', 'l3'] });
+        queue.push('other-mode', 'remote', { userMessageSeq: 99, userMessageLocalId: 'l99' });
 
         const batch = await queue.waitForMessagesAndGetAsString();
         expect(batch?.message).toBe('m1\nm2\nm3');
         // Seq 99 belongs to a message still in the queue and must NOT be covered.
         expect(batch?.maxUserMessageSeq).toBe(12);
+        expect(batch?.userMessageLocalIds).toEqual(['l1', 'l2', 'l3']);
 
         const batch2 = await queue.waitForMessagesAndGetAsString();
         expect(batch2?.maxUserMessageSeq).toBe(99);
+        expect(batch2?.userMessageLocalIds).toEqual(['l99']);
     });
 
     it('returns null when no consumed item carries a seq', async () => {
@@ -472,12 +519,14 @@ describe('MessageQueue2 user-message seq attribution (A3-HIGH-1 owed-delivery wa
         queue.push('m1', 'local');
         const batch = await queue.waitForMessagesAndGetAsString();
         expect(batch?.maxUserMessageSeq).toBeNull();
+        expect(batch?.userMessageLocalIds).toEqual([]);
     });
 
-    it('preserves seq attribution through unshift (undeliverable-batch handback)', async () => {
+    it('preserves delivery attribution through unshift (undeliverable-batch handback)', async () => {
         const queue = new MessageQueue2<string>(mode => mode);
-        queue.unshift('returned', 'local', { userMessageSeq: 7 });
+        queue.unshift('returned', 'local', { userMessageSeq: 7, userMessageLocalIds: ['returned-1'] });
         const batch = await queue.waitForMessagesAndGetAsString();
         expect(batch?.maxUserMessageSeq).toBe(7);
+        expect(batch?.userMessageLocalIds).toEqual(['returned-1']);
     });
 });

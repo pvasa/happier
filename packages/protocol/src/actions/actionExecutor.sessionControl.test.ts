@@ -406,6 +406,52 @@ describe('createActionExecutor (session control)', () => {
     });
   });
 
+  it('executes terminal composer clear through protocol deps', async () => {
+    const sessionTerminalComposerClear = vi.fn(async () => ({
+      ok: true,
+      status: 'cleared',
+      sessionId: 's1',
+    }));
+    const executor = createExecutor({
+      sessionTerminalComposerClear,
+      resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
+    });
+
+    const res = await executor.execute(
+      'session.terminalComposer.clear' as any,
+      { sessionId: 's1', expectedStateAtMs: 1_700_000_000_000 },
+      { surface: 'cli' },
+    );
+
+    expect(res).toEqual({
+      ok: true,
+      result: {
+        ok: true,
+        status: 'cleared',
+        sessionId: 's1',
+      },
+    });
+    expect(sessionTerminalComposerClear).toHaveBeenCalledWith({
+      sessionId: 's1',
+      expectedStateAtMs: 1_700_000_000_000,
+      serverId: 'server-a',
+    });
+  });
+
+  it('fails terminal composer clear closed when deps are unavailable', async () => {
+    const executor = createExecutor();
+
+    await expect(executor.execute(
+      'session.terminalComposer.clear' as any,
+      { sessionId: 's1' },
+      { surface: 'cli' },
+    )).resolves.toEqual({
+      ok: false,
+      errorCode: 'unsupported_action',
+      error: 'unsupported_action:session.terminalComposer.clear',
+    });
+  });
+
   it('executes vendor plugin and skill catalog list actions through protocol deps', async () => {
     const sessionVendorPluginCatalogList = vi.fn(async () => ({ vendorPlugins: [] }));
     const sessionSkillCatalogList = vi.fn(async () => ({ skills: [] }));
@@ -427,11 +473,13 @@ describe('createActionExecutor (session control)', () => {
     const sessionUsageLimitWaitResumeCancel = vi.fn(async () => ({ ok: true }));
     const sessionUsageLimitCheckNow = vi.fn(async () => ({ ok: true }));
     const sessionUsageLimitSwitchAccountNow = vi.fn(async () => ({ ok: true, status: 'waiting' }));
+    const sessionUsageLimitConsumeResetCredit = vi.fn(async () => ({ ok: true, status: 'ready' }));
     const executor = createExecutor({
       sessionUsageLimitWaitResumeEnable,
       sessionUsageLimitWaitResumeCancel,
       sessionUsageLimitCheckNow,
       sessionUsageLimitSwitchAccountNow,
+      sessionUsageLimitConsumeResetCredit,
       resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
     });
 
@@ -449,6 +497,11 @@ describe('createActionExecutor (session control)', () => {
     const switchResult = await executor.execute(
       'session.usageLimit.checkNow' as any,
       { sessionId: 's1', provider: ' codex ', operation: 'switch_account_now', resumePromptMode: 'off' },
+      { surface: 'cli' },
+    );
+    const resetResult = await executor.execute(
+      'session.usageLimit.consumeResetCredit' as any,
+      { sessionId: 's1', provider: ' codex ', resumePromptMode: 'standard' },
       { surface: 'cli' },
     );
 
@@ -479,7 +532,39 @@ describe('createActionExecutor (session control)', () => {
       resumePromptMode: 'off',
       serverId: 'server-a',
     });
+    expect(resetResult).toEqual({
+      ok: true,
+      result: { ok: true, status: 'ready', sessionId: 's1' },
+    });
+    expect(sessionUsageLimitConsumeResetCredit).toHaveBeenCalledWith({
+      sessionId: 's1',
+      provider: 'codex',
+      resumePromptMode: 'standard',
+      serverId: 'server-a',
+    });
     expect(sessionUsageLimitCheckNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not execute reset-credit spend through the safe check-now action id', async () => {
+    const sessionUsageLimitCheckNow = vi.fn(async () => ({ ok: true }));
+    const sessionUsageLimitConsumeResetCredit = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({
+      sessionUsageLimitCheckNow,
+      sessionUsageLimitConsumeResetCredit,
+    });
+
+    await expect(executor.execute(
+      'session.usageLimit.checkNow' as any,
+      { sessionId: 's1', provider: ' codex ', operation: 'consume_reset_credit' },
+      { surface: 'cli' },
+    )).resolves.toEqual({
+      ok: false,
+      errorCode: 'invalid_parameters',
+      error: 'invalid_parameters',
+    });
+
+    expect(sessionUsageLimitCheckNow).not.toHaveBeenCalled();
+    expect(sessionUsageLimitConsumeResetCredit).not.toHaveBeenCalled();
   });
 
   it('normalizes malformed usage-limit action results to typed failure payloads', async () => {

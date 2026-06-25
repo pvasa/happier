@@ -362,6 +362,39 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
     }));
   });
 
+  it('routes reset-credit consumption through the provider adapter without live-session check-now', async () => {
+    const consumeResetCredit = vi.fn(async () => ({ ok: true, status: 'ready' }));
+    const callLiveSessionRpc = vi.fn(async () => ({ ok: true, status: 'waiting' }));
+
+    const result = await routeSessionUsageLimitRecoveryCheckNow({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_consume_reset',
+      rawSession: createRawSession({ id: 'sess_consume_reset', active: true }),
+      metadata: createMetadata(),
+      currentMachineId: 'machine-local',
+      ctx,
+      mode: 'plain',
+      request: {
+        sessionId: 'sess_consume_reset',
+        provider: 'codex',
+        operation: 'consume_reset_credit',
+      },
+      callLiveSessionRpc,
+      resolveAdapter: vi.fn(async () => ({ consumeResetCredit })),
+    });
+
+    expect(parseOperationResult(result)).toEqual({
+      ok: true,
+      status: 'ready',
+      sessionId: 'sess_consume_reset',
+    });
+    expect(callLiveSessionRpc).not.toHaveBeenCalled();
+    expect(consumeResetCredit).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'sess_consume_reset',
+    }));
+  });
+
   it('arms inactive local wait-resume from retry-after timing when no reset timestamp exists', async () => {
     const callLiveSessionRpc = vi.fn();
 

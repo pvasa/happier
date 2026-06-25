@@ -43,6 +43,10 @@ function uniqueNonEmpty(values: ReadonlyArray<string>): string[] {
     return out;
 }
 
+function joinSecondaryIdentityParts(values: ReadonlyArray<string>): string {
+    return uniqueNonEmpty(values).join(' · ');
+}
+
 export function resolveConnectedServiceProfileIdentityDisplay(
     profile: ConnectedServiceIdentityProfileLike,
 ): ConnectedServiceIdentityDisplay {
@@ -51,8 +55,8 @@ export function resolveConnectedServiceProfileIdentityDisplay(
     const providerEmail = readIdentityString(profile.providerEmail);
     const primaryLabel = label || providerEmail || profileId;
     const secondaryLabel = label
-        ? providerEmail || (profileId !== label ? profileId : '')
-        : '';
+        ? joinSecondaryIdentityParts([providerEmail, profileId !== label ? profileId : ''])
+        : joinSecondaryIdentityParts([providerEmail && profileId !== providerEmail ? profileId : '']);
     const diagnosticParts = uniqueNonEmpty([primaryLabel, providerEmail, profileId]);
     const labelMasksStableIdentity = Boolean(label && (
         (providerEmail && providerEmail !== label)

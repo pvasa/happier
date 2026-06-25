@@ -34,8 +34,12 @@ import {
     type PermissionRequestCoordinatorContext,
     type PermissionRequestCoordinatorStore,
 } from '@/agent/permissions/permissionRequestCoordinator';
-import { computeNextMetadataStringOverrideV1, SESSION_MODE_OVERRIDE_KEY } from '@happier-dev/agents';
-import { isClaudeLocalPermissionBridgeAgentStateRequest } from '@happier-dev/agents';
+import {
+    computeNextMetadataStringOverrideV1,
+    isClaudeLocalPermissionBridgeAgentStateRequest,
+    isClaudeUnifiedTerminalResumeChoiceAgentStateRequest,
+    SESSION_MODE_OVERRIDE_KEY,
+} from '@happier-dev/agents';
 import { isChangeTitleToolLikeName } from '@happier-dev/protocol/tools/v2';
 
 type PermissionResponse = PermissionRpcPayload;
@@ -54,6 +58,11 @@ type PendingPermissionMetadata = {
     input: unknown;
     sourceLocalId: string | null;
 };
+
+function isRequestOwnedOutsideRemotePermissionHandler(request: unknown): boolean {
+    return isClaudeLocalPermissionBridgeAgentStateRequest(request)
+        || isClaudeUnifiedTerminalResumeChoiceAgentStateRequest(request);
+}
 
 export class PermissionHandler {
     private toolCalls: { id: string, name: string, input: any, used: boolean }[] = [];
@@ -350,7 +359,7 @@ export class PermissionHandler {
             if (!outstanding) return null;
             const snapshot = (this.session.client as any).getAgentStateSnapshot?.() ?? null;
             const rawRequest = snapshot?.requests?.[id] ?? null;
-            if (isClaudeLocalPermissionBridgeAgentStateRequest(rawRequest)) return null;
+            if (isRequestOwnedOutsideRemotePermissionHandler(rawRequest)) return null;
             return outstanding;
         } catch {
             return null;
@@ -366,7 +375,7 @@ export class PermissionHandler {
                 const now = Date.now();
 
                 for (const [id, request] of Object.entries(requests)) {
-                    if (isClaudeLocalPermissionBridgeAgentStateRequest(request)) continue;
+                    if (isRequestOwnedOutsideRemotePermissionHandler(request)) continue;
                     delete requests[id];
                     const completedEntry = { ...(request && typeof request === 'object' ? request : {}) } as Record<string, unknown>;
                     completedEntry.completedAt = now;

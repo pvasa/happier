@@ -15,7 +15,12 @@ import type {
   Session,
 } from '../domains/state/storageTypes';
 import type { DecryptedArtifact } from '../domains/artifacts/artifactTypes';
-import { collectOpenApprovalSessionIds } from '../domains/artifacts/approvalArtifacts';
+import {
+  collectOpenApprovalSessionIds,
+  listOpenApprovalArtifactsForSession,
+  type OpenApprovalArtifactForSession,
+} from '../domains/artifacts/approvalArtifacts';
+import { isAutomationLinkedToSession } from '../domains/automations/automationSessionLink';
 import type { LocalSettings } from '../domains/settings/localSettings';
 import type { AgentTextMessage, Message } from '../domains/messages/messageTypes';
 import type { Settings } from '../domains/settings/settings';
@@ -29,7 +34,10 @@ import {
   areServerProfileIdentifiersEquivalent,
   resolveServerProfileScopeIdForIdentifier,
 } from '../domains/server/serverProfiles';
-import { resolveSessionReadableSeq } from '../domains/session/readCursor/resolveSessionReadableSeq';
+import {
+  resolveLatestUnreadAffectingCommittedMessageSeq,
+  resolveSessionReadableSeq,
+} from '../domains/session/readCursor/resolveSessionReadableSeq';
 import { resolveSessionWorkspacePath } from '../domains/session/resolveSessionWorkspacePath';
 import { buildSessionMetadataStabilitySignature } from '../domains/session/metadata/sessionMetadataStability';
 import type { ReviewCommentDraft } from '../domains/input/reviewComments/reviewCommentTypes';
@@ -68,10 +76,12 @@ import {
   compareTranscriptMessagesOldestFirst,
   normalizeTranscriptSeq,
 } from '../domains/messages/transcriptOrdering';
+import { readStoredSessionMessagesFromStateLike } from '../domains/messages/readStoredSessionMessages';
 import type { MachineDisplayRenderable } from '../domains/machines/machineDisplayRenderable';
 import type { AgentEvent } from '../typesRaw';
 
 const EMPTY_OPEN_APPROVAL_SESSION_IDS: ReadonlyArray<string> = Object.freeze([]);
+const EMPTY_OPEN_APPROVAL_ARTIFACTS_FOR_SESSION: ReadonlyArray<OpenApprovalArtifactForSession> = Object.freeze([]);
 const EMPTY_SESSION_AGENT_EVENTS: ReadonlyArray<SessionAgentEventSource> = Object.freeze([]);
 
 export type SessionAgentEventSource = Readonly<{
@@ -80,6 +90,7 @@ export type SessionAgentEventSource = Readonly<{
 }>;
 
 type SessionAgentEventSourceCacheEntry = Readonly<{
+  sourceRef: StorageState['sessionMessages'][string];
   signature: string;
   events: ReadonlyArray<SessionAgentEventSource>;
 }>;
@@ -260,6 +271,7 @@ type SessionMessagesArrayCacheEntry = Readonly<{
 
 const SESSION_MESSAGES_ARRAY_CACHE_MAX = 16;
 const sessionMessagesArrayCache = new Map<string, SessionMessagesArrayCacheEntry>();
+const latestCommittedMessageSeqBySessionMessagesRef = new WeakMap<object, number | null>();
 
 type UseSessionMessagesOptions = Readonly<{
   enabled?: boolean;
@@ -529,8 +541,20 @@ export function useSessionConnectedServiceAccountSwitchEvents(
     useShallow((state) => {
       if (!enabled) return EMPTY_SESSION_AGENT_EVENTS;
       const sessionMessages = state.sessionMessages[sessionId];
+      const cached = sessionAgentEventSourceCache.get(sessionId);
+      if (cached && cached.sourceRef === sessionMessages) {
+        return cached.events;
+      }
       if (!sessionMessages || sessionMessages.messageIdsOldestFirst.length === 0) {
-        sessionAgentEventSourceCache.delete(sessionId);
+        if (sessionMessages) {
+          sessionAgentEventSourceCache.set(sessionId, {
+            sourceRef: sessionMessages,
+            signature: 'empty',
+            events: EMPTY_SESSION_AGENT_EVENTS,
+          });
+        } else {
+          sessionAgentEventSourceCache.delete(sessionId);
+        }
         return EMPTY_SESSION_AGENT_EVENTS;
       }
 
@@ -548,18 +572,27 @@ export function useSessionConnectedServiceAccountSwitchEvents(
       }
 
       if (events.length === 0) {
-        sessionAgentEventSourceCache.delete(sessionId);
+        sessionAgentEventSourceCache.set(sessionId, {
+          sourceRef: sessionMessages,
+          signature: 'none',
+          events: EMPTY_SESSION_AGENT_EVENTS,
+        });
         return EMPTY_SESSION_AGENT_EVENTS;
       }
 
       const signature = signatureParts.join('|');
-      const cached = sessionAgentEventSourceCache.get(sessionId);
       if (cached?.signature === signature) {
+        sessionAgentEventSourceCache.set(sessionId, {
+          sourceRef: sessionMessages,
+          signature,
+          events: cached.events,
+        });
         return cached.events;
       }
 
       const next = events;
       sessionAgentEventSourceCache.set(sessionId, {
+        sourceRef: sessionMessages,
         signature,
         events: next,
       });
@@ -594,6 +627,20 @@ export function useForkedTranscriptSnapshot(sessionId: string): ForkedTranscript
   return getStorage()(
     useShallow((state) => getForkedTranscriptSnapshotCached(state, sessionId))
   );
+}
+
+/**
+ * UI-observable per-session "newer catch-up in flight" signal. True while sync is
+ * silently catching the transcript up to newer activity (e.g. after reopening a
+ * background-working session). Drives the bottom-anchored
+ * {@link '@/components/sessions/transcript/CatchUpProgressOverlay'.CatchUpProgressOverlay}.
+ * Fail-closed: unknown session reads false.
+ */
+export function useSessionCatchingUpNewer(sessionId: string, enabled: boolean = true): boolean {
+  return getStorage()((state) => {
+    if (!enabled) return false;
+    return (state.sessionCatchUpNewerInFlight[sessionId] ?? 0) > 0;
+  });
 }
 
 export function useSessionMessagesById(sessionId: string, enabled: boolean = true): Record<string, Message> {
@@ -727,7 +774,7 @@ export function useSessionVisibleReadSeq(
     const session = state.sessions[sessionId];
     const renderable = state.sessionListRenderables[sessionId];
     return resolveSessionReadableSeq({
-      latestMessageSeq: resolveLatestCommittedMessageSeqForHooks(sessionMessages),
+      latestMessageSeq: resolveLatestUnreadAffectingCommittedMessageSeqForHooksCached(sessionMessages),
       sessionSeq,
       latestReadyEventSeq:
         sessionMessages.latestReadyEventSeq
@@ -740,15 +787,23 @@ export function useSessionVisibleReadSeq(
   });
 }
 
-function resolveLatestCommittedMessageSeqForHooks(
+function resolveLatestUnreadAffectingCommittedMessageSeqForHooks(
   sessionMessages: StorageState['sessionMessages'][string],
 ): number | null {
-  let latestSeq: number | null = null;
-  for (const messageId of sessionMessages.messageIdsOldestFirst) {
-    const seq = normalizeHookSeq(sessionMessages.messagesById[messageId]?.seq);
-    if (seq === null) continue;
-    latestSeq = latestSeq === null ? seq : Math.max(latestSeq, seq);
+  return resolveLatestUnreadAffectingCommittedMessageSeq(
+    readStoredSessionMessagesFromStateLike(sessionMessages),
+  );
+}
+
+function resolveLatestUnreadAffectingCommittedMessageSeqForHooksCached(
+  sessionMessages: StorageState['sessionMessages'][string],
+): number | null {
+  if (latestCommittedMessageSeqBySessionMessagesRef.has(sessionMessages)) {
+    return latestCommittedMessageSeqBySessionMessagesRef.get(sessionMessages) ?? null;
   }
+
+  const latestSeq = resolveLatestUnreadAffectingCommittedMessageSeqForHooks(sessionMessages);
+  latestCommittedMessageSeqBySessionMessagesRef.set(sessionMessages, latestSeq);
   return latestSeq;
 }
 
@@ -757,7 +812,9 @@ function resolveSessionHasUnreadForHooks(
   sessionMessages: StorageState['sessionMessages'][string] | undefined,
   renderable: SessionListRenderableSession | undefined,
 ): boolean {
-  const readableMessageSeq = resolveCommittedSessionMessageSeqForUnread(sessionMessages);
+  const readableMessageSeq = sessionMessages
+    ? resolveLatestUnreadAffectingCommittedMessageSeqForHooksCached(sessionMessages)
+    : null;
   const readableSeq = resolveSessionReadableSeq({
     latestMessageSeq: readableMessageSeq,
     sessionSeq: session.seq,
@@ -770,31 +827,6 @@ function resolveSessionHasUnreadForHooks(
   if (readableSeq > 0) return false;
   if (readableMessageSeq !== null) return false;
   return renderable?.hasUnreadMessages === true;
-}
-
-function resolveCommittedSessionMessageSeqForUnread(
-  sessionMessages: StorageState['sessionMessages'][string] | undefined,
-): number | null {
-  if (!sessionMessages) return null;
-  const messageIds = sessionMessages.messageIdsOldestFirst;
-  if (!Array.isArray(messageIds)) return null;
-  if (messageIds.length === 0 && sessionMessages.isLoaded !== true) return null;
-
-  let latestSeq: number | null = null;
-  for (const messageId of messageIds) {
-    const message = sessionMessages.messagesById?.[messageId];
-    const seq = normalizeHookSeq(message?.seq);
-    if (seq !== null) {
-      latestSeq = latestSeq === null ? seq : Math.max(latestSeq, seq);
-    }
-  }
-  return latestSeq;
-}
-
-function normalizeHookSeq(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? Math.max(0, Math.trunc(value))
-    : null;
 }
 
 export function useSessionPendingMessages(
@@ -1246,32 +1278,38 @@ export function useSessionListViewDataByServerId(
       return EMPTY_SESSION_LIST_VIEW_DATA_BY_SERVER_ID;
     }
 
-    const selectedDataByServerId: Record<string, SessionListViewItem[] | null> = {};
-    let hasSelectedData = false;
-    for (const serverId of selectedServerIds) {
-      const cachedServerId = resolveSelectedSessionListServerId(state.sessionListViewDataByServerId, serverId);
-      if (!cachedServerId || Object.prototype.hasOwnProperty.call(selectedDataByServerId, cachedServerId)) continue;
-      selectedDataByServerId[cachedServerId] = state.sessionListViewDataByServerId[cachedServerId] ?? null;
-      hasSelectedData = true;
-    }
-
-    return hasSelectedData
-      ? getStableSessionListShellViewDataByServerId(selectedDataByServerId)
-      : EMPTY_SESSION_LIST_VIEW_DATA_BY_SERVER_ID;
+    return getStableSelectedSessionListShellViewDataByServerId(
+      state.sessionListViewDataByServerId,
+      selectedServerIds,
+    );
   });
 }
 
 type SessionListShellViewDataCache = Readonly<{
+  source: SessionListViewItem[] | null;
   signature: string;
   data: SessionListViewItem[] | null;
 }>;
 
-let sessionListShellViewDataCache: SessionListShellViewDataCache | null = null;
-let sessionListShellViewDataByServerIdCache: Readonly<{
+type SessionListShellViewDataByServerId = Record<string, SessionListViewItem[] | null>;
+
+type SessionListShellViewDataByServerIdCache = Readonly<{
+  source: SessionListShellViewDataByServerId;
+  entries: ReadonlyArray<readonly [string, SessionListViewItem[] | null]>;
   signature: string;
-  dataByServerId: Record<string, SessionListViewItem[] | null>;
-}> | null = null;
+  dataByServerId: SessionListShellViewDataByServerId;
+}>;
+
+type SelectedSessionListShellViewDataByServerIdCache = Readonly<{
+  source: SessionListShellViewDataByServerId;
+  entries: ReadonlyArray<readonly [string, SessionListViewItem[] | null]>;
+  dataByServerId: SessionListShellViewDataByServerId;
+}>;
+
+let sessionListShellViewDataCache: SessionListShellViewDataCache | null = null;
+let sessionListShellViewDataByServerIdCache: SessionListShellViewDataByServerIdCache | null = null;
 const sessionListShellViewDataPerServerCache = new Map<string, SessionListShellViewDataCache>();
+const selectedSessionListShellViewDataByServerIdCache = new Map<string, SelectedSessionListShellViewDataByServerIdCache>();
 
 function buildSessionListShellViewDataSignature(data: ReadonlyArray<SessionListViewItem> | null): string {
   if (!data) return 'null';
@@ -1366,11 +1404,18 @@ function buildSessionListWorkspaceSignature(workspace: SessionListViewItem['work
 }
 
 function getStableSessionListShellViewData(data: SessionListViewItem[] | null): SessionListViewItem[] | null {
-  const signature = buildSessionListShellViewDataSignature(data);
-  if (sessionListShellViewDataCache?.signature === signature) {
+  if (sessionListShellViewDataCache?.source === data) {
     return sessionListShellViewDataCache.data;
   }
-  sessionListShellViewDataCache = { signature, data };
+  const signature = buildSessionListShellViewDataSignature(data);
+  if (sessionListShellViewDataCache?.signature === signature) {
+    sessionListShellViewDataCache = {
+      ...sessionListShellViewDataCache,
+      source: data,
+    };
+    return sessionListShellViewDataCache.data;
+  }
+  sessionListShellViewDataCache = { source: data, signature, data };
   return data;
 }
 
@@ -1378,31 +1423,126 @@ function getStableSessionListShellViewDataForServer(
   serverId: string,
   data: SessionListViewItem[] | null,
 ): SessionListViewItem[] | null {
-  const signature = buildSessionListShellViewDataSignature(data);
   const cached = sessionListShellViewDataPerServerCache.get(serverId);
-  if (cached?.signature === signature) {
+  if (cached?.source === data) {
     return cached.data;
   }
-  sessionListShellViewDataPerServerCache.set(serverId, { signature, data });
+  const signature = buildSessionListShellViewDataSignature(data);
+  if (cached?.signature === signature) {
+    sessionListShellViewDataPerServerCache.set(serverId, {
+      ...cached,
+      source: data,
+    });
+    return cached.data;
+  }
+  sessionListShellViewDataPerServerCache.set(serverId, { source: data, signature, data });
   return data;
 }
 
+function getSortedSessionListShellViewDataByServerIdEntries(
+  dataByServerId: SessionListShellViewDataByServerId,
+): Array<readonly [string, SessionListViewItem[] | null]> {
+  return Object.entries(dataByServerId).sort(([left], [right]) => left.localeCompare(right));
+}
+
+function areSessionListShellViewDataByServerIdEntriesReferenceEqual(
+  left: ReadonlyArray<readonly [string, SessionListViewItem[] | null]>,
+  right: ReadonlyArray<readonly [string, SessionListViewItem[] | null]>,
+): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index][0] !== right[index][0] || left[index][1] !== right[index][1]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function getStableSessionListShellViewDataByServerId(
-  dataByServerId: Record<string, SessionListViewItem[] | null>,
-): Record<string, SessionListViewItem[] | null> {
-  const entries = Object.entries(dataByServerId).sort(([left], [right]) => left.localeCompare(right));
+  dataByServerId: SessionListShellViewDataByServerId,
+): SessionListShellViewDataByServerId {
+  if (sessionListShellViewDataByServerIdCache?.source === dataByServerId) {
+    return sessionListShellViewDataByServerIdCache.dataByServerId;
+  }
+  const entries = getSortedSessionListShellViewDataByServerIdEntries(dataByServerId);
+  if (
+    sessionListShellViewDataByServerIdCache
+    && areSessionListShellViewDataByServerIdEntriesReferenceEqual(
+      sessionListShellViewDataByServerIdCache.entries,
+      entries,
+    )
+  ) {
+    sessionListShellViewDataByServerIdCache = {
+      ...sessionListShellViewDataByServerIdCache,
+      source: dataByServerId,
+      entries,
+    };
+    return sessionListShellViewDataByServerIdCache.dataByServerId;
+  }
   const signature = entries
     .map(([serverId, data]) => `${serverId}\u0001${buildSessionListShellViewDataSignature(data)}`)
     .join('\u0002');
   if (sessionListShellViewDataByServerIdCache?.signature === signature) {
+    sessionListShellViewDataByServerIdCache = {
+      ...sessionListShellViewDataByServerIdCache,
+      source: dataByServerId,
+      entries,
+    };
     return sessionListShellViewDataByServerIdCache.dataByServerId;
   }
   const next: Record<string, SessionListViewItem[] | null> = {};
   for (const [serverId, data] of entries) {
     next[serverId] = getStableSessionListShellViewDataForServer(serverId, data);
   }
-  sessionListShellViewDataByServerIdCache = { signature, dataByServerId: next };
+  sessionListShellViewDataByServerIdCache = {
+    source: dataByServerId,
+    entries,
+    signature,
+    dataByServerId: next,
+  };
   return next;
+}
+
+function getStableSelectedSessionListShellViewDataByServerId(
+  dataByServerId: SessionListShellViewDataByServerId,
+  selectedServerIds: ReadonlyArray<string>,
+): SessionListShellViewDataByServerId {
+  const selectedServerIdsKey = selectedServerIds.join('\u0001');
+  const cached = selectedSessionListShellViewDataByServerIdCache.get(selectedServerIdsKey);
+  if (cached?.source === dataByServerId) {
+    return cached.dataByServerId;
+  }
+
+  const selectedDataByServerId: SessionListShellViewDataByServerId = {};
+  let hasSelectedData = false;
+  for (const serverId of selectedServerIds) {
+    const cachedServerId = resolveSelectedSessionListServerId(dataByServerId, serverId);
+    if (!cachedServerId || Object.prototype.hasOwnProperty.call(selectedDataByServerId, cachedServerId)) continue;
+    selectedDataByServerId[cachedServerId] = dataByServerId[cachedServerId] ?? null;
+    hasSelectedData = true;
+  }
+
+  if (!hasSelectedData) {
+    return EMPTY_SESSION_LIST_VIEW_DATA_BY_SERVER_ID;
+  }
+
+  const entries = getSortedSessionListShellViewDataByServerIdEntries(selectedDataByServerId);
+  if (cached && areSessionListShellViewDataByServerIdEntriesReferenceEqual(cached.entries, entries)) {
+    selectedSessionListShellViewDataByServerIdCache.set(selectedServerIdsKey, {
+      ...cached,
+      source: dataByServerId,
+      entries,
+    });
+    return cached.dataByServerId;
+  }
+
+  const stableSelectedDataByServerId = getStableSessionListShellViewDataByServerId(selectedDataByServerId);
+  selectedSessionListShellViewDataByServerIdCache.set(selectedServerIdsKey, {
+    source: dataByServerId,
+    entries,
+    dataByServerId: stableSelectedDataByServerId,
+  });
+  return stableSelectedDataByServerId;
 }
 
 function sortValuesByUpdatedAtDescending<T extends { updatedAt: number }>(values: Record<string, T>): T[] {
@@ -1753,6 +1893,74 @@ export function useOpenApprovalSessionIds(): ReadonlyArray<string> {
   return getStorage()(useShallow(selectorRef.current));
 }
 
+function buildOpenApprovalArtifactsForSessionSignature(
+  entries: ReadonlyArray<OpenApprovalArtifactForSession>,
+): string {
+  if (entries.length === 0) return '';
+  return entries.map((entry) => [
+    entry.artifact.id,
+    entry.artifact.headerVersion,
+    entry.artifact.bodyVersion ?? '',
+    entry.artifact.seq,
+    entry.artifact.updatedAt,
+    JSON.stringify(entry.approval),
+  ].join(':')).join('\u0000');
+}
+
+function collectVisibleArtifacts(artifacts: Readonly<Record<string, DecryptedArtifact>>): DecryptedArtifact[] {
+  const visibleArtifacts: DecryptedArtifact[] = [];
+  for (const artifact of Object.values(artifacts)) {
+    if (artifact.draft === true) continue;
+    visibleArtifacts.push(artifact);
+  }
+  return visibleArtifacts;
+}
+
+export function useOpenApprovalArtifactsForSession(
+  sessionId: string,
+  enabled: boolean = true,
+): ReadonlyArray<OpenApprovalArtifactForSession> {
+  const selector = React.useMemo(() => {
+    let previousIsDataReady: boolean | null = null;
+    let previousArtifacts: StorageState['artifacts'] | null = null;
+    let previousSignature = '';
+    let previousResult: ReadonlyArray<OpenApprovalArtifactForSession> = EMPTY_OPEN_APPROVAL_ARTIFACTS_FOR_SESSION;
+
+    return (state: StorageState): ReadonlyArray<OpenApprovalArtifactForSession> => {
+      const normalizedSessionId = sessionId.trim();
+      if (!enabled || !normalizedSessionId || !state.isDataReady) {
+        previousIsDataReady = state.isDataReady;
+        previousArtifacts = state.artifacts;
+        previousSignature = '';
+        previousResult = EMPTY_OPEN_APPROVAL_ARTIFACTS_FOR_SESSION;
+        return previousResult;
+      }
+
+      if (state.isDataReady === previousIsDataReady && state.artifacts === previousArtifacts) {
+        return previousResult;
+      }
+
+      previousIsDataReady = state.isDataReady;
+      previousArtifacts = state.artifacts;
+
+      const visibleArtifacts = collectVisibleArtifacts(state.artifacts);
+      visibleArtifacts.sort((a, b) => b.updatedAt - a.updatedAt);
+
+      const next = listOpenApprovalArtifactsForSession(visibleArtifacts, normalizedSessionId);
+      const nextSignature = buildOpenApprovalArtifactsForSessionSignature(next);
+      if (nextSignature === previousSignature) {
+        return previousResult;
+      }
+
+      previousSignature = nextSignature;
+      previousResult = next.length > 0 ? next : EMPTY_OPEN_APPROVAL_ARTIFACTS_FOR_SESSION;
+      return previousResult;
+    };
+  }, [enabled, sessionId]);
+
+  return getStorage()(useShallow(selector));
+}
+
 export function useAllArtifacts(): DecryptedArtifact[] {
   return getStorage()(
     useShallow((state) => {
@@ -1770,6 +1978,46 @@ export function useAutomations(): Automation[] {
       return Object.values(state.automations).sort((a, b) => b.updatedAt - a.updatedAt);
     })
   );
+}
+
+export function useSessionAutomationsEnabledCount(
+  sessionId: string,
+  enabled: boolean = true,
+): number {
+  const selector = React.useMemo(() => {
+    let previousIsDataReady: boolean | null = null;
+    let previousAutomations: StorageState['automations'] | null = null;
+    let previousCount = 0;
+
+    return (state: StorageState): number => {
+      const normalizedSessionId = sessionId.trim();
+      if (!enabled || !normalizedSessionId || !state.isDataReady) {
+        previousIsDataReady = state.isDataReady;
+        previousAutomations = state.automations;
+        previousCount = 0;
+        return previousCount;
+      }
+
+      if (state.isDataReady === previousIsDataReady && state.automations === previousAutomations) {
+        return previousCount;
+      }
+
+      previousIsDataReady = state.isDataReady;
+      previousAutomations = state.automations;
+
+      let count = 0;
+      for (const automation of Object.values(state.automations)) {
+        if (!automation.enabled) continue;
+        if (isAutomationLinkedToSession(automation, normalizedSessionId)) {
+          count += 1;
+        }
+      }
+      previousCount = count;
+      return previousCount;
+    };
+  }, [enabled, sessionId]);
+
+  return getStorage()(selector);
 }
 
 export function useAutomation(automationId: string): Automation | null {

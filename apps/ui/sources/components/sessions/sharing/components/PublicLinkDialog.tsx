@@ -2,12 +2,13 @@ import React, { memo, useEffect, useState } from 'react';
 import { View, Switch, Platform, Linking, ScrollView } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
 
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { Modal } from '@/modal';
 import type { CustomModalInjectedProps } from '@/modal';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -16,6 +17,7 @@ import { HappyError } from '@/utils/errors/errors';
 import { QRCode } from '@/components/qr';
 import { Text } from '@/components/ui/text/Text';
 import { useScrollViewWheelScrollTo } from '@/components/ui/scroll/useScrollViewWheelScrollTo';
+import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 
 export interface PublicLinkDialogProps {
@@ -42,6 +44,7 @@ export const PublicLinkDialog = memo(function PublicLinkDialog({
     const [expiresInDays, setExpiresInDays] = useState<number | undefined>(7);
     const [maxUses, setMaxUses] = useState<number | undefined>(undefined);
     const [isConsentRequired, setIsConsentRequired] = useState(true);
+    const copyFeedback = useTemporaryCopyFeedback();
 
     const scrollRef = React.useRef<ScrollView>(null);
     const wheelScrollHandlers = useScrollViewWheelScrollTo(scrollRef);
@@ -127,12 +130,12 @@ export const PublicLinkDialog = memo(function PublicLinkDialog({
 
     const handleCopyLink = async () => {
         if (!shareUrl) return;
-        try {
-            await Clipboard.setStringAsync(shareUrl);
-            Modal.alert(t('common.copied'), t('items.copiedToClipboard', { label: t('session.sharing.publicLink') }));
-        } catch {
-            Modal.alert(t('common.error'), t('textSelection.failedToCopy'));
+        const copied = await setClipboardStringSafe(shareUrl);
+        if (copied) {
+            copyFeedback.markCopied('publicLink');
+            return;
         }
+        Modal.alert(t('common.error'), t('textSelection.failedToCopy'));
     };
 
     const formatDate = (timestamp: number) => new Date(timestamp).toLocaleDateString();
@@ -264,9 +267,16 @@ export const PublicLinkDialog = memo(function PublicLinkDialog({
                                         onPress={handleOpenLink}
                                     />
                                     <Item
+                                        testID="public-link-copy"
                                         title={t('common.copy')}
                                         icon={<Ionicons name="copy-outline" size={29} color={theme.colors.accent.blue} />}
                                         onPress={handleCopyLink}
+                                        rightElement={
+                                            <CopiedPill
+                                                visible={copyFeedback.isCopied('publicLink')}
+                                                testID="public-link-copy-copied"
+                                            />
+                                        }
                                         showChevron={false}
                                         showDivider={false}
                                     />

@@ -4,6 +4,9 @@ async function loadTransferStreamModule() {
   return await import(new URL('./transferStream.js', import.meta.url).href).catch((error) => ({ error } as const));
 }
 
+const MAX_TRANSFER_CHUNK_PAYLOAD_BASE64_LENGTH = 16 * 1024 * 1024;
+const MAX_TRANSFER_CHUNK_PAYLOAD_DECODED_LENGTH = (MAX_TRANSFER_CHUNK_PAYLOAD_BASE64_LENGTH / 4) * 3;
+
 describe('machine transfer stream schemas', () => {
   it('fails closed when targetMachineId exceeds the bounded maximum length', async () => {
     const mod = await loadTransferStreamModule();
@@ -56,6 +59,55 @@ describe('machine transfer stream schemas', () => {
       sequence: 0,
       payloadBase64: 'YQ==',
       extraKey: 'nope',
+    }).success).toBe(false);
+  });
+
+  it('validates canonical payloads at the 16 MiB transfer ceiling without overflowing the regex stack', async () => {
+    const mod = await loadTransferStreamModule();
+    expect(mod).not.toHaveProperty('error');
+    if ('error' in mod) return;
+
+    const payloadBase64 = 'A'.repeat(MAX_TRANSFER_CHUNK_PAYLOAD_BASE64_LENGTH);
+
+    let parsed: ReturnType<typeof mod.TransferChunkEnvelopeSchema.safeParse> | undefined;
+    expect(() => {
+      parsed = mod.TransferChunkEnvelopeSchema.safeParse({
+        transferId: 'transfer_5',
+        kind: 'chunk',
+        sequence: 0,
+        payloadBase64,
+      });
+    }).not.toThrow();
+    expect(parsed?.success).toBe(true);
+    expect(MAX_TRANSFER_CHUNK_PAYLOAD_DECODED_LENGTH).toBe(12 * 1024 * 1024);
+  });
+
+  it('requires canonical padded base64 for transfer chunk payload fields', async () => {
+    const mod = await loadTransferStreamModule();
+    expect(mod).not.toHaveProperty('error');
+    if ('error' in mod) return;
+
+    expect(mod.TransferChunkEnvelopeSchema.safeParse({
+      transferId: 'transfer_6',
+      kind: 'chunk',
+      sequence: 0,
+      payloadBase64: 'AQID',
+      encryptedDataKeyEnvelopeBase64: 'AA==',
+    }).success).toBe(true);
+
+    expect(mod.TransferChunkEnvelopeSchema.safeParse({
+      transferId: 'transfer_7',
+      kind: 'chunk',
+      sequence: 0,
+      payloadBase64: 'AQI',
+    }).success).toBe(false);
+
+    expect(mod.TransferChunkEnvelopeSchema.safeParse({
+      transferId: 'transfer_8',
+      kind: 'chunk',
+      sequence: 0,
+      payloadBase64: 'AQID',
+      encryptedDataKeyEnvelopeBase64: 'AA=A',
     }).success).toBe(false);
   });
 });

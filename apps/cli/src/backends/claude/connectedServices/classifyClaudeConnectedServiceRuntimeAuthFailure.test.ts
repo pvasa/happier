@@ -38,6 +38,29 @@ describe('classifyClaudeConnectedServiceRuntimeAuthFailure', () => {
     });
   });
 
+  it('classifies Claude SDK api_error auth events that report 401 via error_status', () => {
+    const classification = classifyClaudeConnectedServiceRuntimeAuthFailure({
+      error: {
+        type: 'system',
+        subtype: 'api_error',
+        attempt: 1,
+        max_retries: 11,
+        retry_delay_ms: 1_000,
+        error_status: 401,
+        error: 'Connection error.',
+      },
+    });
+
+    expect(classification).toMatchObject({
+      kind: 'auth_expired',
+      limitCategory: 'auth_invalid',
+      serviceId: 'claude-subscription',
+      profileId: null,
+      groupId: null,
+      source: 'stable_provider_message',
+    });
+  });
+
   it('keeps auth failures out of the usage-limit mapper while the runtime adapter still classifies them', () => {
     const error = {
       type: 'result',

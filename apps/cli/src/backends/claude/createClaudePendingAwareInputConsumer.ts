@@ -1,9 +1,20 @@
 import { createSessionProviderInputConsumer } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
-import type { SessionProviderInputConsumer } from '@/agent/runtime/sessionInput/types';
+import type {
+    PendingMaterializationActiveTurnPolicy,
+    SessionProviderInputConsumer,
+} from '@/agent/runtime/sessionInput/types';
 import { resolveSessionPendingQueueMaxPopPerWake } from '@/agent/runtime/sessionInput/pendingQueueDrainPolicy';
 
 import type { EnhancedMode } from './loop';
 import type { Session } from './session';
+
+function resolveClaudePendingActiveTurnDeliveryPolicy(
+    accountSettings: Session['accountSettings'],
+): PendingMaterializationActiveTurnPolicy | undefined {
+    return accountSettings?.sessionBusySteerSendPolicy === 'server_pending'
+        ? undefined
+        : 'allow_live_delivery';
+}
 
 /**
  * Canonical Claude session input consumer: local agent queue + daemon-owned
@@ -19,7 +30,9 @@ import type { Session } from './session';
  */
 export function createClaudePendingAwareInputConsumer(
     session: Session,
-    opts?: Readonly<{ onMetadataUpdate?: (() => void | Promise<void>) | undefined }>,
+    opts?: Readonly<{
+        onMetadataUpdate?: (() => void | Promise<void>) | undefined;
+    }>,
 ): SessionProviderInputConsumer<EnhancedMode, string> {
     const materializeNextPendingMessageSafely =
         typeof session.client.materializeNextPendingMessageSafely === 'function'
@@ -46,15 +59,16 @@ export function createClaudePendingAwareInputConsumer(
                 }
                 return (await materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).type === 'materialized';
             },
-            shouldAttemptPendingMaterialization: () =>
+            shouldAttemptPendingMaterialization: (attemptOpts) =>
                 session.queue.size() <= 0
-                && (session.client.shouldAttemptPendingMaterialization?.() ?? true),
+                && (session.client.shouldAttemptPendingMaterialization?.(attemptOpts) ?? true),
             reconcilePendingQueueState: async (reconcileOpts) => {
                 await session.client.reconcilePendingQueueState?.(reconcileOpts);
             },
             waitForMetadataUpdate: (signal) => session.client.waitForMetadataUpdate(signal),
         },
         pendingDrainMaxPopPerWake: resolveSessionPendingQueueMaxPopPerWake(session.accountSettings ?? null),
+        resolveActiveTurnDeliveryPolicy: () => resolveClaudePendingActiveTurnDeliveryPolicy(session.accountSettings),
         ...(opts?.onMetadataUpdate ? { onMetadataUpdate: opts.onMetadataUpdate } : {}),
     });
 }

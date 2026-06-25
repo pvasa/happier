@@ -163,6 +163,7 @@ export const SessionRunnerRespawnDescriptorV1Schema = z
     directory: z.string(),
     backendTarget: BackendTargetRefSchema.optional(),
     resume: z.string().optional(),
+    existingSessionId: z.string().optional(),
     transcriptStorage: z.enum(['persisted', 'direct']).optional(),
     terminal: TerminalSpawnOptionsSchema.optional(),
     windowsRemoteSessionLaunchMode: z.enum(['hidden', 'windows_terminal', 'console']).optional(),
@@ -205,6 +206,7 @@ export function buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
   const directory = normalizeOptionalString(spawnOptions.directory);
   if (!directory) return null;
   const resume = normalizeOptionalString(spawnOptions.resume);
+  const existingSessionId = normalizeOptionalString(spawnOptions.existingSessionId);
   const transcriptStorage = spawnOptions.transcriptStorage === 'direct' ? 'direct' : undefined;
   const canonicalCodexBackendMode = resolveCanonicalCodexBackendMode({
     codexBackendMode: spawnOptions.codexBackendMode,
@@ -224,6 +226,7 @@ export function buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
     directory,
     ...(spawnOptions.backendTarget ? { backendTarget: spawnOptions.backendTarget } : {}),
     ...(resume ? { resume } : {}),
+    ...(existingSessionId ? { existingSessionId } : {}),
     ...(transcriptStorage ? { transcriptStorage } : {}),
     ...(spawnOptions.terminal ? { terminal: spawnOptions.terminal } : {}),
     ...(spawnOptions.windowsRemoteSessionLaunchMode ? { windowsRemoteSessionLaunchMode: spawnOptions.windowsRemoteSessionLaunchMode } : {}),
@@ -276,6 +279,7 @@ export function buildSpawnSessionOptionsFromRespawnDescriptorV1(
     directory: descriptor.directory,
     ...(descriptor.backendTarget ? { backendTarget: descriptor.backendTarget } : {}),
     ...(typeof descriptor.resume === 'string' ? { resume: descriptor.resume } : {}),
+    ...(typeof descriptor.existingSessionId === 'string' ? { existingSessionId: descriptor.existingSessionId } : {}),
     ...(descriptor.transcriptStorage === 'direct' ? { transcriptStorage: 'direct' } : {}),
     ...(descriptor.terminal ? { terminal: descriptor.terminal } : {}),
     ...(descriptor.windowsRemoteSessionLaunchMode ? { windowsRemoteSessionLaunchMode: descriptor.windowsRemoteSessionLaunchMode } : {}),

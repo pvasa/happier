@@ -1,10 +1,11 @@
 import * as React from 'react';
 import { Platform, View, type StyleProp, type ViewStyle } from 'react-native';
-import { BlurView } from 'expo-blur';
 import { useUnistyles } from 'react-native-unistyles';
 
+import { createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 import { useReduceTransparency } from '@/hooks/ui/useReduceTransparency';
 
+import { getBlurViewComponent } from './blurMaterial';
 import { getGlassViewComponent, useLiquidGlassAvailable } from './liquidGlass';
 import { resolveGlassCapability } from './resolveGlassCapability';
 
@@ -20,6 +21,8 @@ export type GlassSurfaceProps = Readonly<{
     blurIntensity?: number;
     /** When false, renders an opaque solid surface instead of glass/blur. */
     enabled?: boolean;
+    /** Fill color for the opaque solid tier (web / reduce-transparency / disabled). Defaults to `surface.base`. */
+    solidColor?: string;
     testID?: string;
 }>;
 
@@ -44,6 +47,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
         : resolveGlassCapability({
             liquidGlassAvailable,
             blurAvailable: Platform.OS !== 'web',
+            webBlurAvailable: Platform.OS === 'web',
             reduceTransparency,
         });
 
@@ -63,23 +67,49 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     }
 
     if (capability === 'blur') {
+        const BlurView = getBlurViewComponent();
+        if (BlurView) {
+            return (
+                <BlurView
+                    testID={props.testID}
+                    tint={theme.dark ? 'dark' : 'light'}
+                    intensity={props.blurIntensity ?? 50}
+                    experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+                    style={props.style}
+                >
+                    {props.children}
+                </BlurView>
+            );
+        }
+    }
+
+    if (capability === 'webBlur') {
         return (
-            <BlurView
+            <View
                 testID={props.testID}
-                tint={theme.dark ? 'dark' : 'light'}
-                intensity={props.blurIntensity ?? 50}
-                experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
-                style={props.style}
+                // `createBackdropWebStyle` returns web `CSSProperties` (backdrop-filter +
+                // -webkit- prefix + tint, with a "blur off" preference fallback); cast to
+                // the RN-web `ViewStyle` at this web boundary.
+                style={[
+                    createBackdropWebStyle({
+                        backgroundColor: theme.colors.glass.webBlurTint,
+                        // Map the native blur intensity (≈25/50/80) to a softer CSS radius
+                        // so web glass reads as a refined frost, not an overpowering blur.
+                        blurPx: Math.round((props.blurIntensity ?? 50) / 5),
+                        fallbackBackgroundColorWhenBlurDisabled: props.solidColor ?? theme.colors.surface.base,
+                    }) as unknown as ViewStyle,
+                    props.style,
+                ]}
             >
                 {props.children}
-            </BlurView>
+            </View>
         );
     }
 
     return (
         <View
             testID={props.testID}
-            style={[{ backgroundColor: theme.colors.surface.base }, props.style]}
+            style={[{ backgroundColor: props.solidColor ?? theme.colors.surface.base }, props.style]}
         >
             {props.children}
         </View>

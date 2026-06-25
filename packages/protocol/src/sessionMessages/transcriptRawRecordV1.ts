@@ -369,6 +369,11 @@ const ConnectedServiceSwitchAttemptVerificationByServiceIdV1Schema = z.partialRe
   ConnectedServiceIdSchema,
   z.object({
     status: z.enum(['verified', 'weakly_verified']),
+    providerAccountId: z.string().trim().min(1).nullable().optional(),
+    activeAccountId: z.string().trim().min(1).nullable().optional(),
+    sharedAuthSurfaceId: z.string().trim().min(1).nullable().optional(),
+    proofStrength: z.enum(['exact', 'weak', 'diagnostic']).optional(),
+    source: z.string().trim().min(1).optional(),
     reason: z.string().trim().min(1).optional(),
   }),
 );
@@ -603,9 +608,22 @@ const RuntimeConfigOutcomeChangeV1Schema = z
   })
   .strict();
 
+const TerminalComposerDraftBlockedReasonV1Schema = z.enum([
+  'idle_draft_guard',
+  'in_flight_steer',
+]);
+
 const AgentEventSchema = z.discriminatedUnion('type', [
   withAgentEventLifecycle(z.object({ type: z.literal('switch'), mode: z.enum(['local', 'remote']) })),
   withAgentEventLifecycle(z.object({ type: z.literal('message'), message: z.string() })),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('terminal-composer-draft-blocked'),
+      reason: TerminalComposerDraftBlockedReasonV1Schema,
+      stateAtMs: z.number().int().nonnegative().optional(),
+      message: z.string().trim().min(1).max(2000).optional(),
+    }),
+  ),
   withAgentEventLifecycle(
     z.object({
       type: z.literal('runtime-config-outcome'),
@@ -1000,6 +1018,44 @@ export type TranscriptRawUsageDataV1 = z.infer<typeof TranscriptRawUsageDataV1Sc
 
 export const TranscriptRawAgentEventV1Schema = AgentEventSchema;
 export type TranscriptRawAgentEventV1 = z.infer<typeof TranscriptRawAgentEventV1Schema>;
+
+export const SessionMessageAttentionImpactSchema = z.object({
+  affectsUnread: z.boolean(),
+  affectsMeaningfulActivity: z.boolean(),
+}).strict();
+export type SessionMessageAttentionImpact = z.infer<typeof SessionMessageAttentionImpactSchema>;
+
+export const SESSION_MESSAGE_USER_ATTENTION_IMPACT: SessionMessageAttentionImpact = Object.freeze({
+  affectsUnread: true,
+  affectsMeaningfulActivity: true,
+});
+
+export const SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT: SessionMessageAttentionImpact = Object.freeze({
+  affectsUnread: false,
+  affectsMeaningfulActivity: false,
+});
+
+const AGENT_EVENT_TYPES_WITHOUT_USER_ATTENTION = new Set<TranscriptRawAgentEventV1['type']>([
+  'connected-service-account-switch',
+  'connected-service-account-switch-deferral',
+  'connected-service-account-switch-deferral-completed',
+  'connected-service-account-switch-deferral-superseded',
+  'connected-service-account-switch-attempt',
+  'provider-state-sharing-degraded',
+]);
+
+function readAgentEventType(value: Pick<TranscriptRawAgentEventV1, 'type'> | null | undefined): TranscriptRawAgentEventV1['type'] | null {
+  return typeof value?.type === 'string'
+    ? value.type as TranscriptRawAgentEventV1['type']
+    : null;
+}
+
+export function agentEventAttentionImpact(event: Pick<TranscriptRawAgentEventV1, 'type'> | null | undefined): SessionMessageAttentionImpact {
+  const type = readAgentEventType(event);
+  return type !== null && AGENT_EVENT_TYPES_WITHOUT_USER_ATTENTION.has(type)
+    ? SESSION_MESSAGE_NO_USER_ATTENTION_IMPACT
+    : SESSION_MESSAGE_USER_ATTENTION_IMPACT;
+}
 
 export const TranscriptRawAgentContentV1Schema = RawAgentContentSchema;
 export type TranscriptRawAgentContentV1 = z.infer<typeof TranscriptRawAgentContentV1Schema>;

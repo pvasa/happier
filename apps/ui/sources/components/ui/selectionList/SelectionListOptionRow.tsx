@@ -22,6 +22,7 @@ import { SlideTransitionSwitch } from '@/components/ui/motion/SlideTransitionSwi
 import { activateSelectionListRow } from './SelectionListRowActivation';
 import { buildSelectionListOptionA11yProps } from './buildSelectionListOptionA11yProps';
 import { renderSelectionListAccessory } from './renderSelectionListAccessory';
+import { SelectionListInputAttentionContext } from './SelectionListInputAttentionContext';
 import { SelectionListScrollIntoViewContext } from './SelectionListScrollIntoViewContext';
 import { selectionListTestId } from './_shared';
 import type { SectionRenderPlan } from './SelectionListRenderPlan';
@@ -57,6 +58,7 @@ export function PlanOptionRow(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const registerScrollItemLayout = React.useContext(SelectionListScrollIntoViewContext);
+    const requestInputAttention = React.useContext(SelectionListInputAttentionContext);
     const optionTestId = selectionListTestId(
         props.rootTestID,
         props.stepId,
@@ -74,8 +76,9 @@ export function PlanOptionRow(props: Readonly<{
             option: props.option,
             onSelect: props.onSelect,
             onPushStep: props.onPushStep,
+            onRequiresInput: requestInputAttention ?? undefined,
         });
-    }, [props.option, props.onSelect, props.onPushStep]);
+    }, [props.option, props.onSelect, props.onPushStep, requestInputAttention]);
     const optionAria = buildSelectionListOptionA11yProps({
         optionTestId,
         isSelected: props.isSelected,
@@ -97,6 +100,7 @@ export function PlanOptionRow(props: Readonly<{
                     selected={props.isSelected || props.isFocused}
                     disabled={props.option.disabled === true}
                     showChevron={Boolean(props.option.openStep)}
+                    keepChevronWithRightElement={props.option.keepChevronWithAccessory === true}
                     webRole="presentation"
                 />
             </View>
@@ -132,6 +136,7 @@ export function PlanOptionRow(props: Readonly<{
             selected={selectedOrFocused}
             disabled={props.option.disabled === true}
             showChevron={Boolean(props.option.openStep)}
+            keepChevronWithRightElement={props.option.keepChevronWithAccessory === true}
             // On web the wrapper claims `role="option"`. The inner Item's
             // default `accessibilityRole='button'` would shadow that, so we
             // explicitly opt out via Item's `webRole` escape hatch (only

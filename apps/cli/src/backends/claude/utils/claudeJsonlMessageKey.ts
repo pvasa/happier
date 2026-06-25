@@ -37,7 +37,11 @@ export function buildClaudeJsonlMessageKey(body: RawJSONLines): string | null {
 
 export function buildClaudeJsonlLocalId(body: RawJSONLines): string {
   const key = buildClaudeJsonlMessageKey(body);
-  return key ? `${CLAUDE_JSONL_LOCAL_ID_PREFIX}${key}` : randomUUID();
+  return key ? buildClaudeJsonlLocalIdFromMessageKey(key) : randomUUID();
+}
+
+export function buildClaudeJsonlLocalIdFromMessageKey(key: string): string {
+  return `${CLAUDE_JSONL_LOCAL_ID_PREFIX}${key}`;
 }
 
 export function extractClaudeJsonlMessageKeyFromLocalId(localId: string | null | undefined): string | null {

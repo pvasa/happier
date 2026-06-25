@@ -200,10 +200,13 @@ describe('connectedServiceGroupViewModel', () => {
     it('resolves a unified member identity with the display label primary and raw id only when distinct', () => {
         const labelled = resolveConnectedServiceGroupMemberIdentity({
             serviceId: 'openai-codex',
-            profileId: 'work',
-            labelsByKey: { 'openai-codex/work': 'Work account' },
+            profileId: 'leeroy',
+            labelsByKey: { 'openai-codex/leeroy': 'batiplus' },
+            profiles: [{ profileId: 'leeroy', providerEmail: 'leeroy.brun@gmail.com' }],
         });
-        expect(labelled).toMatchObject({ label: 'Work account', id: 'work', hasDistinctId: true });
+        expect(labelled).toMatchObject({ label: 'batiplus', id: 'leeroy', hasDistinctId: true });
+        expect(labelled.secondaryLabel).toBe('leeroy.brun@gmail.com · leeroy');
+        expect(labelled.visibleLabel).toContain('leeroy');
 
         const unlabelled = resolveConnectedServiceGroupMemberIdentity({
             serviceId: 'openai-codex',

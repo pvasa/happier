@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
-import { reportCodexRateLimitSnapshotToDaemon } from './reportCodexRateLimitSnapshotToDaemon';
+import {
+  createCodexQuotaSnapshotDeliveryOutboxForNotify,
+  flushPendingCodexQuotaSnapshotsToDaemon,
+  reportCodexRateLimitSnapshotToDaemon,
+} from './reportCodexRateLimitSnapshotToDaemon';
 
 type NotifyQuotaSnapshotInput = Readonly<{
   sessionId: string;
@@ -57,6 +61,54 @@ describe('reportCodexRateLimitSnapshotToDaemon', () => {
         profileId: 'backup',
         fetchedAt: 1_000,
         planLabel: 'pro',
+      }),
+    });
+  });
+
+  it('routes connected-service group snapshots through the shared delivery outbox with runtime identity context', async () => {
+    const notify = createNotifyQuotaSnapshotMock();
+    const deliveryOutbox = {
+      enqueue: vi.fn(),
+      enqueueAndFlush: vi.fn(async () => ({
+        attempted: 1,
+        delivered: 1,
+        pending: 0,
+        dropped: 0,
+      })),
+      flushPending: vi.fn(),
+      clearSession: vi.fn(),
+      pendingCount: vi.fn(),
+    };
+
+    await reportCodexRateLimitSnapshotToDaemon({
+      env: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'main',
+          activeProfileId: 'backup',
+          fallbackProfileId: 'primary',
+          generation: 9,
+        }]),
+      },
+      sessionId: 'sess_1',
+      rawSnapshot: { primary: { used_percent: 100 } },
+      activeAccountId: 'acct_live',
+      nowMs: 1_000,
+      notify,
+      deliveryOutbox,
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+    expect(deliveryOutbox.enqueueAndFlush).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      groupGeneration: 9,
+      snapshot: expect.objectContaining({
+        serviceId: 'openai-codex',
+        profileId: 'backup',
+        activeAccountId: 'acct_live',
       }),
     });
   });
@@ -320,6 +372,117 @@ describe('reportCodexRateLimitSnapshotToDaemon', () => {
           resetsAt: 1_779_698_400_000,
         },
       ],
+    });
+  });
+
+  it('leaves failed daemon quota snapshot delivery pending for the shared outbox retry path', async () => {
+    const notify = vi.fn().mockResolvedValueOnce({ error: 'timeout' });
+
+    await expect(reportCodexRateLimitSnapshotToDaemon({
+      env: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'profile',
+          serviceId: 'openai-codex',
+          profileId: 'backup',
+        }]),
+      },
+      sessionId: 'sess_1',
+      rawSnapshot: { primary: { used_percent: 100 } },
+      activeAccountId: 'acct_live',
+      nowMs: 1_000,
+      notify,
+    })).resolves.toEqual({
+      attempted: 1,
+      delivered: 0,
+      pending: 1,
+      dropped: 0,
+    });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('flushes pending daemon quota snapshots when the provider session is reported again', async () => {
+    const notify = vi.fn()
+      .mockResolvedValueOnce({ error: 'No daemon running, no state file found' })
+      .mockResolvedValueOnce({ ok: true });
+    const deliveryOutbox = createCodexQuotaSnapshotDeliveryOutboxForNotify({
+      notify,
+      retryDelayMs: null,
+    });
+
+    await expect(reportCodexRateLimitSnapshotToDaemon({
+      env: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'profile',
+          serviceId: 'openai-codex',
+          profileId: 'backup',
+        }]),
+      },
+      sessionId: 'sess_provider_reconnect',
+      rawSnapshot: { primary: { used_percent: 100 } },
+      activeAccountId: 'acct_live',
+      nowMs: 1_000,
+      deliveryOutbox,
+    })).resolves.toEqual({
+      attempted: 1,
+      delivered: 0,
+      pending: 1,
+      dropped: 0,
+    });
+
+    await expect(flushPendingCodexQuotaSnapshotsToDaemon({
+      deliveryOutbox,
+      sessionId: 'sess_provider_reconnect',
+      reason: 'session_report',
+    })).resolves.toEqual({
+      attempted: 1,
+      delivered: 1,
+      pending: 0,
+      dropped: 0,
+    });
+    expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reject usage-limit recovery when daemon quota snapshot delivery remains pending', async () => {
+    const notify = vi.fn().mockRejectedValueOnce(new Error('socket timeout'));
+    const onDeliveryFailure = vi.fn();
+
+    await expect(reportCodexRateLimitSnapshotToDaemon({
+      env: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'profile',
+          serviceId: 'openai-codex',
+          profileId: 'backup',
+        }]),
+      },
+      sessionId: 'sess_1',
+      rawSnapshot: { primary: { used_percent: 100 } },
+      activeAccountId: 'acct_live',
+      nowMs: 1_000,
+      notify,
+      onDeliveryFailure,
+    })).resolves.toEqual({
+      attempted: 1,
+      delivered: 0,
+      pending: 1,
+      dropped: 0,
+    });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(onDeliveryFailure).toHaveBeenCalledWith({
+      event: 'quota_snapshot_delivery_retrying',
+      phase: 'quota_snapshot_delivery',
+      reason: 'daemon_quota_snapshot_delivery_failed',
+      serviceId: 'openai-codex',
+      sessionId: 'sess_1',
+      profileId: 'backup',
+      groupId: null,
+      activeAccountId: 'acct_live',
+      groupGeneration: null,
+      attemptCount: 1,
+      maxAttempts: 5,
+      lastError: 'socket timeout',
+      flushReason: 'initial',
     });
   });
 

@@ -63,6 +63,7 @@ export function useRepositoryTreeRowActions(params: Readonly<{
     onExpandedPathsChange: (paths: string[]) => void;
     onRequestRefresh?: (() => void) | null;
     onRequestDownload?: ((params: Readonly<{ path: string; asZip: boolean }>) => Promise<{ ok: true } | { ok: false; error: string }>) | null;
+    onCopyPathSuccess?: ((path: string) => void) | null;
 }>): Readonly<{
     onSelectRowMenuItem: (node: RepositoryTreeNodeLike, itemId: RepositoryTreeRowActionMenuItemId) => Promise<void>;
 }> {
@@ -73,6 +74,7 @@ export function useRepositoryTreeRowActions(params: Readonly<{
         onExpandedPathsChange,
         onRequestRefresh,
         onRequestDownload,
+        onCopyPathSuccess,
     } = params;
     const isDestinationAlreadyExistsError = React.useCallback((error: string | undefined): boolean => {
         return typeof error === 'string' && /destination already exists/i.test(error);
@@ -81,12 +83,11 @@ export function useRepositoryTreeRowActions(params: Readonly<{
     const onSelectRowMenuItem = React.useCallback(async (node: RepositoryTreeNodeLike, itemId: RepositoryTreeRowActionMenuItemId) => {
         if (itemId === 'repository-tree-menuitem-copy-path') {
             const ok = await setClipboardStringSafe(node.path);
-            Modal.alert(
-                ok ? t('common.copied') : t('common.error'),
-                ok
-                    ? t('items.copiedToClipboard', { label: t('common.path') })
-                    : t('items.failedToCopyToClipboard'),
-            );
+            if (ok) {
+                onCopyPathSuccess?.(node.path);
+            } else {
+                Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
+            }
             return;
         }
 
@@ -161,6 +162,7 @@ export function useRepositoryTreeRowActions(params: Readonly<{
     }, [
         expandedPaths,
         isDestinationAlreadyExistsError,
+        onCopyPathSuccess,
         onExpandedPathsChange,
         onRequestDownload,
         onRequestRefresh,

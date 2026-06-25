@@ -96,6 +96,40 @@ describe('computeConnectedServiceQuotaSummaryBadges', () => {
     expect(badges[0]?.text).toBe('80%');
   });
 
+  it('adds a compact reset-credit badge when recovery credits are available', () => {
+    const snapshot: ConnectedServiceQuotaSnapshotV1 = {
+      v: 1,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      fetchedAt: 1,
+      staleAfterMs: 1000,
+      planLabel: null,
+      accountLabel: null,
+      meters: [
+        { meterId: 'weekly', label: 'Weekly', used: 20, limit: 100, unit: 'count', utilizationPct: null, resetsAt: null, status: 'ok', details: {} },
+      ],
+      recoveryCredits: {
+        kind: 'usage_limit_resets',
+        availableCount: 2,
+        credits: [
+          { kind: 'usage_limit_reset', status: 'available' },
+          { kind: 'usage_limit_reset', status: 'available' },
+        ],
+      },
+    };
+
+    const badges = computeConnectedServiceQuotaSummaryBadges({
+      snapshot,
+      pinnedMeterIds: [],
+      formatRecoveryCreditBadge: ({ count }) => `${count} resets`,
+    });
+
+    expect(badges).toEqual([
+      { meterId: 'weekly', text: '80%' },
+      { meterId: 'recovery_credits', text: '2 resets' },
+    ]);
+  });
+
   it('omits compact daily and weekly prefixes for automatic summary badges', () => {
     const snapshot: ConnectedServiceQuotaSnapshotV1 = {
       v: 1,

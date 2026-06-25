@@ -83,6 +83,7 @@ let serverFeaturesSnapshot: any = {
 };
 let mockAgentCore: any = {
     resume: {},
+    displayNameKey: 'agentInput.agent.claude',
     permissions: { modeGroup: 'codexLike' },
     ui: { agentPickerIconName: 'code-slash-outline' },
 };
@@ -464,6 +465,7 @@ describe('/session/[id]/info', () => {
         };
         mockAgentCore = {
             resume: {},
+            displayNameKey: 'agentInput.agent.claude',
             permissions: { modeGroup: 'codexLike' },
             ui: { agentPickerIconName: 'code-slash-outline' },
         };
@@ -1378,6 +1380,121 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
         expect(screen.findByTestId('sessionLog.logPathCopyLabel')).toBeTruthy();
+    });
+
+    it('wires session detail copy rows through item-local copy feedback', async () => {
+        localDevModeEnabled = true;
+        mockAgentCore = {
+            resume: {
+                vendorResumeIdField: 'claudeSessionId',
+                uiVendorResumeIdLabelKey: 'sessionInfo.claudeCodeSessionId',
+                uiVendorResumeIdCopiedKey: 'sessionInfo.claudeCodeSessionIdCopied',
+            },
+            displayNameKey: 'agentInput.agent.claude',
+            permissions: { modeGroup: 'codexLike' },
+            ui: { agentPickerIconName: 'code-slash-outline' },
+        };
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {
+                flavor: 'claude',
+                homeDir: '/Users/lee',
+                host: 'mac',
+                path: '/Users/lee/project',
+                claudeSessionId: 'claude-session-1',
+                claudeTranscriptPath: '/tmp/claude/session.jsonl',
+                sessionLogPath: '/tmp/.happier/logs/session.log',
+            },
+        };
+
+        const screen = await renderInfoScreen();
+        const itemByTitle = (title: string) =>
+            screen.findAllByType('Item' as any).find((node: any) => node.props?.title === title);
+
+        expect(itemByTitle('sessionInfo.happySessionId')?.props.copy).toBe('session-1');
+        expect(itemByTitle('sessionInfo.happySessionId')?.props.onPress).toBeUndefined();
+        expect(itemByTitle('sessionInfo.claudeCodeSessionId')?.props.copy).toBe('claude-session-1');
+        expect(itemByTitle('sessionInfo.claudeCodeSessionId')?.props.onPress).toBeUndefined();
+        expect(itemByTitle('sessionLog.logPathCopyLabel')?.props.copy).toBe('/tmp/.happier/logs/session.log');
+        expect(itemByTitle('sessionLog.logPathCopyLabel')?.props.onPress).toBeUndefined();
+        expect(itemByTitle('sessionInfo.providerSessionLogs')?.props.copy).toBe('/tmp/claude/session.jsonl');
+        expect(itemByTitle('sessionInfo.providerSessionLogs')?.props.onPress).toBeUndefined();
+        expect(itemByTitle('sessionInfo.copyMetadata')?.props.copy).toBe(JSON.stringify(mockSession.metadata, null, 2));
+        expect(itemByTitle('sessionInfo.copyMetadata')?.props.onPress).toBeUndefined();
+    });
+
+    it('wires developer debug information through item-local copy feedback and omits unknown provider artifact lines', async () => {
+        localDevModeEnabled = true;
+        mockAgentCore = {
+            resume: {
+                vendorResumeIdField: 'codexSessionId',
+            },
+            displayNameKey: 'agentInput.agent.codex',
+            permissions: { modeGroup: 'codexLike' },
+            ui: { agentPickerIconName: 'code-slash-outline' },
+        };
+        mockResolveAgentIdFromFlavor.mockReturnValue('codex');
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {
+                flavor: 'codex',
+                codexSessionId: 'codex-session-1',
+                sessionLogPath: '/tmp/.happier/logs/session.log',
+            },
+        };
+
+        const screen = await renderInfoScreen();
+        const copyDebugItem = screen.findAllByType('Item' as any)
+            .find((node: any) => node.props?.title === 'sessionInfo.copyDebugInformation');
+        expect(copyDebugItem).toBeTruthy();
+        expect(copyDebugItem?.props.onPress).toBeUndefined();
+        expect(copyDebugItem?.props.copy).toBe([
+            'Happier session ID: session-1',
+            'agentInput.agent.codex session ID: codex-session-1',
+            'Happier logs: /tmp/.happier/logs/session.log',
+        ].join('\n'));
+    });
+
+    it('shows the provider session logs row when an artifact path is known', async () => {
+        localDevModeEnabled = true;
+        mockAgentCore = {
+            resume: {
+                vendorResumeIdField: 'claudeSessionId',
+            },
+            displayNameKey: 'agentInput.agent.claude',
+            permissions: { modeGroup: 'codexLike' },
+            ui: { agentPickerIconName: 'code-slash-outline' },
+        };
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {
+                flavor: 'claude',
+                claudeSessionId: 'claude-session-1',
+                claudeTranscriptPath: '/tmp/claude/session.jsonl',
+            },
+        };
+
+        const screen = await renderInfoScreen();
+        const providerLogsItem = screen.findAllByType('Item' as any)
+            .find((node: any) => node.props?.title === 'sessionInfo.providerSessionLogs');
+        expect(providerLogsItem).toBeTruthy();
+        expect(providerLogsItem?.props.copy).toBe('/tmp/claude/session.jsonl');
+        expect(providerLogsItem?.props.onPress).toBeUndefined();
     });
 
     it('defers raw dev JSON rendering until a section is opened', async () => {

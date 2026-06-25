@@ -50,6 +50,14 @@ function hasModeChange(desired: ClaudeDesiredRuntimeConfig): boolean {
   return typeof desired.agentModeId === 'string' && desired.agentModeId.trim().length > 0;
 }
 
+function isModeOnlyRuntimeConfigChange(desired: ClaudeDesiredRuntimeConfig): boolean {
+  return hasModeChange(desired)
+    && desired.model === undefined
+    && desired.reasoningEffort === undefined
+    && desired.ultracode === undefined
+    && desired.maxThinkingTokens == null;
+}
+
 function mergeDesired(
   base: ClaudeDesiredRuntimeConfig,
   override: ClaudeDesiredRuntimeConfig,
@@ -237,6 +245,7 @@ export function createClaudeUnifiedTuiControlController(
         stash: (into) => ({ ...into, ultracode: desired.ultracode }),
       });
     }
+    const modeOnly = isModeOnlyRuntimeConfigChange(desired);
     if (hasModeChange(desired)) {
       const key = modeChangeKey(desired);
       plans.push({
@@ -247,9 +256,10 @@ export function createClaudeUnifiedTuiControlController(
             runtime,
             telemetry,
             maxAttempts: deps.maxModeCycleAttempts,
-            // Lane Q (probe Q-A): the in-flight steer path may cycle in the steer-safe GENERATING
-            // window; every other reason keeps the idle-only window.
-            ...(reason === 'in_flight_steer' ? { window: 'in_flight_steer' as const } : {}),
+            // Lane Q / Phase 5: mode-only ShiftTab cycling is the same operation whether it was
+            // triggered by metadata-only apply or by a steered message. Non-mode and mixed deltas
+            // keep the stricter idle/next-prompt path.
+            ...(modeOnly ? { window: 'in_flight_steer' as const } : {}),
           },
           { permissionMode: desired.permissionMode, agentModeId: desired.agentModeId },
         ),

@@ -2,6 +2,8 @@ import * as React from 'react';
 import { Platform, View, type ScrollViewProps, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 
 import { FilesystemBrowser } from '@/components/ui/filesystemBrowser/FilesystemBrowser';
 import { FilesystemBrowserRow } from '@/components/ui/filesystemBrowser/FilesystemBrowserRow';
@@ -123,6 +125,7 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
     const detailsMode = props.detailsMode === true;
     const writeActionsEnabled = props.writeActionsEnabled !== false;
     const canDownload = useSessionFileTransferAvailabilityResolver(sessionId);
+    const copyFeedback = useTemporaryCopyFeedback();
     const { rootLoading, rootError, nodes, toggleDirectory, retryRoot, retryDirectory } = useRepositoryTreeBrowser({
         sessionId,
         enabled: true,
@@ -148,12 +151,14 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
         onExpandedPathsChange,
         onRequestRefresh: props.onRequestRefresh ?? null,
         onRequestDownload: props.onRequestDownload ?? null,
+        onCopyPathSuccess: copyFeedback.markCopied,
     });
 
     const rowRenderStateRef = React.useRef({
         badgeIndex,
         canDownload,
         detailsMode,
+        copiedPath: copyFeedback.copiedKey,
         onOpenFile,
         onOpenFilePinned,
         onRequestDownload,
@@ -170,6 +175,7 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
         badgeIndex,
         canDownload,
         detailsMode,
+        copiedPath: copyFeedback.copiedKey,
         onOpenFile,
         onOpenFilePinned,
         onRequestDownload,
@@ -187,6 +193,7 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
     const rowVisualExtraData = React.useMemo(() => [
         renderedBadgeSignature,
         detailsMode ? 'details' : 'compact',
+        copyFeedback.copiedKey ?? '',
         hasDownloadRequest ? 'download' : 'no-download',
         theme.colors.state?.danger?.foreground ?? '',
         theme.colors.state?.neutral?.foreground ?? '',
@@ -198,6 +205,7 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
         writeActionsEnabled ? 'write' : 'read',
     ].join('\u0001'), [
         detailsMode,
+        copyFeedback.copiedKey,
         hasDownloadRequest,
         renderedBadgeSignature,
         theme.colors.state?.danger?.foreground,
@@ -214,6 +222,7 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
         const {
             badgeIndex,
             canDownload,
+            copiedPath,
             detailsMode,
             onOpenFile,
             onOpenFilePinned,
@@ -269,8 +278,15 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
         })();
 
         const shouldShowRight = showDetailsInline || Boolean(badge) || (isDirectoryNode(node) && node.isLoadingChildren) || Boolean(menu);
+        const copyFeedbackVisible = copiedPath === node.path;
         const right = shouldShowRight ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                {copyFeedbackVisible ? (
+                    <CopiedPill
+                        visible
+                        testID={`repository-tree-copy-feedback:${safePath}`}
+                    />
+                ) : null}
                 {showDetailsInline ? (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                         <Text

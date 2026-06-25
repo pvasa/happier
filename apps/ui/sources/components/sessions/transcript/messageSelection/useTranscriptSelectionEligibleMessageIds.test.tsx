@@ -156,6 +156,46 @@ describe('useTranscriptSelectionEligibleMessageIds', () => {
         }
     });
 
+    it('does not reread transcript messages on unrelated store publishes', async () => {
+        const previousState = storage.getState();
+        try {
+            let textReadCount = 0;
+            const trackedMessage = {
+                id: 'user',
+                kind: 'user-text',
+                localId: null,
+                createdAt: 1,
+                get text() {
+                    textReadCount += 1;
+                    return 'hello';
+                },
+            } as Message;
+            writeSessionMessages([trackedMessage]);
+
+            const hook = await renderHook(
+                () => useTranscriptSelectionEligibleMessageIds('s1', { enabled: true, metadata: null }),
+                { flushOptions: { cycles: 1, turns: 4 } },
+            );
+            expect(hook.getCurrent()).toEqual(['user']);
+            expect(textReadCount).toBeGreaterThan(0);
+
+            textReadCount = 0;
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    realtimeStatus: state.realtimeStatus === 'connected' ? 'disconnected' : 'connected',
+                }));
+            });
+
+            expect(hook.getCurrent()).toEqual(['user']);
+            expect(textReadCount).toBe(0);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('falls back to messagesById ordering when transcript ids have not hydrated yet', async () => {
         const previousState = storage.getState();
         try {

@@ -114,9 +114,39 @@ export function useOverlayPresence(visible: boolean, exitMs: number): Readonly<{
     };
 }
 
+/**
+ * Exit duration for an overlay's presence (mount/unmount) window.
+ *
+ * On web a glass overlay (`disableTransformOnWeb`) renders without any
+ * opacity/transform entrance motion — both an animated `opacity < 1` and a
+ * non-`none` `transform` establish a CSS backdrop root that would defeat a
+ * descendant `backdrop-filter`. With no exit fade to wait for, the presence
+ * window collapses to instant so the surface unmounts immediately instead of
+ * lingering fully opaque. Reduced motion collapses it on every platform.
+ */
+export function resolveOverlayExitMs(params: Readonly<{
+    preset: OverlayMotionPreset;
+    reducedMotion: boolean;
+    disableTransformOnWeb?: boolean;
+}>): number {
+    if (params.reducedMotion) return motionTokens.durationMs.instant;
+    if (params.disableTransformOnWeb === true && Platform.OS === 'web') {
+        return motionTokens.durationMs.instant;
+    }
+    return params.preset.exitMs;
+}
+
 export function useOverlayMotionAnimation(params: Readonly<{
     visible: boolean;
     preset: OverlayMotionPreset;
+    /**
+     * On web, animate opacity ONLY (no transform). A non-`none` `transform` creates a
+     * CSS "backdrop root" that defeats a descendant's `backdrop-filter` (glass blur),
+     * so a transform-animated overlay that wraps a glass surface must opt in to keep
+     * its web blur. Native is unaffected (its blur is not `backdrop-filter`) and keeps
+     * the full slide/scale motion.
+     */
+    disableTransformOnWeb?: boolean;
 }>): Readonly<{
     exitMs: number;
     progress: Animated.Value;
@@ -153,13 +183,24 @@ export function useOverlayMotionAnimation(params: Readonly<{
         outputRange: [params.preset.fromTranslateY, 0],
     });
 
+    const omitTransform = params.disableTransformOnWeb === true && Platform.OS === 'web';
     return {
-        exitMs: reducedMotion ? motionTokens.durationMs.instant : params.preset.exitMs,
+        exitMs: resolveOverlayExitMs({
+            preset: params.preset,
+            reducedMotion,
+            disableTransformOnWeb: params.disableTransformOnWeb,
+        }),
         progress,
-        style: {
-            opacity,
-            transform: [{ translateX }, { translateY }, { scale }],
-        },
+        // On web a glass overlay renders at a static opacity of 1 (no fade): an
+        // animated `opacity < 1` — like a `transform` — establishes a CSS backdrop
+        // root that isolates a descendant `backdrop-filter` and breaks the blur.
+        // Appear/disappear is handled by the presence (mount/unmount) window.
+        style: omitTransform
+            ? { opacity: 1 }
+            : {
+                opacity,
+                transform: [{ translateX }, { translateY }, { scale }],
+            },
     };
 }
 
@@ -169,6 +210,7 @@ export function OverlayMotionFrame(props: Readonly<{
     direction?: OverlayMotionDirection;
     style?: StyleProp<ViewStyle>;
     pointerEvents?: 'box-none' | 'none' | 'auto' | 'box-only';
+    disableTransformOnWeb?: boolean;
     children: React.ReactNode;
 }>): React.ReactElement {
     const preset = React.useMemo(() => resolveOverlayMotionPreset({
@@ -178,6 +220,7 @@ export function OverlayMotionFrame(props: Readonly<{
     const motion = useOverlayMotionAnimation({
         visible: props.visible,
         preset,
+        disableTransformOnWeb: props.disableTransformOnWeb,
     });
 
     return (

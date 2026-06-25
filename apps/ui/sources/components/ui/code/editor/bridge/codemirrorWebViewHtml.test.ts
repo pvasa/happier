@@ -177,6 +177,29 @@ describe('buildCodeMirrorWebViewHtml', () => {
         expect(html).toContain('docSnapshot');
     });
 
+    it('preserves selection and scroll when host applies a different document', async () => {
+        vi.resetModules();
+        vi.doMock('./codemirrorWebViewBundle.generated', () => ({
+            CODEMIRROR_WEBVIEW_BUNDLE_JS: '',
+        }));
+
+        const { buildCodeMirrorWebViewHtml } = await import('./codemirrorWebViewHtml');
+        const html = buildCodeMirrorWebViewHtml({
+            theme: createCodeMirrorWebViewTheme(),
+            wrapLines: true,
+            showLineNumbers: true,
+            changeDebounceMs: 100,
+            maxChunkBytes: 64_000,
+            uiFontScale: 1,
+            osFontScale: 1,
+        });
+
+        expect(html).toContain('const previousSelection = view.state.selection');
+        expect(html).toContain('selection: previousSelection');
+        expect(html).toContain('const previousScrollTop = scrollDOM ? scrollDOM.scrollTop : null');
+        expect(html).toContain('scrollDOM.scrollTop = previousScrollTop');
+    });
+
     it('guards same-document host updates so cursor selection is not reset', async () => {
         vi.resetModules();
         vi.doMock('./codemirrorWebViewBundle.generated', () => ({
@@ -195,5 +218,35 @@ describe('buildCodeMirrorWebViewHtml', () => {
         });
 
         expect(html).toContain('view.state.doc.toString() === normalizedDoc');
+    });
+
+    it('cancels queued local docChanged messages before applying host documents', async () => {
+        vi.resetModules();
+        vi.doMock('./codemirrorWebViewBundle.generated', () => ({
+            CODEMIRROR_WEBVIEW_BUNDLE_JS: '',
+        }));
+
+        const { buildCodeMirrorWebViewHtml } = await import('./codemirrorWebViewHtml');
+        const html = buildCodeMirrorWebViewHtml({
+            theme: createCodeMirrorWebViewTheme(),
+            wrapLines: true,
+            showLineNumbers: true,
+            changeDebounceMs: 100,
+            maxChunkBytes: 64_000,
+            uiFontScale: 1,
+            osFontScale: 1,
+        });
+
+        const setDocStart = html.indexOf('function setDoc(nextDoc)');
+        const sameDocumentGuard = html.indexOf('if (view.state.doc.toString() === normalizedDoc)', setDocStart);
+        const setDocPrefix = html.slice(setDocStart, sameDocumentGuard);
+        expect(setDocStart).toBeGreaterThanOrEqual(0);
+        expect(sameDocumentGuard).toBeGreaterThan(setDocStart);
+        expect(setDocPrefix).toContain('cancelPendingDocChange();');
+
+        const recreateViewStart = html.indexOf('function recreateView(doc, language, readOnly)');
+        const recreateViewBody = html.slice(recreateViewStart, html.indexOf('view = createView(doc, language, readOnly);', recreateViewStart));
+        expect(recreateViewStart).toBeGreaterThanOrEqual(0);
+        expect(recreateViewBody).toContain('cancelPendingDocChange();');
     });
 });

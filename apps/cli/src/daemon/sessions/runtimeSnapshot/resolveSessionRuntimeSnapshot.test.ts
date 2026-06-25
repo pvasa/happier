@@ -244,6 +244,22 @@ describe('resolveSessionRuntimeSnapshot', () => {
     expect(result.spawnOptions.resume).toBe('codex-thread-from-metadata');
   });
 
+  it('does not inherit provider resume ids from metadata for configured ACP attaches', () => {
+    const result = resolveSessionRuntimeSnapshot({
+      incomingOptions: baseIncomingOptions({
+        backendTarget: { kind: 'configuredAcpBackend', backendId: 'custom-kiro' },
+      }),
+      persistedMetadata: {
+        flavor: 'codex',
+        codexSessionId: 'codex-thread-from-metadata',
+      },
+      persistedVendorResumeId: 'persisted-provider-thread',
+    });
+
+    expect(result.snapshot.vendorResumeId).toBeNull();
+    expect(result.spawnOptions.resume).toBeUndefined();
+  });
+
   it('preserves incoming controls without timestamps when no persisted or tracked snapshot exists', () => {
     const result = resolveSessionRuntimeSnapshot({
       incomingOptions: baseIncomingOptions({

@@ -15,6 +15,13 @@ export type ConnectedServiceQuotaFetcher = Readonly<{
     now: number;
     signal: AbortSignal;
   }>) => Promise<ConnectedServiceQuotaSnapshotV1 | null>;
+  consumeRecoveryCredit?: (params: Readonly<{
+    record: ConnectedServiceCredentialRecordV1;
+    now: number;
+    idempotencyKey: string;
+    providerCreditId?: string;
+    signal: AbortSignal;
+  }>) => Promise<unknown>;
 }>;
 
 /**

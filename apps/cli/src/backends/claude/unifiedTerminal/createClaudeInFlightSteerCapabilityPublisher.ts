@@ -49,7 +49,8 @@ export function createClaudeInFlightSteerCapabilityPublisher(opts: Readonly<{
 
   function write(snapshot: ClaudeInFlightSteerAvailabilitySnapshot): void {
     const reason = resolveReason(snapshot);
-    const key = `${snapshot.available}:${reason ?? ''}`;
+    const terminalComposerDraftPresent = !snapshot.available && snapshot.reason === 'user_terminal_draft';
+    const key = `${snapshot.available}:${reason ?? ''}:${terminalComposerDraftPresent}`;
     if (key === lastPublishedKey) return;
     lastPublishedKey = key;
     lastPublishAtMs = nowMs();
@@ -63,6 +64,8 @@ export function createClaudeInFlightSteerCapabilityPublisher(opts: Readonly<{
           inFlightSteerAvailable: snapshot.available,
           inFlightSteerUnavailableReason: reason,
           inFlightSteerStateAt: stateAt,
+          terminalComposerClearSupported: true,
+          terminalComposerDraftPresent,
         },
       }),
       '[unified]',

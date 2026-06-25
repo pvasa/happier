@@ -87,11 +87,27 @@ describe('buildCliBinaryArtifactPayload Windows rename fallback', () => {
             ['apps', 'cli', 'scripts', 'session_hook_forwarder.cjs'],
             ['apps', 'cli', 'scripts', 'permission_hook_forwarder.cjs'],
             ['apps', 'cli', 'scripts', 'ripgrep_launcher.cjs'],
+            ['apps', 'cli', 'scripts', 'statusline_forwarder.cjs'],
+            ['apps', 'cli', 'scripts', 'terminal_launch_spec_runner.cjs'],
             ['apps', 'cli', 'scripts', 'runtime', 'placeholder.txt'],
             ['apps', 'cli', 'scripts', 'shims', 'placeholder.txt'],
         ]) {
             await writeRepoFile(join(repoRoot, ...sidecarPath), 'placeholder\n', older);
         }
+        await writeRepoFile(join(cliDir, 'tools', 'archives', 'checksums.sha256'), '', older);
+        await writeRepoFile(join(cliDir, 'scripts', 'unpack-tools.cjs'), `
+const fs = require('fs');
+const path = require('path');
+
+function unpackTools(options = {}) {
+    const toolsDir = options.toolsDir || path.resolve(__dirname, '..', 'tools');
+    const unpackedPath = path.join(toolsDir, 'unpacked');
+    fs.mkdirSync(unpackedPath, { recursive: true });
+    fs.writeFileSync(path.join(unpackedPath, 'zellij.exe'), 'zellij fixture\\n');
+}
+
+module.exports = { unpackTools };
+`, older);
 
         for (const packageName of [
             '@huggingface/transformers',

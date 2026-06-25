@@ -16,8 +16,45 @@ const TERMINATABLE_PROCESS_TYPES = new Set([
   'dev-daemon-version-check',
 ] as const);
 
+const DEFAULT_PAYLOAD_OWNER_STOP_TIMEOUT_MS = 30_000;
+
 function normalizeProcessCommand(value: string): string {
   return String(value ?? '').trim().replaceAll('\\', '/').toLowerCase();
+}
+
+function readPositiveIntFromEnv(params: Readonly<{
+  processEnv: NodeJS.ProcessEnv;
+  name: string;
+}>): number | null {
+  const raw = typeof params.processEnv[params.name] === 'string'
+    ? params.processEnv[params.name]!.trim()
+    : '';
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function resolvePayloadOwnerStopTimeoutMs(processEnv: NodeJS.ProcessEnv): number {
+  return readPositiveIntFromEnv({
+    processEnv,
+    name: 'HAPPIER_CLI_PAYLOAD_OWNER_STOP_TIMEOUT_MS',
+  })
+    ?? readPositiveIntFromEnv({
+      processEnv,
+      name: 'HAPPIER_INSTALLER_PRE_INSTALL_COMMAND_TIMEOUT_MS',
+    })
+    ?? DEFAULT_PAYLOAD_OWNER_STOP_TIMEOUT_MS;
+}
+
+function shouldSkipInstalledCliStopCommands(processEnv: NodeJS.ProcessEnv): boolean {
+  return processEnv.HAPPIER_CLI_SKIP_PAYLOAD_OWNER_STOP_COMMANDS === '1';
 }
 
 function resolveManagedCliInvoker(paths: Readonly<{
@@ -68,8 +105,9 @@ export async function quiesceInstalledCliWindowsPayloadOwners(params: Readonly<{
     processEnv,
   });
   const invoker = resolveManagedCliInvoker(installedPaths);
+  const stopTimeoutMs = resolvePayloadOwnerStopTimeoutMs(processEnv);
 
-  if (invoker) {
+  if (invoker && !shouldSkipInstalledCliStopCommands(processEnv)) {
     for (const args of [
       ['service', 'stop', '--json'],
       ['daemon', 'stop', '--all', '--kill-sessions', '--json'],
@@ -77,6 +115,7 @@ export async function quiesceInstalledCliWindowsPayloadOwners(params: Readonly<{
       spawn.sync(invoker, [...args], {
         env: processEnv,
         stdio: 'ignore',
+        timeout: stopTimeoutMs,
         windowsHide: true,
       });
     }

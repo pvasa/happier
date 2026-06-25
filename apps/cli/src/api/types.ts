@@ -752,6 +752,13 @@ export type AgentState = {
      * "Apply setting & steer now". Absence means an older CLI / unsupported backend (fail-closed).
      */
     inFlightConfigApplySupported?: boolean | null | undefined
+    /**
+     * Provider-neutral terminal composer controls. Runtimes that own an injectable terminal may
+     * publish these so the UI can offer explicit, user-authorized draft clearing without
+     * provider-specific branching.
+     */
+    terminalComposerClearSupported?: boolean | null | undefined
+    terminalComposerDraftPresent?: boolean | null | undefined
     localPermissionBridgeInLocalMode?: boolean | null | undefined
     permissionsInUiWhileLocal?: boolean | null | undefined
   } | null | undefined

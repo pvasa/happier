@@ -8,6 +8,7 @@ import type { RpcHandler, RpcHandlerManagerLike } from '@/api/rpc/types';
 import type { AgentState, Metadata } from '@/api/types';
 import type { MaterializeNextPendingResult } from '@/api/session/sessionClientPort';
 import type { PendingQueueReadOptions, PendingQueueReconcileWhenEmpty } from '@/api/session/pendingQueueReadPolicy';
+import type { ProviderOwnedUserMessageEchoClassifier } from '@/api/session/providerOwnedUserMessageEcho';
 
 export type DeferredApiSessionTarget = Readonly<{
   sessionId: string;
@@ -15,6 +16,7 @@ export type DeferredApiSessionTarget = Readonly<{
   sendSessionEvent: (event: unknown, id?: string) => void;
   sendClaudeSessionMessage: (message: unknown, meta?: unknown) => void;
   recordClaudeJsonlMessageConsumed?: (message: unknown, meta?: unknown) => void;
+  setProviderOwnedUserMessageEchoClassifier?: (classifier: ProviderOwnedUserMessageEchoClassifier | null) => void;
   fetchCommittedClaudeJsonlMessageBaseline?: (opts?: { take?: number }) => Promise<import('@/backends/claude/utils/claudeJsonlMessageKey').CommittedClaudeJsonlMessageBaseline>;
   hasActiveCanonicalTurn?: () => boolean;
   fetchRecentTranscriptTextItemsForAcpImport?: (opts?: { take?: number }) => Promise<Array<{ role: 'user' | 'agent'; text: string }>>;
@@ -67,6 +69,8 @@ export class DeferredApiSessionClient {
   private flushHadErrors = false;
   private flushErrorWarningSent = false;
   private cancelled = false;
+  private providerOwnedUserMessageEchoClassifier: ProviderOwnedUserMessageEchoClassifier | null = null;
+  private providerOwnedUserMessageEchoClassifierSet = false;
 
   constructor(opts: { placeholderSessionId: string; limits: DeferredSessionBufferLimits }) {
     this.sessionId = opts.placeholderSessionId;
@@ -149,6 +153,12 @@ export class DeferredApiSessionClient {
     this.pushBufferedCall((t) => t.recordClaudeJsonlMessageConsumed?.(_message, _meta), {
       hint: 'recordClaudeJsonlMessageConsumed',
     });
+  }
+
+  setProviderOwnedUserMessageEchoClassifier(classifier: ProviderOwnedUserMessageEchoClassifier | null): void {
+    this.providerOwnedUserMessageEchoClassifier = classifier;
+    this.providerOwnedUserMessageEchoClassifierSet = true;
+    this.target?.setProviderOwnedUserMessageEchoClassifier?.(classifier);
   }
 
   async fetchRecentTranscriptTextItemsForAcpImport(opts?: { take?: number }): Promise<Array<{ role: 'user' | 'agent'; text: string }>> {
@@ -394,6 +404,10 @@ export class DeferredApiSessionClient {
 
     for (const [method, handler] of this.registeredHandlers.entries()) {
       _real.rpcHandlerManager.registerHandler(method, handler);
+    }
+
+    if (this.providerOwnedUserMessageEchoClassifierSet) {
+      _real.setProviderOwnedUserMessageEchoClassifier?.(this.providerOwnedUserMessageEchoClassifier);
     }
 
     this.flushInFlight = this.drainBufferedCallsUntilEmpty();

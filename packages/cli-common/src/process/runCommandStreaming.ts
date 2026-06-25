@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 
+import { resolveWindowsCommandInvocation } from './windows/resolveWindowsCommandInvocation.js';
+
 function appendTail(current: string, chunk: string, maxBytes: number): string {
   const combined = current + chunk;
   if (Buffer.byteLength(combined, 'utf8') <= maxBytes) {
@@ -32,13 +34,19 @@ export async function runCommandStreaming(params: Readonly<{
   }
 
   const maxCapturedBytes = Math.max(4 * 1024, Number(params.maxCapturedBytes ?? 32 * 1024));
+  const invocation = resolveWindowsCommandInvocation({
+    command: cmd,
+    args: params.args,
+    env: params.env,
+  });
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(cmd, [...params.args], {
+    const child = spawn(invocation.command, [...invocation.args], {
       cwd: params.cwd,
       env: params.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
 
     let stdoutTail = '';

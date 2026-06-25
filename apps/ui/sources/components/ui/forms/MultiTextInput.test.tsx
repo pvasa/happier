@@ -199,6 +199,102 @@ describe('MultiTextInput', () => {
         expect(onContentHeightChange).toHaveBeenCalledWith(88);
     });
 
+    it('reports the post-paste cursor after inserted native text instead of forcing document end', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput');
+        const onStateChange = vi.fn();
+        const prefix = 'before ';
+        const suffix = ' after';
+        const initialText = `${prefix}${suffix}`;
+        const insertedText = `${'x'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1)} /r`;
+        const pastedText = `${prefix}${insertedText}${suffix}`;
+        const screen = await renderScreen(<MultiTextInput
+            testID="composer-input"
+            value={initialText}
+            onChangeText={() => {}}
+            onStateChange={onStateChange}
+        />);
+        const input = screen.tree.findByType('TextInput' as any);
+
+        await act(async () => {
+            input.props.onSelectionChange({
+                nativeEvent: { selection: { start: prefix.length, end: prefix.length } },
+            });
+            input.props.onChangeText(pastedText);
+        });
+
+        expect(onStateChange).toHaveBeenLastCalledWith({
+            text: pastedText,
+            selection: {
+                start: prefix.length + insertedText.length,
+                end: prefix.length + insertedText.length,
+            },
+        });
+    });
+
+    it('infers the cursor at the end when native appends to a large input after stale selection state', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput');
+        const onStateChange = vi.fn();
+        const initialText = Array.from(
+            { length: TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1 },
+            (_, index) => String.fromCharCode(97 + (index % 26)),
+        ).join('');
+        const nextText = `${initialText} /r`;
+        const screen = await renderScreen(<MultiTextInput
+            testID="composer-input"
+            value={initialText}
+            onChangeText={() => {}}
+            onStateChange={onStateChange}
+        />);
+        const input = screen.tree.findByType('TextInput' as any);
+
+        await act(async () => {
+            input.props.onSelectionChange({
+                nativeEvent: { selection: { start: 0, end: 0 } },
+            });
+            input.props.onChangeText(nextText);
+        });
+
+        expect(onStateChange).toHaveBeenLastCalledWith({
+            text: nextText,
+            selection: {
+                start: nextText.length,
+                end: nextText.length,
+            },
+        });
+    });
+
+    it('accepts native selection updates for the latest native text before controlled value catches up', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput');
+        const onStateChange = vi.fn();
+        const initialText = 'hello';
+        const nextText = `${initialText} /r`;
+        const screen = await renderScreen(<MultiTextInput
+            testID="composer-input"
+            value={initialText}
+            onChangeText={() => {}}
+            onStateChange={onStateChange}
+        />);
+        const input = screen.tree.findByType('TextInput' as any);
+
+        await act(async () => {
+            input.props.onSelectionChange({
+                nativeEvent: { selection: { start: 0, end: 0 } },
+            });
+            input.props.onChangeText(nextText);
+            input.props.onSelectionChange({
+                nativeEvent: { selection: { start: nextText.length, end: nextText.length } },
+            });
+        });
+
+        expect(onStateChange).toHaveBeenLastCalledWith({
+            text: nextText,
+            selection: {
+                start: nextText.length,
+                end: nextText.length,
+            },
+        });
+    });
+
     it('forwards testID as data-testid on web textarea', async () => {
         const { MultiTextInput } = await import('./MultiTextInput.web');
         let tree!: renderer.ReactTestRenderer;

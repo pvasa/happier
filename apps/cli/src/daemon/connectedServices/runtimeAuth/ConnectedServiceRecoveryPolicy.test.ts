@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { decideConnectedServiceRecovery } from './ConnectedServiceRecoveryPolicy';
+import {
+  decideConnectedServiceRecovery,
+  isTemporaryRetryOwnedConnectedServiceRuntimeFailure,
+} from './ConnectedServiceRecoveryPolicy';
 
 const baseIssue = {
   serviceId: 'openai-codex',
@@ -14,6 +17,27 @@ const baseIssue = {
 } as const;
 
 describe('ConnectedServiceRecoveryPolicy', () => {
+  it('exposes the temporary-retry ownership predicate used by intake routers', () => {
+    expect(isTemporaryRetryOwnedConnectedServiceRuntimeFailure({
+      kind: 'temporary_throttle',
+      ...baseIssue,
+    })).toBe(true);
+    expect(isTemporaryRetryOwnedConnectedServiceRuntimeFailure({
+      kind: 'capacity',
+      ...baseIssue,
+      quotaScope: 'provider',
+    })).toBe(true);
+    expect(isTemporaryRetryOwnedConnectedServiceRuntimeFailure({
+      kind: 'capacity',
+      ...baseIssue,
+      quotaScope: 'account',
+    })).toBe(false);
+    expect(isTemporaryRetryOwnedConnectedServiceRuntimeFailure({
+      kind: 'usage_limit',
+      ...baseIssue,
+    })).toBe(false);
+  });
+
   it('routes temporary throttles to bounded temporary retry recovery', () => {
     expect(decideConnectedServiceRecovery({
       actor: 'automatic',
@@ -114,6 +138,64 @@ describe('ConnectedServiceRecoveryPolicy', () => {
       groupId: 'main',
       reason: 'auth_expired',
       actor: 'manual',
+    });
+  });
+
+  it('prefers refresh over account switching for refreshable credential failures', () => {
+    expect(decideConnectedServiceRecovery({
+      actor: 'automatic',
+      issue: {
+        kind: 'auth_expired',
+        ...baseIssue,
+      },
+      selection: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        activeProfileId: 'primary',
+      },
+      credentialRefresh: {
+        status: 'refreshable',
+      },
+    })).toEqual({
+      action: 'refresh',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      reason: 'auth_expired',
+    });
+
+    expect(decideConnectedServiceRecovery({
+      actor: 'automatic',
+      issue: {
+        kind: 'auth_expired',
+        ...baseIssue,
+      },
+      selection: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        activeProfileId: 'primary',
+      },
+      credentialRefresh: {
+        status: 'refreshable',
+      },
+      credentialHealth: {
+        liveEvidence: 'auth_failed',
+      },
+      groupCandidate: {
+        status: 'selected',
+        profileId: 'backup',
+        applyMode: 'restart_rematerialize',
+      },
+    })).toEqual({
+      action: 'switch_account',
+      mode: 'restart_rematerialize',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      fromProfileId: 'primary',
+      toProfileId: 'backup',
+      reason: 'auth_expired',
+      actor: 'automatic',
     });
   });
 

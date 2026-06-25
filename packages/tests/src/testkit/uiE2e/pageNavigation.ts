@@ -46,6 +46,7 @@ async function gotoWithRetries(page: Page, url: string, timeoutMs: number, waitU
   };
 
   const isCommittedTimeout = (error: unknown): boolean => {
+    if (waitUntil !== 'commit') return false;
     const message = error instanceof Error ? error.message : String(error);
     if (!message.toLowerCase().includes('timeout')) return false;
     return normalizeUrl(page.url()) === targetUrl;
@@ -61,7 +62,7 @@ async function gotoWithRetries(page: Page, url: string, timeoutMs: number, waitU
       await page.goto(url, { waitUntil, timeout: remaining });
       return;
     } catch (error) {
-      if (waitUntil === 'commit' && isCommittedTimeout(error)) return;
+      if (isCommittedTimeout(error)) return;
       if (attempt >= 4 || !retryable(error)) throw error;
       await page.waitForTimeout(500 * attempt);
     }

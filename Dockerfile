@@ -35,6 +35,7 @@ RUN chmod +x /usr/local/bin/yarn-install-with-retry
 RUN --mount=type=cache,target=/tmp/.yarn-cache,sharing=locked \
     yarn config set registry https://registry.npmjs.org/ \
     && yarn-install-with-retry --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
+COPY scripts/workspaces ./scripts/workspaces
 
 # Shared deps (alpine) for web UI export embeds.
 # We build the web export on the BUILDPLATFORM because the output is architecture-agnostic, and
@@ -68,6 +69,7 @@ RUN chmod +x /usr/local/bin/yarn-install-with-retry
 RUN --mount=type=cache,target=/tmp/.yarn-cache,sharing=locked \
     yarn config set registry https://registry.npmjs.org/ \
     && yarn-install-with-retry --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
+COPY scripts/workspaces ./scripts/workspaces
 
 # Shared deps (debian) for server builds (needs toolchain for native deps)
 FROM node:${NODE_VERSION} AS deps-debian
@@ -99,6 +101,7 @@ RUN chmod +x /usr/local/bin/yarn-install-with-retry
 RUN --mount=type=cache,target=/tmp/.yarn-cache,sharing=locked \
     yarn config set registry https://registry.npmjs.org/ \
     && yarn-install-with-retry --frozen-lockfile --ignore-engines --network-timeout 600000 --prefer-offline --non-interactive
+COPY scripts/workspaces ./scripts/workspaces
 
 #
 # Targets

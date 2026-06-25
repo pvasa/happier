@@ -12,6 +12,9 @@ const clipboardMocks = vi.hoisted(() => ({
 const mockEnv = vi.hoisted(() => ({
   iconsRenderAsText: false,
 }));
+const modalMocks = vi.hoisted(() => ({
+  alert: vi.fn(),
+}));
 const centeredInfoTileMockState = vi.hoisted(() => ({
   renderCount: 0,
 }));
@@ -51,7 +54,14 @@ vi.mock('@/constants/Typography', () => ({
   },
 }));
 
-installSessionGuidanceCommonModuleMocks();
+installSessionGuidanceCommonModuleMocks({
+  modal: async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({
+      spies: modalMocks,
+    }).module;
+  },
+});
 
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
   useConnectTerminal: () => ({
@@ -122,8 +132,11 @@ describe('SessionGettingStartedGuidanceView', () => {
     expect(expandedContent).toContain('happier opencode');
 
     clipboardMocks.setStringAsync.mockClear();
+    modalMocks.alert.mockClear();
     await screen.pressByTestIdAsync('session-getting-started-copy-auth_login');
     expect(clipboardMocks.setStringAsync).toHaveBeenCalledWith('happier auth login');
+    expect(modalMocks.alert).not.toHaveBeenCalledWith('common.copied', 'items.copiedToClipboard');
+    expect(screen.findByTestId('session-getting-started-copy-auth_login-copied')).not.toBeNull();
   });
 
   it('does not emit raw text nodes under View when copy icons render as text on web', async () => {

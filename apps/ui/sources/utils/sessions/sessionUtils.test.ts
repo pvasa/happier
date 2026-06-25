@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import {
+    CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
+    CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
+} from '@happier-dev/agents';
 import { installSessionUtilsCommonModuleMocks } from './sessionUtilsTestHelpers';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { StorageState } from '@/sync/store/types';
@@ -332,6 +336,49 @@ describe('getSessionStatus', () => {
 
         const status = getSessionStatus(session, 1_000, 0);
         expect(status.state).toBe('waiting');
+    });
+
+    it('does not return action_required when a generated local-bridge request is covered by a recent canonical bridge cancellation', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const question = {
+            questions: [{
+                question: 'remote-dev is complete + live-validated (9/9 QA). How do you want to proceed?',
+                header: 'Next step',
+                options: [{ label: 'Review remote-dev first', description: 'Pause here.' }],
+            }],
+        };
+        const session = createBaseSession({
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: 11_000,
+            agentState: {
+                controlledByUser: null,
+                requests: {
+                    'perm_generated': {
+                        tool: 'AskUserQuestion',
+                        kind: 'user_action',
+                        arguments: question,
+                        createdAt: 10_500,
+                        source: CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
+                    },
+                },
+                completedRequests: {
+                    'toolu_canonical': {
+                        tool: 'AskUserQuestion',
+                        kind: 'user_action',
+                        arguments: question,
+                        createdAt: 1_000,
+                        completedAt: 10_000,
+                        status: 'canceled',
+                        reason: CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
+                        source: CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
+                    },
+                },
+            } as any,
+        });
+
+        const status = getSessionStatus(session, 11_000, 0);
+
+        expect(status.state).toBe('thinking');
     });
 
     it('does not return action_required when transcript marks the same request as canceled', async () => {

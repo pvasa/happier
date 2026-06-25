@@ -64,6 +64,20 @@ describe('StatusPill', () => {
         expect(screen.getTextContent()).toContain('online');
     });
 
+    it('renders the default pill chrome as background-only with no border', async () => {
+        const { StatusPill } = await import('./StatusPill');
+
+        const screen = await renderScreen(<StatusPill variant="success" label="Online" testID="status-online" />);
+        const container = screen.findByTestId('status-online');
+        const flat = flattenStyle(container?.props.style);
+
+        // Badges are background-only app-wide: keep the fill, drop the border chrome.
+        expect(flat.borderWidth).toBe(0);
+        expect(flat.borderColor).toBeUndefined();
+        expect(typeof flat.backgroundColor).toBe('string');
+        expect(flat.backgroundColor).not.toBe('transparent');
+    });
+
     it('uses compact pill typography for the label', async () => {
         const { StatusPill } = await import('./StatusPill');
 

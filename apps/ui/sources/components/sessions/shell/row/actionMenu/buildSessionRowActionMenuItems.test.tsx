@@ -60,4 +60,49 @@ describe('buildSessionRowMoreMenuItems', () => {
         ]);
         expect(items.at(-1)?.submenu?.items).toHaveLength(1);
     });
+
+    it('places leading menu items before shared session actions', () => {
+        const session: SessionListRenderableSession = {
+            id: 'session_1',
+            active: false,
+            archivedAt: null,
+            owner: 'user_1',
+            accessLevel: undefined,
+            seq: 4,
+            lastViewedSessionSeq: 4,
+            latestTurnStatus: 'completed',
+            createdAt: 1,
+            updatedAt: 1,
+            activeAt: 1,
+            metadataVersion: 1,
+            agentStateVersion: 1,
+            metadata: null,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 1,
+        };
+        const target = createSessionActionTarget({
+            session,
+            serverId: 'server_1',
+            currentUserId: 'user_1',
+            isConnected: true,
+            isPinned: false,
+        });
+
+        const items = buildSessionRowMoreMenuItems({
+            target,
+            iconColor: '#999',
+            canMoveToFolder: false,
+            leadingItems: [
+                { id: 'session.copyDebugInformation', title: 'Copy information' },
+            ],
+        });
+
+        expect(items.map((item) => item.id)).toEqual([
+            'session.copyDebugInformation',
+            SESSION_ACTION_MARK_UNREAD_ID,
+            SESSION_ACTION_RENAME_ID,
+            SESSION_ACTION_ARCHIVE_ID,
+        ]);
+    });
 });

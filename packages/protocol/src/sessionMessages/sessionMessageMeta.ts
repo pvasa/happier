@@ -3,6 +3,45 @@ import { z } from 'zod';
 import { createSentFromSchema } from '../sentFrom.js';
 import { createSessionPermissionModeSchema } from '../sessionMetadata/sessionPermissionModes.js';
 
+export type SessionUserMessageDeliveryIntentV1 =
+  | 'default'
+  | 'explicit_pending'
+  | 'explicit_immediate'
+  | 'interrupt';
+
+const SESSION_USER_MESSAGE_DELIVERY_INTENTS = new Set<SessionUserMessageDeliveryIntentV1>([
+  'default',
+  'explicit_pending',
+  'explicit_immediate',
+  'interrupt',
+]);
+
+export const SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY = 'happierDeliveryIntentV1';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function readSessionUserMessageDeliveryIntentMeta(
+  meta: unknown,
+): SessionUserMessageDeliveryIntentV1 | null {
+  if (!isRecord(meta)) return null;
+  const value = meta[SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY];
+  return typeof value === 'string' && SESSION_USER_MESSAGE_DELIVERY_INTENTS.has(value as SessionUserMessageDeliveryIntentV1)
+    ? value as SessionUserMessageDeliveryIntentV1
+    : null;
+}
+
+export function withSessionUserMessageDeliveryIntentMeta(
+  meta: Record<string, unknown> | null | undefined,
+  intent: SessionUserMessageDeliveryIntentV1,
+): Record<string, unknown> & { happierDeliveryIntentV1: SessionUserMessageDeliveryIntentV1 } {
+  return {
+    ...(meta ?? {}),
+    [SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY]: intent,
+  };
+}
+
 /**
  * Message-level metadata (stored in encrypted message bodies).
  *

@@ -6,6 +6,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTempDirSync } from '../../src/testkit/fs/tempDir';
 import { packTarball } from '../packTarball.mjs';
 
+const noopPackageDistWrite = () => undefined;
+const fakePackageDistFs = {
+  cpSync: noopPackageDistWrite,
+  mkdirSync: noopPackageDistWrite,
+  renameSync: noopPackageDistWrite,
+  rmSync: noopPackageDistWrite,
+};
+
 describe('packTarball (npmExecpath)', () => {
   it('ignores non-npm npm_execpath values (e.g. yarn) and uses npm on PATH', () => {
     const destDir = createTempDirSync('happier-cli-pack-tarball-dest-');
@@ -21,8 +29,7 @@ describe('packTarball (npmExecpath)', () => {
       npmExecpath: '/somewhere/yarn.js',
       spawnSync: spawn,
       existsSync: () => true,
-      cpSync: () => undefined,
-      rmSync: () => undefined,
+      ...fakePackageDistFs,
       env: {},
     });
 
@@ -55,8 +62,7 @@ describe('packTarball (npmExecpath)', () => {
         const normalizedNpmCli = npmCliPath.replaceAll('\\', '/').toLowerCase();
         return normalized === normalizedNpmCli || normalized.endsWith(`/${tarballName}`) || normalized.endsWith('/dist');
       },
-      cpSync: () => undefined,
-      rmSync: () => undefined,
+      ...fakePackageDistFs,
       env: {},
     });
 
@@ -86,8 +92,7 @@ describe('packTarball (npmExecpath)', () => {
         const normalized = String(targetPath).replaceAll('\\', '/').toLowerCase();
         return normalized.endsWith(`/${tarballName}`) || normalized.endsWith('/dist');
       },
-      cpSync: () => undefined,
-      rmSync: () => undefined,
+      ...fakePackageDistFs,
       env: {},
     });
 
@@ -120,8 +125,7 @@ describe('packTarball (npmExecpath)', () => {
         const normalizedNpmCli = npmCliPath.replaceAll('\\', '/').toLowerCase();
         return normalized === normalizedNpmCli || normalized.endsWith(`/${tarballName}`) || normalized.endsWith('/dist');
       },
-      cpSync: () => undefined,
-      rmSync: () => undefined,
+      ...fakePackageDistFs,
       env: {},
     });
 
@@ -147,8 +151,7 @@ describe('packTarball (npmExecpath)', () => {
       npmExecpath: npmCliPath,
       spawnSync: spawn,
       existsSync: () => true,
-      cpSync: () => undefined,
-      rmSync: () => undefined,
+      ...fakePackageDistFs,
       env: {},
     });
 
@@ -185,8 +188,7 @@ describe('packTarball (npmExecpath)', () => {
       npmInvocation: { command: 'npm', args: [] },
       spawnSync: spawn,
       existsSync: () => true,
-      cpSync: () => undefined,
-      rmSync: () => undefined,
+      ...fakePackageDistFs,
       env: {},
     });
 
@@ -207,8 +209,7 @@ describe('packTarball (npmExecpath)', () => {
       destDir,
       spawnSync: spawn,
       existsSync: () => true,
-      cpSync: () => undefined,
-      rmSync: () => undefined,
+      ...fakePackageDistFs,
       env: {
         HAPPIER_CLI_PACK_TARBALL_TIMEOUT_MS: '123456',
       },
@@ -221,5 +222,30 @@ describe('packTarball (npmExecpath)', () => {
         timeout: 123_456,
       }),
     );
+  });
+
+  it('does not mask incomplete package-dist filesystem adapters', () => {
+    const destDir = createTempDirSync('happier-cli-pack-tarball-dest-');
+    const packageRoot = createTempDirSync('happier-cli-pack-tarball-root-');
+    const tarballName = 'artifact.tgz';
+    writeFileSync(join(destDir, tarballName), '', 'utf8');
+
+    const spawn = vi.fn(() => ({ status: 0, stdout: JSON.stringify([{ filename: tarballName }]), stderr: '' }));
+
+    expect(() =>
+      packTarball({
+        packageRoot,
+        destDir,
+        spawnSync: spawn,
+        existsSync(targetPath) {
+          return String(targetPath).endsWith('/dist') || String(targetPath).endsWith(`/${tarballName}`);
+        },
+        cpSync() {
+          return undefined;
+        },
+        env: {},
+      }),
+    ).toThrow(/incomplete filesystem adapter/);
+    expect(spawn).not.toHaveBeenCalled();
   });
 });

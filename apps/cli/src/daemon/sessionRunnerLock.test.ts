@@ -153,6 +153,35 @@ describe('sessionRunnerLock', () => {
     expect(JSON.parse(raw).pid).toBe(123);
   });
 
+  it('breaks a lock held by a live pid when its stored hash belongs to a non-Happier process', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const lockPath = sessionRunnerLockPathForSessionId({ happyHomeDir, sessionId: 'sess_5_non_happy' });
+    expect(lockPath).not.toBeNull();
+    if (!lockPath) return;
+
+    await mkdir(dirname(lockPath), { recursive: true });
+    await writeFile(
+      lockPath,
+      JSON.stringify({ sessionId: 'sess_5_non_happy', pid: 999, acquiredAtMs: 1, processCommandHash: 'a'.repeat(64) }, null, 2),
+      'utf8',
+    );
+
+    const res = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_5_non_happy',
+      pid: 123,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async (pid) => (pid === 999 ? null : 'b'.repeat(64)),
+      readProcessRunState: async () => 'servable',
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const raw = await readFile(lockPath, 'utf8');
+    expect(JSON.parse(raw).pid).toBe(123);
+  });
+
   it('does not break a lock held by a live pid when command hash cannot be inspected', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
     const lockPath = sessionRunnerLockPathForSessionId({ happyHomeDir, sessionId: 'sess_6' });
@@ -171,7 +200,10 @@ describe('sessionRunnerLock', () => {
       sessionId: 'sess_6',
       pid: 123,
       nowMs: 10_000,
-      getCurrentProcessCommandHash: async (pid) => (pid === 999 ? null : 'b'.repeat(64)),
+      getCurrentProcessCommandHash: async (pid) => {
+        if (pid === 999) throw new Error('process inspection failed');
+        return 'b'.repeat(64);
+      },
       readProcessRunState: async () => 'servable',
     });
 
@@ -266,6 +298,39 @@ describe('sessionRunnerLock', () => {
     expect(JSON.parse(raw).pid).toBe(123);
   });
 
+  it('breaks a lock held by a STOPPED non-Happier pid without killing the unrelated process', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
+    const lockPath = sessionRunnerLockPathForSessionId({ happyHomeDir, sessionId: 'sess_8_non_happy' });
+    expect(lockPath).not.toBeNull();
+    if (!lockPath) return;
+
+    await mkdir(dirname(lockPath), { recursive: true });
+    await writeFile(
+      lockPath,
+      JSON.stringify({ sessionId: 'sess_8_non_happy', pid: 999, acquiredAtMs: 1, processCommandHash: 'a'.repeat(64) }, null, 2),
+      'utf8',
+    );
+
+    const killedPids: number[] = [];
+    const res = await acquireSessionRunnerLock({
+      happyHomeDir,
+      sessionId: 'sess_8_non_happy',
+      pid: 123,
+      nowMs: 10_000,
+      getCurrentProcessCommandHash: async (pid) => (pid === 999 ? null : 'b'.repeat(64)),
+      readProcessRunState: async (pid) => (pid === 999 ? 'stopped' : 'servable'),
+      killWedgedPid: (pid) => {
+        killedPids.push(pid);
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(killedPids).toEqual([]);
+    const raw = await readFile(lockPath, 'utf8');
+    expect(JSON.parse(raw).pid).toBe(123);
+  });
+
   it('does NOT break a lock held by a STOPPED pid when the command hash cannot prove identity', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-runner-lock-'));
     const lockPath = sessionRunnerLockPathForSessionId({ happyHomeDir, sessionId: 'sess_9' });
@@ -285,7 +350,10 @@ describe('sessionRunnerLock', () => {
       sessionId: 'sess_9',
       pid: 123,
       nowMs: 10_000,
-      getCurrentProcessCommandHash: async (pid) => (pid === 999 ? null : 'b'.repeat(64)),
+      getCurrentProcessCommandHash: async (pid) => {
+        if (pid === 999) throw new Error('process inspection failed');
+        return 'b'.repeat(64);
+      },
       readProcessRunState: async (pid) => (pid === 999 ? 'stopped' : 'servable'),
       killWedgedPid: (pid) => {
         killedPids.push(pid);

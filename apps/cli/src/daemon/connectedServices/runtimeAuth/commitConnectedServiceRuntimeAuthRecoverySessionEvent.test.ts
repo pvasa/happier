@@ -115,4 +115,164 @@ describe('commitConnectedServiceRuntimeAuthRecoverySessionEvent', () => {
       }),
     );
   });
+
+  it('uses a deterministic local id for repeated runtime-auth recovery events', async () => {
+    process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+    vi.resetModules();
+    const {
+      commitConnectedServiceRuntimeAuthRecoverySessionEvent,
+    } = await import('./commitConnectedServiceRuntimeAuthRecoverySessionEvent');
+
+    vi.spyOn(axios, 'get').mockResolvedValue({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess-recovery',
+          seq: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          active: true,
+          activeAt: 1,
+          encryptionMode: 'plain',
+          metadata: '{}',
+          metadataVersion: 1,
+          agentState: null,
+          agentStateVersion: 1,
+          dataEncryptionKey: null,
+        },
+      },
+    });
+    const postSpy = vi.spyOn(axios, 'post').mockResolvedValue({
+      status: 200,
+      data: {
+        didWrite: true,
+        message: { id: 'msg-recovery', seq: 2, localId: 'local-recovery', createdAt: 2 },
+      },
+    });
+    const event = {
+      type: 'connected-service-runtime-auth-recovery',
+      status: 'dead_lettered',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team-pool',
+      attempt: 5,
+      nextRetryAtMs: null,
+      terminal: true,
+      reason: 'max_attempts_exhausted',
+      diagnostic: {
+        code: 'recovery_dead_lettered',
+        failurePhase: 'runtime_auth_recovery',
+        source: 'runtime_auth_recovery',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'team-pool',
+        retryable: false,
+        suggestedActions: ['open_connected_accounts'],
+        diagnostics: { reason: 'max_attempts_exhausted' },
+      },
+    };
+    const credentials = {
+      token: 'token-1',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array([1, 2, 3, 4]) },
+    };
+
+    await commitConnectedServiceRuntimeAuthRecoverySessionEvent({
+      credentials,
+      sessionId: 'sess-recovery',
+      event,
+    });
+    await commitConnectedServiceRuntimeAuthRecoverySessionEvent({
+      credentials,
+      sessionId: 'sess-recovery',
+      event: {
+        ...event,
+        attempt: 6,
+        nextRetryAtMs: 2_000_000,
+      },
+    });
+
+    expect(postSpy).toHaveBeenCalledTimes(2);
+    const firstPayload = postSpy.mock.calls[0]?.[1] as Readonly<{ localId: string; content: { v: { content: { id: string } } } }>;
+    const secondPayload = postSpy.mock.calls[1]?.[1] as Readonly<{ localId: string; content: { v: { content: { id: string } } } }>;
+    expect(firstPayload.localId).not.toBe(secondPayload.localId);
+    expect(firstPayload.content.v.content.id).toBe(firstPayload.localId);
+    expect(secondPayload.content.v.content.id).toBe(secondPayload.localId);
+  });
+
+  it('reuses the same local id when the same runtime-auth recovery incident is retried', async () => {
+    process.env.HAPPIER_SERVER_URL = 'http://server.example.test';
+    vi.resetModules();
+    const {
+      commitConnectedServiceRuntimeAuthRecoverySessionEvent,
+    } = await import('./commitConnectedServiceRuntimeAuthRecoverySessionEvent');
+
+    vi.spyOn(axios, 'get').mockResolvedValue({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess-recovery',
+          seq: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          active: true,
+          activeAt: 1,
+          encryptionMode: 'plain',
+          metadata: '{}',
+          metadataVersion: 1,
+          agentState: null,
+          agentStateVersion: 1,
+          dataEncryptionKey: null,
+        },
+      },
+    });
+    const postSpy = vi.spyOn(axios, 'post').mockResolvedValue({
+      status: 200,
+      data: {
+        didWrite: true,
+        message: { id: 'msg-recovery', seq: 2, localId: 'local-recovery', createdAt: 2 },
+      },
+    });
+    const credentials = {
+      token: 'token-1',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array([1, 2, 3, 4]) },
+    };
+    const event = {
+      type: 'connected-service-runtime-auth-recovery',
+      status: 'dead_lettered',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'team-pool',
+      attempt: 2,
+      nextRetryAtMs: null,
+      terminal: true,
+      reason: 'max_attempts_exhausted',
+      diagnostic: {
+        code: 'recovery_dead_lettered',
+        failurePhase: 'runtime_auth_recovery',
+        source: 'runtime_auth_recovery',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'team-pool',
+        retryable: false,
+        suggestedActions: ['open_connected_accounts'],
+        diagnostics: { reason: 'max_attempts_exhausted' },
+      },
+    } as const;
+
+    await commitConnectedServiceRuntimeAuthRecoverySessionEvent({
+      credentials,
+      sessionId: 'sess-recovery',
+      event,
+    });
+    await commitConnectedServiceRuntimeAuthRecoverySessionEvent({
+      credentials,
+      sessionId: 'sess-recovery',
+      event,
+    });
+
+    expect(postSpy).toHaveBeenCalledTimes(2);
+    const firstPayload = postSpy.mock.calls[0]?.[1] as Readonly<{ localId: string }>;
+    const secondPayload = postSpy.mock.calls[1]?.[1] as Readonly<{ localId: string }>;
+    expect(firstPayload.localId).toBe(secondPayload.localId);
+  });
 });

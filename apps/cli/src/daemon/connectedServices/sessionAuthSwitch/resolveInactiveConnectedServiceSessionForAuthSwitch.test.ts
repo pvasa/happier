@@ -107,4 +107,47 @@ describe('resolveInactiveConnectedServiceSessionForAuthSwitch', () => {
       vendorResumeId: 'vendor-1',
     });
   });
+
+  it('derives the vendor resume id from the inferred persisted agent metadata', async () => {
+    const piSessionFile = '/tmp/repo/.pi/sessions/--tmp-repo--/pi-session-1.jsonl';
+    const resolveAttachContext = vi.fn(async () => ({
+      ok: true as const,
+      attachPayload: {
+        v: 2 as const,
+        encryptionMode: 'e2ee' as const,
+        encryptionKeyBase64: 'a2V5',
+        encryptionVariant: 'legacy' as const,
+      },
+      vendorResumeId: null,
+      sessionPath: '/tmp/repo',
+      deliveredUserMessageSeq: null,
+      metadata: {
+        agentId: 'pi',
+        path: '/tmp/repo',
+        connectedServices,
+        connectedServiceMaterializationIdentityV1: materializationIdentity,
+        agentRuntimeDescriptorV1: {
+          v: 1,
+          providerId: 'pi',
+          provider: {
+            resumeStrategy: 'sessionFileAbsolutePreferred',
+            vendorSessionId: 'pi-session-1',
+            sessionFile: piSessionFile,
+          },
+        },
+        piSessionFile,
+      },
+    }));
+
+    await expect(resolveInactiveConnectedServiceSessionForAuthSwitch({
+      credentials: credentials(),
+      sessionId: 'sess_inactive_pi',
+      agentId: 'codex',
+      resolveAttachContext,
+    })).resolves.toMatchObject({
+      agentId: 'pi',
+      vendorResumeId: piSessionFile,
+      cwd: '/tmp/repo',
+    });
+  });
 });

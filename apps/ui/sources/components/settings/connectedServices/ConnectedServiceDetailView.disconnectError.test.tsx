@@ -3,7 +3,10 @@ import renderer, { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
-import { installConnectedServicesCommonModuleMocks } from './connectedServicesTestHelpers';
+import {
+  installConnectedServiceDetailShellMocks,
+  installConnectedServicesCommonModuleMocks,
+} from './connectedServicesTestHelpers';
 
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -38,6 +41,7 @@ installConnectedServicesCommonModuleMocks({
         }).module;
     },
 });
+installConnectedServiceDetailShellMocks();
 
 vi.mock('@/auth/context/AuthContext', () => ({
   useAuth: () => ({ credentials: { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') } }),

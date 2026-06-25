@@ -178,12 +178,19 @@ describe('getProviderSettingsPlugin', () => {
 
     it('exposes Claude unified terminal provider settings in UI sections', () => {
         const claudePlugin = getProviderSettingsPlugin('claude');
-        const visibleFieldKeys = new Set(
-            claudePlugin?.uiSections.flatMap((section) => section.fields.map((field) => field.key)) ?? [],
-        );
+        const visibleFields = claudePlugin?.uiSections.flatMap((section) => section.fields) ?? [];
+        const visibleFieldKeys = new Set(visibleFields.map((field) => field.key));
+        const resumeChoiceField = visibleFields.find((field) => field.key === 'claudeUnifiedTerminalResumeChoice');
 
         expect(visibleFieldKeys.has('claudeUnifiedTerminalEnabled')).toBe(true);
         expect(visibleFieldKeys.has('claudeUnifiedTerminalHost')).toBe(true);
+        expect(visibleFieldKeys.has('claudeUnifiedTerminalResumeChoice')).toBe(true);
+        expect(resumeChoiceField?.kind).toBe('enum');
+        expect(resumeChoiceField?.enumOptions?.map((option) => option.id)).toEqual([
+            'ask_every_time',
+            'resume_from_summary',
+            'resume_full_session',
+        ]);
     });
 
     it('uses translation refs for first-party provider settings UI text', () => {

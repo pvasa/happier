@@ -68,7 +68,9 @@ describe('local voice engine local neural STT (streaming)', () => {
     const stopPromise = toggleLocalVoiceTurn('s1');
     await stopPromise;
 
-    expect(sendMessage).toHaveBeenCalledWith('s1', 'hello sherpa');
+    expect(sendMessage).toHaveBeenCalledWith('s1', 'hello sherpa', undefined, undefined, {
+      bypassPendingQueueReason: 'voice_turn_immediate',
+    });
   });
 
   it('falls back to the default local_neural pack when assetId is missing', async () => {

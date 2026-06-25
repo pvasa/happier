@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { useUnistyles } from 'react-native-unistyles';
@@ -16,6 +15,8 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { Text } from '@/components/ui/text/Text';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { layout } from '@/components/ui/layout/layout';
 import { Modal } from '@/modal';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
@@ -36,6 +37,7 @@ import { machineCollectBugReportDiagnostics } from '@/sync/ops/machines';
 import { t } from '@/text';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 import { readCachedMachineDoctorSnapshot, writeCachedMachineDoctorSnapshot } from './cache/machineDoctorSnapshotCache';
 import { OtaUpdateStatusSection } from './OtaUpdateStatusSection';
@@ -74,6 +76,7 @@ function resolveServerProfileLabel(profile: ServerProfile): string {
 export const SystemStatusView = React.memo(function SystemStatusView() {
   const router = useRouter();
   const { theme } = useUnistyles();
+  const copyJsonFeedback = useTemporaryCopyFeedback();
 
   const activeServerSnapshot = getActiveServerSnapshot();
   const activeServerUrl = React.useMemo(
@@ -245,8 +248,12 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
       machineListStatusByServerId,
     };
 
-    await Clipboard.setStringAsync(JSON.stringify(payload, null, 2));
-    Modal.alert(t('common.copied'), t('items.copiedToClipboard', { label: t('settings.systemStatus') }));
+    const copied = await setClipboardStringSafe(JSON.stringify(payload, null, 2));
+    if (copied) {
+      copyJsonFeedback.markCopied();
+    } else {
+      Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
+    }
   });
 
   React.useEffect(() => {
@@ -550,6 +557,7 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
             title={t('systemStatus.actions.copyJson')}
             subtitle={t('systemStatus.actions.copyJsonSubtitle')}
             icon={<Ionicons name="copy-outline" size={24} color={theme.colors.accent.indigo} />}
+            rightElement={<CopiedPill visible={copyJsonFeedback.isCopied()} testID="system-status-copy-json-feedback" />}
             onPress={copySystemStatusJson}
             loading={copying}
             showChevron={false}

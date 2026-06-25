@@ -2,6 +2,7 @@ import axios, { type AxiosResponse } from 'axios';
 import {
   type SessionStoredMessageContent,
   type SessionMessageRole,
+  type SessionMessageAttentionImpact,
   type V2SessionByIdResponse,
   type V2SessionListResponse,
   V2SessionByIdResponseSchema,
@@ -223,6 +224,7 @@ export async function commitSessionStoredMessage(params: Readonly<{
   content: SessionStoredMessageContent;
   localId: string;
   messageRole?: SessionMessageRole;
+  attentionImpact?: SessionMessageAttentionImpact;
 }>): Promise<{ didWrite: boolean; messageId: string; seq: number; createdAt: number }> {
   const serverUrl = resolveServerHttpBaseUrl();
   const encodedSessionId = encodeSessionIdPathSegment(params.sessionId);
@@ -230,6 +232,7 @@ export async function commitSessionStoredMessage(params: Readonly<{
     content: params.content,
     localId: params.localId,
     ...(params.messageRole ? { messageRole: params.messageRole } : {}),
+    ...(params.attentionImpact ? { attentionImpact: params.attentionImpact } : {}),
   }, {
     headers: {
       Authorization: `Bearer ${params.token}`,

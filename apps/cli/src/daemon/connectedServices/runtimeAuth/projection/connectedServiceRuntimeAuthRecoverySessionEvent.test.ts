@@ -3,7 +3,10 @@ import type { ConnectedServiceUxDiagnosticV1 } from '@happier-dev/protocol';
 import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY } from '@happier-dev/protocol';
 
 import type { ConnectedServiceRuntimeAuthFailureDaemonReport } from '../reportConnectedServiceRuntimeAuthFailureToDaemon';
-import { projectConnectedServiceRuntimeAuthRecoveryReport } from './connectedServiceRuntimeAuthRecoverySessionEvent';
+import {
+  connectedServiceRuntimeAuthRecoveryCanOwnTurnFailure,
+  projectConnectedServiceRuntimeAuthRecoveryReport,
+} from './connectedServiceRuntimeAuthRecoverySessionEvent';
 
 const uxDiagnostic = {
   code: 'recovery_retry_scheduled',
@@ -18,6 +21,51 @@ const uxDiagnostic = {
 } satisfies ConnectedServiceUxDiagnosticV1;
 
 describe('projectConnectedServiceRuntimeAuthRecoveryReport', () => {
+  it('lets nonterminal retryable recovery own the turn failure surface', () => {
+    const report = {
+      handled: true,
+      report: { ok: true },
+      statusCode: 'recovery_retry_scheduled',
+      statusMessage: 'Connected-service recovery hit a temporary provider failure; retry scheduled.',
+      uxDiagnostic,
+      projection: {
+        handled: true,
+        statusCode: 'recovery_retry_scheduled',
+        statusMessage: 'Connected-service recovery hit a temporary provider failure; retry scheduled.',
+        uxDiagnostic,
+        terminal: false,
+      },
+    } satisfies ConnectedServiceRuntimeAuthFailureDaemonReport;
+
+    expect(connectedServiceRuntimeAuthRecoveryCanOwnTurnFailure(report)).toBe(true);
+  });
+
+  it('does not let terminal recovery own the turn failure surface', () => {
+    const report = {
+      handled: true,
+      report: {
+        ok: true,
+        result: {
+          status: 'recovery_action_required',
+          action: {
+            kind: 'reconnect_profile',
+            profileId: 'primary',
+          },
+        },
+      },
+      statusCode: 'recovery_action_reconnect_profile',
+      statusMessage: 'Connected-service profile needs reconnect before this session can continue.',
+      projection: {
+        handled: true,
+        statusCode: 'recovery_action_reconnect_profile',
+        statusMessage: 'Connected-service profile needs reconnect before this session can continue.',
+        terminal: true,
+      },
+    } satisfies ConnectedServiceRuntimeAuthFailureDaemonReport;
+
+    expect(connectedServiceRuntimeAuthRecoveryCanOwnTurnFailure(report)).toBe(false);
+  });
+
   it('emits the generic fallback when typed projection commit does not surface a uxDiagnostic-only report', () => {
     const sendGenericStatusMessage = vi.fn();
     const commitTypedProjection = vi.fn(() => false);

@@ -8,13 +8,20 @@ import {
 import type { Metadata } from '@/api/types';
 import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import type { SessionEventMessage } from '@/api/session/sessionMessageTypes';
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
-import { projectConnectedServiceRuntimeAuthRecoveryReport } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
+import {
+    connectedServiceRuntimeAuthRecoveryCanOwnTurnFailure,
+    projectConnectedServiceRuntimeAuthRecoveryReport,
+} from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
 import { findConnectedServiceChildSelection } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { buildNativeQuotaProfileId } from '@/daemon/connectedServices/quotas/nativeQuotaProfileId';
+import { createConnectedServiceQuotaSnapshotDeliveryOutbox } from '@/daemon/connectedServices/quotas/connectedServiceQuotaSnapshotDeliveryOutbox';
 import { notifyDaemonConnectedServiceQuotaSnapshot } from '@/daemon/controlClient';
+import { logger } from '@/ui/logger';
 import { resolveConfiguredClaudeConfigDir } from '../utils/resolveConfiguredClaudeConfigDir';
 
+import { resolveClaudeRuntimeAuthRetryDecision } from './claudeRuntimeAuthRetryDecision';
 import { classifyClaudeConnectedServiceRuntimeAuthFailure } from './classifyClaudeConnectedServiceRuntimeAuthFailure';
 import type { NormalizedProviderUsageLimitDetailsV1 } from './mapClaudeRateLimitEventToUsageDetails';
 
@@ -41,6 +48,18 @@ const recentRecoveryProjectionByClient = new WeakMap<
     RuntimeIssueSession['client'],
     RuntimeIssueRecoveryProjectionDeduperState
 >();
+
+const claudeQuotaSnapshotDeliveryOutbox = createConnectedServiceQuotaSnapshotDeliveryOutbox({
+    deliver: async ({ sessionId, serviceId, snapshot }) => await notifyDaemonConnectedServiceQuotaSnapshot({
+        sessionId,
+        serviceId,
+        snapshot,
+    }),
+    retryDelayMs: 1_000,
+    onDiagnostic: (diagnostic) => {
+        logger.debug('[claude] Connected-service quota snapshot delivery diagnostic', diagnostic);
+    },
+});
 
 function normalizeClaudePublicLimitCategory(
     value: NormalizedProviderUsageLimitDetailsV1['limitCategory'] | null | undefined,
@@ -242,6 +261,48 @@ function buildClaudeRuntimeIssueUsageLimit(params: Readonly<{
     };
 }
 
+function buildClaudeRateLimitRuntimeIssue(params: Readonly<{
+    details: NormalizedProviderUsageLimitDetailsV1;
+    classification: NonNullable<ReturnType<typeof classifyClaudeConnectedServiceRuntimeAuthFailure>>;
+    connectedService: RuntimeIssueConnectedService;
+    occurredAt: number;
+}>): SessionRuntimeIssueV1 {
+    if (params.classification.kind === 'temporary_throttle') {
+        return {
+            v: 1,
+            scope: 'primary_session',
+            status: 'failed',
+            code: 'provider_temporary_throttle',
+            source: 'provider_status_error',
+            occurredAt: params.occurredAt,
+            provider: 'claude',
+            sanitizedPreview: 'Provider is temporarily limiting requests',
+            temporaryThrottle: {
+                v: 1,
+                retryAfterMs: params.classification.retryAfterMs ?? params.details.retryAfterMs ?? null,
+                recoverability: 'retry',
+            },
+        };
+    }
+    const isProviderCapacity =
+        params.classification.kind === 'capacity'
+        || params.classification.limitCategory === 'capacity';
+    return {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: isProviderCapacity ? 'provider_status_error' : 'usage_limit',
+        source: isProviderCapacity ? 'provider_status_error' : 'usage_limit',
+        occurredAt: params.occurredAt,
+        provider: 'claude',
+        sanitizedPreview: isProviderCapacity ? 'Provider reported an error' : 'Usage limit reached',
+        usageLimit: buildClaudeRuntimeIssueUsageLimit({
+            details: params.details,
+            connectedService: params.connectedService,
+        }),
+    };
+}
+
 export async function surfaceClaudeRateLimitRuntimeIssue(
     session: RuntimeIssueSession,
     details: NormalizedProviderUsageLimitDetailsV1,
@@ -259,7 +320,6 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
     const connectedServiceId: RuntimeIssueConnectedService['serviceId'] =
         classification.serviceId === 'anthropic' ? 'anthropic' : 'claude-subscription';
     const profileId = classification.profileId ?? (selection ? null : buildNativeClaudeQuotaProfileId());
-    const isProviderCapacity = classification.kind === 'capacity' || classification.limitCategory === 'capacity';
     const connectedService: RuntimeIssueConnectedService = {
         serviceId: connectedServiceId,
         profileId,
@@ -273,20 +333,12 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
     const sidechainSourced = details.sourcedFromSidechain === true;
     const occurredAt = Date.now();
     if (!sidechainSourced) {
-        const issue: SessionRuntimeIssueV1 = {
-            v: 1,
-            scope: 'primary_session',
-            status: 'failed',
-            code: isProviderCapacity ? 'provider_status_error' : 'usage_limit',
-            source: isProviderCapacity ? 'provider_status_error' : 'usage_limit',
+        const issue = buildClaudeRateLimitRuntimeIssue({
+            details,
+            classification,
+            connectedService,
             occurredAt,
-            provider: 'claude',
-            sanitizedPreview: isProviderCapacity ? 'Provider reported an error' : 'Usage limit reached',
-            usageLimit: buildClaudeRuntimeIssueUsageLimit({
-                details,
-                connectedService,
-            }),
-        };
+        });
         await session.client.sessionTurnLifecycle?.failTurn?.({
             provider: 'claude',
             issue,
@@ -296,9 +348,10 @@ export async function surfaceClaudeRateLimitRuntimeIssue(
     // subject. Record it for BOTH the native identity and the selected member (mirroring Codex)
     // so the canonical quota row does not lag behind the background fetcher for group sessions.
     if (profileId) {
-        await notifyDaemonConnectedServiceQuotaSnapshot({
+        await claudeQuotaSnapshotDeliveryOutbox.enqueueAndFlush({
             sessionId: session.client.sessionId,
             serviceId: connectedServiceId,
+            groupId: classification.groupId ?? (selection?.kind === 'group' ? selection.groupId : null),
             snapshot: buildClaudeRuntimeQuotaSnapshot({
                 details,
                 fetchedAt: occurredAt,
@@ -341,7 +394,7 @@ function isSubagentScopedRuntimeAuthEvidence(error: unknown): boolean {
     return typeof parentToolUseId === 'string' && parentToolUseId.trim().length > 0;
 }
 
-export async function surfaceClaudeConnectedServiceRuntimeAuthFailure(
+export async function surfaceClaudeRuntimeAuthFailure(
     session: RuntimeIssueSession,
     error: unknown,
     logPrefix: string,
@@ -351,28 +404,30 @@ export async function surfaceClaudeConnectedServiceRuntimeAuthFailure(
         findConnectedServiceChildSelection(process.env, 'claude-subscription')
         ?? findConnectedServiceChildSelection(process.env, 'anthropic')
         ?? null;
-    if (!selection) return false;
 
     const classification = classifyClaudeConnectedServiceRuntimeAuthFailure({
         error,
-        selection,
+        selection: selection ?? undefined,
     });
     if (!classification) return false;
 
-    const issue: SessionRuntimeIssueV1 = {
-        v: 1,
-        scope: 'primary_session',
-        status: 'failed',
-        code: 'auth_error',
-        source: 'auth_error',
-        occurredAt: Date.now(),
+    const retryDecision = resolveClaudeRuntimeAuthRetryDecision(error);
+    if (retryDecision.action === 'await_provider_retry') {
+        return false;
+    }
+
+    const issue = classifyPrimarySessionRuntimeIssue({
         provider: 'claude',
-        sanitizedPreview: 'Authentication failed',
-    };
-    await session.client.sessionTurnLifecycle?.failTurn?.({
-        provider: 'claude',
-        issue,
+        cause: 'auth_error',
+        error,
     });
+    if (!selection) {
+        await session.client.sessionTurnLifecycle?.failTurn?.({
+            provider: 'claude',
+            issue,
+        });
+        return true;
+    }
 
     const recoveryReport = await reportConnectedServiceRuntimeAuthFailureToDaemon({
         sessionId: session.client.sessionId,
@@ -385,6 +440,13 @@ export async function surfaceClaudeConnectedServiceRuntimeAuthFailure(
         recoveryReport,
         classification,
         logPrefix,
+    });
+    if (connectedServiceRuntimeAuthRecoveryCanOwnTurnFailure(recoveryReport)) {
+        return true;
+    }
+    await session.client.sessionTurnLifecycle?.failTurn?.({
+        provider: 'claude',
+        issue,
     });
     return true;
 }

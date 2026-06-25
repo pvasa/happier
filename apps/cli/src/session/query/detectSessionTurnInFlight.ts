@@ -13,6 +13,16 @@ export type SessionTurnActivity = Readonly<{
     turnInFlight: boolean;
 }>;
 
+export class SessionTurnActivityUnavailableError extends Error {
+    readonly originalError: unknown;
+
+    constructor(originalError: unknown) {
+        super('Session transcript activity is unavailable');
+        this.name = 'SessionTurnActivityUnavailableError';
+        this.originalError = originalError;
+    }
+}
+
 type ProjectedTurnStatus = 'in_progress' | 'completed' | 'cancelled' | 'failed';
 
 const PROJECTED_TURN_STATUSES = new Set<string>(['in_progress', 'completed', 'cancelled', 'failed']);
@@ -66,7 +76,7 @@ export function detectSessionTurnActivityFromProjection(value: unknown): Session
     };
 }
 
-function isMemoryArtifactDecryptedRow(value: unknown): boolean {
+export function isMemoryArtifactDecryptedRow(value: unknown): boolean {
     const obj = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
     if (!obj) return false;
     const meta = obj.meta;
@@ -90,8 +100,8 @@ function tryDecryptTranscriptEnvelope(params: Readonly<{
             params.encryptionVariant,
             decodeBase64(params.content.c, 'base64'),
         );
-    } catch {
-        return null;
+    } catch (error) {
+        throw new SessionTurnActivityUnavailableError(error);
     }
 }
 
@@ -108,6 +118,7 @@ export async function detectSessionTurnActivity(params: Readonly<{
     encryptionVariant: 'legacy' | 'dataKey';
     afterSeqExclusive?: number;
     sessionProjection?: unknown;
+    transcriptFetchTimeoutMs?: number;
 }>): Promise<SessionTurnActivity> {
     const projectedActivity = detectSessionTurnActivityFromProjection(params.sessionProjection);
     if (projectedActivity) {
@@ -122,11 +133,17 @@ export async function detectSessionTurnActivity(params: Readonly<{
                     sessionId: params.sessionId,
                     afterSeq: Math.max(0, Math.trunc(params.afterSeqExclusive)),
                     limit: 20,
+                    ...(typeof params.transcriptFetchTimeoutMs === 'number'
+                        ? { timeoutMs: params.transcriptFetchTimeoutMs }
+                        : {}),
                 })
                 : await fetchEncryptedTranscriptPageLatest({
                     token: params.token,
                     sessionId: params.sessionId,
                     limit: 20,
+                    ...(typeof params.transcriptFetchTimeoutMs === 'number'
+                        ? { timeoutMs: params.transcriptFetchTimeoutMs }
+                        : {}),
                 });
         const orderedRows = [...rows].sort((a, b) => a.seq - b.seq);
 
@@ -167,12 +184,11 @@ export async function detectSessionTurnActivity(params: Readonly<{
             activeTaskInFlight,
             turnInFlight: activeTaskInFlight || pendingUserTurns > 0,
         };
-    } catch {
-        return {
-            pendingUserTurns: 0,
-            activeTaskInFlight: false,
-            turnInFlight: false,
-        };
+    } catch (error) {
+        if (error instanceof SessionTurnActivityUnavailableError) {
+            throw error;
+        }
+        throw new SessionTurnActivityUnavailableError(error);
     }
 }
 
@@ -184,6 +200,7 @@ export async function detectSessionTurnInFlight(params: Readonly<{
     encryptionVariant: 'legacy' | 'dataKey';
     afterSeqExclusive?: number;
     sessionProjection?: unknown;
+    transcriptFetchTimeoutMs?: number;
 }>): Promise<boolean> {
     const activity = await detectSessionTurnActivity(params);
     return activity.turnInFlight;

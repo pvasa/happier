@@ -1,7 +1,9 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { Platform, Pressable, View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
+import { COMPOSER_CONTENT_HORIZONTAL_INSET } from '@/components/sessions/agentInput/composerContentInset';
+import { GlassPanel } from '@/components/ui/glass/GlassPanel';
 import { Text } from '@/components/ui/text/Text';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import type { KeyboardShortcutHandlers } from '@/keyboard/runtime';
@@ -16,6 +18,9 @@ import { useTranscriptSelectionActions, useTranscriptSelectionState } from './Tr
 export type TranscriptSelectionToolbarMessage = TranscriptSelectableMessageText & Readonly<{ id: string }>;
 
 const TRANSCRIPT_SELECTION_COPY_FEEDBACK_MS = 1200;
+// Match the composer panel radius so the selection bar reads as one cohesive
+// glass stack with the agent input directly beneath it.
+const TRANSCRIPT_SELECTION_TOOLBAR_RADIUS = Platform.select({ default: 16, android: 20 });
 
 export function TranscriptSelectionToolbar(props: Readonly<{
     selectableMessagesInOrder: ReadonlyArray<TranscriptSelectionToolbarMessage>;
@@ -25,7 +30,6 @@ export function TranscriptSelectionToolbar(props: Readonly<{
     maxWidth?: number;
     onSendToSession?: (messages: ReadonlyArray<TranscriptSelectionToolbarMessage>) => void | Promise<void>;
 }>): React.ReactElement | null {
-    const { theme } = useUnistyles();
     const state = useTranscriptSelectionState();
     const actions = useTranscriptSelectionActions();
     const [busyAction, setBusyAction] = React.useState<'copy' | 'send' | null>(null);
@@ -97,54 +101,56 @@ export function TranscriptSelectionToolbar(props: Readonly<{
 
     if (!state.isSelectionMode) return null;
 
+    const hasMaxWidth = typeof props.maxWidth === 'number' && Number.isFinite(props.maxWidth);
+
     return (
-        <View
-            testID="transcript-selection-toolbar"
-            accessibilityLiveRegion="polite"
-            style={[
-                styles.container,
-                typeof props.maxWidth === 'number' && Number.isFinite(props.maxWidth) ? { width: '100%' as const, maxWidth: props.maxWidth, alignSelf: 'center' as const } : null,
-                { borderColor: theme.colors.border.default },
-            ]}
-        >
-            <View style={styles.statusTextGroup}>
-                <Text testID="transcript-selection-toolbar-count" style={styles.countText}>
-                    {t('transcript.selection.selectedCount', { count: state.count })}
-                </Text>
-                {copySucceeded ? (
-                    <Text testID="transcript-selection-copy-feedback" style={styles.feedbackText}>
-                        {t('transcript.selection.copySuccess')}
-                    </Text>
-                ) : null}
-            </View>
-            <View style={styles.actions}>
-                <ToolbarButton
-                    testID="transcript-selection-copy"
-                    label={t('transcript.selection.copy')}
-                    accessibilityLabel={t('transcript.selection.copyA11y', { count: state.count })}
-                    disabled={selectedMessages.length === 0 || busyAction != null}
-                    onPress={handleCopy}
-                />
-                {props.sendToSessionEnabled && props.onSendToSession ? (
-                    <ToolbarButton
-                        testID="transcript-selection-send"
-                        label={t('transcript.selection.send')}
-                        accessibilityLabel={t('transcript.selection.sendA11y', { count: state.count })}
-                        disabled={selectedMessages.length === 0 || busyAction != null}
-                        onPress={handleSend}
-                    />
-                ) : null}
-                <ToolbarButton
-                    testID="transcript-selection-select-all"
-                    label={t('transcript.selection.selectAll')}
-                    onPress={() => actions.selectAll(props.selectableMessagesInOrder.map((message) => message.id))}
-                />
-                <ToolbarButton
-                    testID="transcript-selection-cancel"
-                    label={t('transcript.selection.cancel')}
-                    accessibilityLabel={t('transcript.selection.exitA11y')}
-                    onPress={actions.exit}
-                />
+        <View style={[styles.outer, { paddingHorizontal: COMPOSER_CONTENT_HORIZONTAL_INSET }]}>
+            <View
+                testID="transcript-selection-toolbar"
+                accessibilityLiveRegion="polite"
+                style={[styles.sizer, hasMaxWidth ? { maxWidth: props.maxWidth } : null]}
+            >
+                <GlassPanel radius={TRANSCRIPT_SELECTION_TOOLBAR_RADIUS} shadowLevel={3} style={styles.panel}>
+                    <View style={styles.statusTextGroup}>
+                        <Text testID="transcript-selection-toolbar-count" style={styles.countText}>
+                            {t('transcript.selection.selectedCount', { count: state.count })}
+                        </Text>
+                        {copySucceeded ? (
+                            <Text testID="transcript-selection-copy-feedback" style={styles.feedbackText}>
+                                {t('transcript.selection.copySuccess')}
+                            </Text>
+                        ) : null}
+                    </View>
+                    <View style={styles.actions}>
+                        <ToolbarButton
+                            testID="transcript-selection-copy"
+                            label={t('transcript.selection.copy')}
+                            accessibilityLabel={t('transcript.selection.copyA11y', { count: state.count })}
+                            disabled={selectedMessages.length === 0 || busyAction != null}
+                            onPress={handleCopy}
+                        />
+                        {props.sendToSessionEnabled && props.onSendToSession ? (
+                            <ToolbarButton
+                                testID="transcript-selection-send"
+                                label={t('transcript.selection.send')}
+                                accessibilityLabel={t('transcript.selection.sendA11y', { count: state.count })}
+                                disabled={selectedMessages.length === 0 || busyAction != null}
+                                onPress={handleSend}
+                            />
+                        ) : null}
+                        <ToolbarButton
+                            testID="transcript-selection-select-all"
+                            label={t('transcript.selection.selectAll')}
+                            onPress={() => actions.selectAll(props.selectableMessagesInOrder.map((message) => message.id))}
+                        />
+                        <ToolbarButton
+                            testID="transcript-selection-cancel"
+                            label={t('transcript.selection.cancel')}
+                            accessibilityLabel={t('transcript.selection.exitA11y')}
+                            onPress={actions.exit}
+                        />
+                    </View>
+                </GlassPanel>
             </View>
         </View>
     );
@@ -173,16 +179,25 @@ function ToolbarButton(props: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
-    container: {
+    // Full-width band that insets the bar from the screen edges; centers the
+    // capped-width surface so it lines up with the composer beneath it.
+    outer: {
+        width: '100%',
+        alignItems: 'center',
+    },
+    // Stretches to the inset content width but caps at the transcript max width
+    // (web/desktop) — the same constraint the composer's inner container uses.
+    sizer: {
+        width: '100%',
+    },
+    // Inner layout for the glass surface (GlassPanel owns the material/rim/shadow).
+    panel: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 12,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderRadius: 14,
-        paddingHorizontal: 12,
+        paddingHorizontal: 14,
         paddingVertical: 10,
-        backgroundColor: theme.colors.surface.elevated,
     },
     statusTextGroup: {
         gap: 2,

@@ -19,6 +19,7 @@ export async function promoteVersionedPayload(params: Readonly<{
   componentId: FirstPartyComponentId;
   versionId: string;
   stagedPayloadPath: string;
+  stagedPayloadAlreadyFiltered?: boolean;
   channel?: PublicReleaseRingId;
   releaseRing?: PublicReleaseRingId;
   processEnv?: NodeJS.ProcessEnv;
@@ -46,6 +47,7 @@ export async function promoteVersionedPayload(params: Readonly<{
     sourcePath: params.stagedPayloadPath,
     destinationPath: versionPath,
     consumeSourcePath: true,
+    sourcePathAlreadyFiltered: params.stagedPayloadAlreadyFiltered === true,
   });
 
   let nextPreviousVersionId = previousVersionId;

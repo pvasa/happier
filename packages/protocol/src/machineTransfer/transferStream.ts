@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { readCanonicalPaddedBase64DecodedLength } from '../crypto/base64.js';
+
 const MAX_TRANSFER_ID_LENGTH = 512;
 const MAX_TRANSFER_MANIFEST_HASH_LENGTH = 256;
 const MAX_TRANSFER_ENDPOINT_URL_LENGTH = 2048;
@@ -16,15 +18,18 @@ const MAX_TRANSFER_PUBLIC_KEY_BASE64_LENGTH = 256;
 // accidental unbounded JSON bodies.
 const MAX_TRANSFER_CHUNK_PAYLOAD_BASE64_LENGTH = 16 * 1024 * 1024;
 
-const BASE64_REGEX =
-  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-
 function boundedString(maxLength: number): z.ZodString {
   return z.string().min(1).max(maxLength);
 }
 
-function boundedBase64String(maxLength: number): z.ZodString {
-  return boundedString(maxLength).regex(BASE64_REGEX, { message: 'Invalid base64 payload' });
+function boundedBase64String(maxLength: number) {
+  return boundedString(maxLength).superRefine((value, context) => {
+    if (readCanonicalPaddedBase64DecodedLength(value) !== null) return;
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Invalid base64 payload',
+    });
+  });
 }
 
 const TransferUrlEndpointCandidateSchema = z

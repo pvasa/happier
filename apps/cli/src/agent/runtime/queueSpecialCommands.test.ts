@@ -17,7 +17,11 @@ describe('pushMessageToQueueWithSpecialCommands', () => {
     });
 
     expect(queue.push).not.toHaveBeenCalled();
-    expect(queue.pushIsolateAndClear).toHaveBeenCalledWith('/clear', { permissionMode: 'default' }, { userMessageSeq: null });
+    expect(queue.pushIsolateAndClear).toHaveBeenCalledWith('/clear', { permissionMode: 'default' }, {
+      userMessageSeq: null,
+      userMessageLocalId: null,
+      userMessageLocalIds: null,
+    });
   });
 
   it('pushes non-special text normally', () => {
@@ -34,10 +38,14 @@ describe('pushMessageToQueueWithSpecialCommands', () => {
     });
 
     expect(queue.pushIsolateAndClear).not.toHaveBeenCalled();
-    expect(queue.push).toHaveBeenCalledWith('hello', { permissionMode: 'default' }, { userMessageSeq: null });
+    expect(queue.push).toHaveBeenCalledWith('hello', { permissionMode: 'default' }, {
+      userMessageSeq: null,
+      userMessageLocalId: null,
+      userMessageLocalIds: null,
+    });
   });
 
-  it('preserves user message seq attribution for normal and clear commands', () => {
+  it('preserves user message delivery attribution for normal and clear commands', () => {
     const queue = {
       push: vi.fn(),
       pushIsolateAndClear: vi.fn(),
@@ -49,6 +57,7 @@ describe('pushMessageToQueueWithSpecialCommands', () => {
       text: 'hello',
       mode: { permissionMode: 'default' },
       userMessageSeq: 41,
+      userMessageLocalId: 'l41',
     });
     pushMessageToQueueWithSpecialCommands({
       queue,
@@ -56,9 +65,18 @@ describe('pushMessageToQueueWithSpecialCommands', () => {
       text: '/clear',
       mode: { permissionMode: 'default' },
       userMessageSeq: 42,
+      userMessageLocalIds: ['l42'],
     });
 
-    expect(queue.push).toHaveBeenCalledWith('hello', { permissionMode: 'default' }, { userMessageSeq: 41 });
-    expect(queue.pushIsolateAndClear).toHaveBeenCalledWith('/clear', { permissionMode: 'default' }, { userMessageSeq: 42 });
+    expect(queue.push).toHaveBeenCalledWith('hello', { permissionMode: 'default' }, {
+      userMessageSeq: 41,
+      userMessageLocalId: 'l41',
+      userMessageLocalIds: null,
+    });
+    expect(queue.pushIsolateAndClear).toHaveBeenCalledWith('/clear', { permissionMode: 'default' }, {
+      userMessageSeq: 42,
+      userMessageLocalId: null,
+      userMessageLocalIds: ['l42'],
+    });
   });
 });

@@ -8,10 +8,11 @@ import { claudeUnifiedTerminalLauncher } from './unifiedTerminal/claudeUnifiedTe
 import type { JsRuntime } from "./runClaude"
 import type { PushNotificationClient } from "@/api/pushNotifications"
 import type { AccountSettings } from '@happier-dev/protocol';
-import type { ClaudeUnifiedTerminalHost } from '@happier-dev/agents';
+import type { ClaudeUnifiedTerminalHost, ClaudeUnifiedTerminalResumeChoice } from '@happier-dev/agents';
 import type { McpServerConfig } from '@/agent';
 import type { TerminalRuntimeFlags } from '@/terminal/runtime/terminalRuntimeFlags';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
+import { installClaudeProviderOwnedUserMessageEchoClassifier } from './utils/claudeProviderOwnedUserMessageEcho';
 
 // Re-export permission mode type from api/types
 // Single unified type with 7 modes - Codex modes mapped at SDK boundary
@@ -57,6 +58,7 @@ export interface EnhancedMode {
     claudeRemoteAgentSdkEnabled?: boolean;
     claudeUnifiedTerminalEnabled?: boolean;
     claudeUnifiedTerminalHost?: ClaudeUnifiedTerminalHost;
+    claudeUnifiedTerminalResumeChoice?: ClaudeUnifiedTerminalResumeChoice;
     claudeRemoteSettingSourcesV2?: ReadonlyArray<'user' | 'project' | 'local'>;
     claudeRemoteSettingSources?: 'project' | 'user_project' | 'none';
     claudeCodeExperimentalAgentTeamsEnabled?: boolean;
@@ -117,6 +119,8 @@ interface LoopOptions {
 }
 
 export async function loop(opts: LoopOptions): Promise<number> {
+
+    installClaudeProviderOwnedUserMessageEchoClassifier(opts.session);
 
     // Get log path for debug display
     const logPath = logger.logFilePath;

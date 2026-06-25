@@ -11,7 +11,7 @@ describe('shouldUseInFlightSteer', () => {
                 canSteerPrompt: () => true,
             },
             didChangePermissionMode: false,
-            isSpecialCommand: false,
+            isPromptNonSteerable: false,
         })).toBe(true);
     });
 
@@ -23,7 +23,7 @@ describe('shouldUseInFlightSteer', () => {
                 canSteerPrompt: () => false,
             },
             didChangePermissionMode: false,
-            isSpecialCommand: false,
+            isPromptNonSteerable: false,
         })).toBe(false);
     });
 
@@ -34,7 +34,7 @@ describe('shouldUseInFlightSteer', () => {
                 isTurnInFlight: () => true,
             },
             didChangePermissionMode: false,
-            isSpecialCommand: false,
+            isPromptNonSteerable: false,
         })).toBe(true);
     });
 
@@ -46,7 +46,19 @@ describe('shouldUseInFlightSteer', () => {
                 canSteerPrompt: () => true,
             },
             didChangePermissionMode: true,
-            isSpecialCommand: false,
+            isPromptNonSteerable: false,
+        })).toBe(false);
+    });
+
+    it('blocks only prompts classified as non-steerable by the shared payload policy', () => {
+        expect(shouldUseInFlightSteer({
+            runtime: {
+                supportsInFlightSteer: () => true,
+                isTurnInFlight: () => true,
+                canSteerPrompt: () => true,
+            },
+            didChangePermissionMode: false,
+            isPromptNonSteerable: true,
         })).toBe(false);
     });
 });

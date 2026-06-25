@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
@@ -10,6 +10,11 @@ import { t } from '@/text';
 import { resolveConnectedServiceUxDiagnosticPresentation } from '@/components/sessions/connectedServices/diagnostics/connectedServiceUxDiagnostics';
 import { useSettings } from '@/sync/store/hooks';
 import { buildConnectedServiceAccountSwitchMessage } from './connectedServiceAccountSwitchMessage';
+import {
+    isTerminalComposerDraftBlockedEvent,
+    readTerminalComposerDraftBlockedStateAtMs,
+} from '@/components/sessions/terminalComposer/terminalComposerDraftBlockedEvent';
+import { useTerminalComposerClearAction } from '@/components/sessions/terminalComposer/useTerminalComposerClearAction';
 
 const EVENT_ICON_SIZE = 18;
 const EVENT_SPINNER_SIZE = 20;
@@ -63,6 +68,12 @@ function formatConnectedServiceSwitchAttemptFailureText(event: Extract<AgentEven
 
 function formatConnectedServiceSwitchAttemptSuccessText(event: Extract<AgentEvent, { type: 'connected-service-account-switch-attempt' }>): string {
     const outcomeAction = event.outcomeAction;
+    if (outcomeAction === 'hot_applied' || (!outcomeAction && event.action === 'hot_applied')) {
+        return t('connectedServices.authSwitch.status.liveApplied');
+    }
+    if (outcomeAction === 'credential_refreshed' || event.attemptedContinuityMode === 'credential_refresh') {
+        return t('connectedServices.authSwitch.status.credentialsRefreshed');
+    }
     if (outcomeAction === 'restarted' || (!outcomeAction && event.action === 'restart_requested')) {
         return t('connectedServices.authSwitch.status.restarting');
     }
@@ -212,11 +223,61 @@ function formatRuntimeConfigOutcomeSessionModeChange(changes: RuntimeConfigOutco
         : label;
 }
 
+const TerminalComposerClearActionButton = React.memo(function TerminalComposerClearActionButton(props: {
+    sessionId: string;
+    expectedStateAtMs: number | null;
+}) {
+    const { theme } = useUnistyles();
+    const terminalComposerClear = useTerminalComposerClearAction(props.sessionId);
+
+    return (
+        <Pressable
+            testID="transcriptEvent.clearTerminalComposer"
+            accessibilityRole="button"
+            accessibilityLabel={t('session.pendingMessages.clearTerminalComposer.action')}
+            accessibilityState={{
+                disabled: terminalComposerClear.busy,
+                busy: terminalComposerClear.busy,
+            }}
+            disabled={terminalComposerClear.busy}
+            onPress={() => {
+                void terminalComposerClear.clearTerminalComposer({
+                    expectedStateAtMs: props.expectedStateAtMs,
+                });
+            }}
+            style={({ pressed }) => ([
+                styles.action,
+                {
+                    borderColor: theme.colors.border.default,
+                    backgroundColor: pressed ? theme.colors.surface.pressedOverlay : theme.colors.surface.base,
+                    opacity: terminalComposerClear.busy ? 0.7 : 1,
+                },
+            ])}
+        >
+            {terminalComposerClear.busy ? (
+                <ActivitySpinner
+                    testID="transcriptEvent.clearTerminalComposerSpinner"
+                    size={10}
+                    color={theme.colors.text.secondary}
+                />
+            ) : (
+                <Ionicons name="backspace-outline" size={12} color={theme.colors.text.secondary} />
+            )}
+            <Text style={[styles.actionText, { color: theme.colors.text.secondary }]}>
+                {t('session.pendingMessages.clearTerminalComposer.action')}
+            </Text>
+        </Pressable>
+    );
+});
+
 export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: {
     event: AgentEvent;
+    sessionId?: string | null;
 }) {
     const { theme } = useUnistyles();
     const settings = useSettings();
+    const isTerminalComposerDraftBlocked = isTerminalComposerDraftBlockedEvent(props.event);
+    const terminalComposerDraftBlockedStateAtMs = readTerminalComposerDraftBlockedStateAtMs(props.event);
     let iconName: React.ComponentProps<typeof Ionicons>['name'] = 'information-circle-outline';
     let text = formatUnknownEventDetails(props.event);
     let detailText: string | undefined;
@@ -229,6 +290,10 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     } else if (props.event.type === 'message') {
         iconName = 'information-circle-outline';
         text = props.event.message;
+    } else if (props.event.type === 'terminal-composer-draft-blocked') {
+        testID = 'transcript-event-terminal-composer-draft-blocked';
+        iconName = 'pause-circle-outline';
+        text = props.event.message ?? t('session.pendingMessages.steerBlockedTerminalDraftNotice');
     } else if (props.event.type === 'runtime-config-outcome') {
         testID = `transcript-event-runtime-config-outcome-${props.event.status}`;
         const pendingTiming = isPendingRuntimeConfigOutcomeTiming(props.event.timing);
@@ -358,6 +423,12 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
                             {detailText}
                         </Text>
                     ) : null}
+                    {props.sessionId && isTerminalComposerDraftBlocked ? (
+                        <TerminalComposerClearActionButton
+                            sessionId={props.sessionId}
+                            expectedStateAtMs={terminalComposerDraftBlockedStateAtMs}
+                        />
+                    ) : null}
                 </View>
             </View>
         </>
@@ -410,5 +481,21 @@ const styles = StyleSheet.create((theme) => ({
         lineHeight: 18,
         fontWeight: '500',
         flexShrink: 1,
+    },
+    action: {
+        alignSelf: 'flex-start',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        borderWidth: 1,
+        borderRadius: 6,
+        paddingHorizontal: 7,
+        paddingVertical: 3,
+        marginTop: 5,
+    },
+    actionText: {
+        fontSize: 12,
+        lineHeight: 16,
+        fontWeight: '600',
     },
 }));

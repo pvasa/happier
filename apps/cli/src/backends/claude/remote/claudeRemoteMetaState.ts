@@ -1,9 +1,15 @@
-import { CLAUDE_UNIFIED_TERMINAL_HOSTS, type ClaudeUnifiedTerminalHost } from '@happier-dev/agents';
+import {
+    CLAUDE_UNIFIED_TERMINAL_HOSTS,
+    CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES,
+    type ClaudeUnifiedTerminalHost,
+    type ClaudeUnifiedTerminalResumeChoice,
+} from '@happier-dev/agents';
 
 export type ClaudeRemoteMetaState = Readonly<{
     claudeRemoteAgentSdkEnabled: boolean;
     claudeUnifiedTerminalEnabled: boolean;
     claudeUnifiedTerminalHost: ClaudeUnifiedTerminalHost;
+    claudeUnifiedTerminalResumeChoice: ClaudeUnifiedTerminalResumeChoice;
     /**
      * v2 multi-select representation of Claude Code setting sources.
      *
@@ -38,6 +44,10 @@ function isClaudeUnifiedTerminalHost(value: string): value is ClaudeUnifiedTermi
     return (CLAUDE_UNIFIED_TERMINAL_HOSTS as readonly string[]).includes(value);
 }
 
+function isClaudeUnifiedTerminalResumeChoice(value: string): value is ClaudeUnifiedTerminalResumeChoice {
+    return (CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES as readonly string[]).includes(value);
+}
+
 function normalizeSettingSourcesV2(raw: unknown): ('user' | 'project' | 'local')[] | null {
     if (!Array.isArray(raw)) return null;
     const set = new Set<string>();
@@ -70,6 +80,7 @@ export const DEFAULT_CLAUDE_REMOTE_META_STATE: ClaudeRemoteMetaState = Object.fr
     claudeRemoteAgentSdkEnabled: true,
     claudeUnifiedTerminalEnabled: false,
     claudeUnifiedTerminalHost: 'auto',
+    claudeUnifiedTerminalResumeChoice: 'ask_every_time',
     claudeRemoteSettingSourcesV2: ['user', 'project', 'local'] as const,
     // Default to loading BOTH user + project settings so Claude Code can see the user's
     // globally configured MCP servers (and other preferences) when launched by Happier.
@@ -113,6 +124,13 @@ export function applyClaudeRemoteMetaState(prev: ClaudeRemoteMetaState, meta: un
         const value = record.claudeUnifiedTerminalHost;
         if (isClaudeUnifiedTerminalHost(value)) {
             next.claudeUnifiedTerminalHost = value;
+        }
+    }
+
+    if (typeof record.claudeUnifiedTerminalResumeChoice === 'string') {
+        const value = record.claudeUnifiedTerminalResumeChoice;
+        if (isClaudeUnifiedTerminalResumeChoice(value)) {
+            next.claudeUnifiedTerminalResumeChoice = value;
         }
     }
 

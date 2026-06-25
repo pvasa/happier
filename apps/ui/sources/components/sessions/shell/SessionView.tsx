@@ -2,6 +2,7 @@ import Color from 'color';
 
 import { AgentContentView } from '@/components/sessions/transcript/AgentContentView';
 import { AgentInput, type AgentInputAutocompleteSelectionHandler, type AgentInputSendOptions } from '@/components/sessions/agentInput';
+import { COMPOSER_CONTENT_HORIZONTAL_INSET } from '@/components/sessions/agentInput/composerContentInset';
 import {
     computeExistingSessionComposerInputMaxHeight,
     computeExistingSessionComposerPanelMaxHeight,
@@ -66,7 +67,7 @@ import { useWarmRepositoryDirectoryCacheOnSessionOpen } from '@/hooks/session/fi
 import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { continueSessionWithReplay, sessionAbort, resumeSession } from '@/sync/ops';
-import { storage, useActiveServerAccountScope, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLaunchSelectionMachines, useLocalSetting, useProfile, useRealtimeStatus, useSessionConnectedServiceAccountSwitchEvents, useSessionMessages, useSessionPendingMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionUsage, useSessionVisibleReadSeq, useSetting, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
+import { storage, useActiveServerAccountScope, useEndpointConnectivity, useIsDataReady, useLaunchSelectionMachines, useLocalSetting, useOpenApprovalArtifactsForSession, useProfile, useRealtimeStatus, useSessionAutomationsEnabledCount, useSessionConnectedServiceAccountSwitchEvents, useSessionMessages, useSessionPendingMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionUsage, useSessionVisibleReadSeq, useSetting, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import { canContinueSessionWithFreshSpawn, canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
 import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor, buildResumeSessionExtrasFromUiState } from '@/agents/catalog/catalog';
 import {
@@ -117,7 +118,7 @@ import { tracking, trackMessageSent } from '@/track';
 import { isRunningOnMac } from '@/utils/platform/platform';
 import { randomUUID } from '@/platform/randomUUID';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/platform/responsive';
-import { getSessionAvatarId, getSessionName, listPendingAgentInputRequests, shouldReadTranscriptForPendingRequests, shouldShowAbortButtonForSessionState, useSessionStatus, type PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
+import { getSessionAvatarId, getSessionName, listPendingPermissionRequests, shouldReadTranscriptForPendingRequests, shouldShowAbortButtonForSessionState, useSessionStatus, type PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 import { isVersionSupported, MINIMUM_CLI_VERSION } from '@/utils/system/versionUtils';
@@ -199,7 +200,6 @@ import { resolveVoiceSessionComposerRouting } from '@/voice/sessionBinding/voice
 import { sendVoiceSessionComposerText } from '@/voice/sessionBinding/sendVoiceSessionComposerText';
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
-import { countEnabledAutomationsLinkedToSession } from '@/sync/domains/automations/automationSessionLink';
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { executeSessionComposerResolution } from '@/sync/domains/input/slashCommands/executeSessionComposerResolution';
@@ -249,7 +249,6 @@ import {
 } from '@/components/sessions/connectedServices/actions/resolveConnectedServiceProfileActionRoute';
 import { resolveConnectedServiceUxDiagnosticPresentation } from '@/components/sessions/connectedServices/diagnostics/connectedServiceUxDiagnostics';
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
-import { listOpenApprovalArtifactsForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 import { useAuth } from '@/auth/context/AuthContext';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
@@ -262,6 +261,9 @@ import {
     SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
     SessionUsageLimitRecoveryV1Schema,
     readSessionContinuationRecoveryFromMetadata,
+    type ConnectedServiceQuotaRecoveryCreditsV1,
+    type ConnectedServiceQuotaSnapshotV1,
+    type SessionRuntimeIssueV1,
     type SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
 import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
@@ -296,11 +298,13 @@ import {
 import { handleReadyUsageLimitRecoveryResult } from '@/components/sessions/usageLimitRecovery/sessionUsageLimitRecoveryReadyResult';
 import {
     sessionUsageLimitCheckNow,
+    sessionUsageLimitConsumeResetCredit,
     sessionUsageLimitSwitchAccountNow,
     sessionUsageLimitWaitResumeCancel,
     sessionUsageLimitWaitResumeEnable,
     type SessionUsageLimitRecoveryOperationResult,
 } from '@/sync/ops/sessionUsageLimitRecovery';
+import { connectedServiceQuotaRecoveryCreditConsume } from '@/sync/ops/connectedServiceQuotaRecoveryCredits';
 
 const sessionSubmitPort = createSyncBackedSubmitPort(sync);
 const SESSION_COMPOSER_AUTOCOMPLETE_PREFIXES: string[] = ['@', '/', '$'];
@@ -416,6 +420,51 @@ function readSessionUsageLimitRecovery(metadata: unknown): SessionUsageLimitReco
     const raw = (metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY];
     const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(raw);
     return parsed.success ? parsed.data : null;
+}
+
+function resolveUsageLimitRecoveryQuotaProfileRef(params: Readonly<{
+    recovery: SessionUsageLimitRecoveryV1 | null | undefined;
+    issue: SessionRuntimeIssueV1 | null | undefined;
+}>): Readonly<{ serviceId: string; profileId: string }> | null {
+    const selectedAuth = params.recovery?.selectedAuth;
+    if (selectedAuth?.kind === 'profile') {
+        return { serviceId: selectedAuth.serviceId, profileId: selectedAuth.profileId };
+    }
+    if (selectedAuth?.kind === 'group' && selectedAuth.profileId) {
+        return { serviceId: selectedAuth.serviceId, profileId: selectedAuth.profileId };
+    }
+
+    const connectedService = params.issue?.usageLimit?.connectedService;
+    if (connectedService?.serviceId && connectedService.profileId) {
+        return {
+            serviceId: connectedService.serviceId,
+            profileId: connectedService.profileId,
+        };
+    }
+    return null;
+}
+
+type ConnectedServiceQuotaSnapshotOverride = Readonly<{
+    key: string;
+    snapshot: ConnectedServiceQuotaSnapshotV1;
+}>;
+
+function selectConnectedServiceQuotaSnapshotWithOverride(params: Readonly<{
+    profileKey: string | null;
+    polledSnapshot: ConnectedServiceQuotaSnapshotV1 | null;
+    override: ConnectedServiceQuotaSnapshotOverride | null;
+}>): ConnectedServiceQuotaSnapshotV1 | null {
+    if (
+        params.profileKey
+        && params.override?.key === params.profileKey
+        && (
+            !params.polledSnapshot
+            || params.override.snapshot.fetchedAt >= params.polledSnapshot.fetchedAt
+        )
+    ) {
+        return params.override.snapshot;
+    }
+    return params.polledSnapshot;
 }
 
 function hasContinuationRecoveryWorkToResume(metadata: unknown): boolean {
@@ -560,7 +609,8 @@ function isUsageLimitRecoverySwitchAction(kind: SessionUsageLimitRecoveryActionK
 
 function isUsageLimitRecoveryControlAction(kind: SessionUsageLimitRecoveryActionKind): boolean {
     return isUsageLimitRecoveryCheckAction(kind)
-        || isUsageLimitRecoverySwitchAction(kind);
+        || isUsageLimitRecoverySwitchAction(kind)
+        || kind === 'consume_reset_credit';
 }
 
 function SessionAuthRecoveryBanner({ message, style }: Readonly<{
@@ -1034,6 +1084,7 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
         <AgentInput
             {...agentInputProps}
             sessionId={sessionId}
+            contentPaddingHorizontal={COMPOSER_CONTENT_HORIZONTAL_INSET}
             inputMaxHeight={inputMaxHeight}
             inputExpansion={inputExpansion}
             inputPersistence={inputComposerPersistence.inputPersistence}
@@ -1047,7 +1098,7 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
 
 type SessionAgentInputWithUsageAndRequestsProps = Omit<
     SessionAgentInputWithUsageProps,
-    'permissionRequests' | 'userActionRequests'
+    'permissionRequests'
 > & {
     session: Session;
 };
@@ -1058,18 +1109,16 @@ const SessionAgentInputWithUsageAndRequests = React.memo(function SessionAgentIn
 }: SessionAgentInputWithUsageAndRequestsProps) {
     const shouldReadTranscript = shouldReadTranscriptForPendingRequests(session);
     const { messages: committedMessages } = useSessionMessages(props.sessionId, { enabled: shouldReadTranscript });
-    const pendingRequests = React.useMemo(
-        () => listPendingAgentInputRequests(session, shouldReadTranscript ? committedMessages : undefined),
+    const pendingPermissionRequests = React.useMemo(
+        () => listPendingPermissionRequests(session, shouldReadTranscript ? committedMessages : undefined),
         [committedMessages, session, shouldReadTranscript],
     );
-    const pendingPermissionRequests = useStableAgentInputRequests(pendingRequests.permissionRequests);
-    const pendingUserActionRequests = useStableAgentInputRequests(pendingRequests.userActionRequests);
+    const stablePendingPermissionRequests = useStableAgentInputRequests(pendingPermissionRequests);
 
     return (
         <SessionAgentInputWithUsage
             {...props}
-            permissionRequests={pendingPermissionRequests}
-            userActionRequests={pendingUserActionRequests}
+            permissionRequests={stablePendingPermissionRequests}
         />
     );
 });
@@ -1203,7 +1252,6 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const stableSessionForHeader = session;
     const isDataReady = useIsDataReady();
     const { theme } = useUnistyles();
-    const automations = useAutomations();
     const explicitRouteServerId = (routeHydrationState?.serverId ?? props.routeServerId ?? '').trim();
     const currentSessionRouteServerId =
         explicitRouteServerId
@@ -1320,10 +1368,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
             forgetSessionViewContentWidthSurface(contentWidthSurfaceId);
         };
     }, [contentWidthSurfaceId]);
-    const sessionAutomationsEnabledCount = React.useMemo(() => {
-        if (!showAutomations) return 0;
-        return countEnabledAutomationsLinkedToSession(automations, sessionId);
-    }, [automations, sessionId, showAutomations]);
+    const sessionAutomationsEnabledCount = useSessionAutomationsEnabledCount(sessionId, showAutomations);
 
     const constrainHeaderWidth = !(multiPaneEnabled
         && Platform.OS === 'web'
@@ -1941,8 +1986,8 @@ function SessionViewLoaded({
     surfaceFocused,
     routeHydrationPending,
 }: SessionViewLoadedProps) {
-    const artifacts = useArtifacts();
     const { theme } = useUnistyles();
+    const sessionRuntimeStatusSource = useSessionRuntimeStatusSource(session);
     const applyLocalSettings = useApplyLocalSettings();
     const router = useRouter();
     const pathname = usePathname();
@@ -1983,6 +2028,42 @@ function SessionViewLoaded({
         () => readSessionUsageLimitRecovery(session.metadata),
         [session.metadata],
     );
+    const usageLimitRecoveryQuotaProfileRef = React.useMemo(() => resolveUsageLimitRecoveryQuotaProfileRef({
+        recovery: usageLimitRecovery,
+        issue: session.lastRuntimeIssue ?? null,
+    }), [session.lastRuntimeIssue, usageLimitRecovery]);
+    const [connectedServiceQuotaSnapshotOverride, setConnectedServiceQuotaSnapshotOverride] =
+        React.useState<ConnectedServiceQuotaSnapshotOverride | null>(null);
+    const usageLimitRecoveryQuotaSnapshotsByKey = useConnectedServiceQuotaSnapshots(
+        usageLimitRecoveryQuotaProfileRef ? [usageLimitRecoveryQuotaProfileRef] : [],
+    );
+    const usageLimitRecoveryQuotaProfileKey = usageLimitRecoveryQuotaProfileRef
+        ? connectedServiceProfileKey(usageLimitRecoveryQuotaProfileRef)
+        : null;
+    const usageLimitRecoveryQuotaPolledSnapshot = usageLimitRecoveryQuotaProfileKey
+        ? usageLimitRecoveryQuotaSnapshotsByKey[usageLimitRecoveryQuotaProfileKey] ?? null
+        : null;
+    const usageLimitRecoveryQuotaSnapshot = selectConnectedServiceQuotaSnapshotWithOverride({
+        profileKey: usageLimitRecoveryQuotaProfileKey,
+        polledSnapshot: usageLimitRecoveryQuotaPolledSnapshot,
+        override: connectedServiceQuotaSnapshotOverride,
+    });
+    React.useEffect(() => {
+        if (!connectedServiceQuotaSnapshotOverride || connectedServiceQuotaSnapshotOverride.key !== usageLimitRecoveryQuotaProfileKey) return;
+        if (!usageLimitRecoveryQuotaPolledSnapshot) return;
+        if (usageLimitRecoveryQuotaPolledSnapshot.fetchedAt >= connectedServiceQuotaSnapshotOverride.snapshot.fetchedAt) {
+            setConnectedServiceQuotaSnapshotOverride(null);
+        }
+    }, [
+        connectedServiceQuotaSnapshotOverride,
+        usageLimitRecoveryQuotaPolledSnapshot,
+        usageLimitRecoveryQuotaProfileKey,
+    ]);
+    const usageLimitRecoveryCredits = React.useMemo<ConnectedServiceQuotaRecoveryCreditsV1 | null>(() => (
+        usageLimitRecoveryQuotaSnapshot
+            ? usageLimitRecoveryQuotaSnapshot.recoveryCredits ?? null
+            : usageLimitRecovery?.recoveryCredits ?? null
+    ), [usageLimitRecovery?.recoveryCredits, usageLimitRecoveryQuotaSnapshot]);
     const usageLimitRecoveryResetAtMs = React.useMemo(() => readUsageLimitRecoveryResetAtMs({
         issue: session.lastRuntimeIssue ?? null,
         recovery: usageLimitRecovery,
@@ -2109,6 +2190,10 @@ function SessionViewLoaded({
         [sessionWorkStateSnapshot],
     );
     const [activeStatusBadgeKey, setActiveStatusBadgeKey] = React.useState<string | null>(null);
+    const [
+        collapsedUsageLimitRecoveryIssueFingerprint,
+        setCollapsedUsageLimitRecoveryIssueFingerprint,
+    ] = React.useState<string | null>(null);
     const sessionModeOptionIds = React.useMemo(() => {
         const modeState =
             (session.metadata as any)?.sessionModesV1
@@ -2212,27 +2297,31 @@ function SessionViewLoaded({
                 return t(key, { time: params?.time ?? '' });
             case 'session.usageLimitRecovery.statusWaitingUntil':
                 return t(key, { time: params?.time ?? '' });
+            case 'session.usageLimitRecovery.resetCreditBody':
+                return t(key, { count: params?.count ?? 0 });
+            case 'session.usageLimitRecovery.resetCreditExpiresBody':
+                return t(key, { count: params?.count ?? 0, time: params?.time ?? '' });
             default:
                 return t(key);
         }
     }, []);
     const usageLimitRuntimeState = React.useMemo(() => {
-        const pendingFlags = derivePendingRequestFlagsFromSession(session);
+        const pendingFlags = derivePendingRequestFlagsFromSession(sessionRuntimeStatusSource);
         return deriveSessionRuntimePresentationState({
-            active: session.active,
-            activeAt: session.activeAt,
-            presence: session.presence,
-            thinking: session.thinking,
-            thinkingAt: session.thinkingAt,
-            latestTurnStatus: session.latestTurnStatus,
-            latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
-            meaningfulActivityAt: session.meaningfulActivityAt,
+            active: sessionRuntimeStatusSource.active,
+            activeAt: sessionRuntimeStatusSource.activeAt,
+            presence: sessionRuntimeStatusSource.presence,
+            thinking: sessionRuntimeStatusSource.thinking,
+            thinkingAt: sessionRuntimeStatusSource.thinkingAt,
+            latestTurnStatus: sessionRuntimeStatusSource.latestTurnStatus,
+            latestTurnStatusObservedAt: sessionRuntimeStatusSource.latestTurnStatusObservedAt,
+            meaningfulActivityAt: sessionRuntimeStatusSource.meaningfulActivityAt,
             hasPendingPermissionRequests: pendingFlags.hasPendingPermissionRequests,
             hasPendingUserActionRequests: pendingFlags.hasPendingUserActionRequests,
-            pendingRequestObservedAt: deriveLatestPendingRequestObservedAtFromSession(session),
+            pendingRequestObservedAt: deriveLatestPendingRequestObservedAtFromSession(sessionRuntimeStatusSource),
         }, usageLimitRecoveryNowMs);
     }, [
-        session,
+        sessionRuntimeStatusSource,
         usageLimitRecoveryNowMs,
     ]);
     const hasInterruptedWorkToResume = React.useMemo(() => (
@@ -2242,12 +2331,13 @@ function SessionViewLoaded({
     ), [pendingMessages.length, session.active, session.metadata]);
     const baseUsageLimitRecoveryPresentation = React.useMemo(() => buildSessionUsageLimitRecoveryPresentation({
         featureEnabled: usageLimitRecoveryFeatureEnabled,
-        latestTurnStatus: session.latestTurnStatus ?? null,
-        issue: session.lastRuntimeIssue ?? null,
+        latestTurnStatus: sessionRuntimeStatusSource.latestTurnStatus ?? null,
+        issue: sessionRuntimeStatusSource.lastRuntimeIssue ?? null,
         recovery: usageLimitRecovery,
+        recoveryCredits: usageLimitRecoveryCredits,
         operationStatus: null,
         runtimeWorking: usageLimitRuntimeState.runtimeActivelyWorking,
-        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(sessionRuntimeStatusSource),
         hasInterruptedWorkToResume,
         rememberedMode: usageLimitRecoveryMode,
         checkNowSupported: usageLimitRecoveryCheckNowSupported,
@@ -2256,13 +2346,14 @@ function SessionViewLoaded({
         formatTime: formatUsageLimitRecoveryTime,
     }), [
         formatUsageLimitRecoveryTime,
-        session.latestTurnStatus,
-        session.latestTurnStatusObservedAt,
-        session.lastRuntimeIssue,
-        session.meaningfulActivityAt,
+        sessionRuntimeStatusSource.latestTurnStatus,
+        sessionRuntimeStatusSource.latestTurnStatusObservedAt,
+        sessionRuntimeStatusSource.lastRuntimeIssue,
+        sessionRuntimeStatusSource.meaningfulActivityAt,
         translateUsageLimitRecovery,
         hasInterruptedWorkToResume,
         usageLimitRecovery,
+        usageLimitRecoveryCredits,
         usageLimitRecoveryCheckNowSupported,
         usageLimitRecoveryFeatureEnabled,
         usageLimitRecoveryMode,
@@ -2278,6 +2369,18 @@ function SessionViewLoaded({
         if (baseUsageLimitRecoveryPresentation?.issueFingerprint === resolvedUsageLimitRecoveryIssueFingerprint) return;
         setResolvedUsageLimitRecoveryIssueFingerprint(null);
     }, [baseUsageLimitRecoveryPresentation?.issueFingerprint, resolvedUsageLimitRecoveryIssueFingerprint]);
+    const usageLimitRecoveryBannerCollapsed = Boolean(
+        collapsedUsageLimitRecoveryIssueFingerprint
+        && baseUsageLimitRecoveryPresentation?.issueFingerprint === collapsedUsageLimitRecoveryIssueFingerprint
+    );
+    React.useEffect(() => {
+        if (!collapsedUsageLimitRecoveryIssueFingerprint) return;
+        if (baseUsageLimitRecoveryPresentation?.issueFingerprint === collapsedUsageLimitRecoveryIssueFingerprint) return;
+        setCollapsedUsageLimitRecoveryIssueFingerprint(null);
+    }, [
+        baseUsageLimitRecoveryPresentation?.issueFingerprint,
+        collapsedUsageLimitRecoveryIssueFingerprint,
+    ]);
     const activeUsageLimitRecoveryOperation = usageLimitRecoveryOperationStatus
         && baseUsageLimitRecoveryPresentation?.issueFingerprint === usageLimitRecoveryOperationStatus.issueFingerprint
         ? usageLimitRecoveryOperationStatus
@@ -2286,13 +2389,14 @@ function SessionViewLoaded({
     const activeUsageLimitRecoveryOperationRetryAtMs = activeUsageLimitRecoveryOperation?.retryAtMs ?? null;
     const usageLimitRecoveryPresentation = React.useMemo(() => buildSessionUsageLimitRecoveryPresentation({
         featureEnabled: usageLimitRecoveryFeatureEnabled && !usageLimitRecoveryIssueResolved,
-        latestTurnStatus: session.latestTurnStatus ?? null,
-        issue: session.lastRuntimeIssue ?? null,
+        latestTurnStatus: sessionRuntimeStatusSource.latestTurnStatus ?? null,
+        issue: sessionRuntimeStatusSource.lastRuntimeIssue ?? null,
         recovery: usageLimitRecovery,
+        recoveryCredits: usageLimitRecoveryCredits,
         operationStatus: activeUsageLimitRecoveryOperationStatus,
         operationRetryAtMs: activeUsageLimitRecoveryOperationRetryAtMs,
         runtimeWorking: usageLimitRuntimeState.runtimeActivelyWorking,
-        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(sessionRuntimeStatusSource),
         hasInterruptedWorkToResume,
         rememberedMode: usageLimitRecoveryMode,
         checkNowSupported: usageLimitRecoveryCheckNowSupported,
@@ -2303,13 +2407,14 @@ function SessionViewLoaded({
         activeUsageLimitRecoveryOperationRetryAtMs,
         activeUsageLimitRecoveryOperationStatus,
         formatUsageLimitRecoveryTime,
-        session.latestTurnStatus,
-        session.latestTurnStatusObservedAt,
-        session.lastRuntimeIssue,
-        session.meaningfulActivityAt,
+        sessionRuntimeStatusSource.latestTurnStatus,
+        sessionRuntimeStatusSource.latestTurnStatusObservedAt,
+        sessionRuntimeStatusSource.lastRuntimeIssue,
+        sessionRuntimeStatusSource.meaningfulActivityAt,
         translateUsageLimitRecovery,
         hasInterruptedWorkToResume,
         usageLimitRecovery,
+        usageLimitRecoveryCredits,
         usageLimitRecoveryCheckNowSupported,
         usageLimitRecoveryFeatureEnabled,
         usageLimitRecoveryIssueResolved,
@@ -2317,15 +2422,18 @@ function SessionViewLoaded({
         usageLimitRuntimeState.runtimeActivelyWorking,
         usageLimitRecoveryNowMs,
     ]);
+    const visibleUsageLimitRecoveryPresentation = usageLimitRecoveryBannerCollapsed
+        ? null
+        : usageLimitRecoveryPresentation;
     const usageLimitStatusBadgePresentation = React.useMemo(() => buildSessionUsageLimitStatusBadgePresentation({
         featureEnabled: usageLimitRecoveryFeatureEnabled && !usageLimitRecoveryIssueResolved,
-        latestTurnStatus: session.latestTurnStatus ?? null,
-        issue: session.lastRuntimeIssue ?? null,
+        latestTurnStatus: sessionRuntimeStatusSource.latestTurnStatus ?? null,
+        issue: sessionRuntimeStatusSource.lastRuntimeIssue ?? null,
         recovery: usageLimitRecovery,
         operationStatus: activeUsageLimitRecoveryOperationStatus,
         operationRetryAtMs: activeUsageLimitRecoveryOperationRetryAtMs,
         runtimeWorking: usageLimitRuntimeState.runtimeActivelyWorking,
-        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(sessionRuntimeStatusSource),
         hasInterruptedWorkToResume,
         nowMs: usageLimitRecoveryNowMs,
         translate: translateUsageLimitRecovery,
@@ -2334,10 +2442,10 @@ function SessionViewLoaded({
         activeUsageLimitRecoveryOperationRetryAtMs,
         activeUsageLimitRecoveryOperationStatus,
         formatUsageLimitRecoveryTime,
-        session.latestTurnStatus,
-        session.latestTurnStatusObservedAt,
-        session.lastRuntimeIssue,
-        session.meaningfulActivityAt,
+        sessionRuntimeStatusSource.latestTurnStatus,
+        sessionRuntimeStatusSource.latestTurnStatusObservedAt,
+        sessionRuntimeStatusSource.lastRuntimeIssue,
+        sessionRuntimeStatusSource.meaningfulActivityAt,
         translateUsageLimitRecovery,
         hasInterruptedWorkToResume,
         usageLimitRecovery,
@@ -2569,10 +2677,15 @@ function SessionViewLoaded({
                             provider: session.lastRuntimeIssue?.provider ?? null,
                             ...usageLimitRecoveryOperationOptions,
                         })
-                        : await sessionUsageLimitCheckNow(sessionId, {
+                        : kind === 'consume_reset_credit'
+                            ? await sessionUsageLimitConsumeResetCredit(sessionId, {
+                                provider: session.lastRuntimeIssue?.provider ?? null,
+                                ...usageLimitRecoveryOperationOptions,
+                            })
+                            : await sessionUsageLimitCheckNow(sessionId, {
                             provider: session.lastRuntimeIssue?.provider ?? null,
                             ...usageLimitRecoveryOperationOptions,
-                        });
+                            });
             if (!result.ok) {
                 if (isUsageLimitRecoveryControlAction(kind)) {
                     setUsageLimitRecoveryOperationStatus(null);
@@ -2614,41 +2727,35 @@ function SessionViewLoaded({
         usageLimitRecoveryPresentation?.issueFingerprint,
         usageLimitRecoveryResumePromptMode,
     ]);
+    const toggleUsageLimitRecoveryBannerCollapsed = React.useCallback(() => {
+        const issueFingerprint = usageLimitRecoveryPresentation?.issueFingerprint
+            ?? baseUsageLimitRecoveryPresentation?.issueFingerprint
+            ?? null;
+        if (!issueFingerprint) return;
+        setCollapsedUsageLimitRecoveryIssueFingerprint((current) => (
+            current === issueFingerprint ? null : issueFingerprint
+        ));
+    }, [
+        baseUsageLimitRecoveryPresentation?.issueFingerprint,
+        usageLimitRecoveryPresentation?.issueFingerprint,
+    ]);
     const sessionStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => {
         const usageBadge = usageLimitStatusBadgePresentation
             ? [{
                 ...usageLimitStatusBadgePresentation,
+                accessibilityLabel: usageLimitRecoveryBannerCollapsed
+                    ? t('session.usageLimitRecovery.showBannerAction')
+                    : t('session.usageLimitRecovery.hideBannerAction'),
                 icon: (tint: string) => <Ionicons name="timer-outline" size={12} color={tint} />,
-                renderPopover: () => usageLimitRecoveryPresentation ? (
-                    <View style={{ width: '100%', maxWidth: 420, paddingHorizontal: 8 }}>
-                        <SessionWarningActionBanner
-                            testID="session-usageLimit-recovery-status-popover"
-                            actionTestID={`${usageLimitRecoveryPresentation.banner.primaryAction.testID}-popover`}
-                            title={usageLimitRecoveryPresentation.banner.title}
-                            body={usageLimitRecoveryPresentation.banner.body}
-                            actionLabel={usageLimitRecoveryPresentation.banner.primaryAction.label}
-                            actionAccessibilityLabel={usageLimitRecoveryPresentation.banner.primaryAction.accessibilityLabel}
-                            disabled={usageLimitRecoveryActionsDisabled}
-                            onActionPress={() => void handleUsageLimitRecoveryAction(usageLimitRecoveryPresentation.banner.primaryAction.kind)}
-                            secondaryActions={usageLimitRecoveryPresentation.banner.secondaryActions.map((action) => ({
-                                key: action.kind,
-                                testID: `${action.testID}-popover`,
-                                label: action.label,
-                                accessibilityLabel: action.accessibilityLabel,
-                                disabled: usageLimitRecoveryActionsDisabled,
-                                onPress: () => void handleUsageLimitRecoveryAction(action.kind),
-                            }))}
-                        />
-                    </View>
-                ) : null,
+                onPress: toggleUsageLimitRecoveryBannerCollapsed,
             } satisfies AgentInputStatusBadge]
             : [];
         return [...usageBadge, ...sessionWorkStateBadges];
     }, [
-        handleUsageLimitRecoveryAction,
         sessionWorkStateBadges,
-        usageLimitRecoveryActionsDisabled,
-        usageLimitRecoveryPresentation,
+        t,
+        toggleUsageLimitRecoveryBannerCollapsed,
+        usageLimitRecoveryBannerCollapsed,
         usageLimitStatusBadgePresentation,
     ]);
     React.useEffect(() => {
@@ -2717,9 +2824,28 @@ function SessionViewLoaded({
     const connectedServiceQuotaSnapshotsByKey = useConnectedServiceQuotaSnapshots(
         connectedServiceQuotaProfileRef ? [connectedServiceQuotaProfileRef] : [],
     );
-    const connectedServiceQuotaSnapshot = connectedServiceQuotaProfileRef
-        ? connectedServiceQuotaSnapshotsByKey[connectedServiceProfileKey(connectedServiceQuotaProfileRef)] ?? null
+    const connectedServiceQuotaProfileKey = connectedServiceQuotaProfileRef
+        ? connectedServiceProfileKey(connectedServiceQuotaProfileRef)
         : null;
+    const connectedServiceQuotaPolledSnapshot = connectedServiceQuotaProfileKey
+        ? connectedServiceQuotaSnapshotsByKey[connectedServiceQuotaProfileKey] ?? null
+        : null;
+    const connectedServiceQuotaSnapshot = selectConnectedServiceQuotaSnapshotWithOverride({
+        profileKey: connectedServiceQuotaProfileKey,
+        polledSnapshot: connectedServiceQuotaPolledSnapshot,
+        override: connectedServiceQuotaSnapshotOverride,
+    });
+    React.useEffect(() => {
+        if (!connectedServiceQuotaSnapshotOverride || connectedServiceQuotaSnapshotOverride.key !== connectedServiceQuotaProfileKey) return;
+        if (!connectedServiceQuotaPolledSnapshot) return;
+        if (connectedServiceQuotaPolledSnapshot.fetchedAt >= connectedServiceQuotaSnapshotOverride.snapshot.fetchedAt) {
+            setConnectedServiceQuotaSnapshotOverride(null);
+        }
+    }, [
+        connectedServiceQuotaPolledSnapshot,
+        connectedServiceQuotaProfileKey,
+        connectedServiceQuotaSnapshotOverride,
+    ]);
     const connectedServiceQuotaActiveAccountLabel = React.useMemo(() => {
         if (!connectedServiceQuotaProfileRef) return connectedServiceQuotaSnapshot?.accountLabel ?? null;
         return resolveConnectedServiceProfileLabel({
@@ -2732,15 +2858,28 @@ function SessionViewLoaded({
         connectedServiceQuotaSnapshot?.accountLabel,
         settings.connectedServicesProfileLabelByKey,
     ]);
-    const providerUsageGauge = React.useMemo(() => {
+    const providerUsageGaugeSource = React.useMemo(() => {
         if (!connectedServiceQuotasEnabled || sessionProviderUsageGaugeMode === 'hidden') return null;
-        const gaugeSource = selectConnectedServiceSessionProviderUsageGaugeSource({
+        return selectConnectedServiceSessionProviderUsageGaugeSource({
             providerId: liveComposerState.agentId,
             connectedServiceSnapshot: connectedServiceQuotaSnapshot,
             connectedServiceRefProvenance: connectedServiceQuotaProfileRef?.provenance ?? null,
             sessionCheckNowSupported: usageLimitRecoveryCheckNowSupported,
+            recoveryCredits: usageLimitRecoveryCredits,
             runtimeIssue: session.lastRuntimeIssue ?? null,
         });
+    }, [
+        connectedServiceQuotaProfileRef?.provenance,
+        connectedServiceQuotasEnabled,
+        connectedServiceQuotaSnapshot,
+        liveComposerState.agentId,
+        session.lastRuntimeIssue,
+        sessionProviderUsageGaugeMode,
+        usageLimitRecoveryCredits,
+        usageLimitRecoveryCheckNowSupported,
+    ]);
+    const providerUsageGauge = React.useMemo(() => {
+        const gaugeSource = providerUsageGaugeSource;
         if (!gaugeSource) return null;
         return computeConnectedServiceQuotaGaugeViewModel({
             snapshot: gaugeSource.snapshot,
@@ -2750,19 +2889,86 @@ function SessionViewLoaded({
             providerDisplayName: resolveConnectedServiceProviderDisplayName(gaugeSource.snapshot.serviceId),
             activeAccountDisplayLabel: gaugeSource.snapshot === connectedServiceQuotaSnapshot
                 ? connectedServiceQuotaActiveAccountLabel
-                : null,
+                : gaugeSource.snapshot.accountLabel ?? null,
         });
     }, [
         connectedServiceQuotaActiveAccountLabel,
-        connectedServiceQuotaProfileRef?.provenance,
-        connectedServiceQuotasEnabled,
         connectedServiceQuotaSnapshot,
-        liveComposerState.agentId,
-        session.lastRuntimeIssue,
-        sessionProviderUsageGaugeMode,
+        providerUsageGaugeSource,
         sessionProviderUsageGaugeWindowMode,
+    ]);
+    const providerUsageGaugeConnectedServiceProfileRef =
+        providerUsageGaugeSource?.snapshot === connectedServiceQuotaSnapshot
+            ? connectedServiceQuotaProfileRef
+            : null;
+    const [providerUsageRecoveryCreditPending, setProviderUsageRecoveryCreditPending] = React.useState(false);
+    const handleProviderUsageRecoveryCreditPress = React.useCallback(async () => {
+        if (providerUsageRecoveryCreditPending) return;
+        if (!providerUsageGauge?.recoveryCreditSummary) return;
+        if (providerUsageGaugeConnectedServiceProfileRef && connectedServiceQuotaProfileKey) {
+            const targetMachineId = controlMachineTarget?.machineId ?? (typeof machineId === 'string' ? machineId : null);
+            if (!targetMachineId) {
+                Modal.alert(t('common.error'), t('connectedServices.quota.recoveryCreditMachineUnavailable'));
+                return;
+            }
+            const serviceIdResult = ConnectedServiceIdSchema.safeParse(providerUsageGaugeConnectedServiceProfileRef.serviceId);
+            if (!serviceIdResult.success) {
+                Modal.alert(t('common.error'), t('connectedServices.quota.recoveryCreditMachineUnavailable'));
+                return;
+            }
+            setProviderUsageRecoveryCreditPending(true);
+            try {
+                const result = await connectedServiceQuotaRecoveryCreditConsume({
+                    machineId: targetMachineId,
+                    serverId: sessionRouteServerId,
+                    serviceId: serviceIdResult.data,
+                    profileId: providerUsageGaugeConnectedServiceProfileRef.profileId,
+                    ...(providerUsageGauge.recoveryCreditSummary.providerCreditId
+                        ? { providerCreditId: providerUsageGauge.recoveryCreditSummary.providerCreditId }
+                        : {}),
+                    sourceSnapshotFetchedAtMs: providerUsageGaugeSource?.snapshot.fetchedAt ?? null,
+                });
+                if (result.ok) {
+                    if (result.snapshot) {
+                        setConnectedServiceQuotaSnapshotOverride({
+                            key: connectedServiceQuotaProfileKey,
+                            snapshot: result.snapshot,
+                        });
+                    } else {
+                        setConnectedServiceQuotaSnapshotOverride((current) => (
+                            current?.key === connectedServiceQuotaProfileKey ? null : current
+                        ));
+                    }
+                    return;
+                }
+                Modal.alert(t('common.error'), result.error);
+            } finally {
+                setProviderUsageRecoveryCreditPending(false);
+            }
+            return;
+        }
+
+        if (usageLimitRecoveryCheckNowSupported) {
+            await handleUsageLimitRecoveryAction('consume_reset_credit');
+        }
+    }, [
+        connectedServiceQuotaProfileKey,
+        controlMachineTarget?.machineId,
+        handleUsageLimitRecoveryAction,
+        machineId,
+        providerUsageGaugeConnectedServiceProfileRef,
+        providerUsageGauge?.recoveryCreditSummary,
+        providerUsageGaugeSource?.snapshot.fetchedAt,
+        providerUsageRecoveryCreditPending,
+        sessionRouteServerId,
         usageLimitRecoveryCheckNowSupported,
     ]);
+    const providerUsageRecoveryCreditAction = providerUsageGauge?.recoveryCreditSummary
+        && (providerUsageGaugeConnectedServiceProfileRef || usageLimitRecoveryCheckNowSupported)
+        ? handleProviderUsageRecoveryCreditPress
+        : undefined;
+    const providerUsageRecoveryCreditActionPending = providerUsageRecoveryCreditPending
+        || usageLimitRecoveryPendingAction === 'consume_reset_credit';
     const reviewScope = useWorkspaceScopeForSession(sessionId);
     const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(reviewScope);
     const includedReviewCommentDrafts = React.useMemo(
@@ -3401,10 +3607,7 @@ function SessionViewLoaded({
             presence: session.presence,
         });
     }, [session.accessLevel, session.active, session.canApprovePermissions, session.presence]);
-    const openApprovalRequests = React.useMemo(
-        () => listOpenApprovalArtifactsForSession(artifacts, sessionId),
-        [artifacts, sessionId],
-    );
+    const openApprovalRequests = useOpenApprovalArtifactsForSession(sessionId);
 
     const [pendingQueueResumeFailed, setPendingQueueResumeFailed] = React.useState(false);
     React.useEffect(() => {
@@ -3652,7 +3855,7 @@ function SessionViewLoaded({
         });
         const connectedServicesAuthSwitchDisabledReason = resolveConnectedServicesAuthSwitchDisabledReason({
             isReadOnly,
-            session,
+            session: sessionRuntimeStatusSource,
             nowMs: Date.now(),
         });
         const intentionalRestartSourceEvents = useSessionConnectedServiceAccountSwitchEvents(sessionId);
@@ -4420,7 +4623,7 @@ function SessionViewLoaded({
         if (resolved.kind !== 'send') return;
         void sendComposerText(resolved.text, composerMessage, sendOptions);
     });
-    const composerAuxiliaryBannerHorizontalPadding = windowWidth > 700 ? 16 : 8;
+    const composerAuxiliaryBannerHorizontalPadding = COMPOSER_CONTENT_HORIZONTAL_INSET;
     const composerAuxiliaryBannerStyle = { width: '100%' as const, maxWidth: layout.maxWidth };
     const input = shouldShowInput ? (
         <View>
@@ -4453,18 +4656,18 @@ function SessionViewLoaded({
                     />
                 </View>
             ) : null}
-            {usageLimitRecoveryPresentation ? (
+            {visibleUsageLimitRecoveryPresentation ? (
                 <View style={{ width: '100%', alignItems: 'center', paddingHorizontal: composerAuxiliaryBannerHorizontalPadding, paddingTop: 8 }}>
                     <SessionWarningActionBanner
-                        testID={usageLimitRecoveryPresentation.banner.testID}
-                        actionTestID={usageLimitRecoveryPresentation.banner.primaryAction.testID}
-                        title={usageLimitRecoveryPresentation.banner.title}
-                        body={usageLimitRecoveryPresentation.banner.body}
-                        actionLabel={usageLimitRecoveryPresentation.banner.primaryAction.label}
-                        actionAccessibilityLabel={usageLimitRecoveryPresentation.banner.primaryAction.accessibilityLabel}
+                        testID={visibleUsageLimitRecoveryPresentation.banner.testID}
+                        actionTestID={visibleUsageLimitRecoveryPresentation.banner.primaryAction.testID}
+                        title={visibleUsageLimitRecoveryPresentation.banner.title}
+                        body={visibleUsageLimitRecoveryPresentation.banner.body}
+                        actionLabel={visibleUsageLimitRecoveryPresentation.banner.primaryAction.label}
+                        actionAccessibilityLabel={visibleUsageLimitRecoveryPresentation.banner.primaryAction.accessibilityLabel}
                         disabled={usageLimitRecoveryActionsDisabled}
-                        onActionPress={() => void handleUsageLimitRecoveryAction(usageLimitRecoveryPresentation.banner.primaryAction.kind)}
-                        secondaryActions={usageLimitRecoveryPresentation.banner.secondaryActions.map((action) => ({
+                        onActionPress={() => void handleUsageLimitRecoveryAction(visibleUsageLimitRecoveryPresentation.banner.primaryAction.kind)}
+                        secondaryActions={visibleUsageLimitRecoveryPresentation.banner.secondaryActions.map((action) => ({
                             key: action.kind,
                             testID: action.testID,
                             label: action.label,
@@ -4514,6 +4717,8 @@ function SessionViewLoaded({
                 } : undefined}
                 statusBadges={agentInputStatusBadges}
                 providerUsageGauge={providerUsageGauge}
+                onProviderUsageRecoveryCreditPress={providerUsageRecoveryCreditAction}
+                providerUsageRecoveryCreditPending={providerUsageRecoveryCreditActionPending}
                 activeStatusBadgeKey={activeStatusBadgeKey}
                 onActiveStatusBadgeKeyChange={setActiveStatusBadgeKey}
                 connectedServicesRestartState={sessionConnectedServicesAuthSwitch.restartState}

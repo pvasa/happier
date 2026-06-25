@@ -427,6 +427,7 @@ describe('RepositoryTreeList (row menu)', () => {
         await pressRowAction(screen, 'README.md', 'repository-tree-menuitem-copy-path');
 
         expect(setClipboardStringSafeSpy).toHaveBeenCalledWith('README.md');
-        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+        expect(screen.findByTestId('repository-tree-copy-feedback:README.md')).toBeTruthy();
     });
 });

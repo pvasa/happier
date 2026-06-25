@@ -206,6 +206,54 @@ describe('dispatchConnectedServiceAccountSwitchNotificationAsync', () => {
     expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
   });
 
+  it('suppresses external notifications for predictive fanout maintenance switches', async () => {
+    const sendToAllDevicesAsync = vi.fn(async () => {});
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+
+    await dispatchConnectedServiceAccountSwitchNotificationAsync({
+      settings: accountSettingsParse({
+        notificationChannelsV1: [{
+          v: 1,
+          id: 'expo',
+          kind: 'expo_push',
+          enabled: true,
+          topics: {
+            ready: false,
+            permissionRequest: false,
+            userActionRequest: false,
+            connectedServiceAccountSwitch: true,
+            connectedServiceQuotaBlocked: false,
+            connectedServiceQuotaRecovered: false,
+          },
+          readyIncludeMessageText: false,
+        }],
+      }),
+      expoPushSender: { sendToAllDevicesAsync },
+      settingsSecretsReadKeys: [],
+      runtimeQuotaSnapshots,
+      listConnectedServiceProfiles: vi.fn(async () => ({
+        serviceId: 'openai-codex' as const,
+        profiles: [
+          { profileId: 'primary', status: 'connected' as const, providerEmail: 'main@example.test' },
+          { profileId: 'backup', status: 'connected' as const, providerEmail: 'backup@example.test' },
+        ],
+      })),
+      source: {
+        sessionId: 'session-fanout',
+        sessionTitle: 'Implement auth fanout',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        fromProfileId: 'primary',
+        toProfileId: 'backup',
+        reason: 'same_provider_account_exhausted',
+      },
+      nowMs: () => 2_000,
+      dedupeWindowMs: 0,
+    });
+
+    expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
+  });
+
   it('does not expose provider account ids in outbound account-switch notifications', async () => {
     const sendToAllDevicesAsync = vi.fn<SendToAllDevicesAsync>(async (
       _title: string,

@@ -54,6 +54,16 @@ describe('PermissionFooter (codexDecision)', () => {
         return (Array.isArray(style) ? style : [style]).filter(Boolean) as Array<Record<string, unknown>>;
     }
 
+    function getStyleFragments(node: ReactTestInstance) {
+        const style = node.props.style;
+        return (Array.isArray(style) ? style : [style]).filter(Boolean) as Array<Record<string, unknown>>;
+    }
+
+    function expectTextOnlyActionButton(styles: Array<Record<string, unknown>>, actionBackground: string) {
+        expect(styles.some((style) => style.backgroundColor === 'transparent')).toBe(true);
+        expect(styles.some((style) => style.backgroundColor === actionBackground)).toBe(false);
+    }
+
     it('does not repeat the request summary (the tool UI already shows it)', async () => {
         const { PermissionFooter } = await import('../permissions/PermissionFooter');
         const screen = await renderScreen(React.createElement(PermissionFooter, {
@@ -81,11 +91,19 @@ describe('PermissionFooter (codexDecision)', () => {
         const allowForSessionStyles = getTextStyleFragments(allowForSession);
         const denyStyles = getTextStyleFragments(deny);
         const stopStyles = getTextStyleFragments(stop);
+        const allowButtonStyles = getStyleFragments(allow);
+        const allowForSessionButtonStyles = getStyleFragments(allowForSession);
+        const denyButtonStyles = getStyleFragments(deny);
+        const stopButtonStyles = getStyleFragments(stop);
 
         expect(allowStyles.some((style) => style.color === lightTheme.colors.permissionButton.allow.text)).toBe(true);
         expect(allowForSessionStyles.some((style) => style.color === lightTheme.colors.permissionButton.allowAll.text)).toBe(true);
         expect(denyStyles.some((style) => style.color === lightTheme.colors.permissionButton.deny.text)).toBe(true);
         expect(stopStyles.some((style) => style.color === lightTheme.colors.permissionButton.deny.text)).toBe(true);
+        expectTextOnlyActionButton(allowButtonStyles, lightTheme.colors.permissionButton.allow.background);
+        expectTextOnlyActionButton(allowForSessionButtonStyles, lightTheme.colors.permissionButton.allowAll.background);
+        expectTextOnlyActionButton(denyButtonStyles, lightTheme.colors.permissionButton.deny.background);
+        expectTextOnlyActionButton(stopButtonStyles, lightTheme.colors.permissionButton.deny.background);
     });
 
     it('approves execpolicy amendment using the latest proposed_execpolicy_amendment payload', async () => {
@@ -107,7 +125,9 @@ describe('PermissionFooter (codexDecision)', () => {
         );
         expect(execPolicyButton).toBeTruthy();
         const execPolicyTextStyle = getTextStyleFragments(execPolicyButton as ReactTestInstance);
+        const execPolicyButtonStyle = getStyleFragments(execPolicyButton as ReactTestInstance);
         expect(execPolicyTextStyle.some((style) => style.color === lightTheme.colors.permissionButton.allowAll.text)).toBe(true);
+        expectTextOnlyActionButton(execPolicyButtonStyle, lightTheme.colors.permissionButton.allowAll.background);
 
         await pressTestInstanceAsync(execPolicyButton, 'execpolicy approval button');
 

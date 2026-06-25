@@ -92,6 +92,58 @@ describe('useHasUnreadMessages', () => {
     await hook.unmount();
   });
 
+  it('does not report unread when only provider maintenance events are newer than the cursor', async () => {
+    storage.setState({
+      sessions: {
+        s1: {
+          id: 's1',
+          seq: 946,
+          lastViewedSessionSeq: 945,
+          latestTurnStatus: 'in_progress',
+          metadata: null,
+        },
+      },
+      sessionMessages: {
+        s1: {
+          messageIdsOldestFirst: ['m-visible', 'm-provider-state'],
+          messagesById: {
+            'm-visible': {
+              id: 'm-visible',
+              kind: 'agent-text',
+              seq: 945,
+              localId: null,
+              createdAt: 1,
+              text: 'Visible assistant message',
+            },
+            'm-provider-state': {
+              id: 'm-provider-state',
+              kind: 'agent-event',
+              seq: 946,
+              createdAt: 2,
+              event: {
+                type: 'provider-state-sharing-degraded',
+                serviceId: 'anthropic',
+                requestedStateMode: 'shared',
+                effectiveStateMode: 'isolated',
+                code: 'state_symlink_unavailable',
+              },
+            },
+          },
+          isLoaded: true,
+        },
+      },
+      sessionListRenderables: {},
+      sessionPending: {},
+      isDataReady: true,
+    } as never);
+
+    const { useHasUnreadMessages } = await import('./hooks');
+    const hook = await renderHook(() => useHasUnreadMessages('s1'));
+
+    expect(hook.getCurrent()).toBe(false);
+    await hook.unmount();
+  });
+
   it('does not report unread from raw session seq when the transcript bucket is not loaded', async () => {
     storage.setState({
       sessions: {

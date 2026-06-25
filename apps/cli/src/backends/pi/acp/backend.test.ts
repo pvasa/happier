@@ -5,8 +5,9 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 import { buildPiToolsForPermissionMode, createPiBackend } from './backend';
+import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 
-const envKeys = ['PATH', 'HAPPIER_PI_PATH'] as const;
+const envKeys = ['PATH', 'HAPPIER_PI_PATH', HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] as const;
 const TEMP_DIRS = new Set<string>();
 let envScope = createEnvKeyScope(envKeys);
 
@@ -91,6 +92,33 @@ describe('pi backend argv', () => {
     }) as unknown as { options?: { command?: string } };
 
     expect(backend.options?.command).toBe(binPath);
+  });
+
+  it('uses the active connected-service provider with a concrete Pi startup model and scoped model cycle', () => {
+    process.env.PATH = '';
+    process.env.HAPPIER_PI_PATH = createFakeBin('pi');
+
+    const backend = createPiBackend({
+      cwd: '/tmp',
+      env: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([
+          { kind: 'profile', serviceId: 'openai-codex', profileId: 'codex-work' },
+        ]),
+      },
+      permissionMode: 'default',
+    }) as unknown as { options?: { args?: string[] } };
+
+    const args = backend.options?.args;
+    expect(args).toEqual(expect.arrayContaining([
+      '--provider',
+      'openai-codex',
+      '--model',
+      'gpt-5.5',
+      '--models',
+      'openai-codex/*',
+    ]));
+    const modelIndex = args?.indexOf('--model') ?? -1;
+    expect(args?.[modelIndex + 1]).not.toBe('openai-codex/*');
   });
 });
 

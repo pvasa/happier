@@ -13,6 +13,7 @@ import { socketEmitWithAckFallback } from '@/sync/engine/socket/socketEmitWithAc
 import { assertEndpointAuthenticatedWithProbe } from '@/sync/runtime/connectivity/assertEndpointAuthenticatedWithProbe';
 import { isTerminalAuthError } from '@/sync/runtime/connectivity/authErrors';
 import { raceSocketIoAckTimeout } from '@/sync/runtime/socketIoAckTimeout';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 
 import type { ResolvedServerSessionRpcContext } from './resolveServerScopedSessionContext';
 
@@ -111,8 +112,7 @@ export function createServerScopedSessionSendMessage(deps?: Partial<Deps>): Read
     sendMessageActive:
       deps?.sendMessageActive ??
       (async (sessionId, message, displayText, metaOverrides, options) => {
-        const { sync } = await import('@/sync/sync');
-        await sync.sendMessage(sessionId, message, displayText, metaOverrides, {
+        await getSyncSingleton().sendMessage(sessionId, message, displayText, metaOverrides, {
           ...(options?.localId ? { localId: options.localId } : {}),
           bypassPendingQueueReason: 'server_scoped_rpc_active',
         });

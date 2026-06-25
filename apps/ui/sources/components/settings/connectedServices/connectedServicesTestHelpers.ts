@@ -15,6 +15,7 @@ type InstallConnectedServicesCommonModuleMocksOptions = Readonly<{
 const connectedServicesModuleState = vi.hoisted(() => ({
     routerBackSpy: vi.fn(),
     routerPushSpy: vi.fn(),
+    setOptionsSpy: vi.fn(),
     searchParams: {} as ExpoRouterParams,
     options: {
         modal: undefined as ConnectedServicesModuleFactory | undefined,
@@ -27,6 +28,7 @@ const connectedServicesModuleState = vi.hoisted(() => ({
 export function resetConnectedServicesCommonModuleMockState() {
     connectedServicesModuleState.routerBackSpy.mockClear();
     connectedServicesModuleState.routerPushSpy.mockClear();
+    connectedServicesModuleState.setOptionsSpy.mockClear();
     connectedServicesModuleState.searchParams = {};
     connectedServicesModuleState.options = {
         modal: undefined,
@@ -34,6 +36,69 @@ export function resetConnectedServicesCommonModuleMockState() {
         router: undefined,
         text: undefined,
     };
+}
+
+/**
+ * Opt-in passthrough mocks for the UI-primitive boundaries the REDESIGNED
+ * `ConnectedServiceDetailView` mounts: the segmented `Accounts | Pools` shell,
+ * brand-icon SVGs, and member avatars. These are intentionally NOT part of the
+ * always-on common mocks so existing connected-services tests (oauth, settings
+ * index, profile/pool detail) keep their own boundary setup untouched.
+ *
+ * - `SegmentedTabBar`: the real one reads `theme.colors.segmentedControl.*`,
+ *   which the global unistyles test theme omits. Rendered here as one pressable
+ *   per tab, preserving the `${testIDPrefix}:${tab.id}` testID + `onSelectTab`
+ *   callback so segment switching stays exercisable.
+ * - `react-native-svg`: native boundary; the controller renders brand icons via
+ *   `<SvgXml>` (AccountBlock + PoolsList).
+ * - `Avatar`: the PoolsList member stack dynamically requires
+ *   `@/agents/registry/registryUi`, which the Node test runtime cannot resolve.
+ *
+ * Call this AT MODULE SCOPE (alongside `installConnectedServicesCommonModuleMocks`).
+ */
+export function installConnectedServiceDetailShellMocks() {
+    vi.mock('@/components/ui/navigation/SegmentedTabBar', () => {
+        const React = require('react');
+        type Tab = { id: string; label: string };
+        type Props = {
+            tabs: ReadonlyArray<Tab>;
+            activeTabId: string;
+            onSelectTab: (id: string) => void;
+            testIDPrefix?: string;
+        };
+        return {
+            SegmentedTabBar: (props: Props) =>
+                React.createElement(
+                    'SegmentedTabBar',
+                    { testID: props.testIDPrefix },
+                    props.tabs.map((tab) =>
+                        React.createElement('Pressable', {
+                            key: tab.id,
+                            testID: props.testIDPrefix ? `${props.testIDPrefix}:${tab.id}` : undefined,
+                            accessibilityState: { selected: props.activeTabId === tab.id },
+                            onPress: () => props.onSelectTab(tab.id),
+                        }, tab.label),
+                    ),
+                ),
+        };
+    });
+
+    vi.mock('react-native-svg', () => {
+        const React = require('react');
+        return {
+            SvgXml: (props: Record<string, unknown>) => React.createElement('SvgXml', props),
+            Svg: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
+                React.createElement('Svg', props, props.children),
+            Circle: (props: Record<string, unknown>) => React.createElement('Circle', props, null),
+        };
+    });
+
+    vi.mock('@/components/ui/avatar/Avatar', () => {
+        const React = require('react');
+        return {
+            Avatar: (props: Record<string, unknown>) => React.createElement('Avatar', props),
+        };
+    });
 }
 
 export function installConnectedServicesCommonModuleMocks(
@@ -91,6 +156,9 @@ export function installConnectedServicesCommonModuleMocks(
                 replace: vi.fn(),
                 setParams: vi.fn(),
             },
+            // The redesigned controller registers a header-right "+" via
+            // `useNavigation().setOptions` in a layout effect.
+            navigation: { setOptions: connectedServicesModuleState.setOptionsSpy },
         });
 
         return {

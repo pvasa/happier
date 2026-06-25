@@ -242,14 +242,20 @@ function readModelFromMetadata(
 
 function chooseVendorResumeId(params: ResolveSessionRuntimeSnapshotParams): SessionRuntimeSnapshot['vendorResumeId'] {
   const metadata = params.persistedMetadata ?? null;
+  const incomingResume = normalizeNonEmptyString(params.incomingOptions.resume);
+  if (incomingResume) {
+    return { value: incomingResume, updatedAt: null };
+  }
+  if (params.incomingOptions.backendTarget?.kind === 'configuredAcpBackend') {
+    return null;
+  }
   const agentId =
     readAgentIdFromOptions(params.incomingOptions)
     ?? readAgentIdFromOptions(params.trackedSpawnOptions)
     ?? inferAgentIdFromSessionMetadata(metadata);
   const metadataVendorResumeId = resolveVendorResumeIdFromSessionMetadata(agentId, metadata);
   const value =
-    normalizeNonEmptyString(params.incomingOptions.resume)
-    ?? normalizeNonEmptyString(params.trackedSpawnOptions?.resume)
+    normalizeNonEmptyString(params.trackedSpawnOptions?.resume)
     ?? normalizeNonEmptyString(params.trackedVendorResumeId)
     ?? normalizeNonEmptyString(params.persistedVendorResumeId)
     ?? normalizeNonEmptyString(metadataVendorResumeId);

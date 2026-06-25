@@ -7,6 +7,7 @@ import {
   ConnectedServiceSwitchAttemptOutcomeActionV1Schema,
   ConnectedServiceSwitchAttemptOutcomeV1Schema,
   ConnectedServiceSwitchAttemptSessionAdoptionV1Schema,
+  agentEventAttentionImpact,
   type ConnectedServiceId,
   type ConnectedServiceUxDiagnosticV1,
   type ConnectedServiceSwitchAttemptedContinuityModeV1,
@@ -14,6 +15,7 @@ import {
   type ConnectedServiceSwitchAttemptOutcomeV1,
   type ConnectedServiceSwitchAttemptSessionAdoptionV1,
   type SessionStoredMessageContent,
+  type TranscriptRawAgentEventV1,
 } from '@happier-dev/protocol';
 
 import type { Credentials } from '@/persistence';
@@ -31,6 +33,7 @@ import {
   resolveConnectedServiceNotificationProfileLabel,
   type ConnectedServiceNotificationProfileSummary,
 } from '../notifications/connectedServiceNotificationLabels';
+import { isBackgroundConnectedServiceSwitchReason } from '../connectedServiceSwitchEventVisibility';
 
 type ConnectedServiceRuntimeSwitchSessionEvent = Readonly<{
   type: 'connected_service_account_switch' | 'connected_service_auth_group_switch';
@@ -66,6 +69,8 @@ type ConnectedServiceRuntimeSwitchAttemptSessionEvent = Readonly<{
   type: 'connected_service_account_switch_attempt';
   ok: boolean;
   action: 'restart_requested' | 'hot_applied' | 'metadata_updated';
+  rawReason?: string;
+  reason?: TranscriptSwitchReason;
   attemptedContinuityMode?: ConnectedServiceSwitchAttemptedContinuityModeV1;
   outcome?: ConnectedServiceSwitchAttemptOutcomeV1;
   outcomeAction?: ConnectedServiceSwitchAttemptOutcomeActionV1;
@@ -77,13 +82,18 @@ type ConnectedServiceRuntimeSwitchAttemptSessionEvent = Readonly<{
   partialState: 'metadata_may_reference_new_binding' | 'runtime_auth_applied' | 'runtime_auth_partially_applied' | null;
   verificationByServiceId?: Readonly<Record<string, Readonly<{
     status: 'verified' | 'weakly_verified';
+    providerAccountId?: string | null;
+    activeAccountId?: string | null;
+    sharedAuthSurfaceId?: string | null;
+    proofStrength?: 'exact' | 'weak' | 'diagnostic';
+    source?: string;
     reason?: string;
   }>>>;
 }>;
 
 type ConnectedServiceRuntimeStateSharingDegradedSessionEvent = Readonly<{
   type: 'provider_state_sharing_degraded';
-  serviceId: string;
+  serviceId: ConnectedServiceId;
   requestedStateMode: string;
   effectiveStateMode: string;
   code: string;
@@ -162,6 +172,14 @@ function parseRuntimeSwitchEvent(value: unknown): ConnectedServiceRuntimeSwitchS
   };
 }
 
+function isSameProfileRuntimeSwitchEvent(event: ConnectedServiceRuntimeSwitchSessionEvent): boolean {
+  return Boolean(
+    event.fromProfileId
+    && event.toProfileId
+    && event.fromProfileId === event.toProfileId,
+  );
+}
+
 function parseDeferralPolicy(value: unknown): 'defer_until_turn_boundary' | 'defer_until_idle' | null {
   return value === 'defer_until_turn_boundary' || value === 'defer_until_idle' ? value : null;
 }
@@ -236,11 +254,15 @@ function parseRuntimeSwitchAttemptEvent(value: unknown): ConnectedServiceRuntime
     || record.partialState === 'runtime_auth_partially_applied'
       ? record.partialState
       : null;
+  const rawReason = typeof record.reason === 'string' ? record.reason.trim() : '';
+  const reason = rawReason ? mapSwitchReason(rawReason) : null;
   const verificationByServiceId = parseSwitchAttemptVerificationByServiceId(record.verificationByServiceId);
   return {
     type: 'connected_service_account_switch_attempt',
     ok: record.ok,
     action,
+    ...(rawReason ? { rawReason } : {}),
+    ...(reason ? { reason } : {}),
     ...(attemptedContinuityMode.success ? { attemptedContinuityMode: attemptedContinuityMode.data } : {}),
     ...(outcome.success ? { outcome: outcome.data } : {}),
     ...(outcomeAction.success ? { outcomeAction: outcomeAction.data } : {}),
@@ -259,7 +281,15 @@ function parseRuntimeSwitchAttemptEvent(value: unknown): ConnectedServiceRuntime
 function parseSwitchAttemptVerificationByServiceId(value: unknown): ConnectedServiceRuntimeSwitchAttemptSessionEvent['verificationByServiceId'] | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
-  const parsed: Record<string, { status: 'verified' | 'weakly_verified'; reason?: string }> = {};
+  const parsed: Record<string, {
+    status: 'verified' | 'weakly_verified';
+    providerAccountId?: string | null;
+    activeAccountId?: string | null;
+    sharedAuthSurfaceId?: string | null;
+    proofStrength?: 'exact' | 'weak' | 'diagnostic';
+    source?: string;
+    reason?: string;
+  }> = {};
   for (const [serviceId, rawVerification] of Object.entries(record)) {
     const trimmedServiceId = serviceId.trim();
     if (!trimmedServiceId) continue;
@@ -271,8 +301,43 @@ function parseSwitchAttemptVerificationByServiceId(value: unknown): ConnectedSer
     const reason = typeof verification?.reason === 'string' && verification.reason.trim().length > 0
       ? verification.reason.trim()
       : undefined;
+    const providerAccountId = typeof verification?.providerAccountId === 'string' && verification.providerAccountId.trim().length > 0
+      ? verification.providerAccountId.trim()
+      : verification?.providerAccountId === null
+        ? null
+        : undefined;
+    const activeAccountId = typeof verification?.activeAccountId === 'string' && verification.activeAccountId.trim().length > 0
+      ? verification.activeAccountId.trim()
+      : verification?.activeAccountId === null
+        ? null
+        : undefined;
+    const sharedAuthSurfaceId = typeof verification?.sharedAuthSurfaceId === 'string' && verification.sharedAuthSurfaceId.trim().length > 0
+      ? verification.sharedAuthSurfaceId.trim()
+      : verification?.sharedAuthSurfaceId === null
+        ? null
+        : undefined;
+    const proofStrength = verification?.proofStrength === 'exact'
+      || verification?.proofStrength === 'weak'
+      || verification?.proofStrength === 'diagnostic'
+      ? verification.proofStrength
+      : undefined;
+    const source = typeof verification?.source === 'string' && verification.source.trim().length > 0
+      ? verification.source.trim()
+      : undefined;
+    const preserveExactProofDetails = status === 'verified'
+      && proofStrength === 'exact'
+      && (
+        typeof providerAccountId === 'string'
+        || typeof activeAccountId === 'string'
+        || typeof sharedAuthSurfaceId === 'string'
+      );
     parsed[trimmedServiceId] = {
       status,
+      ...(preserveExactProofDetails && providerAccountId !== undefined ? { providerAccountId } : {}),
+      ...(preserveExactProofDetails && activeAccountId !== undefined ? { activeAccountId } : {}),
+      ...(preserveExactProofDetails && sharedAuthSurfaceId !== undefined ? { sharedAuthSurfaceId } : {}),
+      ...(preserveExactProofDetails ? { proofStrength } : {}),
+      ...(preserveExactProofDetails && source ? { source } : {}),
       ...(reason ? { reason } : {}),
     };
   }
@@ -287,11 +352,13 @@ function parseRuntimeStateSharingDegradedEvent(value: unknown): ConnectedService
   const effectiveStateMode = typeof record.effectiveStateMode === 'string' ? record.effectiveStateMode.trim() : '';
   const code = typeof record.code === 'string' ? record.code.trim() : '';
   if (!serviceId || !requestedStateMode || !effectiveStateMode || !code) return null;
+  const parsedServiceId = ConnectedServiceIdSchema.safeParse(serviceId);
+  if (!parsedServiceId.success) return null;
   const reason = typeof record.reason === 'string' && record.reason.trim() ? record.reason.trim() : undefined;
   const entryName = typeof record.entryName === 'string' && record.entryName.trim() ? record.entryName.trim() : undefined;
   return {
     type: 'provider_state_sharing_degraded',
-    serviceId,
+    serviceId: parsedServiceId.data,
     requestedStateMode,
     effectiveStateMode,
     code,
@@ -348,6 +415,51 @@ function buildStoredContent(params: Readonly<{
   };
 }
 
+function buildAgentEventPayload(params: Readonly<{
+  eventId: string;
+  data: TranscriptRawAgentEventV1;
+}>): Readonly<{
+  role: 'agent';
+  content: {
+    type: 'event';
+    id: string;
+    data: TranscriptRawAgentEventV1;
+  };
+}> {
+  return {
+    role: 'agent',
+    content: {
+      type: 'event',
+      id: params.eventId,
+      data: params.data,
+    },
+  };
+}
+
+async function commitAgentEventStoredMessage(params: Readonly<{
+  credentials: Credentials;
+  sessionId: string;
+  rawSession: Awaited<ReturnType<typeof fetchSessionById>>;
+  eventId: string;
+  data: TranscriptRawAgentEventV1;
+}>): Promise<void> {
+  await commitSessionStoredMessage({
+    token: params.credentials.token,
+    sessionId: params.sessionId,
+    localId: params.eventId,
+    messageRole: 'event',
+    attentionImpact: agentEventAttentionImpact(params.data),
+    content: buildStoredContent({
+      credentials: params.credentials,
+      rawSession: params.rawSession,
+      payload: buildAgentEventPayload({
+        eventId: params.eventId,
+        data: params.data,
+      }),
+    }),
+  });
+}
+
 export async function commitConnectedServiceAccountSwitchSessionEvent(params: Readonly<{
   credentials: Credentials;
   sessionId: string;
@@ -374,28 +486,17 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       deferral.awaitingBoundary ? 'awaiting-boundary' : 'awaiting-idle',
       randomUUID(),
     ].join(':');
-    await commitSessionStoredMessage({
-      token: params.credentials.token,
+    await commitAgentEventStoredMessage({
+      credentials: params.credentials,
       sessionId: params.sessionId,
-      localId: eventId,
-      messageRole: 'event',
-      content: buildStoredContent({
-        credentials: params.credentials,
-        rawSession,
-        payload: {
-          role: 'agent',
-          content: {
-            type: 'event',
-            id: eventId,
-            data: {
-              type: 'connected-service-account-switch-deferral',
-              policy: deferral.policy,
-              awaitingBoundary: deferral.awaitingBoundary,
-              timeoutMs: deferral.timeoutMs,
-            },
-          },
-        },
-      }),
+      rawSession,
+      eventId,
+      data: {
+        type: 'connected-service-account-switch-deferral',
+        policy: deferral.policy,
+        awaitingBoundary: deferral.awaitingBoundary,
+        timeoutMs: deferral.timeoutMs,
+      },
     });
     return;
   }
@@ -413,27 +514,16 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       deferralCompletion.reason,
       randomUUID(),
     ].join(':');
-    await commitSessionStoredMessage({
-      token: params.credentials.token,
+    await commitAgentEventStoredMessage({
+      credentials: params.credentials,
       sessionId: params.sessionId,
-      localId: eventId,
-      messageRole: 'event',
-      content: buildStoredContent({
-        credentials: params.credentials,
-        rawSession,
-        payload: {
-          role: 'agent',
-          content: {
-            type: 'event',
-            id: eventId,
-            data: {
-              type: 'connected-service-account-switch-deferral-completed',
-              policy: deferralCompletion.policy,
-              reason: deferralCompletion.reason,
-            },
-          },
-        },
-      }),
+      rawSession,
+      eventId,
+      data: {
+        type: 'connected-service-account-switch-deferral-completed',
+        policy: deferralCompletion.policy,
+        reason: deferralCompletion.reason,
+      },
     });
     return;
   }
@@ -450,32 +540,22 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       superseded.policy ?? 'unknown',
       randomUUID(),
     ].join(':');
-    await commitSessionStoredMessage({
-      token: params.credentials.token,
+    await commitAgentEventStoredMessage({
+      credentials: params.credentials,
       sessionId: params.sessionId,
-      localId: eventId,
-      messageRole: 'event',
-      content: buildStoredContent({
-        credentials: params.credentials,
-        rawSession,
-        payload: {
-          role: 'agent',
-          content: {
-            type: 'event',
-            id: eventId,
-            data: {
-              type: 'connected-service-account-switch-deferral-superseded',
-              ...(superseded.policy ? { policy: superseded.policy } : {}),
-            },
-          },
-        },
-      }),
+      rawSession,
+      eventId,
+      data: {
+        type: 'connected-service-account-switch-deferral-superseded',
+        ...(superseded.policy ? { policy: superseded.policy } : {}),
+      },
     });
     return;
   }
 
   const attempt = parseRuntimeSwitchAttemptEvent(params.event);
   if (attempt) {
+    if (isBackgroundConnectedServiceSwitchReason(attempt.rawReason ?? attempt.reason)) return;
     const rawSession = await fetchSessionById({
       token: params.credentials.token,
       sessionId: params.sessionId,
@@ -486,41 +566,31 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       attempt.ok ? 'ok' : 'failed',
       randomUUID(),
     ].join(':');
-    await commitSessionStoredMessage({
-      token: params.credentials.token,
+    await commitAgentEventStoredMessage({
+      credentials: params.credentials,
       sessionId: params.sessionId,
-      localId: eventId,
-      messageRole: 'event',
-      content: buildStoredContent({
-        credentials: params.credentials,
-        rawSession,
-        payload: {
-          role: 'agent',
-          content: {
-            type: 'event',
-            id: eventId,
-            data: {
-              type: 'connected-service-account-switch-attempt',
-              ok: attempt.ok,
-              action: attempt.action,
-              ...(attempt.attemptedContinuityMode ? { attemptedContinuityMode: attempt.attemptedContinuityMode } : {}),
-              ...(attempt.outcome ? { outcome: attempt.outcome } : {}),
-              ...(attempt.outcomeAction ? { outcomeAction: attempt.outcomeAction } : {}),
-              ...(attempt.errorCode ? { errorCode: attempt.errorCode } : {}),
-              ...(attempt.diagnostic ? { diagnostic: attempt.diagnostic } : {}),
-              ...(attempt.groupGeneration === undefined ? {} : { groupGeneration: attempt.groupGeneration }),
-              ...(attempt.sessionAdoption ? { sessionAdoption: attempt.sessionAdoption } : {}),
-              ...(attempt.sessionAdoptedGeneration === undefined
-                ? {}
-                : { sessionAdoptedGeneration: attempt.sessionAdoptedGeneration }),
-              ...(attempt.partialState ? { partialState: attempt.partialState } : {}),
-              ...(attempt.verificationByServiceId
-                ? { verificationByServiceId: attempt.verificationByServiceId }
-                : {}),
-            },
-          },
-        },
-      }),
+      rawSession,
+      eventId,
+      data: {
+        type: 'connected-service-account-switch-attempt',
+        ok: attempt.ok,
+        action: attempt.action,
+        ...(attempt.reason ? { reason: attempt.reason } : {}),
+        ...(attempt.attemptedContinuityMode ? { attemptedContinuityMode: attempt.attemptedContinuityMode } : {}),
+        ...(attempt.outcome ? { outcome: attempt.outcome } : {}),
+        ...(attempt.outcomeAction ? { outcomeAction: attempt.outcomeAction } : {}),
+        ...(attempt.errorCode ? { errorCode: attempt.errorCode } : {}),
+        ...(attempt.diagnostic ? { diagnostic: attempt.diagnostic } : {}),
+        ...(attempt.groupGeneration === undefined ? {} : { groupGeneration: attempt.groupGeneration }),
+        ...(attempt.sessionAdoption ? { sessionAdoption: attempt.sessionAdoption } : {}),
+        ...(attempt.sessionAdoptedGeneration === undefined
+          ? {}
+          : { sessionAdoptedGeneration: attempt.sessionAdoptedGeneration }),
+        ...(attempt.partialState ? { partialState: attempt.partialState } : {}),
+        ...(attempt.verificationByServiceId
+          ? { verificationByServiceId: attempt.verificationByServiceId }
+          : {}),
+      },
     });
     return;
   }
@@ -537,37 +607,28 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       degraded.serviceId,
       randomUUID(),
     ].join(':');
-    await commitSessionStoredMessage({
-      token: params.credentials.token,
+    await commitAgentEventStoredMessage({
+      credentials: params.credentials,
       sessionId: params.sessionId,
-      localId: eventId,
-      messageRole: 'event',
-      content: buildStoredContent({
-        credentials: params.credentials,
-        rawSession,
-        payload: {
-          role: 'agent',
-          content: {
-            type: 'event',
-            id: eventId,
-	            data: {
-	              type: 'provider-state-sharing-degraded',
-	              serviceId: degraded.serviceId,
-	              requestedStateMode: degraded.requestedStateMode,
-	              effectiveStateMode: degraded.effectiveStateMode,
-	              code: degraded.code,
-	              ...(degraded.reason ? { reason: degraded.reason } : {}),
-	            },
-	          },
-	        },
-	      }),
+      rawSession,
+      eventId,
+      data: {
+        type: 'provider-state-sharing-degraded',
+        serviceId: degraded.serviceId,
+        requestedStateMode: degraded.requestedStateMode,
+        effectiveStateMode: degraded.effectiveStateMode,
+        code: degraded.code,
+        ...(degraded.reason ? { reason: degraded.reason } : {}),
+      },
     });
     return;
   }
 
   const parsed = parseRuntimeSwitchEvent(params.event);
+  if (parsed && isBackgroundConnectedServiceSwitchReason(parsed.reason)) return;
   const reason = parsed ? mapSwitchReason(parsed.reason) : null;
   if (!parsed || !reason) return;
+  if (isSameProfileRuntimeSwitchEvent(parsed)) return;
 
   const rawSession = await fetchSessionById({
     token: params.credentials.token,
@@ -597,35 +658,22 @@ export async function commitConnectedServiceAccountSwitchSessionEvent(params: Re
       }).catch(() => null))?.displayName)
       : null)
     ?? readDisplayLabel(parsed.groupId);
-  const payload = {
-    role: 'agent',
-    content: {
-      type: 'event',
-      id: eventId,
-      data: {
-        type: 'connected-service-account-switch',
-        serviceId: parsed.serviceId,
-        groupId: parsed.groupId,
-        ...(groupLabel ? { groupLabel } : {}),
-        fromProfileId: parsed.fromProfileId,
-        toProfileId: parsed.toProfileId,
-        ...(fromProfileLabel ? { fromProfileLabel } : {}),
-        ...(toProfileLabel ? { toProfileLabel } : {}),
-        reason,
-        mode: parsed.mode,
-      },
-    },
-  };
-
-  await commitSessionStoredMessage({
-    token: params.credentials.token,
+  await commitAgentEventStoredMessage({
+    credentials: params.credentials,
     sessionId: params.sessionId,
-    localId: eventId,
-    messageRole: 'event',
-    content: buildStoredContent({
-      credentials: params.credentials,
-      rawSession,
-      payload,
-    }),
+    rawSession,
+    eventId,
+    data: {
+      type: 'connected-service-account-switch',
+      serviceId: parsed.serviceId,
+      groupId: parsed.groupId,
+      ...(groupLabel ? { groupLabel } : {}),
+      fromProfileId: parsed.fromProfileId,
+      toProfileId: parsed.toProfileId,
+      ...(fromProfileLabel ? { fromProfileLabel } : {}),
+      ...(toProfileLabel ? { toProfileLabel } : {}),
+      reason,
+      mode: parsed.mode,
+    },
   });
 }

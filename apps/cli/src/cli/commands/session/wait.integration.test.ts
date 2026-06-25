@@ -25,9 +25,19 @@ describe('happier session wait (integration)', () => {
   let sessionId = 'sess_integration_wait_123';
   let initialAgentStateCiphertext = '';
   let idleAgentStateCiphertext = '';
+  let sessionMetadataCiphertext = '';
+  let sessionDataEncryptionKeyBase64 = '';
   let transcriptMessages: Array<Record<string, unknown>> = [];
   let transcriptFetchCount = 0;
   let socketOnConnect: ((socket: ReturnType<typeof createApiSessionSocketStub>) => void) | null = null;
+
+  const waitForTranscriptFetch = async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (transcriptFetchCount > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(transcriptFetchCount).toBeGreaterThan(0);
+  };
 
   beforeEach(async () => {
     envScope = createEnvKeyScope(['HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_HOME_DIR']);
@@ -46,7 +56,7 @@ describe('happier session wait (integration)', () => {
     });
 
     const { encodeBase64: encodeBase64Session, encryptWithDataKey } = await import('@/api/encryption');
-    const metadataCiphertext = encodeBase64Session(
+    sessionMetadataCiphertext = encodeBase64Session(
       encryptWithDataKey({ path: '/tmp', tag: 'MyTag' }, dek),
       'base64',
     );
@@ -59,7 +69,7 @@ describe('happier session wait (integration)', () => {
       'base64',
     );
     initialAgentStateCiphertext = busyAgentStateCiphertext;
-    const dataEncryptionKeyBase64 = encodeBase64Session(envelope, 'base64');
+    sessionDataEncryptionKeyBase64 = encodeBase64Session(envelope, 'base64');
 
     server = createServer((req, res) => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`);
@@ -75,13 +85,13 @@ describe('happier session wait (integration)', () => {
               updatedAt: 2,
               active: false,
               activeAt: 0,
-              metadata: metadataCiphertext,
+              metadata: sessionMetadataCiphertext,
               metadataVersion: 0,
               agentState: initialAgentStateCiphertext,
               agentStateVersion: 0,
               pendingCount: 0,
               pendingVersion: 0,
-              dataEncryptionKey: dataEncryptionKeyBase64,
+              dataEncryptionKey: sessionDataEncryptionKeyBase64,
               share: null,
             },
           }),
@@ -543,8 +553,7 @@ describe('happier session wait (integration)', () => {
         }),
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(transcriptFetchCount).toBeGreaterThan(0);
+      await waitForTranscriptFetch();
 
       transcriptMessages = [
         {
@@ -584,6 +593,174 @@ describe('happier session wait (integration)', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(settled).toBe(false);
+
+      await waitPromise;
+
+      const parsed = output.json();
+      expect(parsed.ok).toBe(true);
+      expect(parsed.kind).toBe('session_wait');
+      expect(parsed.data?.sessionId).toBe(sessionId);
+      expect(parsed.data?.idle).toBe(true);
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('does not let an idle session projection mask a freshly committed user turn', async () => {
+    initialAgentStateCiphertext = idleAgentStateCiphertext;
+    transcriptMessages = [];
+
+    server?.removeAllListeners('request');
+    server?.on('request', (req, res) => {
+      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`);
+      if (req.method === 'GET' && url.pathname === `/v2/sessions/${sessionId}`) {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(
+          JSON.stringify({
+            session: {
+              id: sessionId,
+              seq: 1,
+              createdAt: 1,
+              updatedAt: 2,
+              active: false,
+              activeAt: 0,
+              metadata: sessionMetadataCiphertext,
+              metadataVersion: 0,
+              agentState: initialAgentStateCiphertext,
+              agentStateVersion: 0,
+              latestTurnStatus: 'completed',
+              pendingPermissionRequestCount: 0,
+              pendingUserActionRequestCount: 0,
+              pendingCount: 0,
+              pendingVersion: 0,
+              dataEncryptionKey: sessionDataEncryptionKeyBase64,
+              share: null,
+            },
+          }),
+        );
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === `/v1/sessions/${sessionId}/messages`) {
+        transcriptFetchCount += 1;
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ messages: transcriptMessages }));
+        return;
+      }
+
+      res.statusCode = 404;
+      res.end();
+    });
+
+    socketOnConnect = (currentSocket) => {
+      setTimeout(() => {
+        currentSocket.trigger('update', {
+          id: 'u_projection_idle',
+          seq: 2,
+          createdAt: Date.now(),
+          body: {
+            t: 'update-session',
+            id: sessionId,
+            latestTurnStatus: 'completed',
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+          },
+        });
+      }, 10);
+      setTimeout(() => {
+        currentSocket.trigger('update', {
+          id: 'u_projection_idle_after_fresh_turn',
+          seq: 4,
+          createdAt: Date.now(),
+          body: {
+            t: 'update-session',
+            id: sessionId,
+            latestTurnStatus: 'completed',
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+          },
+        });
+      }, 450);
+    };
+
+    const { handleSessionCommand } = await import('./index');
+    const output = captureConsoleJsonOutput();
+    const machineKeySeed = new Uint8Array(32).fill(8);
+
+    try {
+      const waitPromise = handleSessionCommand(['wait', sessionId, '--timeout', '1', '--json'], {
+        readCredentialsFn: async () => ({
+          token: 'token_test',
+          encryption: {
+            type: 'dataKey',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+            machineKey: machineKeySeed,
+          },
+        }),
+      });
+
+      await waitForTranscriptFetch();
+
+      transcriptMessages = [
+        {
+          id: 'm1',
+          seq: 1,
+          createdAt: 1,
+          content: {
+            t: 'plain',
+            v: {
+              role: 'user',
+              content: { type: 'text', text: 'created-session prompt' },
+            },
+          },
+        },
+        {
+          id: 'm2',
+          seq: 2,
+          createdAt: 2,
+          content: {
+            t: 'plain',
+            v: {
+              role: 'agent',
+              content: {
+                type: 'acp',
+                provider: 'codex',
+                data: { type: 'task_started', id: 'task_wait_projection_race' },
+              },
+            },
+          },
+        },
+      ];
+
+      let settled = false;
+      void waitPromise.finally(() => {
+        settled = true;
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 550));
+      expect(settled).toBe(false);
+
+      transcriptMessages = [
+        ...transcriptMessages,
+        {
+          id: 'm3',
+          seq: 3,
+          createdAt: 3,
+          content: {
+            t: 'plain',
+            v: {
+              role: 'agent',
+              content: {
+                type: 'acp',
+                provider: 'codex',
+                data: { type: 'task_complete', id: 'task_wait_projection_race' },
+              },
+            },
+          },
+        },
+      ];
 
       await waitPromise;
 

@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
@@ -264,12 +263,6 @@ export const DiagnosisView = React.memo(function DiagnosisView() {
         setReport(diagnosisReport);
     });
 
-    const [copying, copyReportJson] = useHappyAction(async () => {
-        if (!report) return;
-        await Clipboard.setStringAsync(JSON.stringify(report, null, 2));
-        Modal.alert(t('common.copied'), t('items.copiedToClipboard', { label: t('diagnosis.actions.copyReport') }));
-    });
-
     const [parsing, parsePasted] = useHappyAction(async () => {
         const result = parseDoctorSnapshotSafe(pastedJson);
         if (result.ok) {
@@ -337,9 +330,8 @@ export const DiagnosisView = React.memo(function DiagnosisView() {
                         title={t('diagnosis.actions.copyReport')}
                         subtitle={t('diagnosis.actions.copyReportSubtitle')}
                         icon={<Ionicons name="copy-outline" size={24} color={theme.colors.accent.indigo} />}
-                        onPress={copyReportJson}
+                        copy={report ? JSON.stringify(report, null, 2) : false}
                         disabled={!report}
-                        loading={copying}
                         showChevron={false}
                     />
                 </ItemGroup>

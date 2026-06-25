@@ -1057,4 +1057,33 @@ describe('sessionScanner', () => {
       uuid: 'assistant-auth-error-with-coarse-mtime',
     }))
   })
+
+  it('discovers unhooked assistant API-error transcripts that use Claude SDK error_status', async () => {
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      discoverNewSessions: true,
+    })
+
+    const sessionId = '22222222-2222-4222-8222-222222222222'
+    const sessionFile = join(projectDir, `${sessionId}.jsonl`)
+    await writeFile(sessionFile, `${JSON.stringify({
+      type: 'assistant',
+      uuid: 'assistant-auth-error-status-only',
+      timestamp: new Date().toISOString(),
+      sessionId,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Connection error.' }],
+      },
+      error_status: 401,
+    } as RawJSONLines)}\n`)
+
+    await waitFor(() => collectedMessages.some((message) => (message as any).uuid === 'assistant-auth-error-status-only'), 2_500)
+
+    expect(collectedMessages).toContainEqual(expect.objectContaining({
+      uuid: 'assistant-auth-error-status-only',
+    }))
+  })
 })

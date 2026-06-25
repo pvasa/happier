@@ -236,6 +236,52 @@ describe('buildSessionListRenderableFromSession', () => {
         expect(renderable.hasUnreadMessages).toBe(false);
     });
 
+    it('does not treat trailing provider maintenance events as unread or meaningful activity', () => {
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_provider_event_tail',
+            seq: 946,
+            lastViewedSessionSeq: 945,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            latestTurnStatus: 'in_progress',
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+        } as any, [
+            {
+                id: 'm-visible',
+                kind: 'agent-text',
+                seq: 945,
+                localId: null,
+                createdAt: 1_000,
+                text: 'Visible assistant message',
+            },
+            {
+                id: 'm-provider-state',
+                kind: 'agent-event',
+                seq: 946,
+                createdAt: 5_000,
+                event: {
+                    type: 'provider-state-sharing-degraded',
+                    serviceId: 'anthropic',
+                    requestedStateMode: 'shared',
+                    effectiveStateMode: 'isolated',
+                    code: 'state_symlink_unavailable',
+                },
+            },
+        ]);
+
+        expect(renderable.hasUnreadMessages).toBe(false);
+        expect(renderable.meaningfulActivityAt).toBe(1_000);
+    });
+
     it('keeps rows unread when a displayable message is newer than the cursor', () => {
         const renderable = buildSessionListRenderableFromSession({
             id: 's_unread_visible',
@@ -641,7 +687,7 @@ describe('buildSessionListRenderableFromSession', () => {
         expect(renderable.hasPendingUserActionRequests).toBe(false);
     });
 
-    it('does not mark pending requests as attention when the session is inactive', () => {
+    it('suppresses inactive permission requests but keeps inactive user-action requests visible', () => {
         const renderable = buildSessionListRenderableFromSession({
             id: 's1',
             seq: 1,
@@ -668,7 +714,7 @@ describe('buildSessionListRenderableFromSession', () => {
         } as any);
 
         expect(renderable.hasPendingPermissionRequests).toBe(false);
-        expect(renderable.hasPendingUserActionRequests).toBe(false);
+        expect(renderable.hasPendingUserActionRequests).toBe(true);
     });
 
     it('does not keep stale pending flags when the transcript already marked the request canceled', () => {

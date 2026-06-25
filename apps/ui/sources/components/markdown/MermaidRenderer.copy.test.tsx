@@ -10,9 +10,18 @@ import { installMarkdownCommonModuleMocks } from './markdownTestHelpers';
 const clipboardMocks = vi.hoisted(() => ({
   setStringAsync: vi.fn(async () => {}),
 }));
+const modalMocks = vi.hoisted(() => ({
+  alert: vi.fn(),
+}));
 vi.mock('expo-clipboard', () => clipboardMocks);
 
 installMarkdownCommonModuleMocks({
+    modal: async () => {
+        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+        return createModalModuleMock({
+            spies: modalMocks,
+        }).module;
+    },
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
@@ -47,9 +56,12 @@ describe('MermaidRenderer', () => {
       expect(screen.findByTestId('mermaid-copy-button')).not.toBeNull();
 
       clipboardMocks.setStringAsync.mockClear();
+      modalMocks.alert.mockClear();
       await screen.pressByTestIdAsync('mermaid-copy-button');
 
       expect(clipboardMocks.setStringAsync).toHaveBeenCalledWith('graph TD\\nA-->B');
+      expect(modalMocks.alert).not.toHaveBeenCalledWith('common.success', 'markdown.codeCopied', expect.anything());
+      expect(screen.findByTestId('mermaid-copy-feedback')).not.toBeNull();
     } finally {
       act(() => {
         tree?.unmount();

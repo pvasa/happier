@@ -26,6 +26,13 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 installNewSessionScreenModelCommonModuleMocks();
 
+vi.mock('@/scm/repository/repoScmBranchService', () => ({
+    repoScmBranchService: {
+        fetchBranchesForMachinePath: vi.fn(async () => []),
+        readCachedBranchesForMachinePath: vi.fn(() => []),
+    },
+}));
+
 type UseNewSessionCheckoutActionChipParams = Parameters<typeof useNewSessionCheckoutActionChipType>[0];
 
 const DEFAULT_WORKTREES: NonNullable<ScmWorkingSnapshot['repo']['worktrees']> = [
@@ -352,6 +359,70 @@ describe('useNewSessionCheckoutActionChip', () => {
         // ~/repo (the canonical current dir under tilde) must be suppressed; only the release row remains.
         expect(ids).not.toContain('checkout:~/repo');
         expect(ids).toContain('checkout:/Users/leeroy/repo/.worktrees/release');
+    });
+
+    it('commits a custom worktree name from the name step into the creation draft', async () => {
+        const setCheckoutCreationDraft = vi.fn();
+        const repoScmBranchServiceModule = await import('@/scm/repository/repoScmBranchService');
+        (repoScmBranchServiceModule.repoScmBranchService.fetchBranchesForMachinePath as ReturnType<typeof vi.fn>)
+            .mockResolvedValue([{ name: 'main', type: 'local', upstream: null }]);
+
+        const chip = await renderCheckoutChip({
+            repoScmSnapshot: makeSnapshot([
+                { path: '/repo', branch: 'main', isCurrent: true, isMain: true },
+            ]),
+            checkoutChipModel: makeCheckoutChipModel([
+                { id: 'current_path', kind: 'current_path', path: '/repo' },
+                { id: 'create_git_worktree', kind: 'create_git_worktree' },
+            ]),
+            selectedPath: '/repo',
+            setCheckoutCreationDraft,
+        });
+
+        const createStep = expectDrillDownOption(
+            findCheckoutChipOptionFromChip(chip, 'worktree:quick-actions', 'create_git_worktree'),
+        );
+        const localSection = createStep.sections.find((section) => section.id === 'worktree:branches:local');
+        if (localSection?.kind !== 'dynamic') throw new Error('local branches section must be dynamic');
+        const resolved = await localSection.resolve('', new AbortController().signal);
+        const branchOption = resolved.options.find((option) => option.id === 'branch:local:main');
+        const nameStep = branchOption && 'openStep' in branchOption ? branchOption.openStep : undefined;
+        expect(nameStep?.id).toBe('worktree-name');
+        expect(nameStep?.inputMode).toBe('value');
+
+        await act(async () => {
+            nameStep?.onCommitInputValue?.('My Custom Name');
+        });
+
+        expect(setCheckoutCreationDraft).toHaveBeenCalledTimes(1);
+        const updater = setCheckoutCreationDraft.mock.calls[0]![0] as (current: unknown) => unknown;
+        // The typed name is git-sanitized and stored as the authoritative draft displayName.
+        expect(updater(null)).toEqual({
+            kind: 'git_worktree',
+            displayName: 'My-Custom-Name',
+            baseRef: 'main',
+            branchMode: 'new',
+        });
+    });
+
+    it('selects a "New worktree: <name>" pending row at the top when a creation draft is set', async () => {
+        const chip = await renderCheckoutChip({
+            repoScmSnapshot: makeSnapshot([
+                { path: '/repo', branch: 'main', isCurrent: true, isMain: true },
+            ]),
+            checkoutChipModel: makeCheckoutChipModel([
+                { id: 'current_path', kind: 'current_path', path: '/repo' },
+                { id: 'create_git_worktree', kind: 'create_git_worktree' },
+            ], 'create_git_worktree'),
+            selectedPath: '/repo',
+            checkoutCreationDraft: { kind: 'git_worktree', displayName: 'clever-cloud', baseRef: 'main', branchMode: 'new' },
+        });
+
+        // The popover highlights the synthetic pending row (not the generic create entry).
+        expect(chip?.collapsedOptionsPopover?.selectedOptionId).toBe('pending_git_worktree');
+        expect(chip?.collapsedOptionsPopover?.label).toContain('clever-cloud');
+        const pendingRow = findCheckoutChipOptionFromChip(chip, 'worktree:pending', 'pending_git_worktree');
+        expect(pendingRow?.label).toContain('clever-cloud');
     });
 
     it('returns null when the SCM snapshot does not indicate a git repository', async () => {

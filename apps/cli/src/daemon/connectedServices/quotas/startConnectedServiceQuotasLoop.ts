@@ -1,5 +1,5 @@
 export type ConnectedServiceQuotasLoopHandle = Readonly<{
-  stop: () => void;
+  stop: () => Promise<void>;
   pause: () => void;
   resume: () => void;
 }>;
@@ -38,8 +38,12 @@ export function startConnectedServiceQuotasLoop(params: Readonly<{
     params.clearTimeoutFn ?? ((handle) => clearTimeout(handle as unknown as ReturnType<typeof setTimeout>));
 
   let stopped = false;
-  let inFlight = false;
+  let inFlight: Promise<void> | null = null;
   let paused = false;
+  const waitForInFlight = async (): Promise<void> => {
+    const pending = inFlight;
+    if (pending) await pending;
+  };
   if (tickJitterMs > 0 || params.setTimeoutFn || params.clearTimeoutFn) {
     let timeoutHandle: unknown = null;
     const scheduleNext = (): void => {
@@ -48,7 +52,6 @@ export function startConnectedServiceQuotasLoop(params: Readonly<{
       (timeoutHandle as unknown as { unref?: () => void })?.unref?.();
     };
     const finishTick = (): void => {
-      inFlight = false;
       scheduleNext();
     };
     const runTick = (): void => {
@@ -58,13 +61,13 @@ export function startConnectedServiceQuotasLoop(params: Readonly<{
         scheduleNext();
         return;
       }
-      inFlight = true;
-      void (async () => {
+      inFlight = (async () => {
         try {
           await params.coordinator.tickOnce();
         } catch (error) {
           params.onTickError(error);
         } finally {
+          inFlight = null;
           finishTick();
         }
       })();
@@ -72,13 +75,17 @@ export function startConnectedServiceQuotasLoop(params: Readonly<{
     scheduleNext();
 
     return {
-      stop: () => {
-        if (stopped) return;
+      stop: async () => {
+        if (stopped) {
+          await waitForInFlight();
+          return;
+        }
         stopped = true;
         if (timeoutHandle !== null) {
           clearTimeoutImpl(timeoutHandle);
           timeoutHandle = null;
         }
+        await waitForInFlight();
       },
       pause: () => {
         paused = true;
@@ -92,24 +99,27 @@ export function startConnectedServiceQuotasLoop(params: Readonly<{
   const intervalHandle = setIntervalImpl(() => {
     if (stopped || inFlight) return;
     if (paused) return;
-    inFlight = true;
-    void (async () => {
+    inFlight = (async () => {
       try {
         await params.coordinator.tickOnce();
       } catch (error) {
         params.onTickError(error);
       } finally {
-        inFlight = false;
+        inFlight = null;
       }
     })();
   }, tickMs);
   (intervalHandle as unknown as { unref?: () => void })?.unref?.();
 
   return {
-    stop: () => {
-      if (stopped) return;
+    stop: async () => {
+      if (stopped) {
+        await waitForInFlight();
+        return;
+      }
       stopped = true;
       clearIntervalImpl(intervalHandle);
+      await waitForInFlight();
     },
     pause: () => {
       paused = true;

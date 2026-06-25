@@ -35,10 +35,20 @@ describe('Vitest lane separation', () => {
             readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
         ) as { scripts?: Record<string, string> };
 
-        expect(packageJson.scripts?.['test:unit']).toBe('vitest run --config vitest.config.ts');
+        const fastScripts = [
+            packageJson.scripts?.['test:unit'],
+            packageJson.scripts?.['test:integration'],
+        ].join('\n');
+
+        expect(packageJson.scripts?.['test:unit']).toContain(
+            'vitest run --config vitest.config.ts',
+        );
+        expect(packageJson.scripts?.['test:unit']).toContain('test:import-cycles');
         expect(packageJson.scripts?.['test:integration']).toBe(
             'node scripts/runVitestShards.mjs --config vitest.integration.config.ts',
         );
+        expect(fastScripts).not.toContain('runPkgrollBuild');
+        expect(fastScripts).not.toContain('syncPackageDist');
 
         // `yarn vitest ...` (without going through `yarn test:unit`) should still build internal
         // workspaces first so protocol/agents dist artifacts are never stale/missing.

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY } from '@happier-dev/protocol';
 
 import type { ResumeSessionOptions, ResumeSessionResult } from '@/sync/ops/sessions';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -562,6 +563,54 @@ describe('submitSessionUserMessage', () => {
         expect(calls[0]).toMatchObject({
             type: 'enqueue',
             metaOverrides: { reasoningEffort: 'xhigh' },
+        });
+    });
+
+    it('persists explicit pending delivery intent on server-pending rows', async () => {
+        const subject = await expectSubject();
+        if (!subject) return;
+        const { calls, port } = createPort();
+
+        const result = await subject.submitSessionUserMessage(port, {
+            sessionId: 's1',
+            session: createSession({
+                active: true,
+                presence: 'online',
+                agentStateVersion: 1,
+                thinking: true,
+                thinkingAt: 1_000,
+                agentState: {
+                    controlledByUser: false,
+                    capabilities: {
+                        inFlightSteer: true,
+                        inFlightSteerSupported: true,
+                        inFlightSteerAvailable: true,
+                    },
+                } as any,
+            }),
+            text: 'queue this after the current turn',
+            metaOverrides: {
+                reasoningEffort: 'xhigh',
+                [SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY]: 'default',
+            },
+            configuredMode: 'server_pending',
+            explicitMode: 'server_pending',
+            busySteerSendPolicy: 'steer_immediately',
+            resumeCapabilityOptions: { accountSettings: {} },
+            nowMs: 1_100,
+        });
+
+        expect(result).toMatchObject({
+            type: 'wake_pending',
+            persistence: 'pending',
+        });
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toMatchObject({
+            type: 'enqueue',
+            metaOverrides: {
+                reasoningEffort: 'xhigh',
+                [SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY]: 'explicit_pending',
+            },
         });
     });
 

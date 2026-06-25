@@ -8,6 +8,7 @@ export type OpenCodeGlobalEvent = Readonly<{
 
 export type OpenCodeSession = Readonly<{
   id: string;
+  directory?: string;
 }>;
 
 export type OpenCodeModelRef = Readonly<{

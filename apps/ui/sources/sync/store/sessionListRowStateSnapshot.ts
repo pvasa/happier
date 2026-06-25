@@ -7,6 +7,9 @@ import {
     isSessionListRenderableWarmCacheProgressOnlyChange,
     type SessionListRenderableSession,
 } from '@/sync/domains/session/listing/sessionListRenderable';
+import {
+    SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
+} from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { formatShortRelativeTimeAt } from '@/utils/time/formatShortRelativeTime';
 
@@ -114,6 +117,24 @@ function resolveProgressTimestamp(renderable: SessionListRenderableSession): num
     return Math.max(updatedAt, meaningfulActivityAt);
 }
 
+function canReuseActiveHeartbeatAdvance(input: Readonly<{
+    previous: SessionListRenderableSession;
+    next: SessionListRenderableSession;
+    nowMs: number;
+}>): boolean {
+    const { previous, next, nowMs } = input;
+    if (previous.activeAt === next.activeAt) return true;
+
+    const previousActiveAt = finiteTimestamp(previous.activeAt);
+    const nextActiveAt = finiteTimestamp(next.activeAt);
+    if (previousActiveAt === null || nextActiveAt === null) return false;
+    if (nextActiveAt <= previousActiveAt) return false;
+    if (nextActiveAt - previousActiveAt >= ROW_PROGRESS_RENDERABLE_MIN_UPDATE_INTERVAL_MS) return false;
+
+    return previousActiveAt + SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - nowMs
+        > ROW_PROGRESS_RENDERABLE_MIN_UPDATE_INTERVAL_MS;
+}
+
 function hasSameRelativeProgressLabels(
     previous: SessionListRenderableSession,
     next: SessionListRenderableSession,
@@ -149,7 +170,7 @@ function shouldReusePreviousProgressRenderable(input: Readonly<{
     const { previous, next, nowMs } = input;
     if (!previous || !next || previous === next) return false;
     if (!isSessionListRenderableWarmCacheProgressOnlyChange(previous, next)) return false;
-    if (previous.activeAt !== next.activeAt) return false;
+    if (!canReuseActiveHeartbeatAdvance({ previous, next, nowMs })) return false;
 
     const previousTimestamp = resolveProgressTimestamp(previous);
     const nextTimestamp = resolveProgressTimestamp(next);

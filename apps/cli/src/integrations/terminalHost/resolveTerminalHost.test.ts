@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveTerminalHost } from './resolveTerminalHost';
 import type { TerminalHostAdapter, TerminalHostResolverPlatform } from './_types';
 
-function adapter(kind: 'tmux' | 'zellij'): TerminalHostAdapter {
+function adapter(kind: 'tmux' | 'zellij' | 'windows_console'): TerminalHostAdapter {
   return {
     kind,
     createOrAttachHost: async () => {
@@ -45,11 +45,23 @@ describe('resolveTerminalHost', () => {
     expect(result).toMatchObject({ status: 'resolved', adapter: { kind: 'zellij' }, reason: 'tmux_unavailable' });
   });
 
-  it('uses zellij on Windows x64 auto and disables Windows arm64', () => {
+  it('falls back to tmux on POSIX when zellij is selected but unavailable', () => {
+    const result = resolveTerminalHost({
+      preference: 'zellij',
+      platform: { os: 'linux', arch: 'arm64' },
+      adapters: { tmux: adapter('tmux') },
+      tmuxAvailable: true,
+      zellijAvailable: false,
+    });
+
+    expect(result).toMatchObject({ status: 'resolved', adapter: { kind: 'tmux' }, reason: 'zellij_unavailable_tmux_fallback' });
+  });
+
+  it('prefers a Windows console host on Windows x64 auto and disables Windows arm64', () => {
     const windowsX64 = resolveTerminalHost({
       preference: 'auto',
       platform: { os: 'win32', arch: 'x64' },
-      adapters: { zellij: adapter('zellij') },
+      adapters: { windows_console: adapter('windows_console'), zellij: adapter('zellij') },
       tmuxAvailable: false,
       zellijAvailable: true,
     });
@@ -61,7 +73,83 @@ describe('resolveTerminalHost', () => {
       zellijAvailable: true,
     });
 
-    expect(windowsX64).toMatchObject({ status: 'resolved', adapter: { kind: 'zellij' } });
+    expect(windowsX64).toMatchObject({
+      status: 'resolved',
+      adapter: { kind: 'windows_console' },
+      reason: 'windows_console_available',
+    });
+    expect(windowsArm64).toMatchObject({ status: 'disabled', reason: 'windows_arm64_unsupported' });
+  });
+
+  it('fails closed on Windows x64 auto when no Windows console host is available', () => {
+    const result = resolveTerminalHost({
+      preference: 'auto',
+      platform: { os: 'win32', arch: 'x64' },
+      adapters: { zellij: adapter('zellij') },
+      tmuxAvailable: false,
+      zellijAvailable: true,
+    });
+    const withoutZellij = resolveTerminalHost({
+      preference: 'auto',
+      platform: { os: 'win32', arch: 'x64' },
+      adapters: {},
+      tmuxAvailable: false,
+      zellijAvailable: false,
+    });
+
+    expect(result).toMatchObject({ status: 'disabled', reason: 'windows_zellij_unvalidated' });
+    expect(withoutZellij).toMatchObject({ status: 'disabled', reason: 'windows_zellij_unvalidated' });
+  });
+
+  it('uses the Windows console host on Windows arm64 auto when available', () => {
+    const result = resolveTerminalHost({
+      preference: 'auto',
+      platform: { os: 'win32', arch: 'arm64' },
+      adapters: { windows_console: adapter('windows_console'), zellij: adapter('zellij') },
+      tmuxAvailable: false,
+      zellijAvailable: true,
+    });
+
+    expect(result).toMatchObject({
+      status: 'resolved',
+      adapter: { kind: 'windows_console' },
+      reason: 'windows_console_available',
+    });
+  });
+
+  it('uses the forced Windows console host on Windows arm64 when available', () => {
+    const result = resolveTerminalHost({
+      preference: 'windows_console',
+      platform: { os: 'win32', arch: 'arm64' },
+      adapters: { windows_console: adapter('windows_console') },
+      tmuxAvailable: false,
+      zellijAvailable: false,
+    });
+
+    expect(result).toMatchObject({
+      status: 'resolved',
+      adapter: { kind: 'windows_console' },
+      reason: 'windows_console_forced',
+    });
+  });
+
+  it('fails closed when zellij is forced on native Windows', () => {
+    const windowsX64 = resolveTerminalHost({
+      preference: 'zellij',
+      platform: { os: 'win32', arch: 'x64' },
+      adapters: { zellij: adapter('zellij') },
+      tmuxAvailable: false,
+      zellijAvailable: true,
+    });
+    const windowsArm64 = resolveTerminalHost({
+      preference: 'zellij',
+      platform: { os: 'win32', arch: 'arm64' },
+      adapters: { zellij: adapter('zellij') },
+      tmuxAvailable: false,
+      zellijAvailable: true,
+    });
+
+    expect(windowsX64).toMatchObject({ status: 'disabled', reason: 'windows_zellij_unvalidated' });
     expect(windowsArm64).toMatchObject({ status: 'disabled', reason: 'windows_arm64_unsupported' });
   });
 

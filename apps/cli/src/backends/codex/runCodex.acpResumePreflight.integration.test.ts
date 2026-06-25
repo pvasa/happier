@@ -969,6 +969,64 @@ describe('runCodex CodexACP resume behavior', () => {
     });
   });
 
+  it('routes Codex ChatGPT refresh bridge requests through the live-applied selection after direct auth apply', async () => {
+    resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
+      happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
+      mcpServers: {},
+    }));
+    process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] = JSON.stringify([{
+      kind: 'group',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      activeProfileId: 'old',
+      fallbackProfileId: 'backup',
+      generation: 7,
+    }]);
+    const { runCodex } = await import('./runCodex');
+
+    await runCodex({
+      credentials: { token: 'test' } as Credentials,
+      startedBy: 'terminal',
+      startingMode: 'remote',
+      codexBackendMode: 'appServer',
+    } as any).catch(() => undefined);
+
+    const runtimeArgs = createCodexAppServerRuntimeSpy.mock.calls[0]?.[0] as {
+      onChatGptAuthTokensRefresh?: (input: unknown) => Promise<unknown>;
+      onConnectedServiceAuthGenerationApplied?: (input: Readonly<{ selection: unknown }>) => Promise<void> | void;
+    } | undefined;
+    expect(runtimeArgs?.onChatGptAuthTokensRefresh).toBeTypeOf('function');
+    expect(runtimeArgs?.onConnectedServiceAuthGenerationApplied).toBeTypeOf('function');
+
+    await runtimeArgs!.onConnectedServiceAuthGenerationApplied!({
+      selection: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        activeProfileId: 'new',
+        fallbackProfileId: 'old',
+        generation: 8,
+      },
+    });
+    await expect(runtimeArgs!.onChatGptAuthTokensRefresh!({ chatgptPlanType: null })).resolves.toEqual({
+      accessToken: 'fresh-access',
+      chatgptAccountId: 'acct_123',
+      chatgptPlanType: 'plus',
+    });
+    expect(refreshDaemonOpenAiCodexChatGptAuthTokensForBridgeSpy).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      selection: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        activeProfileId: 'new',
+        fallbackProfileId: 'old',
+        generation: 8,
+      },
+      chatgptPlanType: null,
+    });
+  });
+
   it('routes Codex ChatGPT refresh bridge requests from connected-service session metadata when env binding is missing', async () => {
     resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
       happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
@@ -1434,7 +1492,8 @@ describe('runCodex CodexACP resume behavior', () => {
           },
           isolate: false,
           hash: 'hash-compact',
-          maxUserMessageSeq: 63,
+          maxUserMessageSeq: null,
+          userMessageLocalIds: ['codex-compact-63'],
         };
       }
       return null;
@@ -1460,7 +1519,9 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(compactContext).toHaveBeenCalledWith('/compact');
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(flushTurn).toHaveBeenCalled();
-    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(63);
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(null, {
+      localIds: ['codex-compact-63'],
+    });
   });
 
   it('confirms locally consumed /clear commands when provider delivery is deferred', async () => {
@@ -1501,7 +1562,8 @@ describe('runCodex CodexACP resume behavior', () => {
           },
           isolate: false,
           hash: 'hash-clear',
-          maxUserMessageSeq: 64,
+          maxUserMessageSeq: null,
+          userMessageLocalIds: ['codex-clear-64'],
         };
       }
       return null;
@@ -1525,7 +1587,9 @@ describe('runCodex CodexACP resume behavior', () => {
 
     expect(reset).toHaveBeenCalled();
     expect(sendPrompt).not.toHaveBeenCalled();
-    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(64);
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(null, {
+      localIds: ['codex-clear-64'],
+    });
   });
 
   it('passes the requested directory to the Codex app-server runtime', async () => {
@@ -1912,7 +1976,7 @@ describe('runCodex CodexACP resume behavior', () => {
 
     let observedQueuedMessageText: string | null = null;
     let observedQueuedMessageCount = 0;
-    let acceptedPromptCallback: ((input: Readonly<{ userMessageSeq: number | null }>) => void) | null = null;
+    let acceptedPromptCallback: ((input: Readonly<{ localIds?: readonly string[] | null; userMessageSeq: number | null }>) => void) | null = null;
     const appServerRuntime = {
       getSessionId: () => 'thread-app-server',
       supportsInFlightSteer: () => true,
@@ -1924,8 +1988,11 @@ describe('runCodex CodexACP resume behavior', () => {
       setSessionMode: vi.fn(async () => {}),
       setSessionModel: vi.fn(async () => {}),
       setSessionConfigOption: vi.fn(async () => {}),
-      steerPrompt: vi.fn(async (_prompt: string, options?: { userMessageSeq?: number | null }) => {
-        acceptedPromptCallback?.({ userMessageSeq: options?.userMessageSeq ?? null });
+      steerPrompt: vi.fn(async (_prompt: string, options?: { localId?: string | null; userMessageSeq?: number | null }) => {
+        acceptedPromptCallback?.({
+          localIds: typeof options?.localId === 'string' ? [options.localId] : null,
+          userMessageSeq: options?.userMessageSeq ?? null,
+        });
       }),
       sendPrompt: vi.fn(async () => {}),
       setOnPromptAcceptedByProvider: vi.fn((callback) => {
@@ -1981,10 +2048,13 @@ describe('runCodex CodexACP resume behavior', () => {
         },
       },
       localId: 'local-user-message-1',
+      localIds: ['local-user-message-1'],
       userMessageSeq: 91,
     });
     expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledTimes(1);
-    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(91);
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(91, {
+      localIds: ['local-user-message-1'],
+    });
     expect(appServerRuntime.sendPrompt).not.toHaveBeenCalled();
     expect(lastSessionClient?.updateAgentState).toHaveBeenCalled();
     const updatedAgentState = (lastSessionClient?.updateAgentState as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.({});
@@ -1995,7 +2065,7 @@ describe('runCodex CodexACP resume behavior', () => {
     }
   });
 
-  it('requeues resolved in-flight steer prompts reported undeliverable before provider acceptance', async () => {
+  it('requeues resolved in-flight steer prompts by localId when reported undeliverable before provider acceptance', async () => {
     resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
       happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
       mcpServers: {},
@@ -2023,17 +2093,22 @@ describe('runCodex CodexACP resume behavior', () => {
       return run;
     });
 
-    let acceptedPromptCallback: ((input: Readonly<{ userMessageSeq: number | null }>) => void) | null = null;
+    let acceptedPromptCallback: ((input: Readonly<{ localIds?: readonly string[] | null; userMessageSeq: number | null }>) => void) | null = null;
     let undeliverableCallback:
-      ((prompts: ReadonlyArray<Readonly<{ text: string; userMessageSeq: number | null }>>) => void)
+      ((prompts: ReadonlyArray<Readonly<{ localIds?: readonly string[] | null; text: string; userMessageSeq: number | null }>>) => void)
       | null = null;
-    const steerPrompt = vi.fn(async (_prompt: string, options?: { userMessageSeq?: number | null }) => {
+    const steerPrompt = vi.fn(async (_prompt: string, options?: {
+      localId?: string | null;
+      localIds?: readonly string[] | null;
+      userMessageSeq?: number | null;
+    }) => {
+      const localIds = options?.localIds ?? (typeof options?.localId === 'string' ? [options.localId] : null);
       const userMessageSeq = options?.userMessageSeq ?? null;
       if (steerPrompt.mock.calls.length === 1) {
-        undeliverableCallback?.([{ text: 'not-used-for-requeue-lookup', userMessageSeq }]);
+        undeliverableCallback?.([{ localIds, text: 'not-used-for-requeue-lookup', userMessageSeq }]);
         return;
       }
-      acceptedPromptCallback?.({ userMessageSeq });
+      acceptedPromptCallback?.({ localIds, userMessageSeq });
     });
     const appServerRuntime = {
       getSessionId: () => 'thread-app-server',
@@ -2072,7 +2147,7 @@ describe('runCodex CodexACP resume behavior', () => {
           content: { text: 'steer after replay seed' },
           meta: { source: 'steer-undeliverable-test' },
           localId: 'local-steer-undeliverable',
-        }, { seq: 92 });
+        }, { seq: null });
       }
       const queued = await opts.messageQueue.waitForMessagesAndGetAsString();
       observedRequeuedBatch = queued?.message ?? null;
@@ -2096,12 +2171,20 @@ describe('runCodex CodexACP resume behavior', () => {
     }
 
     expect(steerPrompt).toHaveBeenCalledTimes(2);
-    expect(steerPrompt).toHaveBeenNthCalledWith(1, 'STEER REPLAY SEED\n\nsteer after replay seed', expect.objectContaining({ userMessageSeq: 92 }));
-    expect(steerPrompt).toHaveBeenNthCalledWith(2, 'STEER REPLAY SEED\n\nsteer after replay seed', expect.objectContaining({ userMessageSeq: 92 }));
+    expect(steerPrompt).toHaveBeenNthCalledWith(1, 'STEER REPLAY SEED\n\nsteer after replay seed', expect.objectContaining({
+      localIds: ['local-steer-undeliverable'],
+      userMessageSeq: null,
+    }));
+    expect(steerPrompt).toHaveBeenNthCalledWith(2, 'STEER REPLAY SEED\n\nsteer after replay seed', expect.objectContaining({
+      localIds: ['local-steer-undeliverable'],
+      userMessageSeq: null,
+    }));
     expect(observedRequeuedBatch).toBe('STEER REPLAY SEED\n\nsteer after replay seed');
     expect(appServerRuntime.sendPrompt).not.toHaveBeenCalled();
     expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledTimes(1);
-    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(92);
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(null, {
+      localIds: ['local-steer-undeliverable'],
+    });
   });
 
   it('provides forced pending-queue reconciliation to the remote wait loop', async () => {
@@ -2311,6 +2394,7 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(appServerRuntime.steerPrompt).toHaveBeenCalledWith('recover directly from stale steer', {
       metadata: {},
       localId: 'local-direct-stale-steer',
+      localIds: ['local-direct-stale-steer'],
       userMessageSeq: null,
     });
     expect(observedSuppressUserEcho).toBe(true);
@@ -2397,11 +2481,13 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(appServerRuntime.steerPrompt).toHaveBeenCalledWith(expect.any(String), {
       metadata: undefined,
       localId: 'local-stale-steer',
+      localIds: ['local-stale-steer'],
       userMessageSeq: null,
     });
     expect(sendPrompt).toHaveBeenCalledWith(expect.any(String), {
       metadata: undefined,
       localId: 'local-stale-steer',
+      localIds: ['local-stale-steer'],
       userMessageSeq: null,
     });
     const emittedMessages = (lastSessionClient?.sendSessionEvent as ReturnType<typeof vi.fn> | undefined)?.mock.calls
@@ -2547,6 +2633,7 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(sendPrompt).toHaveBeenCalledWith(expect.any(String), {
       metadata: { source: 'test' },
       localId: 'local-user-message-seq',
+      localIds: ['local-user-message-seq'],
       userMessageSeq: 77,
     });
   });

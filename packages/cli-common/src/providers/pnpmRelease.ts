@@ -48,13 +48,37 @@ function normalizeAssets(raw: unknown): GitHubReleaseAsset[] {
   return assets;
 }
 
-function getPreferredAssetName(): string {
-  if (process.platform === 'darwin' && process.arch === 'arm64') return 'pnpm-macos-arm64';
-  if (process.platform === 'darwin' && process.arch === 'x64') return 'pnpm-macos-x64';
-  if (process.platform === 'linux' && process.arch === 'arm64') return 'pnpm-linuxstatic-arm64';
-  if (process.platform === 'linux' && process.arch === 'x64') return 'pnpm-linuxstatic-x64';
-  if (process.platform === 'win32' && process.arch === 'arm64') return 'pnpm-win-arm64.exe';
-  if (process.platform === 'win32' && process.arch === 'x64') return 'pnpm-win-x64.exe';
+function detectLinuxLibcFamily(): 'gnu' | 'musl' {
+  if (process.platform !== 'linux') return 'gnu';
+  try {
+    const report = (process as NodeJS.Process & { report?: { getReport?: () => unknown } }).report?.getReport?.();
+    const header = report && typeof report === 'object' && 'header' in report
+      ? (report as { header?: { glibcVersionRuntime?: unknown } }).header
+      : undefined;
+    const glibcVersionRuntime = header?.glibcVersionRuntime;
+    if (typeof glibcVersionRuntime === 'string' && glibcVersionRuntime.trim().length > 0) {
+      return 'gnu';
+    }
+  } catch {
+  }
+  return 'musl';
+}
+
+function getPreferredAssetNames(): string[] {
+  if (process.platform === 'darwin' && process.arch === 'arm64') return ['pnpm-darwin-arm64.tar.gz', 'pnpm-macos-arm64'];
+  if (process.platform === 'darwin' && process.arch === 'x64') return ['pnpm-darwin-x64.tar.gz', 'pnpm-macos-x64'];
+  if (process.platform === 'linux' && process.arch === 'arm64') {
+    return detectLinuxLibcFamily() === 'musl'
+      ? ['pnpm-linux-arm64-musl.tar.gz', 'pnpm-linuxstatic-arm64', 'pnpm-linux-arm64.tar.gz']
+      : ['pnpm-linux-arm64.tar.gz', 'pnpm-linuxstatic-arm64', 'pnpm-linux-arm64-musl.tar.gz'];
+  }
+  if (process.platform === 'linux' && process.arch === 'x64') {
+    return detectLinuxLibcFamily() === 'musl'
+      ? ['pnpm-linux-x64-musl.tar.gz', 'pnpm-linuxstatic-x64', 'pnpm-linux-x64.tar.gz']
+      : ['pnpm-linux-x64.tar.gz', 'pnpm-linuxstatic-x64', 'pnpm-linux-x64-musl.tar.gz'];
+  }
+  if (process.platform === 'win32' && process.arch === 'arm64') return ['pnpm-win32-arm64.zip', 'pnpm-win-arm64.exe'];
+  if (process.platform === 'win32' && process.arch === 'x64') return ['pnpm-win32-x64.zip', 'pnpm-win-x64.exe'];
   throw new Error(`Unsupported pnpm platform: ${process.platform}/${process.arch}`);
 }
 
@@ -62,11 +86,13 @@ export function resolvePnpmReleaseAsset(release: unknown): PnpmReleaseAsset {
   const parsed = (release && typeof release === 'object' ? release : {}) as GitHubReleasePayload;
   const tag = normalizeTag(parsed.tag_name);
   const version = parsePnpmVersionFromTag(tag);
-  const preferredName = getPreferredAssetName();
+  const preferredNames = getPreferredAssetNames();
   const assets = normalizeAssets(parsed.assets);
-  const selected = assets.find((asset) => asset.name === preferredName);
+  const selected = preferredNames
+    .map((name) => assets.find((asset) => asset.name === name) ?? null)
+    .find((asset): asset is GitHubReleaseAsset => asset !== null);
   if (!selected) {
-    throw new Error(`No pnpm release asset found for ${preferredName}`);
+    throw new Error(`No pnpm release asset found for ${process.platform}/${process.arch}`);
   }
   if (!selected.digest) {
     throw new Error(`pnpm release asset ${selected.name} is missing a required digest`);

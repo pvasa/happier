@@ -239,20 +239,62 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     });
   });
 
-  it('still prompts provider-enforced tool requests in bypassPermissions mode', async () => {
+  it('auto-approves provider permission requests in full-access modes without suppressing user actions', async () => {
     const session = new FakeSession();
     const handler = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Test]' });
 
+    const pendingBeforeModeChange = handler.handleToolCall('perm-before-mode-change', 'bash', { command: 'echo later' });
+    expect(session.agentState.requests['perm-before-mode-change']).toBeTruthy();
+
     handler.setPermissionMode('bypassPermissions');
 
-    const pending = handler.handleToolCall('perm-1', 'bash', { command: 'echo hello' });
+    await expect(pendingBeforeModeChange).resolves.toEqual({ decision: 'approved' });
+    expect(session.agentState.requests['perm-before-mode-change']).toBeFalsy();
+    expect(session.agentState.completedRequests['perm-before-mode-change']).toMatchObject({
+      tool: 'bash',
+      status: 'approved',
+      decision: 'approved',
+    });
 
-    expect(session.agentState.requests['perm-1']).toBeTruthy();
+    expect(handler.getImmediateDecision('perm-1', 'bash', { command: 'echo hello' })).toEqual({
+      decision: 'approved',
+    });
+    await expect(handler.handleToolCall('perm-1', 'bash', { command: 'echo hello' })).resolves.toEqual({
+      decision: 'approved',
+    });
+    expect(session.agentState.requests['perm-1']).toBeFalsy();
+    expect(session.agentState.completedRequests['perm-1']).toMatchObject({
+      tool: 'bash',
+      status: 'approved',
+      decision: 'approved',
+    });
+
+    handler.setPermissionMode('yolo');
+
+    expect(handler.getImmediateDecision('perm-2', 'TodoWrite', { todos: [] })).toEqual({ decision: 'approved' });
+    await expect(handler.handleToolCall('perm-2', 'TodoWrite', { todos: [] })).resolves.toEqual({
+      decision: 'approved',
+    });
+    expect(session.agentState.requests['perm-2']).toBeFalsy();
+
+    const pending = handler.handleToolCall('ask-1', 'AskUserQuestion', {
+      questions: [{ id: 'language', question: 'Which language?' }],
+    });
+
+    expect(session.agentState.requests['ask-1']).toBeTruthy();
     const respond = session.rpcHandlerManager.handlers.get('permission');
     expect(respond).toBeTruthy();
-    await respond?.({ id: 'perm-1', approved: true, decision: 'approved' });
-    await expect(pending).resolves.toEqual({ decision: 'approved' });
-    expect(session.agentState.requests['perm-1']).toBeFalsy();
+    await respond?.({
+      id: 'ask-1',
+      approved: true,
+      decision: 'approved',
+      answers: { language: 'TypeScript' },
+    });
+    await expect(pending).resolves.toEqual({
+      decision: 'approved',
+      answers: { language: 'TypeScript' },
+    });
+    expect(session.agentState.requests['ask-1']).toBeFalsy();
   });
 
   it('resolves every duplicate same-id waiter from one permission response', async () => {

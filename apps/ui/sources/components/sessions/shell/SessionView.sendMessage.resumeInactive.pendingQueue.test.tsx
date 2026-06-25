@@ -323,6 +323,8 @@ installSessionShellCommonModuleMocks({
                 codexBackendMode: 'acp',
             }) as any,
             useAutomations: () => [],
+            useSessionAutomationsEnabledCount: () => 0,
+            useOpenApprovalArtifactsForSession: () => [],
             useMachine: () => null,
         });
     },
@@ -758,7 +760,9 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         });
 
         expect(enqueuePendingMessageSpy).toHaveBeenCalledTimes(1);
-        expect(enqueuePendingMessageSpy).toHaveBeenCalledWith('s1', 'hello now', undefined, undefined);
+        expect(enqueuePendingMessageSpy).toHaveBeenCalledWith('s1', 'hello now', undefined, {
+            happierDeliveryIntentV1: 'explicit_immediate',
+        });
         expect(submitMessageSpy).not.toHaveBeenCalled();
         expect(sendMessageSpy).not.toHaveBeenCalled();
         expect(resumeSessionSpy).toHaveBeenCalledWith(

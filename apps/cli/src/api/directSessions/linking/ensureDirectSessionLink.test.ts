@@ -1,13 +1,20 @@
+import { createHash } from 'node:crypto';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexBackendMode } from '@happier-dev/agents';
 import { buildCodexAgentRuntimeDescriptorV1 } from '@happier-dev/protocol';
 import { buildOpenCodeAgentRuntimeDescriptorV1 } from '@happier-dev/protocol';
+import type {
+  ConnectedServiceBindingsV1,
+  ConnectedServiceMaterializationIdentityV1,
+} from '@happier-dev/protocol';
 
 const fetchSessionsPageMock = vi.fn();
 const fetchSessionByIdMock = vi.fn();
 const getOrCreateSessionByTagMock = vi.fn();
 const tryDecryptSessionMetadataMock = vi.fn();
 const updateSessionMetadataWithRetryMock = vi.fn();
+const listSessionMarkersMock = vi.fn();
 
 vi.mock('@/session/transport/http/sessionsHttp', () => ({
   fetchSessionById: (...args: unknown[]) => fetchSessionByIdMock(...args),
@@ -23,7 +30,15 @@ vi.mock('@/session/metadata/updateSessionMetadataWithRetry', () => ({
   updateSessionMetadataWithRetry: (...args: unknown[]) => updateSessionMetadataWithRetryMock(...args),
 }));
 
+vi.mock('@/daemon/sessionRegistry', () => ({
+  listSessionMarkers: (...args: unknown[]) => listSessionMarkersMock(...args),
+}));
+
 import { ensureDirectSessionLink } from './ensureDirectSessionLink';
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
 
 describe('ensureDirectSessionLink', () => {
   const legacyCodexBackendMode = '  mcp_resume  ' as unknown as CodexBackendMode;
@@ -34,6 +49,7 @@ describe('ensureDirectSessionLink', () => {
     fetchSessionByIdMock.mockResolvedValue(null);
     tryDecryptSessionMetadataMock.mockReturnValue(null);
     updateSessionMetadataWithRetryMock.mockResolvedValue(undefined);
+    listSessionMarkersMock.mockResolvedValue([]);
   });
 
   it('stores the canonical codex runtime descriptor for linked direct sessions', async () => {
@@ -344,5 +360,170 @@ describe('ensureDirectSessionLink', () => {
       opencodeServerBaseUrl: 'http://127.0.0.1:4096/',
       opencodeServerBaseUrlExplicit: true,
     });
+  });
+
+  it('persists non-secret connected-service identity from a matching daemon marker when creating an OpenCode direct link', async () => {
+    const connectedServices = {
+      v: 1,
+      bindingsByServiceId: {
+        'openai-codex': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'happier',
+          profileId: 'batiplus',
+        },
+      },
+    } satisfies ConnectedServiceBindingsV1;
+    const materializationIdentity = {
+      v: 1,
+      id: 'csm_opencode_link',
+      createdAtMs: 1_718_719_900_000,
+    } satisfies ConnectedServiceMaterializationIdentityV1;
+    listSessionMarkersMock.mockResolvedValueOnce([
+      {
+        pid: 12345,
+        updatedAt: 200,
+        flavor: 'opencode',
+        cwd: '/repo',
+        metadata: {
+          flavor: 'opencode',
+          path: '/repo',
+        },
+        respawn: {
+          version: 1,
+          directory: '/repo',
+          backendTarget: { kind: 'builtInAgent', agentId: 'opencode' },
+          connectedServices,
+          connectedServicesUpdatedAt: 1_718_719_899_000,
+          connectedServiceMaterializationIdentityV1: materializationIdentity,
+          environmentVariables: {
+            OPENCODE_AUTH_CONTENT: 'must-not-be-copied',
+          },
+        },
+      },
+    ]);
+    getOrCreateSessionByTagMock.mockResolvedValueOnce({
+      session: {
+        id: 'sess_direct_oc_connected',
+        metadata: {},
+      },
+    });
+
+    await ensureDirectSessionLink({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array([1]) } },
+      machineId: 'machine_1',
+      providerId: 'opencode',
+      remoteSessionId: 'oc_connected',
+      runtimeDescriptor: buildOpenCodeAgentRuntimeDescriptorV1({
+        backendMode: 'server',
+        vendorSessionId: 'oc_connected',
+      }),
+      source: { kind: 'opencodeServer', baseUrl: null, directory: null },
+      titleHint: 'OpenCode linked session',
+      directoryHint: '/repo',
+      nowMs: () => 123,
+    });
+
+    const createdMetadata = getOrCreateSessionByTagMock.mock.calls[0]?.[0]?.metadata;
+    expect(createdMetadata).toMatchObject({
+      connectedServices,
+      connectedServicesUpdatedAt: 1_718_719_899_000,
+      connectedServiceMaterializationIdentityV1: materializationIdentity,
+      directSessionV1: {
+        remoteSessionId: 'oc_connected',
+      },
+    });
+    expect(JSON.stringify(createdMetadata)).not.toContain('OPENCODE_AUTH_CONTENT');
+    expect(JSON.stringify(createdMetadata)).not.toContain('must-not-be-copied');
+  });
+
+  it('refreshes existing OpenCode direct links with non-secret connected-service identity from matching daemon markers', async () => {
+    const connectedServices = {
+      v: 1,
+      bindingsByServiceId: {
+        'openai-codex': {
+          source: 'connected',
+          selection: 'profile',
+          profileId: 'work',
+        },
+      },
+    } satisfies ConnectedServiceBindingsV1;
+    const materializationIdentity = {
+      v: 1,
+      id: 'csm_opencode_existing_link',
+      createdAtMs: 1_718_720_000_000,
+    } satisfies ConnectedServiceMaterializationIdentityV1;
+    const tag = `direct:v1:${sha256Hex('machine_1|opencode|oc_existing|opencodeServer::')}`;
+    const existingMetadata = {
+      tag,
+      path: '/repo',
+      flavor: 'opencode',
+      opencodeSessionId: 'oc_existing',
+      directSessionV1: {
+        v: 1,
+        providerId: 'opencode',
+        machineId: 'machine_1',
+        remoteSessionId: 'oc_existing',
+        source: { kind: 'opencodeServer', baseUrl: null, directory: null },
+        linkedAtMs: 1,
+      },
+    };
+    fetchSessionsPageMock.mockResolvedValueOnce({
+      sessions: [{ id: 'sess_existing_oc', metadata: existingMetadata }],
+      hasNext: false,
+      nextCursor: null,
+    });
+    fetchSessionByIdMock.mockResolvedValueOnce({ id: 'sess_existing_oc', metadata: existingMetadata });
+    tryDecryptSessionMetadataMock.mockImplementation(({ rawSession }: { rawSession: { metadata?: unknown } }) => rawSession.metadata);
+    listSessionMarkersMock.mockResolvedValueOnce([
+      {
+        pid: 12346,
+        updatedAt: 300,
+        flavor: 'opencode',
+        cwd: '/repo',
+        metadata: {
+          flavor: 'opencode',
+          path: '/repo',
+        },
+        respawn: {
+          version: 1,
+          directory: '/repo',
+          backendTarget: { kind: 'builtInAgent', agentId: 'opencode' },
+          connectedServices,
+          connectedServicesUpdatedAt: 1_718_719_999_000,
+          connectedServiceMaterializationIdentityV1: materializationIdentity,
+          environmentVariables: {
+            OPENCODE_AUTH_CONTENT: 'must-not-be-copied',
+          },
+        },
+      },
+    ]);
+
+    const result = await ensureDirectSessionLink({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array([1]) } },
+      machineId: 'machine_1',
+      providerId: 'opencode',
+      remoteSessionId: 'oc_existing',
+      source: { kind: 'opencodeServer', baseUrl: null, directory: null },
+      titleHint: 'OpenCode linked session',
+      directoryHint: '/repo',
+      nowMs: () => 123,
+    });
+
+    expect(result).toEqual({
+      sessionId: 'sess_existing_oc',
+      created: false,
+      tag,
+    });
+    const updater = updateSessionMetadataWithRetryMock.mock.calls[0]?.[0]?.updater;
+    expect(typeof updater).toBe('function');
+    const updatedMetadata = updater(existingMetadata);
+    expect(updatedMetadata).toMatchObject({
+      connectedServices,
+      connectedServicesUpdatedAt: 1_718_719_999_000,
+      connectedServiceMaterializationIdentityV1: materializationIdentity,
+    });
+    expect(JSON.stringify(updatedMetadata)).not.toContain('OPENCODE_AUTH_CONTENT');
+    expect(JSON.stringify(updatedMetadata)).not.toContain('must-not-be-copied');
   });
 });

@@ -1,13 +1,22 @@
 import {
     readConnectedServiceLimitCategoryV1,
     type ConnectedServiceQuotaMeterV1,
+    type ConnectedServiceQuotaRecoveryCreditsV1,
     type ConnectedServiceQuotaSnapshotV1,
     type SessionRuntimeIssueV1,
 } from '@happier-dev/protocol';
 
 import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/registry/registryCore';
 
+import type { MeterTone } from '@/components/ui/lists/MeterBar';
+
 import { clampQuotaPct, deriveQuotaUtilizationPct } from './deriveQuotaUtilizationPct';
+import {
+    summarizeConnectedServiceQuotaRecoveryCredits,
+    type ConnectedServiceQuotaRecoveryCreditSummary,
+} from './connectedServiceQuotaRecoveryCreditSummary';
+import { formatResetCountdown } from './formatResetCountdown';
+import { resolveQuotaTone } from './resolveQuotaTone';
 
 export type ConnectedServiceQuotaGaugeWindowMode =
     | 'most_constrained'
@@ -59,6 +68,7 @@ export type ConnectedServiceQuotaGaugeViewModel = Readonly<{
     resetLabel: string | null;
     tone: ConnectedServiceQuotaGaugeTone;
     isStale: boolean;
+    recoveryCreditSummary: ConnectedServiceQuotaRecoveryCreditSummary | null;
     effectiveMeter: ConnectedServiceQuotaMeterV1;
     allMeterRows: readonly ConnectedServiceQuotaGaugeMeterRow[];
 }>;
@@ -78,8 +88,6 @@ export type ConnectedServiceQuotaGaugeSource = Readonly<{
     checkNowSupported: boolean;
 }>;
 
-const QUOTA_REMAINING_WARNING_THRESHOLD_PCT = 25;
-const QUOTA_REMAINING_CRITICAL_THRESHOLD_PCT = 10;
 const RUNTIME_ISSUE_QUOTA_PROJECTION_STALE_AFTER_MS = 30_000;
 const RUNTIME_ISSUE_NATIVE_PROFILE_ID = 'native';
 const RUNTIME_ISSUE_PROJECTION_PROFILE_ID = 'runtime';
@@ -215,35 +223,24 @@ export function selectComparableConnectedServiceQuotaMeters(
     return orderedGroups[0]?.meters ?? [];
 }
 
-function formatResetCountdown(
-    nowMs: number,
-    resetsAtMs: number | null,
-    formatter: ConnectedServiceQuotaGaugeLabelFormatter,
-): string | null {
-    if (!resetsAtMs) return null;
-    const delta = resetsAtMs - nowMs;
-    if (!Number.isFinite(delta) || delta <= 0) return formatter.durationNow();
-
-    const totalMinutes = Math.floor(delta / 60000);
-    const days = Math.floor(totalMinutes / (60 * 24));
-    const hours = Math.floor((totalMinutes - days * 60 * 24) / 60);
-    const minutes = totalMinutes - days * 60 * 24 - hours * 60;
-
-    if (days > 0) return formatter.durationDaysHours({ days, hours });
-    if (hours > 0) return minutes > 0
-        ? formatter.durationHoursMinutes({ hours, minutes })
-        : formatter.durationHours({ hours });
-    return formatter.durationMinutes({ minutes });
-}
-
 function formatNumber(value: number): string {
     return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(1)));
 }
 
-function resolveTone(remainingPct: number): ConnectedServiceQuotaGaugeTone {
-    if (remainingPct <= QUOTA_REMAINING_CRITICAL_THRESHOLD_PCT) return 'critical';
-    if (remainingPct <= QUOTA_REMAINING_WARNING_THRESHOLD_PCT) return 'warning';
+/**
+ * Map the canonical `MeterTone` (owned by `resolveQuotaTone`) onto the gauge's
+ * legacy tone vocabulary: danger ⇒ critical; warning ⇒ warning; success/neutral
+ * ⇒ the gauge's healthy `neutral`. (`resolveQuotaTone` only emits the grey
+ * `neutral` for the null/no-data case, which the gauge never feeds here.)
+ */
+function mapMeterToneToGaugeTone(tone: MeterTone): ConnectedServiceQuotaGaugeTone {
+    if (tone === 'danger') return 'critical';
+    if (tone === 'warning') return 'warning';
     return 'neutral';
+}
+
+function resolveTone(remainingPct: number): ConnectedServiceQuotaGaugeTone {
+    return mapMeterToneToGaugeTone(resolveQuotaTone(remainingPct));
 }
 
 function buildMeterRow(
@@ -340,6 +337,7 @@ export function computeConnectedServiceQuotaGaugeViewModel(_params: Readonly<{
         resetLabel: selectedRow.resetLabel,
         tone: selectedRow.tone,
         isStale,
+        recoveryCreditSummary: summarizeConnectedServiceQuotaRecoveryCredits(params.snapshot.recoveryCredits, params.nowMs),
         effectiveMeter,
         allMeterRows,
     };
@@ -394,6 +392,14 @@ function resolveRuntimeIssueQuotaProfileId(issue: SessionRuntimeIssueV1): string
     return issue.usageLimit?.quotaSnapshotRef || issue.usageLimit?.connectedService
         ? RUNTIME_ISSUE_PROJECTION_PROFILE_ID
         : RUNTIME_ISSUE_NATIVE_PROFILE_ID;
+}
+
+function resolveRuntimeIssueQuotaAccountLabel(issue: SessionRuntimeIssueV1): string | null {
+    const refGroupId = issue.usageLimit?.quotaSnapshotRef?.groupId?.trim();
+    if (refGroupId) return refGroupId;
+    const connectedGroupId = issue.usageLimit?.connectedService?.groupId?.trim();
+    if (connectedGroupId) return connectedGroupId;
+    return null;
 }
 
 export function deriveConnectedServiceQuotaSnapshotFromRuntimeIssue(
@@ -470,7 +476,7 @@ export function deriveConnectedServiceQuotaSnapshotFromRuntimeIssue(
         fetchedAt: usageLimit.quotaSnapshotRef?.fetchedAtMs ?? issue.occurredAt,
         staleAfterMs: RUNTIME_ISSUE_QUOTA_PROJECTION_STALE_AFTER_MS,
         planLabel: usageLimit.planType ?? null,
-        accountLabel: null,
+        accountLabel: resolveRuntimeIssueQuotaAccountLabel(issue),
         ...(providerId ? { providerId } : {}),
         source: 'runtime_event',
         confidence: 'exact',
@@ -515,6 +521,21 @@ function classifyConnectedServiceGaugeSourceKind(params: Readonly<{
     }
 }
 
+function snapshotsIdentifySameQuotaProfile(
+    left: ConnectedServiceQuotaSnapshotV1,
+    right: ConnectedServiceQuotaSnapshotV1,
+): boolean {
+    return left.serviceId === right.serviceId && left.profileId === right.profileId;
+}
+
+function withRecoveryCredits(
+    snapshot: ConnectedServiceQuotaSnapshotV1,
+    recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1 | null | undefined,
+): ConnectedServiceQuotaSnapshotV1 {
+    if (!recoveryCredits || snapshot.recoveryCredits) return snapshot;
+    return { ...snapshot, recoveryCredits };
+}
+
 /**
  * Production owner of the session provider-usage gauge source: routes both the
  * runtime-evidence projection and the polled connected-service snapshot
@@ -526,14 +547,19 @@ export function selectConnectedServiceSessionProviderUsageGaugeSource(params: Re
     connectedServiceSnapshot: ConnectedServiceQuotaSnapshotV1 | null;
     connectedServiceRefProvenance: ConnectedServiceQuotaProfileRefProvenance | null | undefined;
     sessionCheckNowSupported?: boolean;
+    recoveryCredits?: ConnectedServiceQuotaRecoveryCreditsV1 | null;
     runtimeIssue: SessionRuntimeIssueV1 | null | undefined;
 }>): ConnectedServiceQuotaGaugeSource | null {
     const runtimeIssueQuotaSnapshot = deriveConnectedServiceQuotaSnapshotFromRuntimeIssue(params.runtimeIssue);
     if (runtimeIssueQuotaSnapshot) {
+        const recoveryCredits = params.connectedServiceSnapshot
+            && snapshotsIdentifySameQuotaProfile(runtimeIssueQuotaSnapshot, params.connectedServiceSnapshot)
+            ? params.connectedServiceSnapshot.recoveryCredits ?? null
+            : params.recoveryCredits ?? null;
         return resolveConnectedServiceQuotaGaugeSource({
             providerId: params.providerId ?? runtimeIssueQuotaSnapshot.providerId ?? runtimeIssueQuotaSnapshot.serviceId,
             sourceKind: 'native_runtime_evidence',
-            snapshot: runtimeIssueQuotaSnapshot,
+            snapshot: withRecoveryCredits(runtimeIssueQuotaSnapshot, recoveryCredits),
         });
     }
     if (!params.connectedServiceSnapshot) return null;

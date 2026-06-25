@@ -8,6 +8,7 @@ type SegmentableTranscriptListItem =
     | { kind: 'tool-calls-group'; id: string; toolMessageIds: readonly string[] }
     | { kind: 'tool-group-header' | 'tool-group-expand' | 'tool-group-tool' | 'tool-group-footer'; id: string; toolMessageIds: readonly string[] }
     | { kind: 'pending-queue'; id: string }
+    | { kind: 'pending-user-action'; id: string }
     | { kind: 'action-draft'; id: string }
     | { kind: 'turn'; id: string; turn: { userMessageId?: string | null; content: readonly SegmentableTranscriptContentItem[] } }
     | { kind: string; id: string };
@@ -198,7 +199,7 @@ export function buildTranscriptHotColdSegments<T extends SegmentableTranscriptLi
             continue;
         }
 
-        if (item.kind === 'pending-queue' || item.kind === 'action-draft') {
+        if (item.kind === 'pending-queue' || item.kind === 'pending-user-action' || item.kind === 'action-draft') {
             splitIndex = Math.min(splitIndex, index);
             continue;
         }

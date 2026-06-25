@@ -4,6 +4,11 @@ import { readRegisteredStorageState } from '@/sync/domains/state/storageStateRea
 import type { AgentState, Session } from '@/sync/domains/state/storageTypes';
 import { isRequestInterruptedPlaceholder } from './requestInterruptedPlaceholder';
 import {
+    CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
+    CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
+    isAgentStateRequestCoveredByCompletedRequests,
+} from '@happier-dev/agents';
+import {
     resolveAgentRequestKind,
     shouldShowGenericPermissionPromptForRequest,
     type AgentRequestKind,
@@ -29,6 +34,12 @@ export type SessionPendingRequestLists = Readonly<{
 }>;
 
 type AgentRequestRecord = NonNullable<AgentState['requests']>;
+
+const PENDING_REQUEST_COVERAGE_OPTIONS = {
+    equivalentSources: [CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE],
+    equivalentCompletedStatuses: ['canceled'],
+    equivalentCompletedReasons: [CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON],
+} as const;
 
 type TranscriptRequestState =
     | Readonly<{
@@ -91,25 +102,18 @@ function mergePendingRequestMetadata(
     };
 }
 
-function getRequestCompletedAt(completed: unknown): number {
-    const completedAt = typeof (completed as { completedAt?: unknown })?.completedAt === 'number'
-        ? (completed as { completedAt: number }).completedAt
-        : 0;
-    const createdAt = typeof (completed as { createdAt?: unknown })?.createdAt === 'number'
-        ? (completed as { createdAt: number }).createdAt
-        : 0;
-    return Math.max(completedAt, createdAt);
-}
-
 function isPendingRequestCoveredByCompleted(
     completedRequests: Record<string, unknown> | null | undefined,
     requestId: string,
     createdAt: number | null,
+    request?: unknown,
 ): boolean {
-    if (!completedRequests || typeof completedRequests !== 'object') return false;
-    const completed = completedRequests[requestId];
-    if (!completed) return false;
-    return (createdAt ?? 0) <= getRequestCompletedAt(completed);
+    return isAgentStateRequestCoveredByCompletedRequests({
+        requestId,
+        request: request ?? { createdAt: createdAt ?? 0 },
+        completedRequests,
+        options: PENDING_REQUEST_COVERAGE_OPTIONS,
+    });
 }
 
 function updateTranscriptRequestState(
@@ -173,7 +177,12 @@ function collectTranscriptRequestStates(
         if (requestId && toolName && permissionStatus) {
             if (
                 permissionStatus === 'pending'
-                && !isPendingRequestCoveredByCompleted(completedRequests, requestId, createdAt)
+                && !isPendingRequestCoveredByCompleted(completedRequests, requestId, createdAt, {
+                    tool: toolName,
+                    kind: permission.kind,
+                    arguments: message.tool?.input,
+                    createdAt,
+                })
             ) {
                 updateTranscriptRequestState(states, requestId, {
                     status: 'pending',
@@ -235,26 +244,33 @@ export function listPendingTranscriptRequests(
         .flatMap((state) => (state.status === 'pending' ? [state.request] : []));
 }
 
-function listPendingRequestEntries(agentState: AgentState | null | undefined): Array<{ kind: string }> {
+function listPendingAgentStateRequests(agentState: AgentState | null | undefined): SessionPendingRequest[] {
     const requests = agentState?.requests;
     if (!requests) return [];
     const completed = agentState?.completedRequests ?? null;
 
     return Object.entries(requests as AgentRequestRecord).flatMap(([id, request]) => {
         if (!request || typeof request !== 'object') return [];
-        const completedEntry = completed?.[id];
-        if (completedEntry && completedEntry.completedAt != null) return [];
+        const toolName = typeof request.tool === 'string' ? request.tool.trim() : '';
+        if (!toolName) return [];
+        const createdAt = typeof request.createdAt === 'number' ? request.createdAt : null;
+        if (isPendingRequestCoveredByCompleted(completed as Record<string, unknown> | null | undefined, id, createdAt, request)) return [];
         return [{
+            id,
+            tool: toolName,
             kind: resolveAgentRequestKind({
-                toolName: typeof request.tool === 'string' ? request.tool : '',
+                toolName,
                 requestKind: request.kind,
             }),
+            arguments: request.arguments,
+            createdAt,
+            ...(getRequestPermissionSuggestions(request) ? { permissionSuggestions: getRequestPermissionSuggestions(request) } : {}),
         }];
     });
 }
 
 export function derivePendingRequestFlagsFromAgentState(agentState: AgentState | null | undefined): PendingRequestFlags {
-    const requests = listPendingRequestEntries(agentState);
+    const requests = listPendingAgentStateRequests(agentState);
     if (requests.length === 0) {
         return EMPTY_PENDING_REQUEST_FLAGS;
     }
@@ -299,7 +315,11 @@ function hasProjectedPendingRequestCounts(session: Session): boolean {
 }
 
 function hasPendingAgentRequests(session: Session): boolean {
-    return Object.keys(session.agentState?.requests ?? {}).length > 0;
+    return listPendingAgentStateRequests(session.agentState).length > 0;
+}
+
+function hasPendingAgentUserActionRequests(session: Session): boolean {
+    return derivePendingRequestFlagsFromAgentState(session.agentState).hasPendingUserActionRequests;
 }
 
 function readProjectedPendingRequestFlags(session: Session): PendingRequestFlags {
@@ -341,11 +361,13 @@ export function listPendingSessionRequests(
     session: Session,
     messages?: ReadonlyArray<Message>,
 ): SessionPendingRequest[] {
+    const pendingAgentStateRequests = listPendingAgentStateRequests(session.agentState);
+
     if (session.active !== true) {
-        return [];
+        return pendingAgentStateRequests.filter((request) => request.kind === 'user_action');
     }
 
-    if (!messages && !shouldReadTranscriptForPendingSessionRequests(session)) {
+    if (!messages && !shouldReadTranscriptForPendingSessionRequests(session) && !hasPendingAgentUserActionRequests(session)) {
         return [];
     }
 
@@ -358,30 +380,16 @@ export function listPendingSessionRequests(
         pending.set(request.id, request);
     }
 
-    const requests = session.agentState?.requests;
-    const completed = session.agentState?.completedRequests ?? null;
-    if (requests && Object.keys(requests).length > 0) {
-        for (const [requestId, req] of Object.entries(requests)) {
-            const createdAt = typeof req?.createdAt === 'number' ? req.createdAt : null;
-            if (isPendingRequestCoveredByCompleted(completed, requestId, createdAt)) continue;
-
-            const transcriptState = transcriptStates.get(requestId);
+    if (pendingAgentStateRequests.length > 0) {
+        for (const request of pendingAgentStateRequests) {
+            const transcriptState = transcriptStates.get(request.id);
             if (
                 transcriptState?.status === 'terminal'
                 && transcriptState.terminalKind === 'hard'
-                && (createdAt ?? 0) <= transcriptState.createdAt
+                && (request.createdAt ?? 0) <= transcriptState.createdAt
             ) {
                 continue;
             }
-
-            const request: SessionPendingRequest = {
-                id: requestId,
-                tool: req.tool,
-                kind: resolveAgentRequestKind({ toolName: req.tool, requestKind: req.kind }),
-                arguments: req.arguments,
-                createdAt,
-                ...(getRequestPermissionSuggestions(req) ? { permissionSuggestions: getRequestPermissionSuggestions(req) } : {}),
-            };
 
             const transcriptMatch = pendingTranscriptRequests.find((transcriptRequest) =>
                 arePendingRequestsEquivalent(transcriptRequest, request)
@@ -397,7 +405,7 @@ export function listPendingSessionRequests(
                 continue;
             }
 
-            pending.set(requestId, request);
+            pending.set(request.id, request);
         }
     }
 
@@ -435,7 +443,9 @@ export function deriveLatestPendingRequestObservedAtFromSession(
     messages?: ReadonlyArray<Message>,
 ): number | null {
     if (session.active !== true) {
-        return null;
+        return latestPendingRequestCreatedAt(
+            listPendingAgentStateRequests(session.agentState).filter((request) => request.kind === 'user_action'),
+        );
     }
 
     if (hasProjectedPendingRequestCounts(session)) {
@@ -476,13 +486,23 @@ export function derivePendingRequestFlagsFromSession(
     messages?: ReadonlyArray<Message>,
 ): PendingRequestFlags {
     if (session.active !== true) {
-        return EMPTY_PENDING_REQUEST_FLAGS;
+        const agentStateFlags = derivePendingRequestFlagsFromAgentState(session.agentState);
+        return {
+            hasPendingPermissionRequests: false,
+            hasPendingUserActionRequests: agentStateFlags.hasPendingUserActionRequests,
+        };
     }
 
     if (hasProjectedPendingRequestCounts(session)) {
         const transcriptStates = getTranscriptRequestStates(session, messages);
         if (shouldUseProjectedPendingRequestCounts(session, transcriptStates)) {
-            return readProjectedPendingRequestFlags(session);
+            const projectedFlags = readProjectedPendingRequestFlags(session);
+            const agentStateFlags = derivePendingRequestFlagsFromAgentState(session.agentState);
+            return {
+                hasPendingPermissionRequests: projectedFlags.hasPendingPermissionRequests,
+                hasPendingUserActionRequests:
+                    projectedFlags.hasPendingUserActionRequests || agentStateFlags.hasPendingUserActionRequests,
+            };
         }
         const pendingTranscriptRequests = Array.from(transcriptStates.values())
             .flatMap((state) => (state.status === 'pending' ? [state.request] : []));

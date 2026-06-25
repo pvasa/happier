@@ -15,11 +15,29 @@ export function resolveOpenAiCodexDaemonRefreshSelection(
   env: Pick<NodeJS.ProcessEnv, string>,
   session?: ConnectedServiceRuntimeAuthMetadataSession | null,
 ): OpenAiCodexDaemonRefreshSelectionResolution | null {
+  const childSelection = findConnectedServiceChildSelection(env, 'openai-codex');
   if (session) {
     const metadataBinding = findConnectedServiceBindingSelectionFromSessionMetadata(session, 'openai-codex');
     if (metadataBinding?.source === 'connected') {
       if (metadataBinding.selection === 'group') {
         if (metadataBinding.profileId) {
+          if (
+            childSelection?.kind === 'group'
+            && childSelection.groupId === metadataBinding.groupId
+            && childSelection.activeProfileId === metadataBinding.profileId
+          ) {
+            return {
+              selection: {
+                kind: 'group',
+                serviceId: 'openai-codex',
+                groupId: childSelection.groupId,
+                activeProfileId: childSelection.activeProfileId,
+                fallbackProfileId: childSelection.fallbackProfileId,
+                generation: childSelection.generation,
+              },
+              recoveryGroupId: childSelection.groupId,
+            };
+          }
           return {
             selection: {
               kind: 'profile',
@@ -42,7 +60,7 @@ export function resolveOpenAiCodexDaemonRefreshSelection(
     }
   }
 
-  const selection = findConnectedServiceChildSelection(env, 'openai-codex');
+  const selection = childSelection;
   if (!selection || selection.serviceId !== 'openai-codex') return null;
   if (selection.kind === 'profile') {
     return {

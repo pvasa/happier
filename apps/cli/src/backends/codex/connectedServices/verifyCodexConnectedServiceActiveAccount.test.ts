@@ -59,7 +59,61 @@ describe('verifyCodexConnectedServiceActiveAccount', () => {
       status: 'verified',
       providerAccountId: 'acct_codex1',
     });
-    expect(client.request).toHaveBeenCalledWith('account/read');
+    expect(client.request).toHaveBeenCalledWith('account/read', {});
+  });
+
+  it('verifies the expected Codex account id from root chatgpt_account_id proof', async () => {
+    await expect(verifyCodexConnectedServiceActiveAccount({
+      target: { agentId: 'codex' },
+      selection: {
+        serviceId: 'openai-codex',
+        profileId: 'codex1',
+        record: record('acct_codex1'),
+        client: {
+          request: vi.fn(async () => ({ chatgpt_account_id: 'acct_codex1' })),
+        },
+      },
+    })).resolves.toEqual({
+      status: 'verified',
+      providerAccountId: 'acct_codex1',
+    });
+  });
+
+  it('verifies top-level Codex account id proof when account details are nested separately', async () => {
+    await expect(verifyCodexConnectedServiceActiveAccount({
+      target: { agentId: 'codex' },
+      selection: {
+        serviceId: 'openai-codex',
+        profileId: 'codex1',
+        record: record('acct_codex1'),
+        client: {
+          request: vi.fn(async () => ({
+            account: { email: 'codex1@example.test', planType: 'plus' },
+            chatgpt_account_id: 'acct_codex1',
+          })),
+        },
+      },
+    })).resolves.toEqual({
+      status: 'verified',
+      providerAccountId: 'acct_codex1',
+    });
+  });
+
+  it('verifies the expected Codex account id from nested account chatgpt_account_id proof', async () => {
+    await expect(verifyCodexConnectedServiceActiveAccount({
+      target: { agentId: 'codex' },
+      selection: {
+        serviceId: 'openai-codex',
+        profileId: 'codex1',
+        record: record('acct_codex1'),
+        client: {
+          request: vi.fn(async () => ({ account: { chatgpt_account_id: 'acct_codex1' } })),
+        },
+      },
+    })).resolves.toEqual({
+      status: 'verified',
+      providerAccountId: 'acct_codex1',
+    });
   });
 
   it('returns a structured retryable mismatch when Codex still reports the previous account', async () => {
@@ -105,10 +159,60 @@ describe('verifyCodexConnectedServiceActiveAccount', () => {
     });
   });
 
+  it('treats email-only account/read mismatch as diagnostic-only when no live account-id proof is available', async () => {
+    const client = {
+      request: vi.fn(async () => ({ account: { email: 'other@example.test', planType: 'plus' } })),
+    };
+
+    await expect(verifyCodexConnectedServiceActiveAccount({
+      target: { agentId: 'codex' },
+      selection: {
+        serviceId: 'openai-codex',
+        profileId: 'codex1',
+        record: recordWithEmail({
+          providerAccountId: 'acct_codex1',
+          providerEmail: 'codex1@example.test',
+        }),
+        client,
+      },
+    })).resolves.toEqual({
+      status: 'unavailable',
+      retryable: true,
+      reason: 'active_account_probe_missing_account_id',
+    });
+  });
+
   it('does not accept Codex account adoption from auth-store proof when live account/read omits account id', async () => {
     const client = {
       request: vi.fn(async () => ({
         account: { type: 'chatgpt', email: '  Codex1@Example.Test  ', planType: 'pro' },
+        requiresOpenaiAuth: true,
+      })),
+    };
+
+    await expect(verifyCodexConnectedServiceActiveAccount({
+      target: { agentId: 'codex' },
+      selection: {
+        serviceId: 'openai-codex',
+        profileId: 'codex1',
+        record: recordWithEmail({
+          providerAccountId: 'acct_codex1',
+          providerEmail: 'codex1@example.test',
+        }),
+        client,
+        readAuthStoreProviderAccountId: vi.fn(async () => 'acct_codex1'),
+      },
+    })).resolves.toEqual({
+      status: 'unavailable',
+      retryable: true,
+      reason: 'active_account_probe_missing_account_id',
+    });
+  });
+
+  it('does not let email-only account/read mismatch override matching auth-store diagnostics', async () => {
+    const client = {
+      request: vi.fn(async () => ({
+        account: { type: 'chatgpt', email: 'other@example.test', planType: 'pro' },
         requiresOpenaiAuth: true,
       })),
     };

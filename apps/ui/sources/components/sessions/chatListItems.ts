@@ -3,6 +3,7 @@ import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { SessionActionDraft } from '@/sync/domains/sessionActions/sessionActionDraftTypes';
 import { isToolCallMessageGroupableInTranscript } from '@/components/sessions/transcript/toolCalls/isToolCallMessageGroupableInTranscript';
 import { filterVisibleContextCompactionLifecycleMessageIds } from '@/components/sessions/transcript/events/contextCompactionLifecycleProjection';
+import type { PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 
 export type ChatListItem =
     | {
@@ -43,6 +44,12 @@ export type ChatListItem =
         id: string;
         pendingMessages: PendingMessage[];
         discardedMessages: DiscardedPendingMessage[];
+    }
+    | {
+        kind: 'pending-user-action';
+        id: string;
+        request: PendingPermissionRequest;
+        createdAt: number;
     };
 
 type CommittedTranscriptItem = Extract<ChatListItem, { kind: 'message' | 'tool-calls-group' }>;
@@ -62,6 +69,7 @@ export type ChatListItemsBuildCache = Readonly<{
     localIdsInTranscript: ReadonlySet<string>;
     pendingMessagesRef: readonly PendingMessage[] | null | undefined;
     discardedMessagesRef: readonly DiscardedPendingMessage[] | null | undefined;
+    pendingUserActionRequestsRef: readonly PendingPermissionRequest[] | null | undefined;
     actionDraftsRef: readonly SessionActionDraft[] | null | undefined;
     items: ChatListItem[];
 }>;
@@ -144,11 +152,54 @@ function filterCommittedItemsForEventLifecycle(
     });
 }
 
+function readToolPermissionRequestId(message: Message): string | null {
+    if (message.kind !== 'tool-call') return null;
+    const permission = message.tool.permission;
+    if (!permission || permission.kind !== 'user_action' || permission.status !== 'pending') return null;
+    return typeof permission.id === 'string' && permission.id.length > 0 ? permission.id : null;
+}
+
+function collectPendingTranscriptUserActionRequestIds(
+    messageIdsOldestFirst: readonly string[],
+    messagesById: Readonly<Record<string, Message>>,
+): Set<string> {
+    const ids = new Set<string>();
+    for (const messageId of messageIdsOldestFirst) {
+        const message = messagesById[messageId];
+        if (!message) continue;
+        const requestId = readToolPermissionRequestId(message);
+        if (requestId) ids.add(requestId);
+    }
+    return ids;
+}
+
+function buildPendingUserActionItems(
+    requests: readonly PendingPermissionRequest[] | null | undefined,
+    transcriptRequestIds: ReadonlySet<string>,
+): Extract<ChatListItem, { kind: 'pending-user-action' }>[] {
+    if (!Array.isArray(requests) || requests.length === 0) return [];
+    const items: Extract<ChatListItem, { kind: 'pending-user-action' }>[] = [];
+    for (const request of requests) {
+        if (request.kind !== 'user_action') continue;
+        if (transcriptRequestIds.has(request.id)) continue;
+        items.push({
+            kind: 'pending-user-action',
+            id: `pending-user-action:${request.id}`,
+            request,
+            createdAt: typeof request.createdAt === 'number' && Number.isFinite(request.createdAt)
+                ? request.createdAt
+                : 0,
+        });
+    }
+    return items;
+}
+
 export function buildChatListItems(opts: {
     messageIdsOldestFirst: string[];
     messagesById: Record<string, Message>;
     pendingMessages: PendingMessage[];
     discardedMessages?: DiscardedPendingMessage[] | null;
+    pendingUserActionRequests?: readonly PendingPermissionRequest[] | null;
     actionDrafts?: SessionActionDraft[] | null;
     includeCommittedMessages?: boolean;
     groupConsecutiveToolCalls?: boolean;
@@ -211,6 +262,9 @@ export function buildChatListItems(opts: {
         });
     }
 
+    const transcriptUserActionRequestIds = collectPendingTranscriptUserActionRequestIds(opts.messageIdsOldestFirst, opts.messagesById);
+    items.push(...buildPendingUserActionItems(opts.pendingUserActionRequests, transcriptUserActionRequestIds));
+
     const drafts = Array.isArray(opts.actionDrafts) ? opts.actionDrafts : [];
     for (const d of drafts) {
         items.push({
@@ -229,6 +283,7 @@ export function buildChatListItemsCached(opts: {
     messagesById: Record<string, Message>;
     pendingMessages: PendingMessage[];
     discardedMessages?: DiscardedPendingMessage[] | null;
+    pendingUserActionRequests?: readonly PendingPermissionRequest[] | null;
     actionDrafts?: SessionActionDraft[] | null;
     groupConsecutiveToolCalls?: boolean;
     forkBoundaryBeforeMessageIds?: ReadonlySet<string>;
@@ -346,6 +401,10 @@ export function buildChatListItemsCached(opts: {
     const visibleMessageIds = new Set(visibleMessageIdsOldestFirst);
     const pending = opts.pendingMessages.filter((p) => !p.localId || !localIdsInTranscript.has(p.localId));
     const discarded = Array.isArray(opts.discardedMessages) ? opts.discardedMessages : [];
+    const pendingUserActionItems = buildPendingUserActionItems(
+        opts.pendingUserActionRequests,
+        collectPendingTranscriptUserActionRequestIds(opts.messageIdsOldestFirst, opts.messagesById),
+    );
     const drafts = Array.isArray(opts.actionDrafts) ? opts.actionDrafts : [];
     if (
         canReuse &&
@@ -354,6 +413,7 @@ export function buildChatListItemsCached(opts: {
         areSameStringList(opts.cache.visibleMessageIdsOldestFirst, visibleMessageIdsOldestFirst) &&
         areSameSourceList(opts.cache.pendingMessagesRef, opts.pendingMessages) &&
         areSameSourceList(opts.cache.discardedMessagesRef, opts.discardedMessages) &&
+        areSameSourceList(opts.cache.pendingUserActionRequestsRef, opts.pendingUserActionRequests) &&
         areSameSourceList(opts.cache.actionDraftsRef, opts.actionDrafts)
     ) {
         return {
@@ -375,6 +435,8 @@ export function buildChatListItemsCached(opts: {
         });
     }
 
+    items.push(...pendingUserActionItems);
+
     for (const d of drafts) {
         items.push({
             kind: 'action-draft',
@@ -394,6 +456,7 @@ export function buildChatListItemsCached(opts: {
             localIdsInTranscript,
             pendingMessagesRef: opts.pendingMessages,
             discardedMessagesRef: opts.discardedMessages,
+            pendingUserActionRequestsRef: opts.pendingUserActionRequests,
             actionDraftsRef: opts.actionDrafts,
             items,
         },

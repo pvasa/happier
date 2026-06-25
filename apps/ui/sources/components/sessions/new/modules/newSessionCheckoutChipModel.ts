@@ -4,6 +4,8 @@ import type { NewSessionCheckoutCreationDraft } from '@/sync/domains/state/newSe
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { normalizeFileSystemPath } from '@/sync/domains/fileSystem/normalizeFileSystemPath';
 
+import { buildWorktreeCheckoutOptionId } from './worktreeCheckoutOptionId';
+
 export type NewSessionCheckoutChipOption =
     | Readonly<{
         id: 'current_path';
@@ -102,7 +104,7 @@ export function resolveNewSessionCheckoutChipModel(params: Readonly<{
             return leftLabel.localeCompare(rightLabel);
         })
         .map((worktree) => ({
-            id: `checkout:${worktree.path}` as const,
+            id: buildWorktreeCheckoutOptionId(worktree.path),
             kind: 'linked_checkout' as const,
             path: worktree.path,
             displayName: worktree.branch ?? resolvePathDisplayName(worktree.path),

@@ -796,7 +796,7 @@ export function createCliActionDeps(params: Readonly<{
 
   const callRoutedUsageLimitRecoveryControl = async (
     sessionId: string,
-    operation: 'enable' | 'cancel' | 'checkNow' | 'switchAccountNow',
+    operation: 'enable' | 'cancel' | 'checkNow' | 'switchAccountNow' | 'consumeResetCredit',
     request: Record<string, unknown>,
   ): Promise<unknown> => {
     if (!params.credentials) {
@@ -884,12 +884,17 @@ export function createCliActionDeps(params: Readonly<{
         request: request as { sessionId: string; provider?: string; resumePromptMode?: 'standard' | 'off' | 'custom' },
         ...(params.notifyConnectedServiceRuntimeAuthFailure
           ? { notifyRuntimeAuthFailure: params.notifyConnectedServiceRuntimeAuthFailure }
-          : {}),
+        : {}),
       });
     }
     return await routeSessionUsageLimitRecoveryCheckNow({
       ...routeParams,
-      request: request as { sessionId: string; provider?: string; resumePromptMode?: 'standard' | 'off' | 'custom' },
+      request: request as {
+        sessionId: string;
+        provider?: string;
+        operation?: 'check_now' | 'switch_account_now' | 'consume_reset_credit';
+        resumePromptMode?: 'standard' | 'off' | 'custom';
+      },
     });
   };
 
@@ -950,6 +955,19 @@ export function createCliActionDeps(params: Readonly<{
     return await callRoutedUsageLimitRecoveryControl(input.sessionId, 'switchAccountNow', {
       sessionId: input.sessionId,
       ...(normalizedProvider.length > 0 ? { provider: normalizedProvider } : {}),
+      ...(resumePromptMode ? { resumePromptMode } : {}),
+    });
+  };
+
+  const runUsageLimitConsumeResetCredit = async (
+    input: Readonly<{ sessionId: string; provider?: string; resumePromptMode?: 'standard' | 'off' | 'custom' }>,
+  ): Promise<unknown> => {
+    const normalizedProvider = typeof input.provider === 'string' ? input.provider.trim() : '';
+    const resumePromptMode = readExplicitUsageLimitRecoveryResumePromptMode(input.resumePromptMode);
+    return await callRoutedUsageLimitRecoveryControl(input.sessionId, 'consumeResetCredit', {
+      sessionId: input.sessionId,
+      ...(normalizedProvider.length > 0 ? { provider: normalizedProvider } : {}),
+      operation: 'consume_reset_credit',
       ...(resumePromptMode ? { resumePromptMode } : {}),
     });
   };
@@ -1282,6 +1300,13 @@ export function createCliActionDeps(params: Readonly<{
       return await callRoutedSessionGoalControl(sessionId, 'clear', {});
     },
 
+    sessionTerminalComposerClear: async ({ sessionId, expectedStateAtMs }) => {
+      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_TERMINAL_COMPOSER_CLEAR, {
+        sessionId,
+        ...(typeof expectedStateAtMs === 'number' ? { expectedStateAtMs } : {}),
+      });
+    },
+
     sessionVendorPluginCatalogList: async ({ sessionId, cwd }) => {
       return await callRoutedSessionCatalogControl(sessionId, 'vendorPlugins', { cwd });
     },
@@ -1355,6 +1380,17 @@ export function createCliActionDeps(params: Readonly<{
         return usageLimitRecoveryFeatureDisabledResult({ sessionId });
       }
       return await runUsageLimitSwitchAccountNow({
+        sessionId,
+        ...(typeof provider === 'string' ? { provider } : {}),
+        ...(resumePromptMode ? { resumePromptMode } : {}),
+      });
+    },
+
+    sessionUsageLimitConsumeResetCredit: async ({ sessionId, provider, resumePromptMode }) => {
+      if (!await usageLimitRecoveryFeatureEnabled()) {
+        return usageLimitRecoveryFeatureDisabledResult({ sessionId });
+      }
+      return await runUsageLimitConsumeResetCredit({
         sessionId,
         ...(typeof provider === 'string' ? { provider } : {}),
         ...(resumePromptMode ? { resumePromptMode } : {}),

@@ -29,11 +29,19 @@ export type ConnectedServiceAccountTransitionVerificationResult =
   | Readonly<{
       status: 'verified';
       providerAccountId?: string | null;
+      activeAccountId?: string | null;
+      sharedAuthSurfaceId?: string | null;
+      proofStrength?: 'exact' | 'weak' | 'diagnostic';
+      source?: string;
       reason?: string;
     }>
   | Readonly<{
       status: 'weakly_verified';
       providerAccountId?: string | null;
+      activeAccountId?: string | null;
+      sharedAuthSurfaceId?: string | null;
+      proofStrength?: 'exact' | 'weak' | 'diagnostic';
+      source?: string;
       reason: string;
     }>
   | Readonly<{

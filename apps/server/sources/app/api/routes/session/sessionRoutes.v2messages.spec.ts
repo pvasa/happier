@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+    checkSessionAccess,
     buildNewMessageUpdate,
     buildMessageUpdatedUpdate,
     buildUpdateSessionUpdate,
@@ -143,6 +144,111 @@ describe("sessionRoutes v2 messages", () => {
         expect(buildNewMessageUpdate).toHaveBeenCalledWith(expect.anything(), "s1", 222, expect.any(String));
         expect(buildUpdateSessionUpdate).not.toHaveBeenCalled();
         expect(emitUpdate).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not forward connected-service attention overrides from the public route even for owner callers", async () => {
+        const createdAt = new Date("2020-01-01T00:00:00.000Z");
+        createSessionMessage.mockResolvedValue({
+            ok: true,
+            didWrite: true,
+            didUpdate: false,
+            message: { id: "m1", seq: 10, localId: "connected-service-account-switch:openai-codex:main:1", content: { t: "encrypted", c: "c" }, createdAt, updatedAt: createdAt },
+            participantCursors: [],
+        });
+
+        const route = await createSessionRouteTestBuilder("POST", "/v2/sessions/:sessionId/messages");
+        await route.invoke({
+            params: { sessionId: "s1" },
+            headers: {},
+            body: {
+                ciphertext: "cipher",
+                localId: "connected-service-account-switch:openai-codex:main:1",
+                messageRole: "event",
+                attentionImpact: {
+                    affectsUnread: false,
+                    affectsMeaningfulActivity: false,
+                },
+            },
+        });
+
+        expect(createSessionMessage).toHaveBeenCalledWith({
+            actorUserId: "u1",
+            sessionId: "s1",
+            ciphertext: "cipher",
+            localId: "connected-service-account-switch:openai-codex:main:1",
+            sidechainId: null,
+            messageRole: "event",
+        });
+    });
+
+    it("does not forward connected-service non-unread attention for non-owner callers", async () => {
+        const createdAt = new Date("2020-01-01T00:00:00.000Z");
+        createSessionMessage.mockResolvedValue({
+            ok: true,
+            didWrite: true,
+            didUpdate: false,
+            message: { id: "m1", seq: 10, localId: "connected-service-account-switch:openai-codex:main:1", content: { t: "encrypted", c: "c" }, createdAt, updatedAt: createdAt },
+            participantCursors: [],
+        });
+        checkSessionAccess.mockResolvedValueOnce({ level: "edit" });
+
+        const route = await createSessionRouteTestBuilder("POST", "/v2/sessions/:sessionId/messages");
+        await route.invoke({
+            params: { sessionId: "s1" },
+            headers: {},
+            body: {
+                ciphertext: "cipher",
+                localId: "connected-service-account-switch:openai-codex:main:1",
+                messageRole: "event",
+                attentionImpact: {
+                    affectsUnread: false,
+                    affectsMeaningfulActivity: false,
+                },
+            },
+        });
+
+        expect(createSessionMessage).toHaveBeenCalledWith({
+            actorUserId: "u1",
+            sessionId: "s1",
+            ciphertext: "cipher",
+            localId: "connected-service-account-switch:openai-codex:main:1",
+            sidechainId: null,
+            messageRole: "event",
+        });
+    });
+
+    it("does not forward caller-supplied attention overrides from the public route", async () => {
+        const createdAt = new Date("2020-01-01T00:00:00.000Z");
+        createSessionMessage.mockResolvedValue({
+            ok: true,
+            didWrite: true,
+            didUpdate: false,
+            message: { id: "m1", seq: 10, localId: "l1", content: { t: "encrypted", c: "c" }, createdAt, updatedAt: createdAt },
+            participantCursors: [],
+        });
+
+        const route = await createSessionRouteTestBuilder("POST", "/v2/sessions/:sessionId/messages");
+        await route.invoke({
+            params: { sessionId: "s1" },
+            headers: {},
+            body: {
+                ciphertext: "cipher",
+                localId: "l1",
+                attentionImpact: {
+                    affectsUnread: false,
+                    affectsMeaningfulActivity: false,
+                },
+                affectsUnread: false,
+            },
+        });
+
+        expect(createSessionMessage).toHaveBeenCalledWith({
+            actorUserId: "u1",
+            sessionId: "s1",
+            ciphertext: "cipher",
+            localId: "l1",
+            sidechainId: null,
+        });
     });
 
     it("forwards sidechainId to the message write service when provided", async () => {

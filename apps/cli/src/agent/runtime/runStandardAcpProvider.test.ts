@@ -568,6 +568,61 @@ describe('runStandardAcpProvider', () => {
     expect(runtime.steerPrompt).toHaveBeenCalledWith('hello');
   });
 
+  it('in-flight steer controller forwards delivery identity to runtime steerPrompt', async () => {
+    const harness = createHarness();
+
+    const runtime = {
+      beginTurn: vi.fn(),
+      startOrLoad: vi.fn(async () => undefined),
+      sendPrompt: vi.fn(async () => undefined),
+      flushTurn: vi.fn(),
+      reset: vi.fn(async () => undefined),
+      getSessionId: vi.fn(() => null),
+      cancel: vi.fn(async () => undefined),
+      setSessionMode: vi.fn(async () => undefined),
+      setSessionConfigOption: vi.fn(async () => undefined),
+      setSessionModel: vi.fn(async () => undefined),
+      steerPrompt: vi.fn(async () => undefined),
+    };
+
+    harness.config.createRuntime = () => runtime as any;
+
+    let inFlightSteer: any = null;
+    harness.deps.createPermissionModeQueueStateFn = (params: any) => {
+      inFlightSteer = params.inFlightSteer;
+      return {
+        messageQueue: {
+          reset: () => undefined,
+          size: () => 0,
+        },
+        getCurrentPermissionMode: () => 'default',
+        setCurrentPermissionMode: () => undefined,
+        getCurrentPermissionModeUpdatedAt: () => 0,
+        setCurrentPermissionModeUpdatedAt: () => undefined,
+      };
+    };
+
+    harness.deps.runPermissionModePromptLoopFn = async (params: any) => {
+      expect(inFlightSteer).not.toBeNull();
+      await inFlightSteer.steerText('hello', {
+        localId: 'local-1',
+        localIds: ['local-1'],
+        userMessageSeq: 1,
+        userMessageSeqs: [1],
+      });
+      params.sendReady();
+    };
+
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+
+    expect(runtime.steerPrompt).toHaveBeenCalledWith('hello', {
+      localId: 'local-1',
+      localIds: ['local-1'],
+      userMessageSeq: 1,
+      userMessageSeqs: [1],
+    });
+  });
+
   it('uses custom ready sender when provided', async () => {
     const harness = createHarness();
     harness.config.createSendReady = () => () => {

@@ -17,7 +17,7 @@ const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
 const readline = require('node:readline');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { resolveClaudeProjectId } = require('../testkit/claudeProjectId.cjs');
 const {
   findArgValue,
@@ -33,9 +33,11 @@ const invocationId =
   process.env.HAPPIER_E2E_FAKE_CLAUDE_INVOCATION_ID ||
   process.env.HAPPY_E2E_FAKE_CLAUDE_INVOCATION_ID ||
   `fake-claude-${randomUUID()}`;
+const resumeSessionId = findArgValue(argv, '--resume');
 const sessionId =
   process.env.HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID ||
   process.env.HAPPY_E2E_FAKE_CLAUDE_SESSION_ID ||
+  (typeof resumeSessionId === 'string' && resumeSessionId.length > 0 ? resumeSessionId : '') ||
   `fake-claude-session-${randomUUID()}`;
 const processNonce = randomUUID();
 const logPath = process.env.HAPPIER_E2E_FAKE_CLAUDE_LOG || process.env.HAPPY_E2E_FAKE_CLAUDE_LOG || '';
@@ -148,6 +150,10 @@ function readCurrentNativeOauthAccessToken() {
   const parsed = parseCredentialsJson(credentialsPath);
   const claudeAiOauth = parsed?.claudeAiOauth && typeof parsed.claudeAiOauth === 'object' ? parsed.claudeAiOauth : null;
   return typeof claudeAiOauth?.accessToken === 'string' ? claudeAiOauth.accessToken : '';
+}
+
+function sha256Text(value) {
+  return createHash('sha256').update(String(value), 'utf8').digest('hex');
 }
 
 function shouldFailLocalStdinWhileTokenIsStale() {
@@ -269,6 +275,7 @@ function appendLocalStdinTurn(promptText, turn) {
     ts: Date.now(),
     turn,
     userTextLength: promptText.length,
+    userTextSha256: sha256Text(promptText),
     userTextPreview: promptText.slice(0, 800),
   });
 }
@@ -545,6 +552,7 @@ async function runSdkStreamUntilEof() {
       messageRole: msg?.message?.role ?? null,
       hasUserText: Boolean(promptText),
       userTextLength: typeof promptText === 'string' ? promptText.length : null,
+      userTextSha256: typeof promptText === 'string' ? sha256Text(promptText) : null,
       userTextPreview: typeof promptText === 'string' ? promptText.slice(0, 800) : null,
     });
     if (!promptText) continue;
@@ -1093,9 +1101,10 @@ if (isSdkStreamJson) {
   let localTurnStarted = false;
   let localTurnCompleted = false;
   let localStdinTurn = 0;
-  const rl = readline.createInterface({ input: process.stdin });
+  let localComposerBuffer = '';
+  let skipNextLfAfterCr = false;
   const renderLocalIdleComposer = () => {
-    process.stdout.write('\n> Try "refactor <filepath>"\n');
+    process.stdout.write('\n❯ \x1b[2mTry "refactor <filepath>"\x1b[22m\n');
     safeAppendJsonl(logPath, {
       type: 'local_idle_composer_rendered',
       invocationId,
@@ -1106,8 +1115,9 @@ if (isSdkStreamJson) {
 
   renderLocalIdleComposer();
 
-  rl.on('line', (line) => {
-    const promptText = String(line || '').trim();
+  function submitLocalComposerBuffer() {
+    const promptText = localComposerBuffer.trim();
+    localComposerBuffer = '';
     if (!promptText) return;
     localStdinTurn += 1;
     if (shouldFailLocalStdinWhileTokenIsStale()) {
@@ -1117,6 +1127,7 @@ if (isSdkStreamJson) {
         ts: Date.now(),
         turn: localStdinTurn,
         userTextLength: promptText.length,
+        userTextSha256: sha256Text(promptText),
         userTextPreview: promptText.slice(0, 800),
       });
       return;
@@ -1125,7 +1136,32 @@ if (isSdkStreamJson) {
     appendLocalStdinTurn(promptText, localStdinTurn);
     void emitHookEvent('Stop', { background_tasks: [] });
     renderLocalIdleComposer();
+  }
+
+  process.stdin.on('data', (chunk) => {
+    const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk ?? '');
+    for (const char of text) {
+      if (skipNextLfAfterCr && char === '\n') {
+        skipNextLfAfterCr = false;
+        continue;
+      }
+      skipNextLfAfterCr = false;
+      if (char === '\r') {
+        submitLocalComposerBuffer();
+        skipNextLfAfterCr = true;
+        continue;
+      }
+      if (char === '\n') {
+        localComposerBuffer += '\n';
+        continue;
+      }
+      localComposerBuffer += char;
+    }
   });
+  if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') {
+    process.stdin.setRawMode(true);
+  }
+  process.stdin.resume();
 
   const maybeStartLocalTurn = () => {
     if (!localActiveTurnEnabled || localTurnStarted) return;
@@ -1152,7 +1188,6 @@ if (isSdkStreamJson) {
   const stop = () => {
     if (localTurnInterval) clearInterval(localTurnInterval);
     clearInterval(interval);
-    rl.close();
     safeAppendJsonl(logPath, { type: 'local_exited', invocationId, ts: Date.now(), stdinTurns: localStdinTurn });
     process.exit(0);
   };

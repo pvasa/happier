@@ -16,9 +16,11 @@ import { SessionHandoffWorkspaceTransferSchema } from '../sessionControl/handoff
 import { ActionApprovalSchema, type ActionApproval } from './actionApprovalMetadata.js';
 import {
   SessionUsageLimitCheckNowRequestV1Schema,
+  SessionUsageLimitConsumeResetCreditRequestV1Schema,
   SessionUsageLimitWaitResumeCancelRequestV1Schema,
   SessionUsageLimitWaitResumeEnableRequestV1Schema,
 } from '../sessionWorkState/sessionWorkStateRpc.js';
+import { SessionTerminalComposerClearRequestV1Schema } from '../sessionControl/sessionTerminalComposerClearV1.js';
 import { SessionWorkStateStatusV1Schema } from '../sessionWorkState/sessionWorkStateV1.js';
 
 export {
@@ -1986,6 +1988,31 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     inputSchema: SessionIdRequiredInputSchema,
   },
   {
+    id: 'session.terminalComposer.clear',
+    title: 'Clear terminal composer',
+    description: 'Clear a live terminal composer draft after explicit user authorization.',
+    safety: 'danger',
+    approval: APPROVAL_RESULT_REQUIRED,
+    placements: [],
+    surfaces: {
+      ui_button: true,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: false,
+      mcp: false,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Clear terminal composer',
+      fields: [
+        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'expectedStateAtMs', title: 'Expected state timestamp', widget: 'text' },
+      ],
+    },
+    inputSchema: SessionTerminalComposerClearRequestV1Schema,
+  },
+  {
     id: 'session.usageLimit.waitResume.enable',
     title: 'Enable usage-limit wait/resume',
     description: 'Arm a durable intent to continue a session when a provider usage limit is lifted.',
@@ -2097,6 +2124,50 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       ],
     },
     inputSchema: SessionUsageLimitCheckNowRequestV1Schema,
+  },
+  {
+    id: 'session.usageLimit.consumeResetCredit',
+    title: 'Apply usage-limit reset credit',
+    description: 'Ask the session runtime to spend a connected-service reset credit for usage-limit recovery.',
+    safety: 'danger',
+    approval: APPROVAL_RESULT_REQUIRED,
+    placements: [],
+    bindings: { mcpToolName: 'session_usage_limit_consume_reset_credit' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Apply reset credit',
+      fields: [
+        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        {
+          path: 'provider',
+          title: 'Provider',
+          description: 'Optional provider/backend id used to match the active usage-limit issue.',
+          widget: 'text',
+        },
+        {
+          path: 'resumePromptMode',
+          title: 'Resume prompt mode',
+          widget: 'select',
+          options: [
+            { value: 'standard', label: 'Standard' },
+            { value: 'off', label: 'Off' },
+            { value: 'custom', label: 'Custom' },
+          ],
+        },
+      ],
+    },
+    inputSchema: SessionUsageLimitConsumeResetCreditRequestV1Schema,
   },
   {
     id: 'session.vendor_plugin_catalog.list',

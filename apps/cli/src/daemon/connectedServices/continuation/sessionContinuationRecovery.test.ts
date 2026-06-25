@@ -4,6 +4,15 @@ import { STANDARD_CONTINUATION_RESUME_PROMPT } from './continuationResumePrompt'
 
 type ContinuationModule = Readonly<{
   isContinuationRecoveryAwaitingProviderActivityStatus: (status: string) => boolean;
+  createSessionContinuationRecoveryOverlayStore: (deps: {
+    durableStore: {
+      read: (sessionId: string) => Promise<unknown | null> | unknown | null;
+      write: (sessionId: string, state: unknown) => Promise<void> | void;
+    };
+  }) => {
+    read: (sessionId: string) => Promise<unknown | null>;
+    write: (sessionId: string, state: unknown) => Promise<void>;
+  };
   createSessionContinuationRecoveryController: (deps: {
     nowMs: () => number;
     providerActivityTimeoutMs?: number;
@@ -79,6 +88,7 @@ async function loadContinuationModule(): Promise<ContinuationModule> {
   const mod = await import(modulePath).catch(() => null);
   expect(mod).not.toBeNull();
   expect(typeof (mod as Partial<ContinuationModule> | null)?.createSessionContinuationRecoveryController).toBe('function');
+  expect(typeof (mod as Partial<ContinuationModule> | null)?.createSessionContinuationRecoveryOverlayStore).toBe('function');
   expect(typeof (mod as Partial<ContinuationModule> | null)?.isContinuationRecoveryAwaitingProviderActivityStatus).toBe('function');
   return mod as ContinuationModule;
 }
@@ -541,6 +551,46 @@ describe('session continuation recovery', () => {
     });
   });
 
+  it('drains a persisted pending attempt exactly once across repeated readiness checks', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const first = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await first.beginAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+    });
+
+    const sentPrompts: string[] = [];
+    const second = createSessionContinuationRecoveryController({ nowMs: () => 3_000, store });
+    await expect(second.resolvePendingAttempts({
+      sessionId: 'session-1',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt }) => {
+        sentPrompts.push(prompt);
+      },
+    })).resolves.toEqual({
+      resolved: [{ attemptId: 'generation-1:restart-1', status: 'awaiting_provider_activity' }],
+    });
+
+    const third = createSessionContinuationRecoveryController({ nowMs: () => 4_000, store });
+    await expect(third.resolvePendingAttempts({
+      sessionId: 'session-1',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt }) => {
+        sentPrompts.push(prompt);
+      },
+    })).resolves.toEqual({
+      resolved: [{ attemptId: 'generation-1:restart-1', status: 'already_awaiting_provider_activity' }],
+    });
+
+    expect(sentPrompts).toEqual([STANDARD_CONTINUATION_RESUME_PROMPT]);
+  });
+
   it('retries a persisted sending attempt with the same deterministic handoff id after restart replay', async () => {
     const { createSessionContinuationRecoveryController } = await loadContinuationModule();
     const store = createStore();
@@ -893,6 +943,71 @@ describe('session continuation recovery', () => {
           replayMode: 'retry_original_user_message',
           status: 'retry_required',
           errorCode: 'original_user_message_retry_evidence_unavailable',
+        },
+      },
+    });
+  });
+
+  it('resolves pending restart continuations from the daemon overlay when durable metadata is briefly stale', async () => {
+    const {
+      createSessionContinuationRecoveryController,
+      createSessionContinuationRecoveryOverlayStore,
+    } = await loadContinuationModule();
+    let durableState: unknown = null;
+    const durableStore = {
+      read: () => durableState,
+      write: (_sessionId: string, state: unknown) => {
+        durableState = state;
+      },
+    };
+    const overlayStore = createSessionContinuationRecoveryOverlayStore({ durableStore });
+    const sender = vi.fn();
+    const armingController = createSessionContinuationRecoveryController({
+      nowMs: () => 2_000,
+      store: overlayStore,
+    });
+
+    await armingController.beginAttempt({
+      sessionId: 'session-1',
+      attemptId: 'connected-service-auth-switch|restart_requested|anthropic:group:team:primary:',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      replayMode: 'continuation_prompt',
+      recoveryIdentity: {
+        serviceId: 'anthropic',
+        selectionKind: 'group',
+        groupId: 'team',
+        profileId: 'primary',
+      },
+      continuationRequired: true,
+    });
+
+    durableState = { v: 1, attemptsById: {} };
+
+    const replayController = createSessionContinuationRecoveryController({
+      nowMs: () => 3_000,
+      store: overlayStore,
+    });
+    await expect(replayController.resolvePendingAttempts({
+      sessionId: 'session-1',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: sender,
+    })).resolves.toEqual({
+      resolved: [{
+        attemptId: 'connected-service-auth-switch|restart_requested|anthropic:group:team:primary:',
+        status: 'awaiting_provider_activity',
+      }],
+    });
+
+    expect(sender).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: STANDARD_CONTINUATION_RESUME_PROMPT,
+    }));
+    expect(durableState).toMatchObject({
+      attemptsById: {
+        'connected-service-auth-switch|restart_requested|anthropic:group:team:primary:': {
+          status: 'awaiting_provider_activity',
+          sentAtMs: 3_000,
         },
       },
     });

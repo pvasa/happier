@@ -765,7 +765,9 @@ function shouldDiscoverUnhookedSession(messages: readonly RawJSONLines[]): boole
         return record.isApiErrorMessage === true
             || record.error != null
             || record.apiErrorStatus != null
-            || record.api_error_status != null;
+            || record.api_error_status != null
+            || record.errorStatus != null
+            || record.error_status != null;
     });
 }
 

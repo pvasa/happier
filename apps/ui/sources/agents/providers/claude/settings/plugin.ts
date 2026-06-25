@@ -62,6 +62,29 @@ export const CLAUDE_PROVIDER_SETTINGS_PLUGIN: ProviderSettingsPlugin = {
                         },
                     ],
                 },
+                {
+                    key: 'claudeUnifiedTerminalResumeChoice',
+                    kind: 'enum',
+                    title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalResumeChoice.title' },
+                    subtitle: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalResumeChoice.subtitle' },
+                    enumOptions: [
+                        {
+                            id: 'ask_every_time',
+                            title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalResumeChoice.options.ask_every_time.title' },
+                            subtitle: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalResumeChoice.options.ask_every_time.subtitle' },
+                        },
+                        {
+                            id: 'resume_from_summary',
+                            title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalResumeChoice.options.resume_from_summary.title' },
+                            subtitle: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalResumeChoice.options.resume_from_summary.subtitle' },
+                        },
+                        {
+                            id: 'resume_full_session',
+                            title: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalResumeChoice.options.resume_full_session.title' },
+                            subtitle: { key: 'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalResumeChoice.options.resume_full_session.subtitle' },
+                        },
+                    ],
+                },
             ],
         },
         {

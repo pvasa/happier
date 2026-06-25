@@ -2,20 +2,33 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { writeFakeCodexAppServerThreadListScript } from '@/backends/codex/appServer/testkit/fakeCodexAppServer';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import type {
+  ConnectedServiceBindingsV1,
+  ConnectedServiceMaterializationIdentityV1,
+} from '@happier-dev/protocol';
 import type { LoadedLinkedDirectSession } from './loadLinkedDirectSession';
 import { resolveDirectTakeoverSpawnOptions } from './resolveDirectTakeoverSpawnOptions';
+
+const { listSessionMarkersMock } = vi.hoisted(() => ({
+  listSessionMarkersMock: vi.fn<() => Promise<unknown[]>>(async () => []),
+}));
 
 vi.mock('@/configuration', () => ({
   configuration: {
     activeServerDir: '/tmp/happier-test-active-server',
+    daemonReattachCatchUpConcurrency: 0,
     happyHomeDir: '/tmp/happier-test-home',
     logsDir: '/tmp',
     isDaemonProcess: false,
   },
+}));
+
+vi.mock('@/daemon/sessionRegistry', () => ({
+  listSessionMarkers: listSessionMarkersMock,
 }));
 
 function jsonlLine(value: unknown): string {
@@ -45,10 +58,11 @@ function createLinkedOpenCodeSessionFixture(params: Readonly<{
   remoteSessionId: string;
   source: LoadedLinkedDirectSession['source'];
   sessionPath?: string | null;
+  metadata?: LoadedLinkedDirectSession['metadata'];
 }>): LoadedLinkedDirectSession {
   return {
     rawSession: {} as RawSessionRecord,
-    metadata: {},
+    metadata: params.metadata ?? {},
     sessionPath: params.sessionPath ?? null,
     providerId: 'opencode',
     machineId: 'machine-1',
@@ -59,6 +73,11 @@ function createLinkedOpenCodeSessionFixture(params: Readonly<{
 }
 
 describe('resolveDirectTakeoverSpawnOptions', () => {
+  beforeEach(() => {
+    listSessionMarkersMock.mockReset();
+    listSessionMarkersMock.mockResolvedValue([]);
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -320,6 +339,109 @@ describe('resolveDirectTakeoverSpawnOptions', () => {
         HAPPIER_OPENCODE_BACKEND_MODE: 'server',
         HAPPIER_OPENCODE_SERVER_URL: 'http://127.0.0.1:4096',
         HAPPIER_OPENCODE_SERVER_URL_EXPLICIT: '1',
+      },
+    });
+  });
+
+  it('carries connected-service auth bindings into direct OpenCode server takeovers', async () => {
+    const connectedServices = {
+      v: 1,
+      bindingsByServiceId: {
+        'openai-codex': {
+          source: 'connected',
+          selection: 'profile',
+          profileId: 'batiplus',
+        },
+      },
+    } satisfies ConnectedServiceBindingsV1;
+    const materializationIdentity = {
+      v: 1,
+      id: 'csm_opencode_direct_takeover',
+      createdAtMs: 1_718_719_200_000,
+    } satisfies ConnectedServiceMaterializationIdentityV1;
+
+    const spawnOptions = await resolveDirectTakeoverSpawnOptions({
+      linked: createLinkedOpenCodeSessionFixture({
+        remoteSessionId: 'opencode-session-connected-1',
+        sessionPath: '/tmp/direct-opencode-connected-takeover-project',
+        source: { kind: 'opencodeServer', baseUrl: null },
+        metadata: {
+          connectedServices,
+          connectedServiceMaterializationIdentityV1: materializationIdentity,
+        },
+      }),
+      sessionId: 'sess_happy_direct_opencode_connected',
+    });
+
+    expect(spawnOptions).toEqual({
+      directory: '/tmp/direct-opencode-connected-takeover-project',
+      backendTarget: { kind: 'builtInAgent', agentId: 'opencode' },
+      existingSessionId: 'sess_happy_direct_opencode_connected',
+      resume: 'opencode-session-connected-1',
+      approvedNewDirectoryCreation: true,
+      transcriptStorage: 'direct',
+      connectedServices,
+      connectedServiceMaterializationIdentityV1: materializationIdentity,
+      environmentVariables: {
+        HAPPIER_OPENCODE_BACKEND_MODE: 'server',
+      },
+    });
+  });
+
+  it('recovers OpenCode connected-service auth bindings from the tracked runtime marker during direct takeover', async () => {
+    const connectedServices = {
+      v: 1,
+      bindingsByServiceId: {
+        'openai-codex': {
+          source: 'connected',
+          selection: 'group',
+          groupId: 'happier',
+          profileId: 'edison',
+        },
+      },
+    } satisfies ConnectedServiceBindingsV1;
+    const materializationIdentity = {
+      v: 1,
+      id: 'csm_opencode_marker_takeover',
+      createdAtMs: 1_718_719_300_000,
+    } satisfies ConnectedServiceMaterializationIdentityV1;
+    listSessionMarkersMock.mockResolvedValueOnce([
+      {
+        updatedAt: 200,
+        metadata: {
+          flavor: 'opencode',
+          opencodeSessionId: 'opencode-session-marker-1',
+        },
+        respawn: {
+          resume: 'opencode-session-marker-1',
+          connectedServices,
+          connectedServicesUpdatedAt: 1_718_719_299_000,
+          connectedServiceMaterializationIdentityV1: materializationIdentity,
+        },
+      },
+    ]);
+
+    const spawnOptions = await resolveDirectTakeoverSpawnOptions({
+      linked: createLinkedOpenCodeSessionFixture({
+        remoteSessionId: 'opencode-session-marker-1',
+        sessionPath: '/tmp/direct-opencode-marker-takeover-project',
+        source: { kind: 'opencodeServer', baseUrl: null },
+      }),
+      sessionId: 'sess_happy_direct_opencode_marker',
+    });
+
+    expect(spawnOptions).toEqual({
+      directory: '/tmp/direct-opencode-marker-takeover-project',
+      backendTarget: { kind: 'builtInAgent', agentId: 'opencode' },
+      existingSessionId: 'sess_happy_direct_opencode_marker',
+      resume: 'opencode-session-marker-1',
+      approvedNewDirectoryCreation: true,
+      transcriptStorage: 'direct',
+      connectedServices,
+      connectedServicesUpdatedAt: 1_718_719_299_000,
+      connectedServiceMaterializationIdentityV1: materializationIdentity,
+      environmentVariables: {
+        HAPPIER_OPENCODE_BACKEND_MODE: 'server',
       },
     });
   });

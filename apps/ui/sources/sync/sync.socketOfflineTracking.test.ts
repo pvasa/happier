@@ -127,6 +127,10 @@ import { loadChangesCursor, loadDirectSessionTailCursor, saveProfile } from './d
 import { profileDefaults } from './domains/profiles/profile';
 import { getActiveServerSnapshot, upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import {
+  clearActiveViewingSessionsForServerScopeReset,
+  markSessionVisible,
+} from './domains/session/activeViewingSession';
+import {
   clearMountedSessionRealtimeScmConsumerScopes,
   readMountedSessionRealtimeScmConsumerScopes,
   registerSessionRealtimeScmConsumerScope,
@@ -190,6 +194,7 @@ describe('sync socket offline tracking', () => {
 
   beforeEach(() => {
     storage.setState(initialStorageState, true);
+    clearActiveViewingSessionsForServerScopeReset();
     clearMountedSessionRealtimeScmConsumerScopes();
     kvStore.clear();
     statusListeners.clear();
@@ -284,6 +289,7 @@ describe('sync socket offline tracking', () => {
     storage.getState().applyMessagesLoaded('s_reconnect_gap');
     (sync as any).sessionMaterializedMaxSeqById = { s_reconnect_gap: 20 };
     (sync as any).isForeground = true;
+    markSessionVisible('s_reconnect_gap');
 
     await (sync as any).fetchMessages('s_reconnect_gap');
 
@@ -315,6 +321,7 @@ describe('sync socket offline tracking', () => {
     storage.getState().applyMessagesLoaded('s_tuned_page_size');
     (sync as any).sessionMaterializedMaxSeqById = { s_tuned_page_size: 20 };
     (sync as any).isForeground = true;
+    markSessionVisible('s_tuned_page_size');
 
     await (sync as any).fetchMessages('s_tuned_page_size');
 
@@ -342,6 +349,7 @@ describe('sync socket offline tracking', () => {
     (sync as any).sessionMaterializedMaxSeqById = { s_deferred_durable_gap: 7 };
     (sync as any).hasFetchedSessionsSnapshotForActiveServer = false;
     (sync as any).isForeground = true;
+    markSessionVisible('s_deferred_durable_gap');
     (sync as any).markSessionTranscriptDeferred('s_deferred_durable_gap', {
       updateType: 'new-message',
       seq: 8,
@@ -381,11 +389,92 @@ describe('sync socket offline tracking', () => {
     storage.getState().applyMessagesLoaded('s_reconnect_consumed');
     (sync as any).sessionMaterializedMaxSeqById = { s_reconnect_consumed: 20 };
     (sync as any).isForeground = true;
+    markSessionVisible('s_reconnect_consumed');
 
     await (sync as any).fetchMessages('s_reconnect_consumed');
     await (sync as any).fetchMessages('s_reconnect_consumed');
 
     expect(apiSocketRequestMock).toHaveBeenCalledTimes(1);
+  }, 60_000);
+
+  it('includes the turns projection for socket turn-projection hydration', async () => {
+    upsertAndActivateServer({ serverUrl: 'http://localhost:53288', scope: 'tab' });
+    apiSocketRequestMock.mockImplementation(async (...args: unknown[]) => {
+      const path = String(args[0] ?? '');
+      if (path === '/v2/sessions/s_socket_turn_projection') {
+        return new Response(JSON.stringify({
+          session: {
+            id: 's_socket_turn_projection',
+            createdAt: 1,
+            updatedAt: 2,
+            seq: 3,
+            active: false,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            dataEncryptionKey: null,
+            metadataVersion: 1,
+            metadata: JSON.stringify({
+              path: '/workspace',
+              host: 'localhost',
+              flavor: 'codex',
+              codexBackendMode: 'appServer',
+            }),
+            agentStateVersion: 1,
+            agentState: JSON.stringify({ controlledByUser: false }),
+            share: null,
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      if (path === '/v1/sessions/s_socket_turn_projection/turns') {
+        return new Response(JSON.stringify({
+          v: 1,
+          sessionId: 's_socket_turn_projection',
+          latestTurnId: 'turn-1',
+          updatedAt: 4,
+          turns: [
+            {
+              turnId: 'turn-1',
+              status: 'completed',
+              startedAt: 1,
+              updatedAt: 4,
+              terminalAt: 4,
+              transcriptAnchors: {
+                startUserMessageSeq: 3,
+                userMessageSeqs: [3],
+                startSeqInclusive: 3,
+                endSeqInclusive: 4,
+              },
+              rollback: { state: 'eligible', updatedAt: 4 },
+            },
+          ],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      return new Response(JSON.stringify({ error: `unexpected path ${path}` }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    (sync as any).credentials = { token: 'hdr.eyJzdWIiOiJ0ZXN0In0.sig', secret: 'secret' };
+    (sync as any).encryption = {
+      decryptEncryptionKey: async () => null,
+      initializeSessions: async () => {},
+      getSessionEncryption: () => null,
+      removeSessionEncryption: () => {},
+    };
+
+    (sync as any).hydrateSessionShellByIdFromSocket(
+      's_socket_turn_projection',
+      'socket-update-turn-projection',
+      null,
+      () => true,
+    );
+
+    await expect.poll(() => apiSocketRequestMock.mock.calls.map((call) => String((call as readonly unknown[])[0] ?? ''))).toContain(
+      '/v1/sessions/s_socket_turn_projection/turns',
+    );
+    await expect.poll(() => storage.getState().sessions.s_socket_turn_projection?.rollbackEligibleTurnStarts).toEqual([3]);
   }, 60_000);
 
   it('clears active server machine cache during server-scoped runtime reset', () => {

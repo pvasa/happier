@@ -3,7 +3,6 @@ import { classifyDaemonServerWorkError } from '@/daemon/serverWork/classifyDaemo
 import {
   DurableBackoffRecoveryScheduler,
   type DurableRecoveryGateResult,
-  type DurableRecoveryStore,
 } from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
 import { CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES, type ConnectedServiceUxDiagnosticV1 } from '@happier-dev/protocol';
 import { buildConnectedServiceUxDiagnostic } from '../diagnostics/connectedServiceUxDiagnostics';
@@ -101,7 +100,6 @@ type RuntimeAuthRecoverySchedulerDeps = Readonly<{
   degradedBackoffMs?: number;
   // RD-REC-15: bounded coalesced stale-profile replay budget (defaults apply).
   maxCoalescedReplays?: number;
-  store?: DurableRecoveryStore<RuntimeAuthRecoveryIntent>;
   recover: (input: Readonly<{
     sessionId: string;
     switchesThisTurn: number;
@@ -339,6 +337,28 @@ function readApplyFailure(result: unknown): Readonly<{
   };
 }
 
+function isDurableContinuityReconstructionExhausted(
+  diagnostics: Readonly<Record<string, unknown>> | null,
+): boolean {
+  if (!diagnostics) return false;
+  if (diagnostics.durableContinuityReconstructionExhausted === true) return true;
+  const candidates = [
+    diagnostics.durableContinuity,
+    diagnostics.durableContinuityReconstruction,
+    diagnostics.continuity,
+  ];
+  return candidates.some((candidate) => {
+    if (!isRecord(candidate)) return false;
+    const status = readString(candidate.status)
+      ?? readString(candidate.reconstructionStatus)
+      ?? readString(candidate.reconstructionState);
+    return candidate.reconstructionExhausted === true
+      || candidate.durableReconstructionExhausted === true
+      || status === 'exhausted'
+      || status === 'terminal';
+  });
+}
+
 function classifyApplyFailure(result: unknown): RetryDecision | null {
   const failure = readApplyFailure(result);
   if (!failure) return null;
@@ -380,6 +400,31 @@ function classifyApplyFailure(result: unknown): RetryDecision | null {
       classification: explicit ?? { kind: 'dependency_unavailable', retryable: true },
       failurePhase: 'apply',
       failureReason: 'account_settings_unavailable',
+      lastError: failure.errorCode,
+    };
+  }
+  // Missing provider resume state during recovery is a durable-continuity infrastructure gap until
+  // the reconstruction path has explicitly exhausted. Keep arbitrary provider verdicts fail-closed.
+  if (failure.errorCode === 'provider_session_state_unavailable_for_resume') {
+    const explicit = normalizeClassification(failure.diagnostics?.errorClassification);
+    if (
+      failure.diagnostics?.retryable === false
+      || explicit?.retryable === false
+      || isDurableContinuityReconstructionExhausted(failure.diagnostics)
+    ) {
+      return {
+        retryable: false,
+        classification: explicit,
+        reason: 'provider_session_state_unavailable_after_reconstruction',
+        failurePhase: 'apply',
+        lastError: failure.errorCode,
+      };
+    }
+    return {
+      retryable: true,
+      classification: explicit ?? { kind: 'dependency_unavailable', retryable: true },
+      failurePhase: 'apply',
+      failureReason: 'durable_continuity_reconstruction_retrying',
       lastError: failure.errorCode,
     };
   }
@@ -957,7 +1002,6 @@ export class RuntimeAuthRecoveryScheduler {
       baseBackoffMs: deps.baseBackoffMs,
       maxBackoffMs: deps.maxBackoffMs,
       jitterMs: deps.jitterMs,
-      store: deps.store,
       normalizeIntent,
       getStatus: (intent) => intent.status === 'resumed_awaiting_proof' ? 'waiting' : intent.status,
       getNextRetryAtMs: (intent) => intent.nextRetryAtMs,
@@ -1292,13 +1336,9 @@ export class RuntimeAuthRecoveryScheduler {
     return this.scheduler.readForSession(sessionId);
   }
 
-  hydrate(): ReadonlyArray<RuntimeAuthRecoveryIntent> {
-    return this.scheduler.hydrate();
-  }
-
   /**
-   * Daemon-shutdown lifecycle: stop firing recovery timers. Persisted `waiting`
-   * intents stay on disk so a healthy future daemon re-hydrates and re-drives them.
+   * Daemon-shutdown lifecycle: stop firing live-daemon recovery timers so recovery
+   * work cannot switch/restart sessions while this daemon instance is tearing down.
    */
   dispose(): void {
     this.scheduler.dispose();

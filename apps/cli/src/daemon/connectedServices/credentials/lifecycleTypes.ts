@@ -31,6 +31,25 @@ export type ConnectedServicePredictiveSoftSwitchLiveSessionRequirement =
       authEnvSubpath?: ReadonlyArray<string>;
     }>;
 
+export type ConnectedServiceRuntimeAuthApplyCapability = Readonly<{
+  directLiveHotAuth:
+    | 'unsupported'
+    | Readonly<{
+        supportsInTurnApply: boolean;
+        requiresExactRuntimeIdentity: boolean;
+        refreshSelectionResync: 'required' | 'not_applicable';
+        authMode:
+          | Readonly<{ kind: 'external_token_injection'; surface: string }>
+          | Readonly<{ kind: 'managed_provider_session' }>
+          | Readonly<{ kind: 'api_key' }>
+          | Readonly<{ kind: 'provider_owned'; name: string }>;
+      }>;
+}>;
+
+export const DEFAULT_CONNECTED_SERVICE_RUNTIME_AUTH_APPLY_CAPABILITY: ConnectedServiceRuntimeAuthApplyCapability = {
+  directLiveHotAuth: 'unsupported',
+};
+
 /**
  * Every field here must have a production consumer; capability declarations without an enforcing
  * consumer are banned (they rot into false claims — see the removed `refreshTokenRuntimeHandling`,
@@ -42,6 +61,8 @@ export type ConnectedServicePredictiveSoftSwitchLiveSessionRequirement =
  * - `refreshedCredentialApplication` — `createConnectedServicesAuthUpdatedRestartHandler`.
  * - `predictiveSoftSwitch` — `predictiveSoftSwitchPolicy` (spawn + daemon scheduling).
  * - `sameAccountFanoutStrategy` — `ConnectedServiceQuotasCoordinator` exact same-account fanout.
+ * - `runtimeAuthApply` — central switch/fanout policy for in-turn direct-live eligibility
+ *   and exact runtime identity/auth-mode requirements.
  */
 export type ConnectedServiceCredentialLifecycleDescriptor = Readonly<{
   providerId: CatalogAgentId;
@@ -57,6 +78,7 @@ export type ConnectedServiceCredentialLifecycleDescriptor = Readonly<{
     liveSessionRequirement?: ConnectedServicePredictiveSoftSwitchLiveSessionRequirement;
   }>;
   sameAccountFanoutStrategy: ConnectedServiceSameAccountFanoutStrategy;
+  runtimeAuthApply: ConnectedServiceRuntimeAuthApplyCapability;
 }>;
 
 export function buildDefaultConnectedServiceCredentialLifecycleDescriptor(
@@ -69,5 +91,6 @@ export function buildDefaultConnectedServiceCredentialLifecycleDescriptor(
     refreshedCredentialApplication: { mode: 'no_restart_required' },
     predictiveSoftSwitch: { mode: 'unsupported', liveSessionRequirement: { kind: 'none' } },
     sameAccountFanoutStrategy: 'none',
+    runtimeAuthApply: DEFAULT_CONNECTED_SERVICE_RUNTIME_AUTH_APPLY_CAPABILITY,
   };
 }

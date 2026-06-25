@@ -23,15 +23,18 @@ export type ClaudeUnifiedTelemetryEvent =
       }>;
     }>
     | Readonly<{
-        name: 'unified.injection.outcome';
-        properties: Readonly<{
-        status: TerminalInputInjectionResult['status'];
-        reason?: TelemetryReason | undefined;
-        phase?: string | undefined;
-        duplicateRisk?: string | undefined;
-        recoverable?: boolean | undefined;
-        hostKind: TerminalHostKind;
-        multiline: boolean;
+      name: 'unified.injection.outcome';
+      properties: Readonly<{
+          status: TerminalInputInjectionResult['status'];
+          reason?: TelemetryReason | undefined;
+          phase?: string | undefined;
+          duplicateRisk?: string | undefined;
+          recoverable?: boolean | undefined;
+          hostKind: TerminalHostKind;
+          multiline: boolean;
+          inputByteLength?: number | undefined;
+          inputNewlineCount?: number | undefined;
+          writeTimeoutMs?: number | undefined;
           originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
           inFlightSteer?: boolean | undefined;
         }>;
@@ -64,9 +67,18 @@ export type ClaudeUnifiedTelemetryEvent =
         // C11: pre-injection composer guard outcome (own leftover cleared / genuine draft deferral).
         name: 'unified.injection.draft_guard';
         properties: Readonly<{
-          status: 'cleared' | 'foreign_draft' | 'generating' | 'capture_failed' | 'clear_failed';
+          status:
+            | 'cleared'
+            | 'foreign_draft'
+            | 'capture_style_unavailable'
+            | 'generating'
+            | 'capture_failed'
+            | 'clear_failed'
+            | 'starvation_escalated';
           attempts?: number | undefined;
           draftLength?: number | undefined;
+          guardStatus?: 'foreign_draft' | 'capture_style_unavailable' | 'clear_failed' | undefined;
+          consecutiveDeferrals?: number | undefined;
           originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
         }>;
       }>
@@ -100,6 +112,7 @@ export type ClaudeUnifiedTelemetryEvent =
       properties: Readonly<{
         guard:
           | 'windows_arm64_unsupported'
+          | 'windows_zellij_unvalidated'
           | 'windows_default_shell_cmd';
         hostKind: 'zellij';
         platform: 'win32';
@@ -126,6 +139,13 @@ function buildLogPayload(event: ClaudeUnifiedTelemetryEvent): Record<string, unk
   return payload;
 }
 
+function normalizeNonNegativeInteger(value: number | undefined): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
 export function createClaudeUnifiedTelemetrySink(params?: Readonly<{
   logger?: LoggerLike | undefined;
 }>): ClaudeUnifiedTelemetrySink {
@@ -143,10 +163,17 @@ export function emitClaudeUnifiedInjectionOutcome(
     result: TerminalInputInjectionResult;
     hostKind: TerminalHostKind;
     multiline: boolean;
+    inputByteLength?: number | undefined;
+    inputNewlineCount?: number | undefined;
+    writeTimeoutMs?: number | undefined;
     originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
     inFlightSteer?: boolean | undefined;
   }>,
 ): void {
+  const inputByteLength = normalizeNonNegativeInteger(params.inputByteLength);
+  const inputNewlineCount = normalizeNonNegativeInteger(params.inputNewlineCount);
+  const writeTimeoutMs = normalizeNonNegativeInteger(params.writeTimeoutMs);
+
   telemetry.emit({
     name: 'unified.injection.outcome',
     properties: {
@@ -161,6 +188,9 @@ export function emitClaudeUnifiedInjectionOutcome(
         : {}),
       hostKind: params.hostKind,
       multiline: params.multiline,
+      ...(inputByteLength !== undefined ? { inputByteLength } : {}),
+      ...(inputNewlineCount !== undefined ? { inputNewlineCount } : {}),
+      ...(writeTimeoutMs !== undefined ? { writeTimeoutMs } : {}),
       originKind: params.originKind,
       ...(params.inFlightSteer ? { inFlightSteer: true } : {}),
     },
@@ -250,6 +280,7 @@ export function maybeEmitClaudeUnifiedWindowsGuardTriggered(
 ): void {
   if (
     reason === 'windows_arm64_unsupported'
+    || reason === 'windows_zellij_unvalidated'
   ) {
     emitClaudeUnifiedWindowsGuardTriggered(telemetry, reason);
   }

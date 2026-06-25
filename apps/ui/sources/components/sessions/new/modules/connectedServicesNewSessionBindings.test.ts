@@ -188,6 +188,71 @@ describe('buildConnectedServicesBindingsPayload', () => {
 });
 
 describe('buildConnectedServiceProfileOptionsByServiceId', () => {
+    it('projects Pi Claude subscription OAuth profiles as selectable while keeping OpenCode OAuth unsupported', () => {
+        const accountProfileConnectedServicesV2 = [{
+            serviceId: 'claude-subscription' as const,
+            profiles: [
+                {
+                    profileId: 'claude-pro-oauth',
+                    status: 'connected',
+                    kind: 'oauth' as const,
+                    providerEmail: 'oauth@example.com',
+                },
+            ],
+        }];
+
+        const piOptions = buildConnectedServiceProfileOptionsByServiceId({
+            accountProfileConnectedServicesV2,
+            agentCore: AGENTS_CORE.pi,
+            supportedConnectedServiceIds: AGENTS_CORE.pi.connectedServices?.supportedServiceIds ?? [],
+            labelsByKey: {},
+        });
+        const opencodeOptions = buildConnectedServiceProfileOptionsByServiceId({
+            accountProfileConnectedServicesV2,
+            agentCore: AGENTS_CORE.opencode,
+            supportedConnectedServiceIds: AGENTS_CORE.opencode.connectedServices?.supportedServiceIds ?? [],
+            labelsByKey: {},
+        });
+
+        expect(piOptions['claude-subscription']).toEqual([
+            expect.objectContaining({
+                profileId: 'claude-pro-oauth',
+                status: 'connected',
+                kind: 'oauth',
+            }),
+        ]);
+        expect(opencodeOptions['claude-subscription']).toEqual([
+            expect.objectContaining({
+                profileId: 'claude-pro-oauth',
+                status: 'unsupported_kind',
+                kind: 'oauth',
+                unsupportedSubtitleKey: 'connectedServices.detail.connectSetupTokenSubtitle',
+            }),
+        ]);
+
+        expect(buildConnectedServicesBindingsPayload({
+            supportedConnectedServiceIds: ['claude-subscription'],
+            connectedServiceProfileOptionsByServiceId: piOptions,
+            connectedServicesBindingsByServiceId: {
+                'claude-subscription': {
+                    source: 'connected',
+                    selection: 'profile',
+                    profileId: 'claude-pro-oauth',
+                },
+            },
+            defaultProfileByServiceId: {},
+        })).toEqual({
+            v: 1,
+            bindingsByServiceId: {
+                'claude-subscription': {
+                    source: 'connected',
+                    selection: 'profile',
+                    profileId: 'claude-pro-oauth',
+                },
+            },
+        });
+    });
+
     it('keeps OpenCode Claude subscription OAuth profiles visible as setup-token action rows', () => {
         const options = buildConnectedServiceProfileOptionsByServiceId({
             accountProfileConnectedServicesV2: [{

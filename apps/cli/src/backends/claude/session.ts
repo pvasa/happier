@@ -22,6 +22,7 @@ import { resolveConfiguredClaudeConfigDir } from './utils/resolveConfiguredClaud
 import type { TerminalRuntimeFlags } from '@/terminal/runtime/terminalRuntimeFlags';
 import { resolveSessionCriticalMetadataDrainTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import { getProjectPath } from './utils/path';
+import { readExplicitClaudeResumeSessionIdFromArgs } from './utils/claudeResumeArgs';
 
 export type SessionFoundInfo = {
     sessionId: string;
@@ -417,6 +418,7 @@ export class Session {
         this.sessionId = opts.sessionId;
         this.queue = opts.messageQueue;
         this.claudeArgs = opts.claudeArgs;
+        this.adoptExplicitResumeSessionIdFromArgs();
         this._onModeChange = opts.onModeChange;
         this.hookSettingsPath = opts.hookSettingsPath;
         this.hookPluginDir = opts.hookPluginDir ?? null;
@@ -459,6 +461,16 @@ export class Session {
         const last = this.lastUserAbortRequestedAtMs;
         if (last <= 0) return false;
         return Date.now() - last <= windowMs;
+    }
+
+    adoptExplicitResumeSessionIdFromArgs = (): void => {
+        if (this.sessionId) return;
+
+        const resumeSessionId = readExplicitClaudeResumeSessionIdFromArgs(this.claudeArgs);
+        if (!resumeSessionId) return;
+
+        this.sessionId = resumeSessionId;
+        logger.debug(`[Session] Adopted provisional Claude resume session ID from args: ${resumeSessionId}`);
     }
 
     setPushSender(pushSender: PushNotificationClient | null): void {

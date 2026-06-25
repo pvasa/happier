@@ -5,6 +5,13 @@ import {
   findConnectedServiceChildSelection,
   type ConnectedServiceRuntimeAuthMetadataSession,
 } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import {
+  createConnectedServiceQuotaSnapshotDeliveryOutbox,
+  type ConnectedServiceQuotaSnapshotDeliveryDiagnostic,
+  type ConnectedServiceQuotaSnapshotDeliveryFlushReason,
+  type ConnectedServiceQuotaSnapshotDeliveryFlushResult,
+  type ConnectedServiceQuotaSnapshotDeliveryOutbox,
+} from '@/daemon/connectedServices/quotas/connectedServiceQuotaSnapshotDeliveryOutbox';
 import { buildNativeQuotaProfileId } from '@/daemon/connectedServices/quotas/nativeQuotaProfileId';
 import { notifyDaemonConnectedServiceQuotaSnapshot } from '@/daemon/controlClient';
 import { resolveConfiguredCodexHome } from '../utils/resolveConfiguredCodexHome';
@@ -19,6 +26,47 @@ type NotifyQuotaSnapshot = (body: Readonly<{
   serviceId: 'openai-codex';
   snapshot: ConnectedServiceQuotaSnapshotV1;
 }>) => Promise<unknown>;
+
+export type CodexQuotaSnapshotDeliveryFailureDiagnostic = ConnectedServiceQuotaSnapshotDeliveryDiagnostic;
+export type CodexQuotaSnapshotReportResult = ConnectedServiceQuotaSnapshotDeliveryFlushResult;
+export const CODEX_QUOTA_SNAPSHOT_DELIVERY_RETRY_DELAY_MS = 1_000;
+
+export function createCodexQuotaSnapshotDeliveryOutboxForNotify(input: Readonly<{
+  notify: NotifyQuotaSnapshot;
+  onDiagnostic?: (diagnostic: ConnectedServiceQuotaSnapshotDeliveryDiagnostic) => void;
+  retryDelayMs?: number | null;
+}>): ConnectedServiceQuotaSnapshotDeliveryOutbox {
+  return createConnectedServiceQuotaSnapshotDeliveryOutbox({
+    deliver: async ({ sessionId, snapshot }) => await input.notify({
+      sessionId,
+      serviceId: 'openai-codex',
+      snapshot,
+    }),
+    retryDelayMs: input.retryDelayMs === undefined
+      ? CODEX_QUOTA_SNAPSHOT_DELIVERY_RETRY_DELAY_MS
+      : input.retryDelayMs,
+    onDiagnostic: input.onDiagnostic,
+  });
+}
+
+const defaultCodexQuotaSnapshotDeliveryOutbox = createCodexQuotaSnapshotDeliveryOutboxForNotify({
+  notify: async ({ sessionId, serviceId, snapshot }) => await notifyDaemonConnectedServiceQuotaSnapshot({
+    sessionId,
+    serviceId,
+    snapshot,
+  }),
+});
+
+export async function flushPendingCodexQuotaSnapshotsToDaemon(input: Readonly<{
+  deliveryOutbox?: ConnectedServiceQuotaSnapshotDeliveryOutbox;
+  reason: Extract<ConnectedServiceQuotaSnapshotDeliveryFlushReason, 'daemon_reconnect' | 'session_report'>;
+  sessionId?: string;
+}>): Promise<ConnectedServiceQuotaSnapshotDeliveryFlushResult> {
+  return await (input.deliveryOutbox ?? defaultCodexQuotaSnapshotDeliveryOutbox).flushPending({
+    reason: input.reason,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+  });
+}
 
 async function resolveCodexNativeQuotaIdentity(env: Pick<NodeJS.ProcessEnv, string>): Promise<Readonly<{
   profileId: string;
@@ -63,20 +111,42 @@ async function resolveCodexNativeQuotaIdentity(env: Pick<NodeJS.ProcessEnv, stri
 function resolveSelectedCodexProfileId(input: Readonly<{
   env: Pick<NodeJS.ProcessEnv, string>;
   session?: ConnectedServiceRuntimeAuthMetadataSession | null;
-}>): string | null {
+}>): Readonly<{ profileId: string; groupId: string | null; groupGeneration: number | null }> | null {
+  const childSelection = findConnectedServiceChildSelection(input.env, 'openai-codex');
   if (input.session) {
     const binding = findConnectedServiceBindingSelectionFromSessionMetadata(input.session, 'openai-codex');
     if (binding?.source === 'connected') {
       if (binding.selection === 'group') {
-        if (binding.profileId) return binding.profileId;
+        if (binding.profileId) {
+          return {
+            profileId: binding.profileId,
+            groupId: binding.groupId,
+            groupGeneration: childSelection?.kind === 'group' && childSelection.groupId === binding.groupId
+              ? childSelection.generation
+              : null,
+          };
+        }
       } else {
-        return binding.profileId;
+        return {
+          profileId: binding.profileId,
+          groupId: null,
+          groupGeneration: null,
+        };
       }
     }
   }
-  const selection = findConnectedServiceChildSelection(input.env, 'openai-codex');
-  if (!selection) return null;
-  return selection.kind === 'group' ? selection.activeProfileId : selection.profileId;
+  if (!childSelection) return null;
+  return childSelection.kind === 'group'
+    ? {
+        profileId: childSelection.activeProfileId,
+        groupId: childSelection.groupId,
+        groupGeneration: childSelection.generation,
+      }
+    : {
+        profileId: childSelection.profileId,
+        groupId: null,
+        groupGeneration: null,
+      };
 }
 
 export async function reportCodexRateLimitSnapshotToDaemon(input: Readonly<{
@@ -88,18 +158,28 @@ export async function reportCodexRateLimitSnapshotToDaemon(input: Readonly<{
   // Do not substitute auth-store identity for connected-service sessions.
   activeAccountId?: string | null;
   accountLabel?: string | null;
+  rawResetCredits?: unknown;
   nowMs?: number;
   notify?: NotifyQuotaSnapshot;
-}>): Promise<void> {
-  const selectedProfileId = resolveSelectedCodexProfileId(input);
+  onDeliveryFailure?: (diagnostic: CodexQuotaSnapshotDeliveryFailureDiagnostic) => void;
+  onDeliveryDiagnostic?: (diagnostic: CodexQuotaSnapshotDeliveryFailureDiagnostic) => void;
+  deliveryOutbox?: ConnectedServiceQuotaSnapshotDeliveryOutbox;
+}>): Promise<CodexQuotaSnapshotReportResult> {
+  const selectedContext = resolveSelectedCodexProfileId(input);
   const nativeIdentity = await resolveCodexNativeQuotaIdentity(input.env);
-  const identity = selectedProfileId
+  const identity = selectedContext
     ? {
-        profileId: selectedProfileId,
+        profileId: selectedContext.profileId,
+        groupId: selectedContext.groupId,
+        groupGeneration: selectedContext.groupGeneration,
         activeAccountId: input.activeAccountId ?? null,
         accountLabel: input.accountLabel ?? null,
       }
-    : nativeIdentity;
+    : {
+        ...nativeIdentity,
+        groupId: null,
+        groupGeneration: null,
+      };
 
   const snapshot = mapCodexRateLimitSnapshotToQuotaSnapshot({
     serviceId: 'openai-codex',
@@ -108,10 +188,21 @@ export async function reportCodexRateLimitSnapshotToDaemon(input: Readonly<{
     accountLabel: identity.accountLabel,
     fetchedAt: input.nowMs ?? Date.now(),
     rawSnapshot: input.rawSnapshot,
+    rawResetCredits: input.rawResetCredits,
   });
-  await (input.notify ?? notifyDaemonConnectedServiceQuotaSnapshot)({
+  const onDiagnostic = input.onDeliveryDiagnostic ?? input.onDeliveryFailure;
+  const deliveryOutbox = input.deliveryOutbox
+    ?? (input.notify
+      ? createCodexQuotaSnapshotDeliveryOutboxForNotify({
+          notify: input.notify,
+          onDiagnostic,
+        })
+      : defaultCodexQuotaSnapshotDeliveryOutbox);
+  return await deliveryOutbox.enqueueAndFlush({
     sessionId: input.sessionId,
     serviceId: 'openai-codex',
+    groupId: identity.groupId,
+    groupGeneration: identity.groupGeneration,
     snapshot,
   });
 }

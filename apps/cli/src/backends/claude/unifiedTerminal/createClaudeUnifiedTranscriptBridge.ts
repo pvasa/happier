@@ -2,7 +2,10 @@ import { createSessionScanner, type SessionScanner } from '../utils/sessionScann
 import type { CommittedClaudeJsonlMessageBaseline } from '../utils/claudeJsonlMessageKey';
 import type { RawJSONLines } from '../types';
 import { isSidechainSessionHook } from '../utils/sessionHookAttribution';
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { logger } from '@/ui/logger';
+import { getProjectPath } from '../utils/path';
 
 // Allowance for clock skew between Claude JSONL row timestamps (runner machine clock) and the
 // server commit times that bound the committed-keys baseline coverage window (Lane N4). A
@@ -12,6 +15,7 @@ const COMMITTED_BASELINE_COVERAGE_SKEW_MS = 10 * 60_000;
 import type { SessionHookData } from '../utils/startHookServer';
 import type { ClaudeUnifiedSessionHookSubscription } from './createClaudeUnifiedHookLifecycleBridge';
 import type { ClaudeUnifiedStartableDisposable } from './_types';
+import { createJsonlFollowController, type JsonlFollowController } from '@/agent/localControl/jsonlFollowController';
 
 type ClaudeUnifiedTranscriptBridgeSessionFound = (sessionId: string, data: SessionHookData) => void;
 
@@ -101,6 +105,30 @@ function isFreshHookDrivenSession(opts: Readonly<{
   return opts.sessionId === null && !transcriptPath;
 }
 
+function readKnownResumeTranscriptPath(opts: Readonly<{
+  sessionId: string | null;
+  transcriptPath?: string | null | undefined;
+  workingDirectory: string;
+  claudeConfigDir?: string | null | undefined;
+}>): Readonly<{ path: string; source: 'explicit' | 'canonical' }> | null {
+  const explicitTranscriptPath =
+    typeof opts.transcriptPath === 'string' && opts.transcriptPath.trim().length > 0
+      ? opts.transcriptPath.trim()
+      : null;
+  if (explicitTranscriptPath) {
+    return { path: explicitTranscriptPath, source: 'explicit' };
+  }
+  const sessionId =
+    typeof opts.sessionId === 'string' && opts.sessionId.trim().length > 0
+      ? opts.sessionId.trim()
+      : null;
+  if (!sessionId) return null;
+  return {
+    path: join(getProjectPath(opts.workingDirectory, opts.claudeConfigDir ?? null), `${sessionId}.jsonl`),
+    source: 'canonical',
+  };
+}
+
 export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
   sessionId: string | null;
   transcriptPath?: string | null | undefined;
@@ -135,6 +163,13 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
   const freshResumeLiveMessageAfterMsBySessionId = new Map<string, number>();
   const pendingSessionStarts: PendingClaudeUnifiedSessionStart[] = [];
   const freshHookDrivenSession = isFreshHookDrivenSession(opts);
+  const knownResumeSessionId =
+    typeof opts.sessionId === 'string' && opts.sessionId.trim().length > 0
+      ? opts.sessionId.trim()
+      : null;
+  const knownResumeTranscript = readKnownResumeTranscriptPath(opts);
+  const knownResumeTranscriptPath = knownResumeTranscript?.path ?? null;
+  let knownResumeRawFollower: JsonlFollowController | null = null;
 
   const recordSessionStartBaselines = (
     sessionInfo: ClaudeUnifiedSessionStartInfo,
@@ -167,6 +202,36 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
     });
   };
 
+  const startKnownResumeRawFollower = async (): Promise<void> => {
+    if (!knownResumeSessionId || !knownResumeTranscriptPath || !opts.onRawTranscriptValue) return;
+    if (knownResumeRawFollower) return;
+    logger.debug('[unified]: known resume raw transcript follower starting', {
+      sessionId: knownResumeSessionId,
+      transcriptPath: knownResumeTranscriptPath,
+      transcriptPathSource: knownResumeTranscript?.source ?? 'none',
+    });
+    const startOffsetBytes = await stat(knownResumeTranscriptPath).then(
+      (snapshot) => snapshot.size,
+      () => 0,
+    );
+    const follower = createJsonlFollowController({
+      filePath: knownResumeTranscriptPath,
+      startOffsetBytes,
+      onJson: (value) => {
+        if (disposed) return;
+        opts.onRawTranscriptValue?.(value);
+      },
+      onError: (error) => {
+        logger.debug('[unified]: known resume raw transcript follower error:', error);
+      },
+    });
+    knownResumeRawFollower = follower;
+    await follower.start();
+    if (disposed || knownResumeRawFollower !== follower) {
+      await follower.stop();
+    }
+  };
+
   const flushPendingSessionStarts = () => {
     if (!scanner) return;
     for (const pending of pendingSessionStarts.splice(0)) {
@@ -183,12 +248,34 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
       if (disposed || scanner) return;
       const waitForSessionStartHook = Boolean(opts.subscribeClaudeSessionHooks);
       if (opts.subscribeClaudeSessionHooks && !unsubscribe) {
+        logger.debug('[unified]: Claude SessionStart hook subscription registered', {
+          knownResumeSessionId,
+          knownResumeTranscriptPath,
+          knownResumeTranscriptPathSource: knownResumeTranscript?.source ?? 'none',
+        });
         unsubscribe = opts.subscribeClaudeSessionHooks((data) => {
           // A4-MED-2: a subagent (sidechain) SessionStart must never re-key the transcript /
           // resume identity — same shared gate the hook lifecycle bridge uses.
-          if (isSidechainSessionHook(data)) return;
+          if (isSidechainSessionHook(data)) {
+            if (readHookEventName(data) === 'SessionStart') {
+              logger.debug('[unified]: ignoring sidechain Claude SessionStart hook');
+            }
+            return;
+          }
           const sessionInfo = readSessionStartInfo(data);
+          if (!sessionInfo && readHookEventName(data) === 'SessionStart') {
+            logger.debug('[unified]: ignoring malformed Claude SessionStart hook', {
+              hasSessionId: Boolean(readHookString(data, 'session_id', 'sessionId')),
+              hasTranscriptPath: Boolean(readHookString(data, 'transcript_path', 'transcriptPath')),
+            });
+          }
           if (!sessionInfo) return;
+          logger.debug('[unified]: Claude SessionStart hook received', {
+            sessionId: sessionInfo.sessionId,
+            hasTranscriptPath: Boolean(sessionInfo.transcriptPath),
+            source: sessionInfo.source,
+            knownResumeSessionId,
+          });
           applySessionStart(sessionInfo, data, Date.now());
         }) ?? null;
       }
@@ -196,6 +283,7 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
       let replaySuppressRowsBeforeMs: number | null = null;
       const resumesKnownClaudeSession = Boolean(opts.sessionId || opts.transcriptPath);
       if (waitForSessionStartHook) {
+        await startKnownResumeRawFollower();
         try {
           const baseline = await Promise.resolve(opts.loadCommittedClaudeJsonlMessageBaseline?.())
             ?? { keys: new Set<string>(), complete: true, oldestCoveredAtMs: null };
@@ -219,9 +307,19 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
         pendingSessionStarts.length = 0;
         return;
       }
+      const prebindKnownResumeTranscript = Boolean(
+        waitForSessionStartHook
+        && knownResumeSessionId
+        && knownResumeTranscriptPath
+        && knownResumeTranscript?.source === 'canonical',
+      );
       const nextScanner = await createSessionScanner({
-        sessionId: waitForSessionStartHook ? null : opts.sessionId,
-        transcriptPath: waitForSessionStartHook ? null : opts.transcriptPath,
+        sessionId: waitForSessionStartHook
+          ? (prebindKnownResumeTranscript ? knownResumeSessionId : null)
+          : opts.sessionId,
+        transcriptPath: waitForSessionStartHook
+          ? (prebindKnownResumeTranscript ? knownResumeTranscriptPath : null)
+          : opts.transcriptPath,
         claudeConfigDir: opts.claudeConfigDir,
         workingDirectory: opts.workingDirectory,
         onMessage: (message) => {
@@ -236,9 +334,9 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
         onTranscriptMissing: opts.onTranscriptMissing,
         transcriptMissingWarningMs: opts.transcriptMissingWarningMs,
         initialProcessedMessageKeys: committedClaudeJsonlMessageKeys,
-        replayInitialMessages: waitForSessionStartHook,
+        replayInitialMessages: waitForSessionStartHook && !prebindKnownResumeTranscript,
         replaySuppressRowsBeforeMs,
-        discoverNewSessions: waitForSessionStartHook && !opts.sessionId && !opts.transcriptPath,
+        discoverNewSessions: waitForSessionStartHook && !knownResumeSessionId && !opts.transcriptPath,
         bindToFirstSession: waitForSessionStartHook,
         bindDiscoveredSessions: !waitForSessionStartHook,
         classifyDiscoveredSession: opts.classifyDiscoveredSession,
@@ -259,6 +357,8 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
       pendingSessionStarts.length = 0;
       await scanner?.cleanup();
       scanner = null;
+      await knownResumeRawFollower?.stop();
+      knownResumeRawFollower = null;
     },
   };
 }

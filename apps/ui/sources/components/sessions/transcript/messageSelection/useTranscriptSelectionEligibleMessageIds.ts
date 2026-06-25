@@ -17,6 +17,7 @@ const EMPTY_ELIGIBLE_MESSAGE_IDS: readonly string[] = Object.freeze([]);
 const ELIGIBLE_IDS_CACHE_MAX = 100;
 
 const eligibleIdsBySessionCache = new Map<string, Readonly<{
+    sourceRef: object | null;
     signature: string;
     ids: readonly string[];
 }>>();
@@ -81,17 +82,33 @@ function readCachedEligibleIds(cacheKey: string): readonly string[] | null {
     return cached.ids;
 }
 
-function rememberEligibleIds(cacheKey: string, signature: string, ids: readonly string[]): readonly string[] {
+function readCachedEligibleIdsForSource(cacheKey: string, sourceRef: object): readonly string[] | null {
+    const cached = eligibleIdsBySessionCache.get(cacheKey);
+    if (!cached || cached.sourceRef !== sourceRef) return null;
+    eligibleIdsBySessionCache.delete(cacheKey);
+    eligibleIdsBySessionCache.set(cacheKey, cached);
+    return cached.ids;
+}
+
+function rememberEligibleIds(
+    cacheKey: string,
+    sourceRef: object | null,
+    signature: string,
+    ids: readonly string[],
+): readonly string[] {
     const cached = eligibleIdsBySessionCache.get(cacheKey);
     if (cached?.signature === signature) {
+        const nextCached = cached.sourceRef === sourceRef
+            ? cached
+            : { ...cached, sourceRef };
         eligibleIdsBySessionCache.delete(cacheKey);
-        eligibleIdsBySessionCache.set(cacheKey, cached);
+        eligibleIdsBySessionCache.set(cacheKey, nextCached);
         return cached.ids;
     }
 
     const nextIds = ids.length === 0 ? EMPTY_ELIGIBLE_MESSAGE_IDS : ids;
     eligibleIdsBySessionCache.delete(cacheKey);
-    eligibleIdsBySessionCache.set(cacheKey, { signature, ids: nextIds });
+    eligibleIdsBySessionCache.set(cacheKey, { sourceRef, signature, ids: nextIds });
     while (eligibleIdsBySessionCache.size > ELIGIBLE_IDS_CACHE_MAX) {
         const oldestKey = eligibleIdsBySessionCache.keys().next().value;
         if (typeof oldestKey !== 'string') break;
@@ -120,18 +137,22 @@ export function useTranscriptSelectionEligibleMessageIds(
         if (!enabled) return EMPTY_ELIGIBLE_MESSAGE_IDS;
 
         const sessionMessages = state.sessionMessages[sessionId];
+        const cacheKey = `${sessionId}\0${discardedLocalIdsSignature}\0thinking:${thinkingVisibilitySignature}`;
+        if (sessionMessages) {
+            const cachedIds = readCachedEligibleIdsForSource(cacheKey, sessionMessages);
+            if (cachedIds) return cachedIds;
+        }
         const messageIds = sessionMessages?.messageIdsOldestFirst;
         const messagesById = sessionMessages?.messagesById ?? {};
         const fallbackMessages = Array.isArray(messageIds) && messageIds.length > 0
             ? null
             : listMessagesByFallbackOrder(messagesById);
-        const cacheKey = `${sessionId}\0${discardedLocalIdsSignature}\0thinking:${thinkingVisibilitySignature}`;
         if ((!Array.isArray(messageIds) || messageIds.length === 0) && (!fallbackMessages || fallbackMessages.length === 0)) {
             if (sessionMessages?.isLoaded === false) {
                 const cachedIds = readCachedEligibleIds(cacheKey);
                 if (cachedIds) return cachedIds;
             }
-            return rememberEligibleIds(cacheKey, 'empty', EMPTY_ELIGIBLE_MESSAGE_IDS);
+            return rememberEligibleIds(cacheKey, sessionMessages ?? null, 'empty', EMPTY_ELIGIBLE_MESSAGE_IDS);
         }
 
         const discardedLocalIds = discardedLocalIdsSignature.length > 0
@@ -167,6 +188,7 @@ export function useTranscriptSelectionEligibleMessageIds(
 
         return rememberEligibleIds(
             cacheKey,
+            sessionMessages ?? null,
             signatureParts.join('|'),
             eligibleIds,
         );

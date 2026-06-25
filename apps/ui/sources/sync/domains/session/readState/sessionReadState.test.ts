@@ -70,6 +70,54 @@ describe('sessionReadState', () => {
         });
     });
 
+    it('ignores trailing maintenance events when deriving manual read-state actions', () => {
+        (storageState as { sessionMessages: Record<string, unknown> }).sessionMessages = {
+            s_maintenance: {
+                messageIdsOldestFirst: ['m-visible', 'm-switch'],
+                messagesById: {
+                    'm-visible': {
+                        id: 'm-visible',
+                        seq: 945,
+                        localId: null,
+                        kind: 'agent-text',
+                        text: 'done',
+                        createdAt: 100,
+                    },
+                    'm-switch': {
+                        id: 'm-switch',
+                        seq: 946,
+                        kind: 'agent-event',
+                        createdAt: 101,
+                        event: {
+                            type: 'connected-service-account-switch',
+                            serviceId: 'openai-codex',
+                            groupId: 'codex-main',
+                            fromProfileId: 'profile-a',
+                            toProfileId: 'profile-b',
+                            reason: 'usage_limit',
+                            mode: 'hot_apply',
+                        },
+                    },
+                },
+            },
+        };
+        const session = {
+            id: 's_maintenance',
+            seq: 946,
+            lastViewedSessionSeq: 945,
+            latestMessageSeq: 946,
+            latestTurnStatus: 'in_progress' as const,
+            metadata: null,
+        };
+
+        expect(deriveSessionReadState(session)).toBe('read');
+        expect(resolveSessionReadStateAction(session)).toEqual({
+            kind: 'mark-unread',
+            visible: true,
+            targetState: 'unread',
+        });
+    });
+
     it('derives unread state from a ready event and offers mark-read', () => {
         const session = {
             seq: 3,

@@ -555,6 +555,56 @@ describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
     }
   });
 
+  it('enqueues a sanitized outbox report when daemon shutdown defers recovery intake', async () => {
+    const outboxDir = await createTempDir('happier-runtime-auth-report-outbox-shutdown-deferral-');
+    try {
+      await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+        sessionId: 'sess_shutdown_deferral',
+        switchesThisTurn: 1,
+        classification: {
+          ...classifiedFailure,
+          providerLimitId: 'refresh-token-secret',
+          accessToken: 'secret-access-token',
+          rawProviderPayload: { body: 'raw-provider-body' },
+        },
+        notify: vi.fn(async () => ({
+          ok: true,
+          result: {
+            status: 'daemon_lifecycle_unavailable',
+            reason: 'recovery_deferred_shutdown',
+          },
+        })),
+        reportOutboxDir: outboxDir,
+        nowMs: () => 1_700_000_000_000,
+      })).resolves.toMatchObject({
+        handled: false,
+        report: {
+          ok: true,
+          result: {
+            status: 'daemon_lifecycle_unavailable',
+            reason: 'recovery_deferred_shutdown',
+          },
+        },
+      });
+
+      const items = await readRuntimeAuthFailureReportOutboxItems({ outboxDir });
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        sessionId: 'sess_shutdown_deferral',
+        switchesThisTurn: 1,
+        classification: {
+          ...classifiedFailure,
+          providerLimitId: null,
+        },
+      });
+      expect(JSON.stringify(items[0])).not.toContain('secret-access-token');
+      expect(JSON.stringify(items[0])).not.toContain('raw-provider-body');
+      expect(JSON.stringify(items[0])).not.toContain('refresh-token-secret');
+    } finally {
+      await removeTempDir(outboxDir);
+    }
+  });
+
   it('does not enqueue when daemon returns an accepted report that is not a local-control error', async () => {
     const outboxDir = await createTempDir('happier-runtime-auth-report-outbox-accepted-unprojected-');
     try {

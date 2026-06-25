@@ -173,11 +173,61 @@ export type AcpRuntime = Readonly<{
    *
    * This should NOT start a new turn and should NOT abort the current turn.
    */
-  steerPrompt: (prompt: string) => Promise<void>;
+  steerPrompt: (prompt: string, options?: AcpRuntimeSteerPromptOptions) => Promise<void>;
   compactContext: (command: string) => Promise<void>;
   sendPrompt: (prompt: string) => Promise<void>;
   flushTurn: () => Promise<void>;
 }>;
+
+export type AcpRuntimeSteerPromptOptions = Readonly<{
+  localId?: string | null;
+  localIds?: readonly string[];
+  userMessageSeq?: number | null;
+  userMessageSeqs?: readonly number[];
+}>;
+
+function normalizeSteerPromptLocalIds(options: AcpRuntimeSteerPromptOptions | undefined): string[] {
+  const values = [
+    ...(typeof options?.localId === 'string' ? [options.localId] : []),
+    ...(options?.localIds ?? []),
+  ];
+  const seen = new Set<string>();
+  const localIds: string[] = [];
+  for (const value of values) {
+    const localId = typeof value === 'string' ? value.trim() : '';
+    if (!localId || seen.has(localId)) continue;
+    seen.add(localId);
+    localIds.push(localId);
+  }
+  return localIds;
+}
+
+function normalizeSteerPromptSeqs(options: AcpRuntimeSteerPromptOptions | undefined): number[] {
+  const values = [
+    ...(typeof options?.userMessageSeq === 'number' ? [options.userMessageSeq] : []),
+    ...(options?.userMessageSeqs ?? []),
+  ];
+  const seqs: number[] = [];
+  for (const value of values) {
+    if (!Number.isInteger(value) || value < 0 || seqs.includes(value)) continue;
+    seqs.push(value);
+  }
+  return seqs;
+}
+
+function confirmSteerPromptDeliveredToProvider(
+  session: AcpRuntimeSessionClient,
+  options: AcpRuntimeSteerPromptOptions | undefined,
+): void {
+  if (typeof session.confirmUserMessageDeliveredToProvider !== 'function') return;
+  const localIds = normalizeSteerPromptLocalIds(options);
+  const seqs = normalizeSteerPromptSeqs(options);
+  if (localIds.length === 0 && seqs.length === 0) return;
+  const highestSeq = seqs.length === 0 ? null : Math.max(...seqs);
+  session.confirmUserMessageDeliveredToProvider(highestSeq, {
+    localIds: localIds.length === 0 ? null : localIds,
+  });
+}
 
 export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & {
   waitForResponseComplete?: (timeoutMs?: number | null) => Promise<AcpTurnOutcome | void>;
@@ -200,7 +250,7 @@ export type AcpRuntimeBackend = Omit<AgentBackend, 'waitForResponseComplete'> & 
   /**
    * Optional: send additional user input into an already running turn.
    */
-  sendSteerPrompt?: (sessionId: string, prompt: string) => Promise<void>;
+  sendSteerPrompt?: (sessionId: string, prompt: string, options?: AcpRuntimeSteerPromptOptions) => Promise<void>;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1805,7 +1855,7 @@ export function createAcpRuntime(params: {
       await b.setSessionConfigOption(sessionId, resolvedConfigId, resolvedValue);
     },
 
-    async steerPrompt(prompt: string): Promise<void> {
+    async steerPrompt(prompt: string, options?: AcpRuntimeSteerPromptOptions): Promise<void> {
       if (!inFlightSteerEnabled) {
         throw new Error(`${params.provider} runtime does not support in-flight steer`);
       }
@@ -1831,7 +1881,12 @@ export function createAcpRuntime(params: {
 
       const b = await ensureBackend();
       if (b.sendSteerPrompt) {
-        await b.sendSteerPrompt(sessionId, prompt);
+        if (options === undefined) {
+          await b.sendSteerPrompt(sessionId, prompt);
+        } else {
+          await b.sendSteerPrompt(sessionId, prompt, options);
+        }
+        confirmSteerPromptDeliveredToProvider(params.session, options);
       } else {
         throw new Error(`${params.provider} ACP backend does not support in-flight steer`);
       }

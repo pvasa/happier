@@ -368,6 +368,8 @@ installSessionShellCommonModuleMocks({
       },
       useSettings: () => ({ experiments: true, featureToggles: {} }),
       useAutomations: () => [],
+      useSessionAutomationsEnabledCount: () => 0,
+      useOpenApprovalArtifactsForSession: () => [],
     });
   },
 });
@@ -397,6 +399,13 @@ function findPressableByAccessibilityLabel(screen: RenderScreenResult, label: st
 }
 
 async function renderSessionView(routeServerId?: string) {
+  const normalizedRouteServerId = routeServerId?.trim();
+  if (normalizedRouteServerId) {
+    sessionState.session = {
+      ...sessionState.session,
+      serverId: normalizedRouteServerId,
+    };
+  }
   return renderScreen(
     <SessionView id="s1" routeServerId={routeServerId} />,
     {
@@ -566,6 +575,42 @@ describe('SessionView header action menu visibility', () => {
     expect(sessionConnectedServicesAuthSwitchSpy).toHaveBeenCalledWith(expect.objectContaining({
       switchingDisabledReason: null,
     }));
+  });
+
+  it('refreshes connected-services auth switching when only runtime heartbeat freshness changes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_000_000));
+    sessionState.session = {
+      ...sessionState.session,
+      active: true,
+      activeAt: 0,
+      presence: 'online',
+      thinking: false,
+      thinkingAt: 0,
+      latestTurnStatus: 'in_progress',
+      latestTurnStatusObservedAt: 1,
+      pendingPermissionRequestCount: 0,
+      pendingUserActionRequestCount: 0,
+      pendingRequestObservedAt: null,
+    };
+
+    const screen = await renderSessionView();
+
+    expect(sessionConnectedServicesAuthSwitchSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+      switchingDisabledReason: null,
+    }));
+
+    sessionState.session = {
+      ...sessionState.session,
+      serverId: 'server-runtime-refresh',
+      latestTurnStatusObservedAt: 1_000_000,
+    };
+    await screen.update(<SessionView id="s1" routeServerId="server-runtime-refresh" />);
+
+    expect(sessionConnectedServicesAuthSwitchSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+      switchingDisabledReason: 'active_turn',
+    }));
+    vi.useRealTimers();
   });
 
   it('shows the open runs button when the viewed session server supports execution runs', async () => {

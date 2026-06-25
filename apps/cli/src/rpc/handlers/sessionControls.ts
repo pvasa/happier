@@ -1,5 +1,9 @@
 import {
   SessionGoalClearRequestV1Schema,
+  SessionConnectedServiceAuthApplyGenerationRequestV1Schema,
+  SessionConnectedServiceAuthApplyGenerationResponseV1Schema,
+  SessionConnectedServiceAuthReadRuntimeIdentityRequestV1Schema,
+  SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema,
   SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema,
   SessionGoalGetRequestV1Schema,
   SessionGoalSetRequestV1Schema,
@@ -13,11 +17,18 @@ import {
   normalizeSessionUsageLimitRecoveryOperationResultV1,
   type SessionUsageLimitRecoveryV1,
   type SessionUsageLimitRecoveryOperationResultV1,
+  type SessionConnectedServiceAuthApplyGenerationRequestV1,
+  type SessionConnectedServiceAuthReadRuntimeIdentityRequestV1,
   SessionUsageLimitRecoveryV1Schema,
   SessionVendorPluginCatalogListRequestV1Schema,
   SessionWorkStateGetRequestV1Schema,
   SessionWorkStateV1Schema,
+  SessionTerminalComposerClearRequestV1Schema,
+  SessionTerminalComposerClearResultV1Schema,
+  buildUnsupportedSessionTerminalComposerClearResult,
   readDisplayableSessionWorkStateV1,
+  type SessionTerminalComposerClearRequestV1,
+  type SessionTerminalComposerClearResultV1,
 } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
@@ -42,6 +53,12 @@ export type SessionRuntimeControls = {
   listSkills?: (options?: Readonly<{ cwd?: string }>) => Promise<unknown>;
   startInlineReview?: (input: unknown) => Promise<unknown> | unknown;
   invalidateConnectedServiceAuthTransports?: () => Promise<unknown> | unknown;
+  applyConnectedServiceAuthGeneration?: (
+    request: Readonly<SessionConnectedServiceAuthApplyGenerationRequestV1>,
+  ) => Promise<unknown> | unknown;
+  readConnectedServiceRuntimeIdentity?: (
+    request: Readonly<SessionConnectedServiceAuthReadRuntimeIdentityRequestV1>,
+  ) => Promise<unknown> | unknown;
   enableUsageLimitWaitResume?: (request: Readonly<{
     sessionId: string;
     issueFingerprint?: string;
@@ -55,9 +72,12 @@ export type SessionRuntimeControls = {
   checkUsageLimitRecoveryNow?: (request: Readonly<{
     sessionId: string;
     provider?: string;
-    operation?: 'check_now' | 'switch_account_now';
+    operation?: 'check_now' | 'switch_account_now' | 'consume_reset_credit';
     resumePromptMode?: 'standard' | 'off' | 'custom';
   }>) => Promise<unknown> | unknown;
+  clearTerminalComposer?: (
+    request: Readonly<SessionTerminalComposerClearRequestV1>,
+  ) => Promise<SessionTerminalComposerClearResultV1 | unknown> | SessionTerminalComposerClearResultV1 | unknown;
   handleUserMessage?: (
     request: Readonly<{
       text: string;
@@ -79,6 +99,14 @@ function unsupported(method: string): Readonly<{ ok: false; errorCode: string; e
 
 function invalidInput(): Readonly<{ ok: false; errorCode: string; error: string }> {
   return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+}
+
+function invalidRuntimeControlResult(): Readonly<{ ok: false; errorCode: string; error: string }> {
+  return {
+    ok: false,
+    errorCode: 'invalid_runtime_control_result',
+    error: 'invalid_runtime_control_result',
+  };
 }
 
 function readWorkState(getSessionMetadata?: (() => Metadata | null) | null): unknown {
@@ -166,6 +194,25 @@ function normalizeUsageLimitRecoveryOperationResult(
   });
 }
 
+function normalizeTerminalComposerClearResult(
+  result: unknown,
+  sessionId: string,
+): SessionTerminalComposerClearResultV1 {
+  const parsed = SessionTerminalComposerClearResultV1Schema.safeParse(result);
+  if (parsed.success) {
+    return parsed.data.sessionId
+      ? parsed.data
+      : SessionTerminalComposerClearResultV1Schema.parse({ ...parsed.data, sessionId });
+  }
+  return SessionTerminalComposerClearResultV1Schema.parse({
+    ok: false,
+    status: 'clear_failed',
+    sessionId,
+    errorCode: 'invalid_runtime_control_result',
+    error: 'invalid_runtime_control_result',
+  });
+}
+
 export function registerSessionControlHandlers(
   rpc: RpcHandlerRegistrar,
   opts: Readonly<{
@@ -234,6 +281,21 @@ export function registerSessionControlHandlers(
     return { workState: readWorkState(opts.getSessionMetadata) };
   });
 
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_TERMINAL_COMPOSER_CLEAR, async (raw: unknown) => {
+    const parsed = SessionTerminalComposerClearRequestV1Schema.safeParse(raw);
+    if (!parsed.success) return invalidInput();
+    if (typeof opts.sessionRuntimeControls?.clearTerminalComposer !== 'function') {
+      return buildUnsupportedSessionTerminalComposerClearResult(
+        parsed.data.sessionId,
+        SESSION_RPC_METHODS.SESSION_TERMINAL_COMPOSER_CLEAR,
+      );
+    }
+    return normalizeTerminalComposerClearResult(
+      await opts.sessionRuntimeControls.clearTerminalComposer(parsed.data),
+      parsed.data.sessionId,
+    );
+  });
+
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_REVIEW_START_INLINE, async (raw: unknown) => {
     const parsed = ReviewStartInputSchema.safeParse(raw);
     if (!parsed.success) return invalidInput();
@@ -254,6 +316,28 @@ export function registerSessionControlHandlers(
     );
     if (result) return result;
     return { ok: true };
+  });
+
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION, async (raw: unknown) => {
+    const parsed = SessionConnectedServiceAuthApplyGenerationRequestV1Schema.safeParse(raw);
+    if (!parsed.success) return invalidInput();
+    if (typeof opts.sessionRuntimeControls?.applyConnectedServiceAuthGeneration !== 'function') {
+      return unsupported(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION);
+    }
+    const result = await opts.sessionRuntimeControls.applyConnectedServiceAuthGeneration(parsed.data);
+    const output = SessionConnectedServiceAuthApplyGenerationResponseV1Schema.safeParse(result);
+    return output.success ? output.data : invalidRuntimeControlResult();
+  });
+
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY, async (raw: unknown) => {
+    const parsed = SessionConnectedServiceAuthReadRuntimeIdentityRequestV1Schema.safeParse(raw);
+    if (!parsed.success) return invalidInput();
+    if (typeof opts.sessionRuntimeControls?.readConnectedServiceRuntimeIdentity !== 'function') {
+      return unsupported(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY);
+    }
+    const result = await opts.sessionRuntimeControls.readConnectedServiceRuntimeIdentity(parsed.data);
+    const output = SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema.safeParse(result);
+    return output.success ? output.data : invalidRuntimeControlResult();
   });
 
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE, async (raw: unknown) => {

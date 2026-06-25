@@ -7,10 +7,11 @@ export type MessageQueueBatch<Mode, Message> = {
   hash: string;
   /**
    * Owed-delivery watermark attribution (A3-HIGH-1): max server user-row seq among the items
-   * consumed into this batch, or null when none carried one. Lets the provider-acceptance seam
-   * persist the delivered-watermark for exactly the rows that actually reached the provider.
+   * consumed into this batch, or null when none carried one. `userMessageLocalIds` carries the
+   * same ownership proof for rows whose server seq is not known until the socket echo arrives.
    */
   maxUserMessageSeq: number | null;
+  userMessageLocalIds: string[];
 };
 
 type QueueItem<Mode, Message> = {
@@ -19,12 +20,32 @@ type QueueItem<Mode, Message> = {
   modeHash: string;
   isolate: boolean;
   userMessageSeq: number | null;
+  userMessageLocalIds: string[];
 };
 
 type MessageBatcher<Message> = (messages: Message[]) => Message;
 
 function normalizeUserMessageSeq(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function normalizeUserMessageLocalIds(input?: {
+  userMessageLocalId?: string | null;
+  userMessageLocalIds?: readonly string[] | null;
+}): string[] {
+  const values = [
+    ...(input?.userMessageLocalId ? [input.userMessageLocalId] : []),
+    ...(input?.userMessageLocalIds ?? []),
+  ];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    const id = typeof value === 'string' ? value.trim() : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    normalized.push(id);
+  }
+  return normalized;
 }
 
 function defaultStringBatcher(messages: unknown[]): string {
@@ -65,7 +86,15 @@ export class MessageQueue2<Mode, Message = string> {
     this.onMessageHandler = handler;
   }
 
-  push(message: Message, mode: Mode, opts?: { userMessageSeq?: number | null }): void {
+  push(
+    message: Message,
+    mode: Mode,
+    opts?: {
+      userMessageSeq?: number | null;
+      userMessageLocalId?: string | null;
+      userMessageLocalIds?: readonly string[] | null;
+    },
+  ): void {
     if (this.closed) {
       throw new Error('Cannot push to closed queue');
     }
@@ -78,6 +107,7 @@ export class MessageQueue2<Mode, Message = string> {
       modeHash,
       isolate: false,
       userMessageSeq: normalizeUserMessageSeq(opts?.userMessageSeq),
+      userMessageLocalIds: normalizeUserMessageLocalIds(opts),
     });
 
     if (this.onMessageHandler) {
@@ -95,7 +125,15 @@ export class MessageQueue2<Mode, Message = string> {
     this.push(message, mode);
   }
 
-  pushIsolateAndClear(message: Message, mode: Mode, opts?: { userMessageSeq?: number | null }): void {
+  pushIsolateAndClear(
+    message: Message,
+    mode: Mode,
+    opts?: {
+      userMessageSeq?: number | null;
+      userMessageLocalId?: string | null;
+      userMessageLocalIds?: readonly string[] | null;
+    },
+  ): void {
     if (this.closed) {
       throw new Error('Cannot push to closed queue');
     }
@@ -109,6 +147,7 @@ export class MessageQueue2<Mode, Message = string> {
       modeHash,
       isolate: true,
       userMessageSeq: normalizeUserMessageSeq(opts?.userMessageSeq),
+      userMessageLocalIds: normalizeUserMessageLocalIds(opts),
     });
 
     if (this.onMessageHandler) {
@@ -122,7 +161,15 @@ export class MessageQueue2<Mode, Message = string> {
     }
   }
 
-  unshift(message: Message, mode: Mode, opts?: { userMessageSeq?: number | null }): void {
+  unshift(
+    message: Message,
+    mode: Mode,
+    opts?: {
+      userMessageSeq?: number | null;
+      userMessageLocalId?: string | null;
+      userMessageLocalIds?: readonly string[] | null;
+    },
+  ): void {
     if (this.closed) {
       throw new Error('Cannot unshift to closed queue');
     }
@@ -135,6 +182,7 @@ export class MessageQueue2<Mode, Message = string> {
       modeHash,
       isolate: false,
       userMessageSeq: normalizeUserMessageSeq(opts?.userMessageSeq),
+      userMessageLocalIds: normalizeUserMessageLocalIds(opts),
     });
 
     if (this.onMessageHandler) {
@@ -221,10 +269,17 @@ export class MessageQueue2<Mode, Message = string> {
     const isolate = firstItem.isolate;
     const targetModeHash = firstItem.modeHash;
     let maxUserMessageSeq: number | null = null;
+    const userMessageLocalIdSet = new Set<string>();
+    const userMessageLocalIds: string[] = [];
     const consume = (item: QueueItem<Mode, Message>): void => {
       sameModeMessages.push(item.message);
       if (item.userMessageSeq !== null) {
         maxUserMessageSeq = Math.max(maxUserMessageSeq ?? -1, item.userMessageSeq);
+      }
+      for (const localId of item.userMessageLocalIds) {
+        if (userMessageLocalIdSet.has(localId)) continue;
+        userMessageLocalIdSet.add(localId);
+        userMessageLocalIds.push(localId);
       }
     };
 
@@ -244,12 +299,20 @@ export class MessageQueue2<Mode, Message = string> {
       hash: targetModeHash,
       isolate,
       maxUserMessageSeq,
+      userMessageLocalIds,
     };
   }
 
   private waitForMessages(abortSignal?: AbortSignal): Promise<boolean> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       let abortHandler: (() => void) | null = null;
+
+      const waiterFunc = (hasMessages: boolean) => {
+        if (abortHandler && abortSignal) {
+          abortSignal.removeEventListener('abort', abortHandler);
+        }
+        resolve(hasMessages);
+      };
 
       if (abortSignal) {
         abortHandler = () => {
@@ -269,13 +332,6 @@ export class MessageQueue2<Mode, Message = string> {
         abortSignal.addEventListener('abort', abortHandler);
       }
 
-      const waiterFunc = (hasMessages: boolean) => {
-        if (abortHandler && abortSignal) {
-          abortSignal.removeEventListener('abort', abortHandler);
-        }
-        resolve(hasMessages);
-      };
-
       if (this.queue.length > 0) {
         if (abortHandler && abortSignal) {
           abortSignal.removeEventListener('abort', abortHandler);
@@ -289,6 +345,14 @@ export class MessageQueue2<Mode, Message = string> {
           abortSignal.removeEventListener('abort', abortHandler);
         }
         resolve(false);
+        return;
+      }
+
+      if (this.waiter) {
+        if (abortHandler && abortSignal) {
+          abortSignal.removeEventListener('abort', abortHandler);
+        }
+        reject(new Error('MessageQueue2 already has an active waiter'));
         return;
       }
 

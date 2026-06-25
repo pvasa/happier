@@ -9,6 +9,7 @@ import {
     areLiveInputTextStatusesEqual,
     resolveLiveInputTextStatus,
 } from './liveInputState';
+import { isGlassComposerSurface } from './composerSurfaceStyle';
 import { Typography } from '@/constants/Typography';
 import type { PermissionMode, ModelMode } from '@/sync/domains/permissions/permissionTypes';
 import { findModelOptionForEffectiveModelId, getModelOptionsForSession, supportsFreeformModelSelectionForSession, type ModelOption } from '@/sync/domains/models/modelOptions';
@@ -148,8 +149,10 @@ import {
     buildStructuredInputMetaOverrides,
     createStructuredInputMentionFromSuggestion,
     reconcileStructuredInputMentionsWithText,
+    reconcileStructuredInputMentionsWithTextChange,
     type ComposerStructuredInputMention,
 } from './structuredInputMentions';
+import { buildGlassCastShadowStyle } from '@/shadowElevation';
 import { resolveThemeSurfaceBorderStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
 import {
     COMPOSER_ABORT_CONFIRMATION_WINDOW_MS,
@@ -182,6 +185,9 @@ const AGENT_INPUT_CONTAINER_VERTICAL_PADDING = 4;
 const AGENT_INPUT_CONTAINER_VERTICAL_CHROME_HEIGHT = AGENT_INPUT_CONTAINER_VERTICAL_PADDING * 2;
 const AGENT_INPUT_PANEL_PADDING_TOP = 2;
 const AGENT_INPUT_PANEL_PADDING_BOTTOM = 8;
+// Composer panel corner radius. Shared by the panel surface and its cast-shadow
+// wrapper so the drop shadow follows the same rounded shape.
+const AGENT_INPUT_PANEL_RADIUS = Platform.select({ default: 16, android: 20 });
 const AGENT_INPUT_PANEL_VERTICAL_CHROME_HEIGHT = AGENT_INPUT_PANEL_PADDING_TOP + AGENT_INPUT_PANEL_PADDING_BOTTOM;
 const AGENT_INPUT_VARIABLE_SECTION_CONTENT_PADDING_BOTTOM = 4;
 const EMPTY_PERMISSION_LOCATIONS_BY_ID = new Map<string, PermissionToolCallMessageLocation | null>();
@@ -314,6 +320,8 @@ interface AgentInputProps {
         contextWindowTokens?: number;
     };
     providerUsageGauge?: ConnectedServiceQuotaGaugeViewModel | null;
+    onProviderUsageRecoveryCreditPress?: () => void;
+    providerUsageRecoveryCreditPending?: boolean;
     alwaysShowContextSize?: boolean;
     onFileViewerPress?: () => void;
     agentType?: AgentId;
@@ -375,7 +383,6 @@ interface AgentInputProps {
     onAttachmentsAdded?: (files: readonly File[]) => void;
     hasSendableAttachments?: boolean;
     permissionRequests?: ReadonlyArray<PendingPermissionRequest>;
-    userActionRequests?: ReadonlyArray<PendingPermissionRequest>;
     approvalRequests?: ReadonlyArray<OpenApprovalArtifactForSession>;
     canApprovePermissions?: boolean;
     permissionDisabledReason?: 'public' | 'readOnly' | 'notGranted' | 'inactive';
@@ -461,6 +468,8 @@ function AgentInputAttentionRequestsWithLocations(
 type AgentInputHiddenUsageOverflowProps = Readonly<{
     contextUsageState?: ContextUsageState | null;
     providerUsageGauge?: ConnectedServiceQuotaGaugeViewModel | null;
+    onProviderUsageRecoveryCreditPress?: () => void;
+    providerUsageRecoveryCreditPending?: boolean;
     marginLeft?: number;
 }>;
 
@@ -487,6 +496,7 @@ function AgentInputHiddenUsageOverflow(props: AgentInputHiddenUsageOverflowProps
         })
         : null;
     const providerUsageGauge = props.providerUsageGauge ?? null;
+    const providerRecoveryCreditSummary = providerUsageGauge?.recoveryCreditSummary ?? null;
 
     if (!contextDetail && !providerUsageGauge) return null;
 
@@ -538,6 +548,37 @@ function AgentInputHiddenUsageOverflow(props: AgentInputHiddenUsageOverflowProps
                                         {providerUsageGauge.usedLimitLabel}
                                     </Text>
                                 ) : null}
+                                {providerRecoveryCreditSummary ? (
+                                    <>
+                                        <Text style={styles.hiddenUsageOverflowSubdetail}>
+                                            {t('connectedServices.quota.recoveryCreditTitle', { count: providerRecoveryCreditSummary.availableCount })}
+                                        </Text>
+                                        <Text style={styles.hiddenUsageOverflowSubdetail}>
+                                            {typeof providerRecoveryCreditSummary.nextExpiresAtMs === 'number'
+                                                ? t('connectedServices.quota.recoveryCreditExpires', { time: new Date(providerRecoveryCreditSummary.nextExpiresAtMs).toLocaleString() })
+                                                : t('connectedServices.quota.recoveryCreditSubtitle')}
+                                        </Text>
+                                        {props.onProviderUsageRecoveryCreditPress ? (
+                                            <Pressable
+                                                testID="agent-input-hidden-provider-usage-recovery-credit-action"
+                                                accessibilityRole="button"
+                                                disabled={props.providerUsageRecoveryCreditPending === true}
+                                                onPress={props.onProviderUsageRecoveryCreditPress}
+                                                style={({ pressed }) => [
+                                                    styles.hiddenUsageOverflowAction,
+                                                    pressed ? styles.hiddenUsageOverflowActionPressed : null,
+                                                    props.providerUsageRecoveryCreditPending === true ? styles.hiddenUsageOverflowActionDisabled : null,
+                                                ]}
+                                            >
+                                                <Text style={styles.hiddenUsageOverflowActionText}>
+                                                    {props.providerUsageRecoveryCreditPending === true
+                                                        ? t('connectedServices.quota.recoveryCreditApplying')
+                                                        : t('session.usageLimitRecovery.consumeResetCreditAction')}
+                                                </Text>
+                                            </Pressable>
+                                        ) : null}
+                                    </>
+                                ) : null}
                             </View>
                         ) : null}
                     </View>
@@ -558,9 +599,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         width: '100%',
         position: 'relative',
     },
+    // Default (non-glass) composer surface — the original styling: standard input
+    // background + hairline surface border, no drop shadow.
     unifiedPanel: {
         backgroundColor: theme.colors.input.background,
-        borderRadius: Platform.select({ default: 16, android: 20 }),
+        borderRadius: AGENT_INPUT_PANEL_RADIUS,
         ...resolveThemeSurfaceBorderStyle({
             borderColor: theme.colors.border.surface,
             highlightColor: theme.colors.effect.surfaceHighlight,
@@ -569,6 +612,31 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         paddingTop: AGENT_INPUT_PANEL_PADDING_TOP,
         paddingBottom: AGENT_INPUT_PANEL_PADDING_BOTTOM,
         paddingHorizontal: 8,
+    },
+    // Opt-in "glass" composer: the Liquid Glass tab bar's solid look — `surface.base`
+    // fill, the glass rim, and a top inset shadow. Fully redefines the border so the
+    // standard hairline + highlight don't leak through. The cast shadow lives on the
+    // `panelShadow` wrapper (glass mode only).
+    unifiedPanelGlass: {
+        backgroundColor: theme.colors.glass.composerSurface,
+        // Light: a touch thicker rim so the edge reads against the white surface.
+        borderWidth: theme.dark ? 1.5 : 2,
+        borderColor: theme.colors.glass.border,
+        borderTopWidth: theme.dark ? 1.5 : 2,
+        borderTopColor: theme.colors.glass.border,
+        // Composer-only fainter inner shadow (the other glass surfaces keep `glass.innerShadow`).
+        boxShadow: theme.colors.glass.composerInnerShadow,
+    },
+    // Cast-shadow wrapper (un-clipped) for the glass composer — the two-layer pattern
+    // the tab bar uses so the soft drop shadow renders around the clipped surface.
+    // `buildGlassCastShadowStyle` uses native shadow* on iOS and the cross-platform
+    // boxShadow on Android/web (never Android `elevation`), damped further on web.
+    panelShadow: {
+        borderRadius: AGENT_INPUT_PANEL_RADIUS,
+    },
+    // Match the cockpit tab bar that sits beside the composer: same level, softened.
+    panelShadowGlass: {
+        ...buildGlassCastShadowStyle(theme.colors.shadowLevels[4], theme.colors.glass.castShadow, true),
     },
     inputContainer: {
         flexDirection: 'row',
@@ -762,6 +830,25 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         fontSize: 12,
         color: theme.colors.text.secondary,
         ...Typography.default(),
+    },
+    hiddenUsageOverflowAction: {
+        alignSelf: 'flex-start',
+        minHeight: 28,
+        justifyContent: 'center',
+        borderRadius: 6,
+        paddingHorizontal: 10,
+        backgroundColor: theme.colors.surface.pressedOverlay,
+    },
+    hiddenUsageOverflowActionPressed: {
+        opacity: 0.82,
+    },
+    hiddenUsageOverflowActionDisabled: {
+        opacity: 0.58,
+    },
+    hiddenUsageOverflowActionText: {
+        fontSize: 12,
+        color: theme.colors.text.primary,
+        ...Typography.default('semiBold'),
     },
     permissionModeContainer: {
         flexDirection: 'column',
@@ -1113,7 +1200,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const [fileDragActive, setFileDragActive] = React.useState(false);
 
     const pendingPermissionRequests = props.permissionRequests ?? [];
-    const pendingUserActionRequests = props.userActionRequests ?? [];
     const pendingApprovalRequests = props.approvalRequests ?? [];
     const canApprovePermissions = props.canApprovePermissions ?? true;
     const permissionPromptSurface = useSetting('permissionPromptSurface');
@@ -1128,7 +1214,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         && showComposerPermissionCards
         && (
             composerPermissionRequests.length > 0
-            || pendingUserActionRequests.length > 0
             || pendingApprovalRequests.length > 0
         ),
     );
@@ -1248,6 +1333,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const agentInputActionBarLayout = useSetting('agentInputActionBarLayout');
     const agentInputChipDensity = useSetting('agentInputChipDensity');
     const sessionPermissionModeApplyTiming = useSetting('sessionPermissionModeApplyTiming');
+    const isGlassComposer = isGlassComposerSurface({ setting: useSetting('composerSurfaceStyle') });
 
     const historyScope = agentInputHistoryScope === 'global' ? 'global' : 'perSession';
     const messageHistory = useUserMessageHistory({
@@ -1316,7 +1402,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, []);
 
     const handleInputStateChange = React.useCallback((newState: TextInputState) => {
-        const previousText = inputStateRef.current.text;
+        const previousState = inputStateRef.current;
+        const previousText = previousState.text;
         const historyAppliedInputState = historyAppliedInputStateRef.current;
         const isProgrammaticHistoryApply =
             historyAppliedInputState !== null
@@ -1326,9 +1413,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             historyAppliedInputStateRef.current = null;
             messageHistory.pause(newState.text);
         }
-        updateStructuredInputMentions((current) => reconcileStructuredInputMentionsWithText({
+        updateStructuredInputMentions((current) => reconcileStructuredInputMentionsWithTextChange({
             previousText,
             nextText: newState.text,
+            previousSelection: previousState.selection,
             mentions: current,
         }));
         if (newState.text !== previousText && !isProgrammaticHistoryApply) {
@@ -1357,10 +1445,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const current = inputStateRef.current;
         if (current.text === props.value) return;
 
-        const nextSelection = {
-            start: Math.min(current.selection.start, props.value.length),
-            end: Math.min(current.selection.end, props.value.length),
-        };
+        const wasSelectionAtCurrentEnd = current.selection.start === current.text.length
+            && current.selection.end === current.text.length;
+        const nextSelection = wasSelectionAtCurrentEnd
+            ? { start: props.value.length, end: props.value.length }
+            : {
+                start: Math.min(current.selection.start, props.value.length),
+                end: Math.min(current.selection.end, props.value.length),
+            };
         const nextState = {
             text: props.value,
             selection: nextSelection,
@@ -1509,11 +1601,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const abortConfirmationExpiresAtRef = React.useRef(0);
     const shakerRef = React.useRef<ShakeInstance>(null);
     const [isInputFocused, setIsInputFocused] = React.useState(false);
+    const composerKeyboardLayoutForFocus = useComposerKeyboardLayoutContext();
 
     // Forward ref to the MultiTextInput
     React.useImperativeHandle(ref, () => inputRef.current!, []);
 
     const handleComposerFocus = React.useCallback(() => {
+        composerKeyboardLayoutForFocus?.setComposerInputFocused?.(true);
         setIsInputFocused(true);
         const focusedActiveWord = findActiveWord(
             inputStateRef.current.text,
@@ -1527,11 +1621,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             setHasAutocompleteTextInteraction(true);
         }
         messageHistory.warmup();
-    }, [messageHistory, props.autocompletePrefixes]);
+    }, [composerKeyboardLayoutForFocus, messageHistory, props.autocompletePrefixes]);
 
     const handleComposerBlur = React.useCallback(() => {
+        composerKeyboardLayoutForFocus?.setComposerInputFocused?.(false);
         setIsInputFocused(false);
-    }, []);
+    }, [composerKeyboardLayoutForFocus]);
 
     const applyHistoryInputText = React.useCallback((next: string) => {
         const nextState = { text: next, selection: { start: next.length, end: next.length } };
@@ -2260,9 +2355,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         styles.actionChip,
     ]);
 
+    // Fade the chip rows out to the composer's own fill: the glass surface in glass
+    // mode, the standard input background otherwise.
     const actionBarFadeColor = React.useMemo(() => {
-        return theme.colors.input.background;
-    }, [theme.colors.input.background]);
+        return isGlassComposer ? theme.colors.surface.base : theme.colors.input.background;
+    }, [isGlassComposer, theme.colors.surface.base, theme.colors.input.background]);
 
     // Handle abort button press
     const handleAbortPress = React.useCallback(async () => {
@@ -2681,7 +2778,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     <AgentInputAttentionRequestsWithLocations
                         sessionId={props.sessionId}
                         permissionRequests={composerPermissionRequests}
-                        userActionRequests={pendingUserActionRequests}
                         approvalRequests={pendingApprovalRequests}
                         metadata={props.metadata || null}
                         canApprovePermissions={canApprovePermissions}
@@ -2702,7 +2798,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     <AgentInputAttentionRequests
                         sessionId={props.sessionId}
                         permissionRequests={composerPermissionRequests}
-                        userActionRequests={pendingUserActionRequests}
                         approvalRequests={pendingApprovalRequests}
                         permissionLocationsById={EMPTY_PERMISSION_LOCATIONS_BY_ID}
                         approvalLocationsByArtifactId={EMPTY_PERMISSION_LOCATIONS_BY_ID}
@@ -3074,12 +3169,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             <AgentInputProviderUsageBadge
                                                 viewModel={props.providerUsageGauge}
                                                 marginLeft={showContextGauge ? 8 : 0}
+                                                onRecoveryCreditPress={props.onProviderUsageRecoveryCreditPress}
+                                                recoveryCreditActionPending={props.providerUsageRecoveryCreditPending}
                                             />
                                         ) : null}
                                         {showHiddenGaugeOverflow ? (
                                             <AgentInputHiddenUsageOverflow
                                                 contextUsageState={hiddenContextUsageState}
                                                 providerUsageGauge={hiddenProviderUsageGauge}
+                                                onProviderUsageRecoveryCreditPress={props.onProviderUsageRecoveryCreditPress}
+                                                providerUsageRecoveryCreditPending={props.providerUsageRecoveryCreditPending}
                                                 marginLeft={(showContextGauge || showProviderGauge) ? 8 : 0}
                                             />
                                         ) : null}
@@ -3096,10 +3195,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 })}
 
                 {/* Box 2: Action Area (Input + Send) */}
+                <View style={[styles.panelShadow, isGlassComposer ? styles.panelShadowGlass : null]}>
                 <WebDropTargetView
                     testID="agent-input-drop-zone"
                     style={[
                         styles.unifiedPanel,
+                        isGlassComposer ? styles.unifiedPanelGlass : null,
                         props.panelStyle,
                         typeof effectivePanelMaxHeight === 'number' ? { maxHeight: effectivePanelMaxHeight } : null,
                     ]}
@@ -3162,6 +3263,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         </View>
                     )}
                 </WebDropTargetView>
+                </View>
                 </View>
             </View>
         </SyncPerformanceReactProfiler>

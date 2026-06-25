@@ -10,6 +10,13 @@ export type CodexEnvironmentAuthState = Readonly<{
     accountLabel: string | null;
 }>;
 
+export type CodexEnvironmentAuthTokens = Readonly<{
+    idToken: string | null;
+    accessToken: string | null;
+    accountId: string | null;
+    accountLabel: string | null;
+}>;
+
 export function readCodexApiKey(env: NodeJS.ProcessEnv): string {
     const openAiApiKey = typeof env.OPENAI_API_KEY === 'string' ? env.OPENAI_API_KEY.trim() : '';
     if (openAiApiKey) return openAiApiKey;
@@ -55,36 +62,36 @@ function resolveCodexAuthHomeDir(env: NodeJS.ProcessEnv): string {
     return resolve(resolveConfiguredCodexHome(env));
 }
 
-function readCodexAuthFileTokens(env: NodeJS.ProcessEnv): Readonly<{
-    idToken: string | null;
-    accessToken: string | null;
-    accountLabel: string | null;
-}> {
+export function readCodexEnvironmentAuthTokens(env: NodeJS.ProcessEnv = process.env): CodexEnvironmentAuthTokens {
     const parsed = readJsonFileSafe(join(resolveCodexAuthHomeDir(env), 'auth.json'));
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return { idToken: null, accessToken: null, accountLabel: null };
+        return { idToken: null, accessToken: null, accountId: null, accountLabel: null };
     }
 
     const record = parsed as Record<string, unknown>;
     const tokens = record.tokens;
     if (!tokens || typeof tokens !== 'object' || Array.isArray(tokens)) {
-        return { idToken: null, accessToken: null, accountLabel: null };
+        return { idToken: null, accessToken: null, accountId: null, accountLabel: null };
     }
 
     const tokenRecord = tokens as Record<string, unknown>;
     const idToken = typeof tokenRecord.id_token === 'string' ? tokenRecord.id_token : null;
     const accessToken = typeof tokenRecord.access_token === 'string' ? tokenRecord.access_token : null;
+    const accountId = typeof tokenRecord.account_id === 'string' && tokenRecord.account_id.trim()
+        ? tokenRecord.account_id.trim()
+        : null;
     const hasUsableToken = hasUsableJwtLifetime(idToken) || hasUsableJwtLifetime(accessToken);
 
     return {
         idToken: hasUsableToken ? idToken : null,
         accessToken: hasUsableToken ? accessToken : null,
+        accountId: hasUsableToken ? accountId : null,
         accountLabel: hasUsableToken ? (decodeJwtEmail(idToken) ?? decodeJwtEmail(accessToken)) : null,
     };
 }
 
 export function readCodexEnvironmentAuthState(env: NodeJS.ProcessEnv = process.env): CodexEnvironmentAuthState {
-    const authFileTokens = readCodexAuthFileTokens(env);
+    const authFileTokens = readCodexEnvironmentAuthTokens(env);
     const apiKey = readCodexApiKey(env);
 
     if (apiKey) {

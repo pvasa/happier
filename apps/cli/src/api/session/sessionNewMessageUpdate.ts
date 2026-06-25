@@ -3,6 +3,7 @@ import type {
     Update,
     UserMessage,
 } from '../types';
+import type { ProviderOwnedUserMessageEchoClassifier } from './providerOwnedUserMessageEcho';
 import { SessionMessageContentSchema, UserMessageSchema } from '../types';
 import { coerceSessionUserPromptV1 } from '@happier-dev/protocol';
 import { summarizeValueShapeForLog } from '@/diagnostics/eventShapeForLog';
@@ -37,12 +38,22 @@ export function handleSessionNewMessageUpdate(params: {
     lastObservedUserMessageSeq: number;
     hasSelfEchoSuppressedLocalId: (localId: string) => boolean;
     hasAgentQueueEchoSuppressedLocalId: (localId: string) => boolean;
+    hasPassiveCommittedUserMessageLocalId?: (localId: string) => boolean;
     markAgentQueueEchoSuppressedLocalId: (localId: string) => void;
+    hasAgentQueueDeliveredLocalId?: (localId: string) => boolean;
+    markAgentQueueDeliveredLocalId?: (localId: string) => void;
     hasPendingQueueMaterializedLocalId: (localId: string) => boolean;
     deleteMaterializedLocalId: (localId: string) => void;
     pendingMessageCallback: ((message: UserMessage, info?: Readonly<{ seq: number | null }>) => void) | null;
     pendingMessages: UserMessage[];
     shouldDeliverUserMessageToAgentQueue?: (message: UserMessage, update: Update) => boolean;
+    /**
+     * Identifies user transcript rows that are owned by the provider/native terminal and should
+     * prove custody instead of being replayed into the agent queue. This is intentionally supplied
+     * by the session/provider owner so generic socket handling does not learn provider-specific
+     * local-id formats.
+     */
+    isProviderOwnedUserMessageEcho?: ProviderOwnedUserMessageEchoClassifier;
     /**
      * Owed-delivery watermark hook (A-F2/D15b, narrowed by A3-HIGH-1): fired with the message seq
      * when a user message is handed to the runner's agent QUEUE (volatile memory). Whether this
@@ -54,8 +65,9 @@ export function handleSessionNewMessageUpdate(params: {
     /**
      * Fired when a local echo proves a user row is no longer owed to the runner without handing
      * it through the queue in this update. Examples: an already queued prompt echo, an already
-     * pending prompt, or a provider-native terminal transcript row that originated in the provider
-     * TUI and was only mirrored into Happier.
+     * pending prompt, or a deterministic daemon initial prompt echo. Provider-native terminal
+     * transcript rows are suppressed by their provider owner and do not prove this local queue
+     * watermark.
      */
     onUserMessageDeliveryProvenByLocalEcho?: (seq: number) => void;
     onObservedMessage?: (message: {
@@ -190,20 +202,34 @@ export function handleSessionNewMessageUpdate(params: {
         const isAgentQueueEchoSuppressedForDelivery = Boolean(
             agentQueueLocalId && params.hasAgentQueueEchoSuppressedLocalId(agentQueueLocalId),
         );
+        const isAgentQueueDeliveredLocalId = Boolean(
+            agentQueueLocalId && params.hasAgentQueueDeliveredLocalId?.(agentQueueLocalId),
+        );
         const isAlreadyPendingAgentQueueMessage = hasPendingMessageLocalId(params.pendingMessages, agentQueueLocalId);
         const isDeterministicDaemonInitialPrompt =
             source === 'daemon-initial-prompt'
             && isDeterministicDaemonInitialPromptLocalId(agentQueueLocalId, params.sessionId);
         const isSelfEchoSuppressedCliWrite =
             isSelfEchoSuppressedLocalId && source === 'cli';
-        const shouldRespectAgentQueueEchoSuppression = Boolean(params.pendingMessageCallback) || isAlreadyPendingAgentQueueMessage;
+        const isAgentQueueEchoSuppressedCliWrite =
+            isAgentQueueEchoSuppressedForDelivery && source === 'cli';
+        const isProviderOwnedUserMessageEcho = params.isProviderOwnedUserMessageEcho?.(userResult.data, params.update) === true;
+        const isPassiveCommittedUserMessageLocalId = Boolean(
+            agentQueueLocalId && params.hasPassiveCommittedUserMessageLocalId?.(agentQueueLocalId),
+        );
+        const shouldRespectAgentQueueEchoSuppression = isAlreadyPendingAgentQueueMessage;
         const isEffectivelyAgentQueueEchoSuppressedLocalId =
             shouldRespectAgentQueueEchoSuppression
             && isAgentQueueEchoSuppressedForDelivery;
         const shouldDeliverToAgentQueue =
-            !isEffectivelyAgentQueueEchoSuppressedLocalId
+            !isAgentQueueDeliveredLocalId
+            && !isEffectivelyAgentQueueEchoSuppressedLocalId
             && !isAlreadyPendingAgentQueueMessage
             && !isSelfEchoSuppressedCliWrite
+            && !isAgentQueueEchoSuppressedCliWrite
+            && !isDeterministicDaemonInitialPrompt
+            && !isProviderOwnedUserMessageEcho
+            && !isPassiveCommittedUserMessageLocalId
             && (params.shouldDeliverUserMessageToAgentQueue?.(userResult.data, params.update) ?? true);
         if (shouldDeliverToAgentQueue) {
             const deliverableSeq = typeof msgSeq === 'number' && Number.isFinite(msgSeq) ? msgSeq : null;
@@ -214,6 +240,7 @@ export function handleSessionNewMessageUpdate(params: {
             }
             if (agentQueueLocalId) {
                 params.markAgentQueueEchoSuppressedLocalId(agentQueueLocalId);
+                params.markAgentQueueDeliveredLocalId?.(agentQueueLocalId);
             }
             if (deliverableSeq !== null) {
                 params.onUserMessageDeliveredToAgentQueue?.(deliverableSeq);
@@ -221,10 +248,16 @@ export function handleSessionNewMessageUpdate(params: {
         } else {
             // An agent-queue echo of a prompt we already handed to the loop locally (daemon initial
             // prompt, RPC send, pending materialization) proves delivery and carries its seq.
+            // Provider-owned/native rows suppress replay, but they did not pass through this queue
+            // handoff and must not advance the monotonic delivered-user watermark past older owed
+            // prompts.
             const isDeliveredLocalPromptEcho =
-                isEffectivelyAgentQueueEchoSuppressedLocalId
+                isAgentQueueDeliveredLocalId
+                || isEffectivelyAgentQueueEchoSuppressedLocalId
                 || isAlreadyPendingAgentQueueMessage
-                || isSelfEchoSuppressedCliWrite;
+                || isSelfEchoSuppressedCliWrite
+                || isAgentQueueEchoSuppressedCliWrite
+                || isDeterministicDaemonInitialPrompt;
             if (isDeliveredLocalPromptEcho && typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
                 params.onUserMessageDeliveryProvenByLocalEcho?.(msgSeq);
             }
@@ -236,9 +269,13 @@ export function handleSessionNewMessageUpdate(params: {
                 isSelfEchoSuppressedLocalId,
                 isAgentQueueEchoSuppressedLocalId,
                 isAgentQueueEchoSuppressedForDelivery,
+                isAgentQueueDeliveredLocalId,
                 isAlreadyPendingAgentQueueMessage,
                 isPendingQueueMaterializedLocalId,
                 isSelfEchoSuppressedCliWrite,
+                isAgentQueueEchoSuppressedCliWrite,
+                isProviderOwnedUserMessageEcho,
+                isPassiveCommittedUserMessageLocalId,
                 shouldRespectAgentQueueEchoSuppression,
                 isDeterministicDaemonInitialPrompt,
             });
@@ -265,19 +302,37 @@ export function handleSessionNewMessageUpdate(params: {
                 const isAgentQueueEchoSuppressedForDelivery = Boolean(
                     agentQueueLocalId && params.hasAgentQueueEchoSuppressedLocalId(agentQueueLocalId),
                 );
+                const isAgentQueueDeliveredLocalId = Boolean(
+                    agentQueueLocalId && params.hasAgentQueueDeliveredLocalId?.(agentQueueLocalId),
+                );
+                const isEffectivelyAgentQueueEchoSuppressedLocalId =
+                    isAlreadyPendingAgentQueueMessage
+                    && isAgentQueueEchoSuppressedForDelivery;
                 const parsedSource = parsedCandidate.data.meta?.source;
                 const isSelfEchoSuppressedCliWrite = Boolean(
                     agentQueueLocalId
                     && params.hasSelfEchoSuppressedLocalId(agentQueueLocalId)
                     && parsedSource === 'cli',
                 );
+                const isAgentQueueEchoSuppressedCliWrite =
+                    isAgentQueueEchoSuppressedForDelivery && parsedSource === 'cli';
                 const isDeterministicDaemonInitialPrompt =
                     parsedSource === 'daemon-initial-prompt'
                     && isDeterministicDaemonInitialPromptLocalId(agentQueueLocalId, params.sessionId);
+                const isProviderOwnedUserMessageEcho =
+                    params.isProviderOwnedUserMessageEcho?.(parsedCandidate.data, params.update) === true;
+                const isPassiveCommittedUserMessageLocalId = Boolean(
+                    agentQueueLocalId && params.hasPassiveCommittedUserMessageLocalId?.(agentQueueLocalId),
+                );
                 const shouldDeliverToAgentQueue =
-                    !isAlreadyPendingAgentQueueMessage
-                    && !isAgentQueueEchoSuppressedForDelivery
+                    !isAgentQueueDeliveredLocalId
+                    && !isAlreadyPendingAgentQueueMessage
+                    && !isEffectivelyAgentQueueEchoSuppressedLocalId
                     && !isSelfEchoSuppressedCliWrite
+                    && !isAgentQueueEchoSuppressedCliWrite
+                    && !isDeterministicDaemonInitialPrompt
+                    && !isProviderOwnedUserMessageEcho
+                    && !isPassiveCommittedUserMessageLocalId
                     && (params.shouldDeliverUserMessageToAgentQueue?.(parsedCandidate.data, params.update) ?? true);
                 if (shouldDeliverToAgentQueue) {
                     const deliverableSeq = typeof msgSeq === 'number' && Number.isFinite(msgSeq) ? msgSeq : null;
@@ -288,15 +343,19 @@ export function handleSessionNewMessageUpdate(params: {
                     }
                     if (agentQueueLocalId) {
                         params.markAgentQueueEchoSuppressedLocalId(agentQueueLocalId);
+                        params.markAgentQueueDeliveredLocalId?.(agentQueueLocalId);
                     }
                     if (deliverableSeq !== null) {
                         params.onUserMessageDeliveredToAgentQueue?.(deliverableSeq);
                     }
                 } else {
                     const isDeliveredLocalPromptEcho =
-                        isAgentQueueEchoSuppressedForDelivery
+                        isAgentQueueDeliveredLocalId
+                        || isEffectivelyAgentQueueEchoSuppressedLocalId
                         || isAlreadyPendingAgentQueueMessage
-                        || isSelfEchoSuppressedCliWrite;
+                        || isSelfEchoSuppressedCliWrite
+                        || isAgentQueueEchoSuppressedCliWrite
+                        || isDeterministicDaemonInitialPrompt;
                     if (isDeliveredLocalPromptEcho && typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
                         params.onUserMessageDeliveryProvenByLocalEcho?.(msgSeq);
                     }
@@ -305,7 +364,13 @@ export function handleSessionNewMessageUpdate(params: {
                         agentQueueLocalId,
                         isAlreadyPendingAgentQueueMessage,
                         isAgentQueueEchoSuppressedForDelivery,
+                        isAgentQueueDeliveredLocalId,
+                        isEffectivelyAgentQueueEchoSuppressedLocalId,
                         isSelfEchoSuppressedCliWrite,
+                        isAgentQueueEchoSuppressedCliWrite,
+                        isDeterministicDaemonInitialPrompt,
+                        isProviderOwnedUserMessageEcho,
+                        isPassiveCommittedUserMessageLocalId,
                         source: parsedCandidate.data.meta?.source ?? null,
                         sentFrom: parsedCandidate.data.meta?.sentFrom ?? null,
                     });

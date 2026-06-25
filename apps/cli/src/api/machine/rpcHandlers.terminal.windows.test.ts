@@ -4,7 +4,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import { createTerminalPtySessionManager } from '@/daemon/terminalPty/terminalPtySessionManager';
-import type { PtyProcess, PtyProvider, PtySpawnParams } from '@/daemon/terminalPty/ptyProvider';
+import type { PtyProcess, PtyProvider, PtySpawnParams } from '@/integrations/pty/ptyProvider';
 import { registerMachineTerminalRpcHandlers } from './rpcHandlers.terminal';
 
 class FakePty implements PtyProcess {

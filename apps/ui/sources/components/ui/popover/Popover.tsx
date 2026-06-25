@@ -27,6 +27,7 @@ import type {
     ResolvedPopoverPlacement,
 } from './_types';
 import { getFallbackBoundaryRect, measureInWindow, measureLayoutRelativeTo } from './measure';
+import { resolvePortalRelativeAnchorRect } from './resolvePortalRelativeAnchor';
 import { resolvePlacement } from './positioning';
 import { PopoverBackdrop } from './backdrop';
 import { tryRenderWebPortal, useNativeOverlayPortalNode } from './portal';
@@ -643,39 +644,18 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                 const deltaRect = deltaResult?.deltaRect ?? null;
                 const anchorWindowRect = deltaResult?.anchorWindowRect ?? null;
 
-                // Choose the portal-relative rect that is most plausible for the portal root.
-                //
-                // iOS/react-native-screens quirk:
-                // Some contained presentations can report anchor coordinates that are already
-                // portal-relative via `measureInWindow`. If we blindly subtract the portal root
-                // window origin, the popover ends up rendered too high (double-applied offset).
-                //
-                // When `measureLayout` is available (portal-relative by definition), use it as an
-                // arbiter: whichever candidate better matches the layout-based measurement wins.
-                const chosen = (() => {
-                    // If we don't have a layout-based measurement to arbitrate, but we do have a known
-                    // portal layout, detect the "double offset" case by looking for negative deltas.
-                    // In contained iOS presentations, `measureInWindow` can sometimes return portal-
-                    // relative coords already; subtracting the portal root origin yields negatives and
-                    // clamps the popover to the top of the portal.
-                    if (!layoutRect && hasPortalLayout && deltaRect && anchorWindowRect) {
-                        const tolerance = 16;
-                        const deltaLooksDoubleOffset = deltaRect.x < -tolerance || deltaRect.y < -tolerance;
-                        if (deltaLooksDoubleOffset && withinPortalLayout(anchorWindowRect)) {
-                            return anchorWindowRect;
-                        }
-                    }
-                    if (deltaRect && withinPortalLayout(deltaRect)) {
-                        if (layoutRect && withinPortalLayout(layoutRect) && anchorWindowRect && withinPortalLayout(anchorWindowRect)) {
-                            const errDelta = Math.abs(deltaRect.x - layoutRect.x) + Math.abs(deltaRect.y - layoutRect.y);
-                            const errRaw = Math.abs(anchorWindowRect.x - layoutRect.x) + Math.abs(anchorWindowRect.y - layoutRect.y);
-                            if (keyboardHeight <= 0 && errRaw + 8 < errDelta) return anchorWindowRect;
-                        }
-                        return deltaRect;
-                    }
-                    if (layoutRect && withinPortalLayout(layoutRect)) return layoutRect;
-                    return deltaRect ?? layoutRect;
-                })();
+                // Choose the portal-relative anchor rect. The iOS `measureLayout` arbiter is
+                // intentionally scoped to iOS; on Android the window-delta is authoritative.
+                // See `resolvePortalRelativeAnchorRect` for the full coordinate-space rationale.
+                const chosen = resolvePortalRelativeAnchorRect({
+                    deltaRect,
+                    layoutRect,
+                    anchorWindowRect,
+                    hasPortalLayout,
+                    withinPortalLayout,
+                    keyboardHeight,
+                    platformOS: Platform.OS,
+                });
 
                 if (chosen) {
                     anchorRect = chosen;
@@ -1301,6 +1281,9 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
     const backdropAnchorOverlay = typeof backdrop === 'object' && backdrop ? backdrop.anchorOverlay : undefined;
     const backdropStyle = typeof backdrop === 'object' && backdrop ? backdrop.style : undefined;
     const closeOnBackdropPan = typeof backdrop === 'object' && backdrop ? (backdrop.closeOnPan ?? false) : false;
+    const backdropPointerEventsEnabled =
+        !overlayPresence.exiting
+        && (!(shouldPortalWeb || shouldPortalNative) || portalOpacity !== 0);
 
     useEscapeLayer({
         enabled: Platform.OS === 'web' && open && typeof onRequestClose === 'function',
@@ -1380,6 +1363,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                 backdropAnchorOverlay={backdropAnchorOverlay}
                 backdropStyle={backdropStyle}
                 closeOnBackdropPan={closeOnBackdropPan}
+                backdropPointerEventsEnabled={backdropPointerEventsEnabled}
                 onRequestClose={onRequestClose}
                 shouldPortal={shouldPortal}
                 shouldPortalWeb={shouldPortalWeb}

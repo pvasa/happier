@@ -79,4 +79,18 @@ describe('buildUnifiedTerminalRuntimeConfigRestartChanges (shared comparator)', 
     );
     expect(changes.map((c) => c.key)).toContain('permissionMode');
   });
+
+  it('reports resume-choice changes as launch-option restart reasons', () => {
+    const changes = buildUnifiedTerminalRuntimeConfigRestartChanges(
+      { ...baseMode, claudeUnifiedTerminalResumeChoice: 'ask_every_time' },
+      { ...baseMode, claudeUnifiedTerminalResumeChoice: 'resume_from_summary' },
+    );
+
+    expect(changes).toContainEqual({
+      key: 'launchOption',
+      previous: 'ask_every_time',
+      requested: 'resume_from_summary',
+      reason: 'claudeUnifiedTerminalResumeChoice',
+    });
+  });
 });

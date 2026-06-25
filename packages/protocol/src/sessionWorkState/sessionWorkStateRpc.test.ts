@@ -3,8 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
     SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema,
     SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema,
+    SessionConnectedServiceAuthApplyGenerationRequestV1Schema,
+    SessionConnectedServiceAuthApplyGenerationResponseV1Schema,
+    SessionConnectedServiceAuthReadRuntimeIdentityRequestV1Schema,
+    SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema,
     DaemonSessionSkillCatalogListRequestV1Schema,
     DaemonSessionVendorPluginCatalogListRequestV1Schema,
+    ConnectedServiceQuotaRecoveryCreditConsumeRequestV1Schema,
+    ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema,
     DaemonSessionGoalClearRequestV1Schema,
     DaemonSessionGoalSetRequestV1Schema,
     SessionUsageLimitCheckNowRequestV1Schema,
@@ -28,6 +34,12 @@ describe('session work-state RPC contracts', () => {
         expect(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS).toBe(
             'session.connectedServiceAuth.invalidateTransports',
         );
+        expect(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_APPLY_GENERATION).toBe(
+            'session.connectedServiceAuth.applyGeneration',
+        );
+        expect(SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_READ_RUNTIME_IDENTITY).toBe(
+            'session.connectedServiceAuth.readRuntimeIdentity',
+        );
         expect(RPC_METHODS.DAEMON_SESSION_GOAL_GET).toBe('daemon.sessionGoal.get');
         expect(RPC_METHODS.DAEMON_SESSION_GOAL_SET).toBe('daemon.sessionGoal.set');
         expect(RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR).toBe('daemon.sessionGoal.clear');
@@ -37,8 +49,71 @@ describe('session work-state RPC contracts', () => {
         expect((RPC_METHODS as Record<string, string>).DAEMON_SESSION_SKILL_CATALOG_LIST).toBe(
             'daemon.sessionSkillCatalog.list',
         );
+        expect((RPC_METHODS as Record<string, string>).DAEMON_CONNECTED_SERVICE_QUOTA_RECOVERY_CREDIT_CONSUME).toBe(
+            'daemon.connectedServiceQuota.recoveryCredit.consume',
+        );
         expect(SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST).toBe('session.vendorPluginCatalog.list');
         expect(SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST).toBe('session.skillCatalog.list');
+    });
+
+    it('parses connected-service quota recovery credit consume RPC contracts', () => {
+        expect(ConnectedServiceQuotaRecoveryCreditConsumeRequestV1Schema.parse({
+            serviceId: 'openai-codex',
+            profileId: ' work ',
+            idempotencyKey: ' reset-req-1 ',
+            providerCreditId: ' credit-1 ',
+        })).toEqual({
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            idempotencyKey: 'reset-req-1',
+            providerCreditId: 'credit-1',
+        });
+        expect(() => ConnectedServiceQuotaRecoveryCreditConsumeRequestV1Schema.parse({
+            serviceId: 'openai-codex',
+            profileId: '',
+        })).toThrow();
+        expect(() => ConnectedServiceQuotaRecoveryCreditConsumeRequestV1Schema.parse({
+            serviceId: 'openai-codex',
+            profileId: 'work',
+        })).toThrow();
+        expect(ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema.parse({
+            ok: true,
+            snapshot: null,
+            receipt: {
+                idempotencyKey: 'reset-req-1',
+                providerCreditId: 'credit-1',
+                status: 'consumed',
+            },
+        })).toEqual({
+            ok: true,
+            snapshot: null,
+            receipt: {
+                idempotencyKey: 'reset-req-1',
+                providerCreditId: 'credit-1',
+                status: 'consumed',
+            },
+        });
+        expect(() => ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema.parse({
+            ok: true,
+            snapshot: null,
+        })).toThrow();
+        expect(ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema.parse({
+            ok: false,
+            errorCode: 'connected_service_quota_recovery_credit_timeout',
+            error: 'connected_service_quota_recovery_credit_timeout',
+            receipt: {
+                idempotencyKey: 'reset-req-timeout',
+                status: 'unknown_after_timeout',
+            },
+        })).toEqual({
+            ok: false,
+            errorCode: 'connected_service_quota_recovery_credit_timeout',
+            error: 'connected_service_quota_recovery_credit_timeout',
+            receipt: {
+                idempotencyKey: 'reset-req-timeout',
+                status: 'unknown_after_timeout',
+            },
+        });
     });
 
     it('parses work-state and vendor plugin catalog response shapes', () => {
@@ -123,6 +198,173 @@ describe('session work-state RPC contracts', () => {
         })).toEqual({
             ok: true,
         });
+        expect(SessionConnectedServiceAuthApplyGenerationRequestV1Schema.parse({
+            serviceId: ' openai-codex ',
+            reason: 'same_provider_account_exhausted',
+            requireDirectLiveHotApply: true,
+            expected: {
+                profileId: 'profile-1',
+                groupId: 'group-1',
+                generation: '7',
+            },
+            authGeneration: {
+                kind: 'connected_service_credential',
+                profileId: 'profile-2',
+            },
+        })).toEqual({
+            serviceId: 'openai-codex',
+            reason: 'same_provider_account_exhausted',
+            requireDirectLiveHotApply: true,
+            expected: {
+                profileId: 'profile-1',
+                groupId: 'group-1',
+                generation: '7',
+            },
+            authGeneration: {
+                kind: 'connected_service_credential',
+                profileId: 'profile-2',
+            },
+        });
+        expect(() => SessionConnectedServiceAuthApplyGenerationRequestV1Schema.parse({
+            serviceId: 'openai-codex',
+            reason: 'not-a-reason',
+        })).toThrow();
+        expect(() => SessionConnectedServiceAuthApplyGenerationRequestV1Schema.parse({
+            serviceId: 'openai-codex',
+            reason: 'usage_limit',
+        })).toThrow();
+        expect(() => SessionConnectedServiceAuthApplyGenerationRequestV1Schema.parse({
+            serviceId: 'openai-codex',
+            reason: 'usage_limit',
+            authGeneration: {},
+        })).toThrow();
+        expect(() => SessionConnectedServiceAuthApplyGenerationResponseV1Schema.parse({
+            ok: true,
+            appliedVia: 'direct_live_hot_auth',
+            verification: {
+                status: 'verified',
+                proofStrength: 'exact',
+            },
+        })).toThrow();
+        expect(SessionConnectedServiceAuthApplyGenerationResponseV1Schema.parse({
+            ok: true,
+            appliedVia: 'direct_live_hot_auth',
+            verification: {
+                status: 'verified',
+                providerAccountId: 'acct_1',
+                proofStrength: 'exact',
+            },
+        })).toEqual({
+            ok: true,
+            appliedVia: 'direct_live_hot_auth',
+            verification: {
+                status: 'verified',
+                providerAccountId: 'acct_1',
+                proofStrength: 'exact',
+            },
+        });
+        expect(SessionConnectedServiceAuthReadRuntimeIdentityRequestV1Schema.parse({
+            serviceId: ' openai-codex ',
+            reason: 'same_provider_account_exhausted',
+            requireExactProof: true,
+            expected: {
+                profileId: 'profile-1',
+                groupId: 'group-1',
+                generation: '7',
+            },
+        })).toEqual({
+            serviceId: 'openai-codex',
+            reason: 'same_provider_account_exhausted',
+            requireExactProof: true,
+            expected: {
+                profileId: 'profile-1',
+                groupId: 'group-1',
+                generation: '7',
+            },
+        });
+        expect(SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema.parse({
+            ok: true,
+            serviceId: 'openai-codex',
+            identity: {
+                strategy: 'provider_account_id',
+                proofStrength: 'exact',
+                providerAccountId: 'acct-1',
+                source: 'runtime_loaded_credential',
+            },
+            runtime: {
+                safeToApply: false,
+                inProviderTurn: true,
+            },
+        })).toEqual({
+            ok: true,
+            serviceId: 'openai-codex',
+            identity: {
+                strategy: 'provider_account_id',
+                proofStrength: 'exact',
+                providerAccountId: 'acct-1',
+                source: 'runtime_loaded_credential',
+            },
+            runtime: {
+                safeToApply: false,
+                inProviderTurn: true,
+            },
+        });
+        expect(() => SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema.parse({
+            ok: true,
+            serviceId: 'openai-codex',
+            identity: {
+                strategy: 'provider_account_id',
+                proofStrength: 'exact',
+                source: 'runtime_loaded_credential',
+            },
+        })).toThrow();
+        expect(() => SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema.parse({
+            ok: true,
+            serviceId: 'openai-codex',
+            identity: {
+                strategy: 'provider_account_id',
+                proofStrength: 'exact',
+                sharedAuthSurfaceId: 'surface-1',
+                source: 'runtime_loaded_credential',
+            },
+        })).toThrow();
+        expect(() => SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema.parse({
+            ok: true,
+            serviceId: 'claude-subscription',
+            identity: {
+                strategy: 'shared_group_auth_surface',
+                proofStrength: 'exact',
+                source: 'runtime_loaded_credential',
+            },
+        })).toThrow();
+        expect(SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema.parse({
+            ok: true,
+            serviceId: 'claude-subscription',
+            identity: {
+                strategy: 'shared_group_auth_surface',
+                proofStrength: 'exact',
+                sharedAuthSurfaceId: 'claude-subscription:team',
+                source: 'runtime_loaded_credential',
+            },
+        })).toEqual({
+            ok: true,
+            serviceId: 'claude-subscription',
+            identity: {
+                strategy: 'shared_group_auth_surface',
+                proofStrength: 'exact',
+                sharedAuthSurfaceId: 'claude-subscription:team',
+                source: 'runtime_loaded_credential',
+            },
+        });
+        expect(() => SessionConnectedServiceAuthReadRuntimeIdentityResponseV1Schema.parse({
+            ok: true,
+            serviceId: 'openai-codex',
+            identity: {
+                strategy: 'none',
+                proofStrength: 'exact',
+                source: 'runtime_loaded_credential',
+            },
+        })).toThrow();
     });
 
     it('defines shared request and response schemas for usage-limit recovery session RPCs', () => {
@@ -171,6 +413,11 @@ describe('session work-state RPC contracts', () => {
             operation: 'switch_account_now',
             resumePromptMode: 'off',
         });
+        expect(() => SessionUsageLimitCheckNowRequestV1Schema.parse({
+            sessionId: 's1',
+            provider: ' codex ',
+            operation: 'consume_reset_credit',
+        })).toThrow();
         expect(() => SessionUsageLimitCheckNowRequestV1Schema.parse({
             sessionId: 's1',
             resumePromptMode: 'sometimes',

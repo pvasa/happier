@@ -166,7 +166,9 @@ describe('LocalTailscaleSecureAccessSection', () => {
         await screen.pressByTestIdAsync('settings.localTailscale.copyShareableUrl');
 
         expect(setClipboardStringSafeSpy).toHaveBeenCalledWith('https://relay.example.ts.net');
-        expect(modalAlertSpy).toHaveBeenCalledWith('common.copied', 'items.copiedToClipboard');
+        expect(modalAlertSpy).not.toHaveBeenCalledWith('common.copied', 'items.copiedToClipboard');
+        expect(screen.findByTestId('settings.localTailscale.copyShareableUrl')?.props.rightElement?.props.testID)
+            .toBe('settings.localTailscale.copyShareableUrl.copied');
         const addPhoneItem = screen.findByTestId('settings.localTailscale.addPhone');
         expect(addPhoneItem).toBeTruthy();
         expect(addPhoneItem?.props.onPress).toBeTypeOf('function');

@@ -51,6 +51,23 @@ describe('isApprovalRequiredByActionsSettings', () => {
     expect(isApprovalRequiredByActionsSettings('session.title.set' as any, settings, { surface: 'mcp' } as any)).toBe(true);
   });
 
+  it('requires approvals for reset-credit consume without requiring usage-limit check-now', () => {
+    const settings: ActionsSettingsV1 = {
+      v: 1,
+      actions: {
+        'session.usageLimit.consumeResetCredit': {
+          enabledPlacements: [],
+          disabledSurfaces: [],
+          disabledPlacements: [],
+          approvalRequiredSurfaces: ['cli'],
+        },
+      } as any,
+    };
+
+    expect(isApprovalRequiredByActionsSettings('session.usageLimit.checkNow' as any, settings, { surface: 'cli' } as any)).toBe(false);
+    expect(isApprovalRequiredByActionsSettings('session.usageLimit.consumeResetCredit' as any, settings, { surface: 'cli' } as any)).toBe(true);
+  });
+
   it('returns a non-required typed route when settings do not require the active surface', () => {
     const settings: ActionsSettingsV1 = {
       v: 1,

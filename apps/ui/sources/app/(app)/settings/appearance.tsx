@@ -95,8 +95,8 @@ export default React.memo(function AppearanceSettingsScreen() {
     const [tabBarOpenTabsBadgeEnabled, setTabBarOpenTabsBadgeEnabled] = useSettingMutable('tabBarOpenTabsBadgeEnabled');
     const [tabBarShowLabels, setTabBarShowLabels] = useSettingMutable('tabBarShowLabels');
     const [tabBarSize, setTabBarSize] = useSettingMutable('tabBarSize');
-    const [tabBarBlurEnabled, setTabBarBlurEnabled] = useSettingMutable('tabBarBlurEnabled');
-    const [tabBarBlurIntensity, setTabBarBlurIntensity] = useSettingMutable('tabBarBlurIntensity');
+    const [glassBlurEnabled, setGlassBlurEnabled] = useSettingMutable('glassBlurEnabled');
+    const [glassBlurIntensity, setGlassBlurIntensity] = useSettingMutable('glassBlurIntensity');
     const [preferredLanguage] = useSettingMutable('preferredLanguage');
     const [openTextSizeMenu, setOpenTextSizeMenu] = React.useState(false);
     const [openThemeMenu, setOpenThemeMenu] = React.useState(false);
@@ -108,7 +108,7 @@ export default React.memo(function AppearanceSettingsScreen() {
     const [openAvatarStyleMenu, setOpenAvatarStyleMenu] = React.useState(false);
     const [openGitBadgeMenu, setOpenGitBadgeMenu] = React.useState(false);
     const [openTabBarSizeMenu, setOpenTabBarSizeMenu] = React.useState(false);
-    const [openTabBarBlurMenu, setOpenTabBarBlurMenu] = React.useState(false);
+    const [openGlassBlurMenu, setOpenGlassBlurMenu] = React.useState(false);
     const safeThemeProfiles = themeProfiles ?? DEFAULT_THEME_PROFILES_LOCAL_STATE;
     const activeLightThemeProfile = React.useMemo(
         () => findActiveThemeProfileForMode(safeThemeProfiles, 'light'),
@@ -165,11 +165,11 @@ export default React.memo(function AppearanceSettingsScreen() {
         ];
     }, []);
 
-    const tabBarBlurIntensityMenuItems = React.useMemo((): readonly DropdownMenuItem[] => {
+    const glassBlurIntensityMenuItems = React.useMemo((): readonly DropdownMenuItem[] => {
         return [
-            { id: 'light', title: t('settingsAppearance.tabBarAppearance.intensityLight') },
-            { id: 'regular', title: t('settingsAppearance.tabBarAppearance.intensityRegular') },
-            { id: 'strong', title: t('settingsAppearance.tabBarAppearance.intensityStrong') },
+            { id: 'light', title: t('settingsAppearance.glass.intensityLight') },
+            { id: 'regular', title: t('settingsAppearance.glass.intensityRegular') },
+            { id: 'strong', title: t('settingsAppearance.glass.intensityStrong') },
         ];
     }, []);
 
@@ -540,39 +540,43 @@ export default React.memo(function AppearanceSettingsScreen() {
                     }
                     showChevron={false}
                 />
+            </ItemGroup>
+
+            {/* Glass surfaces */}
+            <ItemGroup title={t('settingsAppearance.glass.title')} footer={t('settingsAppearance.glass.footer')}>
                 <Item
-                    title={t('settingsAppearance.tabBarAppearance.blur')}
+                    title={t('settingsAppearance.glass.enable')}
                     icon={<Ionicons name="contrast-outline" size={29} color={theme.colors.accent.blue} />}
                     rightElement={
                         <Switch
-                            testID="settings-appearance-tabBarBlur-switch"
-                            value={tabBarBlurEnabled}
-                            onValueChange={setTabBarBlurEnabled}
+                            testID="settings-appearance-glassBlur-switch"
+                            value={glassBlurEnabled}
+                            onValueChange={setGlassBlurEnabled}
                         />
                     }
                     showChevron={false}
                 />
-                {tabBarBlurEnabled ? (
+                {glassBlurEnabled ? (
                     <DropdownMenu
-                        open={openTabBarBlurMenu}
-                        onOpenChange={setOpenTabBarBlurMenu}
+                        open={openGlassBlurMenu}
+                        onOpenChange={setOpenGlassBlurMenu}
                         variant="selectable"
                         search={false}
-                        selectedId={tabBarBlurIntensity}
+                        selectedId={glassBlurIntensity}
                         showCategoryTitles={false}
                         matchTriggerWidth={true}
                         connectToTrigger={true}
                         rowKind="item"
                         itemTrigger={{
-                            title: t('settingsAppearance.tabBarAppearance.blurIntensity'),
+                            title: t('settingsAppearance.glass.intensity'),
                             icon: <Ionicons name="options-outline" size={29} color={theme.colors.accent.blue} />,
                             showSelectedSubtitle: false,
-                            itemProps: { testID: 'settings-appearance-tabBarBlurIntensity-select' },
+                            itemProps: { testID: 'settings-appearance-glassBlurIntensity-select' },
                         }}
-                        items={tabBarBlurIntensityMenuItems}
+                        items={glassBlurIntensityMenuItems}
                         onSelect={(itemId) => {
                             if (itemId !== 'light' && itemId !== 'regular' && itemId !== 'strong') return;
-                            setTabBarBlurIntensity(itemId);
+                            setGlassBlurIntensity(itemId);
                         }}
                     />
                 ) : null}

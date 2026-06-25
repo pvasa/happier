@@ -157,6 +157,13 @@ export type ConnectedServiceAuthGroupSwitchResult =
       diagnostics?: unknown;
     }>
   | Readonly<{
+      status: 'predictive_apply_unavailable';
+      activeProfileId: string | null;
+      generation: number;
+      errorCode: string;
+      diagnostics?: unknown;
+    }>
+  | Readonly<{
       status: 'observed_generation';
       activeProfileId: string | null;
       generation: number;
@@ -373,9 +380,30 @@ function isPredictiveSessionApplyReason(reason: string | undefined): boolean {
   return reason === 'soft_threshold' || reason === 'same_provider_account_exhausted';
 }
 
+function isTransientPredictiveApplyUnavailable(input: Readonly<{
+  reason?: string;
+  failure: ConnectedServiceAuthGenerationApplyFailure;
+}>): boolean {
+  return isPredictiveSessionApplyReason(input.reason) && input.failure.errorCode === 'hot_apply_failed';
+}
+
+function buildPredictiveApplyUnavailableResult(input: Readonly<{
+  activeProfileId: string | null;
+  generation: number;
+  failure: ConnectedServiceAuthGenerationApplyFailure;
+}>): Extract<ConnectedServiceAuthGroupSwitchResult, { status: 'predictive_apply_unavailable' }> {
+  return {
+    status: 'predictive_apply_unavailable',
+    activeProfileId: input.activeProfileId,
+    generation: input.generation,
+    errorCode: input.failure.errorCode,
+    ...(input.failure.diagnostics === undefined ? {} : { diagnostics: input.failure.diagnostics }),
+  };
+}
+
 type ObservedGenerationApplyResult = Extract<
   ConnectedServiceAuthGroupSwitchResult,
-  { status: 'observed_generation' | 'generation_apply_failed' }
+  { status: 'observed_generation' | 'generation_apply_failed' | 'predictive_apply_unavailable' }
 >;
 
 type GenerationConflictResolution =
@@ -612,6 +640,13 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
     try {
       const preflightFailure = await this.preflightPredictiveSessionApply(completion);
       if (preflightFailure) {
+        if (isTransientPredictiveApplyUnavailable({ reason: completion.reason, failure: preflightFailure })) {
+          return buildPredictiveApplyUnavailableResult({
+            activeProfileId: completion.activeProfileId,
+            generation: completion.generation,
+            failure: preflightFailure,
+          });
+        }
         return {
           status: 'generation_apply_failed',
           activeProfileId: completion.activeProfileId,
@@ -627,6 +662,13 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
         applyResult,
       });
       if (predictiveFailure) {
+        if (isTransientPredictiveApplyUnavailable({ reason: completion.reason, failure: predictiveFailure })) {
+          return buildPredictiveApplyUnavailableResult({
+            activeProfileId: completion.activeProfileId,
+            generation: completion.generation,
+            failure: predictiveFailure,
+          });
+        }
         return {
           status: 'generation_apply_failed',
           activeProfileId: completion.activeProfileId,
@@ -644,6 +686,13 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
     } catch (error) {
       const applyFailure = readConnectedServiceAuthGenerationApplyFailure(error);
       if (!applyFailure) throw error;
+      if (isTransientPredictiveApplyUnavailable({ reason: completion.reason, failure: applyFailure })) {
+        return buildPredictiveApplyUnavailableResult({
+          activeProfileId: completion.activeProfileId,
+          generation: completion.generation,
+          failure: applyFailure,
+        });
+      }
       return {
         status: 'generation_apply_failed',
         activeProfileId: completion.activeProfileId,
@@ -779,6 +828,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
     success: boolean;
     startedAtMs: number;
   }>): void {
+    if (input.resultStatus === 'predictive_apply_unavailable') return;
     if (!this.shouldEmitSwitchPipelineResult(input.trigger, input.phase)) return;
     this.emitSwitchResult(input);
   }
@@ -791,6 +841,7 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
       case 'switched':
       case 'observed_generation':
       case 'generation_apply_failed':
+      case 'predictive_apply_unavailable':
         return input.result.activeProfileId;
       case 'auto_switch_disabled':
       case 'switch_reason_disabled':
@@ -1235,13 +1286,34 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
             fromProfileId: commitLoaded.activeProfileId,
           });
           if (preflightFailure) {
-            return {
-              status: 'generation_apply_failed',
-              activeProfileId: selectedProfileId,
-              generation: commitLoaded.generation + 1,
-              errorCode: preflightFailure.errorCode,
-              ...(preflightFailure.diagnostics === undefined ? {} : { diagnostics: preflightFailure.diagnostics }),
-            };
+            const result: ConnectedServiceAuthGroupSwitchResult = isTransientPredictiveApplyUnavailable({
+              reason: input.reason,
+              failure: preflightFailure,
+            })
+              ? buildPredictiveApplyUnavailableResult({
+                  activeProfileId: selectedProfileId,
+                  generation: commitLoaded.generation + 1,
+                  failure: preflightFailure,
+                })
+              : {
+                  status: 'generation_apply_failed',
+                  activeProfileId: selectedProfileId,
+                  generation: commitLoaded.generation + 1,
+                  errorCode: preflightFailure.errorCode,
+                  ...(preflightFailure.diagnostics === undefined ? {} : { diagnostics: preflightFailure.diagnostics }),
+                };
+            if (result.status === 'predictive_apply_unavailable') {
+              return this.completePipelineResult({
+                trigger,
+                phase: 'apply_failed',
+                lease,
+                request: input,
+                loaded: commitLoaded,
+                result,
+                startedAtMs,
+              });
+            }
+            return result;
           }
           committed = await this.deps.commitSwitch({
             serviceId: input.serviceId,
@@ -1355,6 +1427,17 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
       } catch (error) {
         const applyFailure = readConnectedServiceAuthGenerationApplyFailure(error);
         if (!applyFailure) throw error;
+        const unavailableResult = isTransientPredictiveApplyUnavailable({
+          reason: input.reason,
+          failure: applyFailure,
+        })
+          ? buildPredictiveApplyUnavailableResult({
+              activeProfileId: committed.activeProfileId ?? selectedProfileId,
+              generation: committed.generation,
+              failure: applyFailure,
+            })
+          : null;
+        if (unavailableResult) return unavailableResult;
         this.maybeEmitSwitchPipelineResult({
           trigger,
           phase: 'apply_failed',
@@ -1381,6 +1464,17 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
         applyResult,
       });
       if (predictiveFailure) {
+        const unavailableResult = isTransientPredictiveApplyUnavailable({
+          reason: input.reason,
+          failure: predictiveFailure,
+        })
+          ? buildPredictiveApplyUnavailableResult({
+              activeProfileId: committed.activeProfileId ?? selectedProfileId,
+              generation: committed.generation,
+              failure: predictiveFailure,
+            })
+          : null;
+        if (unavailableResult) return unavailableResult;
         this.maybeEmitSwitchPipelineResult({
           trigger,
           phase: 'apply_failed',

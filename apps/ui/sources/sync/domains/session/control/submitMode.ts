@@ -1,3 +1,5 @@
+import { isNonSteerablePromptPayload } from '@happier-dev/protocol';
+
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { isVersionSupported, MINIMUM_CLI_PENDING_QUEUE_V2_VERSION } from '@/utils/system/versionUtils';
 import { getSessionLocalControlState } from '@/sync/domains/session/control/sessionLocalControl';
@@ -138,7 +140,7 @@ export function getNonSteerablePayloadReason(opts: {
     providerNonSteerablePayloadReason?: Extract<NonSteerablePayloadReason, 'provider_config_change_refused'> | null;
 }): NonSteerablePayloadReason | null {
     const text = (opts.text ?? '').trim();
-    if (text === '/clear' || text === '/compact' || text.startsWith('/compact ')) {
+    if (isNonSteerablePromptPayload(text)) {
         return 'special_command';
     }
     if (opts.providerNonSteerablePayloadReason === 'provider_config_change_refused') {
@@ -174,6 +176,37 @@ export function getNonSteerablePayloadReason(opts: {
  */
 export function canApplySteerConfigInFlight(session: Session | null): boolean {
     return session?.agentState?.capabilities?.inFlightConfigApplySupported === true;
+}
+
+export function supportsInFlightSteerUserMessage(opts: {
+    session: Session | null;
+    nowMs?: number;
+}): boolean {
+    const session = opts.session;
+    if (!session || session.active !== true || session.agentState?.controlledByUser === true) {
+        return false;
+    }
+
+    const runtimeState = deriveSubmitRuntimeState(session, opts.nowMs ?? Date.now());
+    return Boolean(
+        !runtimeState.localControlBlocksDirectSubmit
+        && runtimeState.isOnline
+        && runtimeState.agentReady
+        && runtimeState.inFlightSteerSupported === true
+    );
+}
+
+export function canSteerUserMessageNow(opts: {
+    session: Session | null;
+    nowMs?: number;
+}): boolean {
+    const session = opts.session;
+    if (!supportsInFlightSteerUserMessage({ session, nowMs: opts.nowMs })) {
+        return false;
+    }
+
+    const runtimeState = deriveSubmitRuntimeState(session, opts.nowMs ?? Date.now());
+    return runtimeState.isBusy && runtimeState.inFlightSteerAvailable === true;
 }
 
 export function canDirectSubmitUserMessageNow(opts: {

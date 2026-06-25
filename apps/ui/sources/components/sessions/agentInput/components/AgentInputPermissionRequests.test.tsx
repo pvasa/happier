@@ -94,9 +94,6 @@ describe('AgentInputAttentionRequests', () => {
                 { id: 'p1', kind: 'permission', tool: 'execute', arguments: { command: 'pwd' }, createdAt: null },
                 { id: 'p2', kind: 'permission', tool: 'execute', arguments: { command: 'ls' }, createdAt: null },
             ],
-            userActionRequests: [
-                { id: 'u1', kind: 'user_action', tool: 'execute', arguments: { command: 'whoami' }, createdAt: null },
-            ],
             approvalRequests: [
                 {
                     artifact: approvalArtifact('a1'),
@@ -141,7 +138,6 @@ describe('AgentInputAttentionRequests', () => {
         await renderScreen(React.createElement(AgentInputAttentionRequests, {
             sessionId: 's1',
             permissionRequests: [],
-            userActionRequests: [],
             approvalRequests: [
                 {
                     artifact: approvalArtifact('a1'),
@@ -174,7 +170,7 @@ describe('AgentInputAttentionRequests', () => {
         expect(capturedApprovalPromptCardProps[0].location).toEqual({ kind: 'top', messageId: 'tool:call-1', seq: 10 });
     });
 
-    it('does not render when approvals are disabled due to inactive session', async () => {
+    it('does not render provider permissions or approvals when approvals are disabled due to inactive session', async () => {
         const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;
         capturedUserActionPromptCardProps.length = 0;
@@ -184,9 +180,6 @@ describe('AgentInputAttentionRequests', () => {
             sessionId: 's1',
             permissionRequests: [
                 { id: 'p1', kind: 'permission', tool: 'execute', arguments: { command: 'pwd' }, createdAt: null },
-            ],
-            userActionRequests: [
-                { id: 'u1', kind: 'user_action', tool: 'execute', arguments: { command: 'whoami' }, createdAt: null },
             ],
             approvalRequests: [
                 {
@@ -220,6 +213,69 @@ describe('AgentInputAttentionRequests', () => {
         expect(capturedApprovalPromptCardProps).toHaveLength(0);
     });
 
+    it('does not render live user-action requests when permission approvals are inactive', async () => {
+        const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
+        const UntypedAgentInputAttentionRequests = AgentInputAttentionRequests as React.ComponentType<any>;
+        capturedPermissionPromptCardProps.length = 0;
+        capturedUserActionPromptCardProps.length = 0;
+        capturedApprovalPromptCardProps.length = 0;
+
+        const screen = await renderScreen(React.createElement(UntypedAgentInputAttentionRequests, {
+            sessionId: 's1',
+            permissionRequests: [
+                { id: 'p1', kind: 'permission', tool: 'execute', arguments: { command: 'pwd' }, createdAt: null },
+            ],
+            userActionRequests: [
+                {
+                    id: 'resume_choice',
+                    kind: 'user_action',
+                    tool: 'AskUserQuestion',
+                    arguments: {
+                        questions: [{
+                            header: 'Claude resume',
+                            question: 'How should Claude resume this session?',
+                            options: [
+                                { label: 'Resume from summary', description: 'Use the saved summary.' },
+                                { label: 'Resume full session', description: 'Load full context.' },
+                            ],
+                            multiSelect: false,
+                        }],
+                    },
+                    createdAt: null,
+                },
+            ],
+            approvalRequests: [
+                {
+                    artifact: approvalArtifact('a1'),
+                    approval: {
+                        v: 1,
+                        status: 'open',
+                        createdAtMs: 1,
+                        updatedAtMs: 1,
+                        createdBy: { surface: 'session_agent', sessionId: 's1' },
+                        actionId: 'session.list',
+                        actionArgs: {},
+                        summary: 'List sessions',
+                    },
+                },
+            ],
+            permissionLocationsById: new Map(),
+            metadata: null,
+            canApprovePermissions: false,
+            disabledReason: 'inactive',
+            maxHeightPx: 200,
+            onContentSizeChange: () => {},
+            onLayout: () => {},
+            onScroll: () => {},
+            fadeVisibility: { top: false, bottom: false },
+        }));
+
+        expect(screen.findByTestId('agentInput.permissionRequests.chrome')).toBeNull();
+        expect(capturedPermissionPromptCardProps).toHaveLength(0);
+        expect(capturedUserActionPromptCardProps).toHaveLength(0);
+        expect(capturedApprovalPromptCardProps).toHaveLength(0);
+    });
+
     it('does not render permission requests when the session is inactive even if canApprovePermissions is incorrectly true', async () => {
         const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;
@@ -231,7 +287,6 @@ describe('AgentInputAttentionRequests', () => {
             permissionRequests: [
                 { id: 'p1', kind: 'permission', tool: 'mcp__playwright__browser_close', arguments: {}, createdAt: null },
             ],
-            userActionRequests: [],
             approvalRequests: [],
             permissionLocationsById: new Map(),
             metadata: null,
@@ -250,14 +305,15 @@ describe('AgentInputAttentionRequests', () => {
 
     it('ignores legacy user action requests without an explicit user action kind', async () => {
         const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
+        const UntypedAgentInputAttentionRequests = AgentInputAttentionRequests as React.ComponentType<any>;
         capturedPermissionPromptCardProps.length = 0;
         capturedUserActionPromptCardProps.length = 0;
         capturedApprovalPromptCardProps.length = 0;
         const legacyUserActionRequests = [
             { id: 'u1', tool: 'AskUserQuestion', arguments: { question: 'Continue?' }, createdAt: null },
-        ] as unknown as React.ComponentProps<typeof AgentInputAttentionRequestsComponent>['userActionRequests'];
+        ];
 
-        const screen = await renderScreen(React.createElement(AgentInputAttentionRequests, {
+        const screen = await renderScreen(React.createElement(UntypedAgentInputAttentionRequests, {
             sessionId: 's1',
             permissionRequests: [],
             // Malformed persisted legacy fixture intentionally violates the current request type.
@@ -271,7 +327,7 @@ describe('AgentInputAttentionRequests', () => {
             onLayout: () => {},
             onScroll: () => {},
             fadeVisibility: { top: false, bottom: false },
-        } satisfies React.ComponentProps<typeof AgentInputAttentionRequestsComponent>));
+        }));
 
         expect(screen.findByTestId('agentInput.permissionRequests.chrome')).toBeNull();
         expect(capturedUserActionPromptCardProps).toHaveLength(0);

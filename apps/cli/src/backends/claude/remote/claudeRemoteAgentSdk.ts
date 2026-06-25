@@ -48,6 +48,7 @@ import { repairClaudeTranscriptAfterInterrupt } from './agentSdk/repairClaudeTra
 import { parseCheckpointsCommand, parseRewindCommand } from './agentSdk/claudeAgentSdkSlashCommands';
 import { mapClaudeRateLimitEventToUsageDetails, type NormalizedProviderUsageLimitDetailsV1 } from '../connectedServices/mapClaudeRateLimitEventToUsageDetails';
 import { classifyClaudeConnectedServiceRuntimeAuthFailure } from '../connectedServices/classifyClaudeConnectedServiceRuntimeAuthFailure';
+import { resolveClaudeRuntimeAuthRetryDecision } from '../connectedServices/claudeRuntimeAuthRetryDecision';
 import {
     buildClaudeTodoWriteWorkState,
     createClaudeTaskToolWorkStateTracker,
@@ -1563,6 +1564,11 @@ export async function claudeRemoteAgentSdk(opts: {
 
             const runtimeAuthFailure = classifyClaudeConnectedServiceRuntimeAuthFailure({ error: message });
             if (runtimeAuthFailure) {
+                const retryDecision = resolveClaudeRuntimeAuthRetryDecision(message);
+                if (retryDecision.action === 'await_provider_retry') {
+                    emitMessage(message as SDKMessage);
+                    continue;
+                }
                 await opts.onRuntimeAuthFailureEvent?.(message);
                 emitMessage(message as SDKMessage);
                 return;

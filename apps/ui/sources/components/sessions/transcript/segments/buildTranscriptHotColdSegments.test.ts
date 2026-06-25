@@ -567,6 +567,72 @@ describe('buildTranscriptHotColdSegments', () => {
             expect(result.splitIndex).toBe(3);
         });
 
+        it('leaves the growing newest row uncarved in a fresh/short window where it is the oldest item (Finding 4 — documented narrow edge)', () => {
+            // FRESH-FIRST-ROW GAP (audit Finding 4). The narrowest exposure of activeIndex==0: a fresh
+            // or short native session whose OLDEST WINDOWED item is itself the (per-token growing) live
+            // anchor — e.g. the first agent turn of a new session, before any older page has loaded.
+            //
+            // Two independently-correct behaviors compose into a 1-frame edge:
+            //   (1) the carve does NOT engage here (activeIndex==0, no settled cold body to protect):
+            //       carving would clamp the growing anchor into cold and re-expose the exact overlap the
+            //       carve exists to kill — this assertion pins that.
+            //   (2) the C1 measurement reconciler reserves NOTHING for a never-measured row (a deliberate
+            //       contract — seeding a per-type/median first-paint height is the REVERTED
+            //       over-reservation regression, TRACKING.md §17). So on the VERY FIRST paint the growing
+            //       row has neither a carve nor a height floor; the per-item floor only protects frame 2+.
+            //
+            // DECISION (LEFT ALONE, documented narrow edge — like the web jiggle): there is no
+            // high-confidence safe fix. Carving here is unsafe (clamps the growing anchor → overlap), and
+            // the only other lever — seeding a synthetic first-paint height — is exactly the forbidden
+            // median/global-seed path. The first frame has no prior measurement to floor against by
+            // definition; subsequent frames are protected by C1's per-item monotonic floor. This test is
+            // the boundary marker: if a future change makes the builder carve (or otherwise alter) this
+            // shape, it must be a deliberate, separately-validated decision.
+            const result = buildTranscriptHotColdSegments({
+                enabled: true,
+                hotTailItemCount: 1,
+                maxHotTailItems: 4,
+                liveTailOnly: true,
+                liveTailAnchorMessageId: 'm0', // the growing newest row, also the oldest windowed item
+                items: [
+                    { kind: 'message', id: 'm0', messageId: 'm0' }, // streaming + newest + oldest (index 0)
+                ],
+                activeThinkingMessageId: null,
+                expandedToolCallsAnchorMessageIds: new Set<string>(),
+            });
+
+            // No carve: the lone growing row stays in the recycler (single-item window short-circuit and
+            // the activeIndex==0 guard both forbid clamping it into cold). Protection for its first paint
+            // is delegated to FlashList's natural onLayout; subsequent frames to C1's per-item floor.
+            expect(result.hotItems).toEqual([]);
+            expect(result.coldItems.map((item) => item.id)).toEqual(['m0']);
+            expect(result.splitIndex).toBe(1);
+        });
+
+        it('does not carve when a growing newest anchor at index 0 is followed by a second growing row (fresh two-row window)', () => {
+            // Finding 4 (multi-row variant): a fresh session whose window is [growing-answer,
+            // growing-answer-continuation] with the anchor at index 0 still must not clamp the growing
+            // anchor into cold. Documents that the edge is not specific to a single-row window — any
+            // window rooted at a growing index-0 anchor stays uncarved (no first-frame floor either).
+            const result = buildTranscriptHotColdSegments({
+                enabled: true,
+                hotTailItemCount: 1,
+                maxHotTailItems: 4,
+                liveTailOnly: true,
+                liveTailAnchorMessageId: 'm0',
+                items: [
+                    { kind: 'message', id: 'm0', messageId: 'm0' }, // streaming anchor, index 0
+                    { kind: 'message', id: 'm1', messageId: 'm1' }, // newest growing continuation
+                ],
+                activeThinkingMessageId: null,
+                expandedToolCallsAnchorMessageIds: new Set<string>(),
+            });
+
+            expect(result.hotItems).toEqual([]);
+            expect(result.coldItems.map((item) => item.id)).toEqual(['m0', 'm1']);
+            expect(result.splitIndex).toBe(2);
+        });
+
         it('still carves with index 0 cold when a settled row precedes the anchor (activeIndex==1 positive control)', () => {
             // The complement of the activeIndex==0 case: a settled older row at index 0 gives the carve
             // a real cold body to protect, so the growing anchor at index 1 onward is carved hot while

@@ -1,4 +1,5 @@
 import type { RawJSONLines } from '../types';
+import { normalizeClaudeUnifiedPromptIdentityText } from './promptIdentity';
 
 export type ClaudeUnifiedAcceptedPrompt = Readonly<{
   message: string;
@@ -22,7 +23,7 @@ export type ClaudeUnifiedPromptEchoSuppressorOptions = Readonly<{
 }>;
 
 type AcceptedPromptEcho = Readonly<{
-  text: string;
+  normalizedText: string;
   expiresAtMs: number;
 }>;
 
@@ -64,26 +65,28 @@ export function createClaudeUnifiedPromptEchoSuppressor(
 
   return {
     recordAcceptedPrompt(input) {
-      if (input.message.length === 0) return;
+      const normalizedText = normalizeClaudeUnifiedPromptIdentityText(input.message);
+      if (normalizedText.length === 0) return;
       const rawAcceptedAtMs = input.acceptedAtMs;
       const acceptedAtMs =
         typeof rawAcceptedAtMs === 'number' && Number.isFinite(rawAcceptedAtMs)
           ? Math.trunc(rawAcceptedAtMs)
           : nowMs();
       acceptedPromptEchoes.push({
-        text: input.message,
+        normalizedText,
         expiresAtMs: acceptedAtMs + acceptedPromptEchoWindowMs,
       });
     },
 
     recordPersistedUserPromptTexts(inputs) {
       for (const input of inputs) {
-        if (input.text.length === 0 || !Number.isFinite(input.suppressBeforeMs)) continue;
-        const existing = persistedPromptTexts.get(input.text) ?? [];
+        const normalizedText = normalizeClaudeUnifiedPromptIdentityText(input.text);
+        if (normalizedText.length === 0 || !Number.isFinite(input.suppressBeforeMs)) continue;
+        const existing = persistedPromptTexts.get(normalizedText) ?? [];
         existing.push(input.suppressBeforeMs);
         // Re-set to refresh insertion order so eviction drops the least-recently-recorded text.
-        persistedPromptTexts.delete(input.text);
-        persistedPromptTexts.set(input.text, existing);
+        persistedPromptTexts.delete(normalizedText);
+        persistedPromptTexts.set(normalizedText, existing);
         while (persistedPromptTexts.size > MAX_PERSISTED_PROMPT_TEXTS) {
           const oldestKey = persistedPromptTexts.keys().next().value;
           if (oldestKey === undefined) break;
@@ -96,15 +99,17 @@ export function createClaudeUnifiedPromptEchoSuppressor(
       if (message.type !== 'user') return false;
       const content = message.message?.content;
       if (typeof content !== 'string') return false;
+      const normalizedContent = normalizeClaudeUnifiedPromptIdentityText(content);
+      if (normalizedContent.length === 0) return false;
       const observedAtMs = readMessageTimestampMs(message) ?? nowMs();
       pruneExpiredAcceptedPromptEchoes(observedAtMs);
       const nextAcceptedEcho = acceptedPromptEchoes[0];
-      if (nextAcceptedEcho?.text === content) {
+      if (nextAcceptedEcho?.normalizedText === normalizedContent) {
         acceptedPromptEchoes.shift();
         return true;
       }
 
-      const persistedCutoffs = persistedPromptTexts.get(content);
+      const persistedCutoffs = persistedPromptTexts.get(normalizedContent);
       if (!persistedCutoffs || persistedCutoffs.length === 0) return false;
       const timestampMs = readMessageTimestampMs(message);
       if (timestampMs === null) return false;
@@ -112,7 +117,7 @@ export function createClaudeUnifiedPromptEchoSuppressor(
       if (matchIndex < 0) return false;
       persistedCutoffs.splice(matchIndex, 1);
       if (persistedCutoffs.length === 0) {
-        persistedPromptTexts.delete(content);
+        persistedPromptTexts.delete(normalizedContent);
       }
       return true;
     },

@@ -41,7 +41,7 @@ function makeCommitSelectionResult(overrides: Record<string, unknown> = {}) {
     };
 }
 
-const useCommitSelectionSpy = vi.fn(() => makeCommitSelectionResult());
+const useCommitSelectionSpy = vi.fn((_input?: unknown) => makeCommitSelectionResult());
 
 const useDerivedSessionChangeSetSpy = vi.fn((_: unknown) => ({
     turnChangeSets: [],
@@ -82,7 +82,7 @@ vi.mock('@/sync/domains/session/changes/hooks/useDerivedSessionChangeSet', () =>
 }));
 
 vi.mock('./useSessionRightPanelGitCommitSelection', () => ({
-    useSessionRightPanelGitCommitSelection: () => useCommitSelectionSpy(),
+    useSessionRightPanelGitCommitSelection: (input: any) => useCommitSelectionSpy(input),
 }));
 
 describe('SessionRightPanelGitCommitTabContent', () => {
@@ -395,12 +395,117 @@ describe('SessionRightPanelGitCommitTabContent', () => {
         expect(commitTabRenderSpy.mock.calls.at(-1)?.[0].changedFilesViewMode).toBe('selected');
     });
 
+    it('filters directory-like repository entries before commit selection and repository select-all', async () => {
+        const visibleFile = {
+            fileName: 'visible.ts',
+            filePath: 'src',
+            fullPath: 'src/visible.ts',
+            status: 'modified',
+            isIncluded: false,
+            linesAdded: 1,
+            linesRemoved: 0,
+        };
+        const directoryLikeFile = {
+            fileName: 'generated',
+            filePath: 'src',
+            fullPath: 'src/generated/',
+            status: 'added',
+            isIncluded: false,
+            linesAdded: 1,
+            linesRemoved: 0,
+        };
+        const bulkSelectAll = vi.fn();
+        useChangedFilesDataSpy.mockClear();
+        useChangedFilesDataSpy.mockReturnValue(makeChangedFilesData({
+            allRepositoryChangedFiles: [visibleFile, directoryLikeFile],
+            showTurnViewToggle: false,
+            showSessionViewToggle: false,
+            sessionAttributedFiles: [],
+        }));
+        useCommitSelectionSpy.mockClear();
+        useCommitSelectionSpy.mockReturnValue(makeCommitSelectionResult({
+            bulkSelectAll,
+            disableSelectAll: false,
+        }));
+        commitTabRenderSpy.mockClear();
+        useDerivedSessionChangeSetSpy.mockReturnValue({
+            turnChangeSets: [],
+            latestTurnChangeSet: null,
+            latestTurnScopedChangeSet: null,
+            sessionChangeSet: null,
+            latestTurnDiffByPath: null,
+            providerDiffByPath: null,
+        });
+
+        const { SessionRightPanelGitCommitTabContent } = await import('./SessionRightPanelGitCommitTabContent');
+
+        await renderScreen(<SessionRightPanelGitCommitTabContent
+                    theme={{}}
+                    sessionId="s1"
+                    sessionPath="/tmp/repo"
+                    scmSnapshot={{ capabilities: {} } as any}
+                    touchedPaths={[]}
+                    operationLog={[]}
+                    projectSessionIds={[]}
+                    commitSelectionPaths={[]}
+                    commitSelectionPatches={[]}
+                    scmCommitStrategy="atomic"
+                    scmWriteEnabled={true}
+                    inFlightScmOperation={null}
+                    hasGlobalOperationInFlight={false}
+                    scmOperationBusy={false}
+                    scmOperationStatus={null}
+                    backendLabel="Git"
+                    commitActionLabel="Commit"
+                    hasConflicts={false}
+                    commitAllowedForComposer={true}
+                    commitBlockedMessageForComposer={null}
+                    commitWriteEnabled={true}
+                    commitSelectionUiEnabled={true}
+                    commitDraftMessage=""
+                    onCommitDraftMessageChange={vi.fn()}
+                    onCommitFromMessage={vi.fn()}
+                    commitMessageGeneratorEnabled={false}
+                    onGenerateCommitMessageSuggestion={async () => ({ ok: true, message: '' })}
+                    onOpenFilesSidebar={vi.fn()}
+                    onOpenReviewAllChanges={vi.fn()}
+                    onOpenStashDetails={vi.fn()}
+                    openFileInDetails={vi.fn()}
+                    openFileInDetailsPinned={vi.fn()}
+                />);
+
+        const selectionInput = useCommitSelectionSpy.mock.calls.at(-1)?.[0] as
+            | { changedFiles: Array<{ fullPath: string }> }
+            | undefined;
+        expect(selectionInput?.changedFiles.map((file) => file.fullPath)).toEqual([
+            'src/visible.ts',
+        ]);
+        expect(commitTabRenderSpy.mock.calls.at(-1)?.[0].allRepositoryChangedFiles.map((file: { fullPath: string }) => file.fullPath)).toEqual([
+            'src/visible.ts',
+        ]);
+
+        await act(async () => {
+            commitTabRenderSpy.mock.calls.at(-1)?.[0].onSelectAll();
+        });
+
+        expect(bulkSelectAll).toHaveBeenCalledTimes(1);
+    });
+
     it('selects all files only from the active scoped view', async () => {
         const turnFile = {
             fileName: 'turn.ts',
             filePath: 'src',
             fullPath: 'src/turn.ts',
             status: 'modified',
+            isIncluded: false,
+            linesAdded: 1,
+            linesRemoved: 0,
+        };
+        const turnDirectoryLikeFile = {
+            fileName: 'generated',
+            filePath: 'src',
+            fullPath: 'src/generated/',
+            status: 'added',
             isIncluded: false,
             linesAdded: 1,
             linesRemoved: 0,
@@ -418,8 +523,11 @@ describe('SessionRightPanelGitCommitTabContent', () => {
         const bulkSelectFiles = vi.fn();
         useChangedFilesDataSpy.mockClear();
         useChangedFilesDataSpy.mockReturnValue(makeChangedFilesData({
-            allRepositoryChangedFiles: [turnFile, repositoryOnlyFile],
-            turnAttributedFiles: [{ file: turnFile, confidence: 'high' }],
+            allRepositoryChangedFiles: [turnFile, turnDirectoryLikeFile, repositoryOnlyFile],
+            turnAttributedFiles: [
+                { file: turnFile, confidence: 'high' },
+                { file: turnDirectoryLikeFile, confidence: 'high' },
+            ],
             showTurnViewToggle: true,
             showSessionViewToggle: false,
         }));

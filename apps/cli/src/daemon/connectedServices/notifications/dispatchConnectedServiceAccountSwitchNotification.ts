@@ -7,6 +7,7 @@ import { ConnectedServiceIdSchema } from '@happier-dev/protocol';
 import { dispatchActivityNotificationAsync } from '@/activity/notifications/dispatchActivityNotification';
 import type { ExpoPushActivityNotificationSender } from '@/activity/notifications/sendExpoPushActivityNotification';
 import type { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
+import { isBackgroundConnectedServiceSwitchReason } from '../connectedServiceSwitchEventVisibility';
 import {
   loadConnectedServiceNotificationProfilesById,
   readConnectedServiceNotificationDisplayText,
@@ -108,6 +109,7 @@ export async function dispatchConnectedServiceAccountSwitchNotificationAsync(par
   dedupeWindowMs?: number;
 }>): Promise<void> {
   if (params.source.reason === 'manual') return;
+  if (isBackgroundConnectedServiceSwitchReason(params.source.reason)) return;
 
   const profilesById = await loadConnectedServiceNotificationProfilesById({
     serviceId: params.source.serviceId,

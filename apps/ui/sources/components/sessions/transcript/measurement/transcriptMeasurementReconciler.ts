@@ -125,6 +125,45 @@ function hasStructuralDelta(
     return false;
 }
 
+/**
+ * Per-ITEM floor-reset trigger (distinct from {@link hasStructuralDelta}, the whole-list cache
+ * invalidation gate). Returns true when a row's reservation floor must be re-seeded from its next
+ * onLayout because the shape changed in a shrink-capable way. `TranscriptRowShell` calls this to
+ * decide whether to `resetReservationForStructuralChange`.
+ *
+ * Difference from `hasStructuralDelta`: that gate suppresses on ANY streaming side (clearing the
+ * whole-list cache mid-stream drops the pin); this one suppresses only when BOTH sides stream — a
+ * streaming row's own frames keep their growing floor, but a streaming→stable finalize re-seeds.
+ *
+ * It additionally re-seeds on a SETTLED-row content change: a `structuralKey` delta while BOTH sides
+ * are `stable` is shrink-capable. The motivating case is a grouped tool-calls HEADER, whose height
+ * drops (≈36→33px) when its status goes running→completed — the status lives in `structuralKey`,
+ * which the rowState/expansion/width/font checks all miss, so the per-item floor (keyed without
+ * `structuralKey`) keeps serving the taller running-state height and the `minHeight` self-fulfills
+ * a persistent gap. Growing rows (`streaming`/`tool-progress`) are excluded by the both-`stable`
+ * guard: their `structuralKey` churns every frame and the monotonic floor is exactly what prevents
+ * append overlap there.
+ */
+export function isStructuralSignatureDelta(
+    previous: TranscriptItemHeightValiditySignature,
+    next: TranscriptItemHeightValiditySignature,
+): boolean {
+    if (previous.rowState === 'streaming' && next.rowState === 'streaming') return false;
+    if (previous.rowState !== next.rowState) return true;
+    if (previous.kind !== next.kind) return true;
+    if (previous.expansionKey !== next.expansionKey) return true;
+    if (previous.widthBucket !== next.widthBucket) return true;
+    if (previous.fontScaleKey !== next.fontScaleKey) return true;
+    if (
+        previous.rowState === 'stable'
+        && next.rowState === 'stable'
+        && previous.structuralKey !== next.structuralKey
+    ) {
+        return true;
+    }
+    return false;
+}
+
 export function createTranscriptMeasurementReconciler(
     options: TranscriptMeasurementReconcilerOptions = {},
 ): TranscriptMeasurementReconciler {

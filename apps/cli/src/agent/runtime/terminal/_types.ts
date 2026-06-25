@@ -25,6 +25,7 @@ export type TerminalLifecycleObservation =
 
 export type TerminalHostLiveness = Readonly<{
   paneAlive: boolean;
+  probeInconclusive?: boolean | undefined;
   paneDead?: boolean | undefined;
   panePid?: number | undefined;
   paneCurrentCommand?: string | undefined;

@@ -111,7 +111,9 @@ describe('local voice engine device STT (experimental)', () => {
 
         await stopPromise;
 
-        expect(sendMessage).toHaveBeenCalledWith('s1', 'hello from device stt');
+        expect(sendMessage).toHaveBeenCalledWith('s1', 'hello from device stt', undefined, undefined, {
+            bypassPendingQueueReason: 'voice_turn_immediate',
+        });
         expect((globalThis.fetch as any).mock.calls.length).toBe(0);
     });
 
@@ -233,7 +235,9 @@ describe('local voice engine device STT (experimental)', () => {
 
         await waitForCallCount(sendMessage, 1);
         await waitForCallCount(speechRecStart, 2);
-        expect(sendMessage).toHaveBeenCalledWith('s1', 'hands free message');
+        expect(sendMessage).toHaveBeenCalledWith('s1', 'hands free message', undefined, undefined, {
+            bypassPendingQueueReason: 'voice_turn_immediate',
+        });
         expect(speechRecStart).toHaveBeenCalledTimes(2);
         expect(getLocalVoiceState().status).toBe('recording');
     });
@@ -329,6 +333,8 @@ describe('local voice engine device STT (experimental)', () => {
         emitSpeechRecEvent('end', {});
 
         await waitForCallCount(sendMessage, 1);
-        expect(sendMessage).toHaveBeenCalledWith('s1', 'timed hands free');
+        expect(sendMessage).toHaveBeenCalledWith('s1', 'timed hands free', undefined, undefined, {
+            bypassPendingQueueReason: 'voice_turn_immediate',
+        });
     });
 });

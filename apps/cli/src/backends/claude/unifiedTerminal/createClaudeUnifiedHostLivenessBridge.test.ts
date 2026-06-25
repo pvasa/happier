@@ -211,6 +211,44 @@ describe('createClaudeUnifiedHostLivenessBridge', () => {
     abortController.abort();
   });
 
+  it('does not report host death for a single explicit inconclusive liveness result after startup grace', async () => {
+    vi.useFakeTimers();
+    let nowMs = 100;
+    const evaluateLiveness = vi
+      .fn()
+      .mockResolvedValueOnce({
+        paneAlive: false,
+        probeInconclusive: true,
+        paneScreenDumpError: 'tmux display-message timed out',
+        observedAt: 110,
+      })
+      .mockResolvedValueOnce({ paneAlive: true, observedAt: 120 });
+    const onHostDead = vi.fn(async () => undefined);
+    const bridge = createClaudeUnifiedHostLivenessBridge({
+      hostAdapter: { evaluateLiveness },
+      handle,
+      onHostDead,
+      pollIntervalMs: 10,
+      startupGraceMs: 0,
+      startupGraceActive: () => false,
+      nowMs: () => nowMs,
+    });
+    const abortController = new AbortController();
+
+    bridge.start({ abortSignal: abortController.signal });
+
+    nowMs += 10;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(onHostDead).not.toHaveBeenCalled();
+
+    nowMs += 10;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(onHostDead).not.toHaveBeenCalled();
+
+    bridge.dispose();
+    abortController.abort();
+  });
+
   it('reports host death after startup grace expires', async () => {
     vi.useFakeTimers();
     let nowMs = 0;
@@ -300,6 +338,54 @@ describe('createClaudeUnifiedHostLivenessBridge', () => {
     expect(onHostDead).not.toHaveBeenCalled();
 
     // Probe recovers: streak resets, no host death ever reported.
+    nowMs += 1_000;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onHostDead).not.toHaveBeenCalled();
+
+    nowMs += 30_000;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onHostDead).not.toHaveBeenCalled();
+
+    bridge.dispose();
+    abortController.abort();
+  });
+
+  it('does not report host death for consecutive explicit inconclusive liveness results under production defaults', async () => {
+    vi.useFakeTimers();
+    let nowMs = 100;
+    const evaluateLiveness = vi
+      .fn()
+      .mockResolvedValueOnce({
+        paneAlive: false,
+        probeInconclusive: true,
+        paneScreenDumpError: 'tmux display-message timed out',
+        observedAt: 110,
+      })
+      .mockResolvedValueOnce({
+        paneAlive: false,
+        probeInconclusive: true,
+        paneScreenDumpError: 'tmux display-message timed out',
+        observedAt: 111,
+      })
+      .mockResolvedValue({ paneAlive: true, observedAt: 0 });
+    const onHostDead = vi.fn(async () => undefined);
+    const bridge = createClaudeUnifiedHostLivenessBridge({
+      hostAdapter: { evaluateLiveness },
+      handle,
+      onHostDead,
+      pollJitterMs: 0,
+      startupGraceMs: 0,
+      startupGraceActive: () => false,
+      nowMs: () => nowMs,
+    });
+    const abortController = new AbortController();
+
+    bridge.start({ abortSignal: abortController.signal });
+
+    nowMs += 30_000;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onHostDead).not.toHaveBeenCalled();
+
     nowMs += 1_000;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(onHostDead).not.toHaveBeenCalled();

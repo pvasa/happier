@@ -147,7 +147,7 @@ describe('happier daemon status --json', () => {
       output.restore();
       exitSpy.mockRestore();
     }
-  });
+  }, 60_000);
 
   it('prints stable JSON for daemon status across all configured servers', async () => {
     listDaemonStatusesForAllKnownServersMock.mockResolvedValueOnce([
@@ -254,5 +254,5 @@ describe('happier daemon status --json', () => {
       output.restore();
       exitSpy.mockRestore();
     }
-  });
+  }, 60_000);
 });

@@ -450,7 +450,7 @@ export const ACCOUNT_TRANSCRIPT_TOOL_SETTING_DEFINITIONS = defineSettingDefiniti
     },
     transcriptScrollJumpToBottomRevealViewportRatio: {
         schema: z.number(),
-        default: 0.75,
+        default: 0.4,
         description: 'Viewport fraction away from the transcript bottom before showing jump-to-bottom button',
         storageScope: 'account',
         analytics: {

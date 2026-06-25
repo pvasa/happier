@@ -12,6 +12,7 @@ export type ComposerKeyboardLayout = Readonly<{
     listBottomInset: SharedValue<number>;
     getKeyboardHeight?: () => number;
     retainKeyboardLift?: () => () => void;
+    setComposerInputFocused?: (focused: boolean) => void;
     setComposerMeasuredHeight: (height: number) => void;
     setScaffoldMeasuredHeight?: (height: number) => void;
     subscribeAvailablePanelHeight?: (listener: (height: number) => void) => () => void;

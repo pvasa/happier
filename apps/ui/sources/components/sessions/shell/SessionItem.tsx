@@ -11,19 +11,23 @@ import {
 } from '@/components/ui/text/webStartEllipsisTextStyles';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
-import { DEFAULT_AGENT_ID, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
+import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
+import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { Typography } from '@/constants/Typography';
 import { formatPendingCountBadge } from '@/components/sessions/pendingBadge';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { t } from '@/text';
 import type { SessionListSecondaryLineMode } from '@/sync/domains/session/listing/deriveSessionListActivity';
 import { Session } from '@/sync/domains/state/storageTypes';
+import { storage, useLocalSetting } from '@/sync/domains/state/storage';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { getSessionAvatarId } from '@/utils/sessions/sessionUtils';
 import { PinIcon, PinSlashIcon } from './sessionPinIcons';
 import { TagIcon } from './sessionTagIcons';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ContextMenu } from '@/components/ui/forms/dropdown/ContextMenu';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { SessionRowAttentionIndicator } from './row/SessionRowAttentionIndicator';
 import type { SessionRowAttentionState, SessionRowPresentation } from './row/resolveSessionRowPresentation';
 import type { SessionListRowModel } from './row/sessionListRowModelTypes';
@@ -53,6 +57,16 @@ import { resolveKeyboardPlatform } from '@/keyboard/runtime';
 import { SessionListSelectionCheckbox } from './selection/SessionListSelectionCheckbox';
 import { useOptionalSessionListSelectionRow } from './selection/SessionListSelectionContext';
 import { resolveSessionListSelectionPointerAction } from './selection/sessionListSelectionPointer';
+import {
+    buildSessionDebugInformation,
+    isSessionDebugInformationEnabled,
+    resolveProviderSessionIdForDebug,
+} from '@/components/sessions/debug/sessionDebugInformation';
+import { copySessionDebugInformationToClipboard } from '@/components/sessions/debug/sessionDebugClipboard';
+import {
+    createCopySessionDebugInformationMenuItem,
+    SESSION_COPY_DEBUG_INFORMATION_MENU_ITEM_ID,
+} from '@/components/sessions/debug/sessionDebugMenuItem';
 
 const AVATAR_SIZE_DEFAULT = 48;
 const AVATAR_SIZE_COMPACT = 30;
@@ -633,6 +647,8 @@ const SessionItemContent = React.memo(
         const styles = stylesheet;
         const { theme } = useUnistyles();
         const resolvedSession = session;
+        const localDevModeEnabled = useLocalSetting('devModeEnabled');
+        const devModeEnabled = isSessionDebugInformationEnabled(localDevModeEnabled);
         const resolvedSelectionKey = selectionKey ?? '';
         const rowSelection = useOptionalSessionListSelectionRow(resolvedSelectionKey);
         const identitySkeletonOpacity = React.useRef(new Animated.Value(0.45)).current;
@@ -679,6 +695,7 @@ const SessionItemContent = React.memo(
         const [tagMenuOpen, setTagMenuOpen] = React.useState(false);
         const [tagMenuEverOpened, setTagMenuEverOpened] = React.useState(false);
         const [moreMenuOpen, setMoreMenuOpen] = React.useState(false);
+        const copyFeedback = useTemporaryCopyFeedback();
         const [rowWidth, setRowWidth] = React.useState<number | null>(null);
         const isWeb = Platform.OS === 'web';
         const isNativeMobile = Platform.OS === 'ios' || Platform.OS === 'android';
@@ -691,6 +708,39 @@ const SessionItemContent = React.memo(
         });
         const showRowActions = isWeb && (isRowHovered || isActionsHovered || tagMenuOpen || moreMenuOpen || isBeingDragged === true);
         const rowActionIconColor = theme.colors.text.secondary;
+        const resolveSessionDebugInformation = React.useCallback(() => {
+            const fullSession = storage.getState().sessions[resolvedSession.id];
+            const debugSession = fullSession ?? resolvedSession;
+            const debugMetadata = debugSession.metadata ?? resolvedSession.metadata;
+            const debugAgentId = resolveAgentIdFromSessionMetadata(debugMetadata)
+                ?? resolveAgentIdFromFlavor(debugMetadata?.flavor)
+                ?? resolveAgentIdFromSessionMetadata(resolvedSession.metadata)
+                ?? resolveAgentIdFromFlavor(resolvedSession.metadata?.flavor)
+                ?? DEFAULT_AGENT_ID;
+            const debugAgentCore = getAgentCore(debugAgentId);
+            const providerSessionId = resolveProviderSessionIdForDebug({
+                metadata: debugMetadata,
+                vendorResumeIdField: debugAgentCore.resume.vendorResumeIdField,
+            });
+            return buildSessionDebugInformation({
+                session: debugSession,
+                providerDisplayName: t(debugAgentCore.displayNameKey),
+                providerSessionId,
+            });
+        }, [resolvedSession]);
+        const leadingMenuItems = React.useMemo(
+            () => devModeEnabled
+                ? [createCopySessionDebugInformationMenuItem({ iconColor: rowActionIconColor })]
+                : [],
+            [devModeEnabled, rowActionIconColor],
+        );
+        const handleSelectLeadingMenuItem = React.useCallback(async (itemId: string) => {
+            if (itemId !== SESSION_COPY_DEBUG_INFORMATION_MENU_ITEM_ID) return;
+            const copied = await copySessionDebugInformationToClipboard(resolveSessionDebugInformation());
+            if (copied) {
+                copyFeedback.markCopied(resolvedSession.id);
+            }
+        }, [copyFeedback, resolvedSession.id, resolveSessionDebugInformation]);
         const supportsPin = typeof onTogglePinned === 'function';
         const supportsTag = tagsEnabled === true && typeof onSetTags === 'function';
         const handleTogglePinnedAction = React.useCallback(() => {
@@ -879,6 +929,8 @@ const SessionItemContent = React.memo(
             folderMoveMenuItems,
             onMoveToFolder,
             onSelectFolderMoveMenuItem,
+            leadingMenuItems,
+            onSelectLeadingMenuItem: handleSelectLeadingMenuItem,
             selectionModeAvailable: Boolean(resolvedSelectionKey),
             selectionModeActive: rowSelection.isSelectionMode,
             onEnterSelectionMode: handleEnterSelectionMode,
@@ -1293,6 +1345,10 @@ const SessionItemContent = React.memo(
                     onPointerLeave={isWeb ? handleActionsHoverOut : undefined}
                 >
                     {showInlineTagChips ? renderTagChipRow('inline') : null}
+                    <CopiedPill
+                        visible={copyFeedback.isCopied(resolvedSession.id)}
+                        testID={`session-item-copy-debug-feedback:${resolvedSession.id}`}
+                    />
                     {showRowActions ? (
                         <View style={styles.rowActionsRow}>
                             {showReorderHandle && reorderHandleGesture ? (

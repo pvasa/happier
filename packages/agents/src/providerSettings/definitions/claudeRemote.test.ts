@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildClaudeRemoteOutgoingMessageMetaExtras,
+  CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES,
   CLAUDE_UNIFIED_TERMINAL_HOSTS,
   CLAUDE_REMOTE_PROVIDER_SETTINGS_DEFAULTS,
   CLAUDE_REMOTE_PROVIDER_FIELDS,
@@ -15,6 +16,17 @@ describe('buildClaudeRemoteOutgoingMessageMetaExtras', () => {
     );
   });
 
+  it('exports the canonical unified terminal resume-choice values used by the provider schema', () => {
+    expect(CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES).toEqual([
+      'ask_every_time',
+      'resume_from_summary',
+      'resume_full_session',
+    ]);
+    expect(CLAUDE_REMOTE_PROVIDER_FIELDS.claudeUnifiedTerminalResumeChoice.schema.options).toEqual(
+      CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES,
+    );
+  });
+
   it('uses canonical provider defaults when the persisted settings object omits fields', () => {
     const extras = buildClaudeRemoteOutgoingMessageMetaExtras({});
     const defaults = CLAUDE_REMOTE_PROVIDER_SETTINGS_DEFAULTS as Readonly<Record<string, unknown>>;
@@ -22,6 +34,7 @@ describe('buildClaudeRemoteOutgoingMessageMetaExtras', () => {
     expect(extras.claudeRemoteAgentSdkEnabled).toBe(CLAUDE_REMOTE_PROVIDER_SETTINGS_DEFAULTS.claudeRemoteAgentSdkEnabled);
     expect(extras.claudeUnifiedTerminalEnabled).toBe(defaults.claudeUnifiedTerminalEnabled);
     expect(extras.claudeUnifiedTerminalHost).toBe(defaults.claudeUnifiedTerminalHost);
+    expect(extras.claudeUnifiedTerminalResumeChoice).toBe(defaults.claudeUnifiedTerminalResumeChoice);
     expect(extras.claudeCodeExperimentalAgentTeamsEnabled).toBe(
       CLAUDE_REMOTE_PROVIDER_SETTINGS_DEFAULTS.claudeCodeExperimentalAgentTeamsEnabled,
     );
@@ -51,6 +64,7 @@ describe('buildClaudeRemoteOutgoingMessageMetaExtras', () => {
       claudeRemoteAgentSdkEnabled: false,
       claudeUnifiedTerminalEnabled: true,
       claudeUnifiedTerminalHost: 'zellij',
+      claudeUnifiedTerminalResumeChoice: 'resume_full_session',
       claudeLocalPermissionBridgeEnabled: false,
       claudeLocalPermissionBridgeWaitIndefinitely: false,
       claudeLocalPermissionBridgeTimeoutSeconds: 42,
@@ -62,6 +76,7 @@ describe('buildClaudeRemoteOutgoingMessageMetaExtras', () => {
     expect(extras.claudeRemoteAgentSdkEnabled).toBe(false);
     expect(extras.claudeUnifiedTerminalEnabled).toBe(true);
     expect(extras.claudeUnifiedTerminalHost).toBe('zellij');
+    expect(extras.claudeUnifiedTerminalResumeChoice).toBe('resume_full_session');
     expect(extras.claudeLocalPermissionBridgeEnabled).toBe(false);
     expect(extras.claudeLocalPermissionBridgeWaitIndefinitely).toBe(false);
     expect(extras.claudeLocalPermissionBridgeTimeoutSeconds).toBe(42);
@@ -75,9 +90,11 @@ describe('buildClaudeRemoteOutgoingMessageMetaExtras', () => {
     const extras = buildClaudeRemoteOutgoingMessageMetaExtras({
       claudeUnifiedTerminalEnabled: 'true',
       claudeUnifiedTerminalHost: 'screen',
+      claudeUnifiedTerminalResumeChoice: 'resume_partial_session',
     });
 
     expect(extras.claudeUnifiedTerminalEnabled).toBe(false);
     expect(extras.claudeUnifiedTerminalHost).toBe('auto');
+    expect(extras.claudeUnifiedTerminalResumeChoice).toBe('ask_every_time');
   });
 });

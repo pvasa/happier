@@ -8,6 +8,47 @@ function connectedServiceProfileLegacyKey(params: Readonly<{ serviceId: string; 
   return `${String(params.serviceId).trim()}/${String(params.profileId).trim()}`;
 }
 
+export function pruneConnectedServiceProfilePreferencesForDeletedProfile(params: Readonly<{
+  serviceId: string;
+  profileId: string;
+  connectedServicesDefaultProfileByServiceId: Readonly<Record<string, string | undefined>>;
+  connectedServicesProfileLabelByKey: Readonly<Record<string, string | undefined>>;
+}>): {
+  connectedServicesDefaultProfileByServiceId: Record<string, string>;
+  connectedServicesProfileLabelByKey: Record<string, string>;
+} {
+  const serviceId = String(params.serviceId).trim();
+  const profileId = String(params.profileId).trim();
+  const encodedKey = connectedServiceProfileKey({ serviceId, profileId });
+  const legacyKey = connectedServiceProfileLegacyKey({ serviceId, profileId });
+
+  const connectedServicesDefaultProfileByServiceId = copyDefinedStringRecord(
+    params.connectedServicesDefaultProfileByServiceId,
+  );
+  if (connectedServicesDefaultProfileByServiceId[serviceId] === profileId) {
+    delete connectedServicesDefaultProfileByServiceId[serviceId];
+  }
+
+  const connectedServicesProfileLabelByKey = copyDefinedStringRecord(params.connectedServicesProfileLabelByKey);
+  delete connectedServicesProfileLabelByKey[encodedKey];
+  delete connectedServicesProfileLabelByKey[legacyKey];
+
+  return {
+    connectedServicesDefaultProfileByServiceId,
+    connectedServicesProfileLabelByKey,
+  };
+}
+
+function copyDefinedStringRecord(input: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value === 'string') {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 export function resolveConnectedServiceProfileLabel(params: Readonly<{
   labelsByKey: Readonly<Record<string, string | undefined>>;
   serviceId: string;

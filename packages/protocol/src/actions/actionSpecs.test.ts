@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { ExecutionRunIntentSchema } from '../executionRuns.js';
 import {
+  SessionUsageLimitConsumeResetCreditRequestV1Schema,
   SessionUsageLimitCheckNowRequestV1Schema,
   SessionUsageLimitWaitResumeCancelRequestV1Schema,
   SessionUsageLimitWaitResumeEnableRequestV1Schema,
@@ -20,7 +21,9 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'session.status.get',
   'session.work_state.get',
   'session.goal.get',
+  'session.terminalComposer.clear',
   'session.usageLimit.checkNow',
+  'session.usageLimit.consumeResetCredit',
   'session.vendor_plugin_catalog.list',
   'session.skill_catalog.list',
   'session.history.get',
@@ -225,19 +228,39 @@ describe('Action Spec Registry', () => {
     const enable = getActionSpec('session.usageLimit.waitResume.enable');
     const cancel = getActionSpec('session.usageLimit.waitResume.cancel');
     const checkNow = getActionSpec('session.usageLimit.checkNow');
+    const consumeResetCredit = getActionSpec('session.usageLimit.consumeResetCredit');
 
     expect(enable.bindings?.mcpToolName).toBe('session_usage_limit_wait_resume_enable');
     expect(cancel.bindings?.mcpToolName).toBe('session_usage_limit_wait_resume_cancel');
     expect(checkNow.bindings?.mcpToolName).toBe('session_usage_limit_check_now');
+    expect(consumeResetCredit.bindings?.mcpToolName).toBe('session_usage_limit_consume_reset_credit');
     expect(enable.approval).toEqual({ result: 'none' });
     expect(cancel.approval).toEqual({ result: 'none' });
     expect(checkNow.approval).toEqual({ result: 'required' });
+    expect(consumeResetCredit.approval).toEqual({ result: 'required' });
+    expect(checkNow.safety).toBe('safe');
+    expect(consumeResetCredit.safety).toBe('danger');
     expect(enable.surfaces.session_agent).toBe(true);
     expect(cancel.surfaces.session_agent).toBe(true);
     expect(checkNow.surfaces.session_agent).toBe(true);
+    expect(consumeResetCredit.surfaces.session_agent).toBe(true);
     expect(enable.inputSchema).toBe(SessionUsageLimitWaitResumeEnableRequestV1Schema);
     expect(cancel.inputSchema).toBe(SessionUsageLimitWaitResumeCancelRequestV1Schema);
     expect(checkNow.inputSchema).toBe(SessionUsageLimitCheckNowRequestV1Schema);
+    expect(consumeResetCredit.inputSchema).toBe(SessionUsageLimitConsumeResetCreditRequestV1Schema);
+    expect(checkNow.inputSchema.safeParse({
+      sessionId: 's1',
+      operation: 'consume_reset_credit',
+    }).success).toBe(false);
+    expect(consumeResetCredit.inputSchema.parse({
+      sessionId: 's1',
+      provider: ' codex ',
+      resumePromptMode: 'standard',
+    })).toEqual({
+      sessionId: 's1',
+      provider: 'codex',
+      resumePromptMode: 'standard',
+    });
     expect(enable.inputSchema.parse({
       sessionId: 's1',
       issueFingerprint: 'usage-limit:s1:123',
@@ -276,6 +299,27 @@ describe('Action Spec Registry', () => {
         expect.objectContaining({ value: 'custom' }),
       ],
     });
+  });
+
+  it('declares terminal composer clear as a user-authorized provider-neutral control', () => {
+    const spec = getActionSpec('session.terminalComposer.clear' as any);
+
+    expect(spec.safety).toBe('danger');
+    expect(spec.approval).toEqual({ result: 'required' });
+    expect(spec.surfaces.ui_button).toBe(true);
+    expect(spec.surfaces.cli).toBe(true);
+    expect(spec.surfaces.mcp).toBe(false);
+    expect(spec.surfaces.session_agent).toBe(false);
+    expect(spec.inputSchema.parse({
+      sessionId: 'sess_1',
+      expectedStateAtMs: 1_700_000_000_000,
+    })).toEqual({
+      sessionId: 'sess_1',
+      expectedStateAtMs: 1_700_000_000_000,
+    });
+    expect(spec.inputSchema.safeParse({
+      sessionId: '  ',
+    }).success).toBe(false);
   });
 
   it('accepts session.list filter fields in the action schema', () => {

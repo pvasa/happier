@@ -5,6 +5,16 @@ import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/con
 import type { TrackedSession } from '@/daemon/types';
 import { createConnectedServicesAuthUpdatedRestartHandler } from './createConnectedServicesAuthUpdatedRestartHandler';
 
+const directLiveExternalTokenInjectionCapability = {
+  supportsInTurnApply: true,
+  requiresExactRuntimeIdentity: true,
+  refreshSelectionResync: 'required',
+  authMode: {
+    kind: 'external_token_injection',
+    surface: 'codex_chatgpt_auth_tokens',
+  },
+} as const;
+
 describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
   type RestartHandlerParams = Parameters<typeof createConnectedServicesAuthUpdatedRestartHandler>[0];
   type RestartSignalParams = Parameters<RestartHandlerParams['requestRestartSignal']>[0];
@@ -32,6 +42,11 @@ describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
       refreshedCredentialApplication: { mode },
       predictiveSoftSwitch: { mode: agentId === 'codex' ? 'supported' : 'unsupported' },
       sameAccountFanoutStrategy: agentId === 'codex' ? 'provider_account_id' : 'none',
+      runtimeAuthApply: {
+        directLiveHotAuth: agentId === 'codex'
+          ? directLiveExternalTokenInjectionCapability
+          : 'unsupported',
+      },
     };
   }
 

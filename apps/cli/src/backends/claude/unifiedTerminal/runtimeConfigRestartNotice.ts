@@ -94,6 +94,13 @@ export function buildUnifiedTerminalRuntimeConfigRestartChanges(
   pushRuntimeConfigOutcomeChange(
     changes,
     'launchOption',
+    currentMode.claudeUnifiedTerminalResumeChoice ?? 'ask_every_time',
+    nextMode.claudeUnifiedTerminalResumeChoice ?? 'ask_every_time',
+    'claudeUnifiedTerminalResumeChoice',
+  );
+  pushRuntimeConfigOutcomeChange(
+    changes,
+    'launchOption',
     currentMode.ultracode === true,
     nextMode.ultracode === true,
     'ultracode',

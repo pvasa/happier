@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { DaemonTerminalErrorCode, DaemonTerminalStreamEvent } from '@happier-dev/protocol';
 
-import type { Disposable, PtyProvider, PtyProcess } from './ptyProvider';
+import type { Disposable, PtyProvider, PtyProcess } from '@/integrations/pty/ptyProvider';
 import { createTerminalUrlDetector } from './terminalUrlDetection';
 import { resolveTerminalShell } from './terminalShellCandidates';
 

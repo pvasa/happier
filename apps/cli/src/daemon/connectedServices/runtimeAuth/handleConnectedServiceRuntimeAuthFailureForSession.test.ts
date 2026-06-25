@@ -6,6 +6,7 @@ import {
   InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry,
 } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
+import type { TrackedSession } from '@/daemon/types';
 import { handleConnectedServiceRuntimeAuthFailureForSession } from './handleConnectedServiceRuntimeAuthFailureForSession';
 import { ConnectedServiceRuntimeAuthSwitchAttemptTracker } from './ConnectedServiceRuntimeAuthSwitchAttemptTracker';
 import type {
@@ -181,6 +182,145 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     expect(continueAfterRuntimeAuthSwitch).not.toHaveBeenCalled();
   });
 
+  it('reconstructs an untracked failed session from durable metadata and schedules restart continuation', async () => {
+    const reconstructedTracked: TrackedSession = {
+      startedBy: 'daemon' as const,
+      happySessionId: 'sess_1',
+      pid: 0,
+      vendorResumeId: 'codex-session-1',
+      happySessionMetadataFromLocalWebhook: {
+        path: '/tmp/project',
+        homeDir: '/tmp/home',
+        happyHomeDir: '/tmp/home/.happier',
+        happyLibDir: '/tmp/home/.happier/lib',
+        happyToolsDir: '/tmp/home/.happier/tools',
+        host: 'test-host',
+        flavor: 'codex',
+        connectedServices: {
+          v: 1 as const,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected' as const,
+              selection: 'group' as const,
+              profileId: 'primary',
+              groupId: 'main',
+            },
+          },
+        },
+        connectedServiceMaterializationIdentityV1: {
+          v: 1,
+          id: 'csm_codex_1',
+          createdAtMs: 1_000,
+        },
+        agentRuntimeDescriptorV1: {
+          v: 1,
+          providerId: 'codex',
+          provider: {
+            resumeStrategy: 'vendorSessionId',
+            vendorSessionId: 'codex-session-1',
+          },
+        },
+      },
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent' as const, agentId: 'codex' as const },
+        resume: 'codex-session-1',
+        connectedServices: {
+          v: 1 as const,
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected' as const,
+              selection: 'group' as const,
+              profileId: 'primary',
+              groupId: 'main',
+            },
+          },
+        },
+        connectedServiceMaterializationIdentityV1: {
+          v: 1,
+          id: 'csm_codex_1',
+          createdAtMs: 1_000,
+        },
+      },
+    };
+    const resolveDurableSessionForRuntimeAuthRecovery = vi.fn(async () => reconstructedTracked);
+    const restartSession = vi.fn(async () => {});
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
+    const switchAfterClassifiedFailure = vi.fn(async (input: Readonly<{ sessionId?: string }>) => {
+      if (!input.sessionId) {
+        return {
+          status: 'generation_apply_failed' as const,
+          activeProfileId: 'backup',
+          generation: 2,
+          errorCode: 'session_not_found',
+        };
+      }
+      return {
+        status: 'switched' as const,
+        activeProfileId: 'backup',
+        generation: 2,
+        mode: 'spawn_next_turn' as const,
+      };
+    });
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [],
+      resolveDurableSessionForRuntimeAuthRecovery,
+      switchCoordinator: { switchAfterClassifiedFailure },
+      restartSession,
+      continueAfterRuntimeAuthSwitch,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      recoveryInvocationSource: 'scheduler_retry',
+      classification: {
+        kind: 'usage_limit',
+        limitCategory: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        resetsAtMs: null,
+        retryAfterMs: 30_000,
+        quotaScope: 'account',
+        providerLimitId: 'weekly',
+        action: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+    })).resolves.toMatchObject({
+      status: 'switch_attempted',
+      result: {
+        status: 'switched',
+        activeProfileId: 'backup',
+        generation: 2,
+        mode: 'spawn_next_turn',
+      },
+    });
+
+    expect(resolveDurableSessionForRuntimeAuthRecovery).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      classification: expect.objectContaining({
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+      }),
+    });
+    expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      observedProfileId: 'primary',
+    }));
+    expect(restartSession).toHaveBeenCalledWith(reconstructedTracked);
+    expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
+      tracked: reconstructedTracked,
+      sessionId: 'sess_1',
+      action: 'restart_requested',
+      switchReason: 'automatic_runtime_failure',
+    }));
+  });
+
   it('requests a session restart when runtime recovery switches a group account for the next turn', async () => {
     const events: string[] = [];
     const onRuntimeAuthRecoverySuccess = vi.fn(async () => {
@@ -205,8 +345,8 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             v: 1,
             bindingsByServiceId: {
               'openai-codex': {
-                source: 'connected',
-                selection: 'group',
+                source: 'connected' as const,
+                selection: 'group' as const,
                 profileId: 'primary',
                 groupId: 'main',
               },
@@ -762,21 +902,19 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       },
     })).resolves.toMatchObject({
       status: 'credential_refreshed',
-      restartRequested: true,
+      restartRequested: false,
     });
 
     expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledWith({
       serviceId: 'openai-codex',
       profileId: 'primary',
+      sessionId: 'sess_1',
     });
-    expect(restartSession).toHaveBeenCalledWith(expect.objectContaining({
-      happySessionId: 'sess_1',
-      pid: 123,
-    }));
+    expect(restartSession).not.toHaveBeenCalled();
     expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
   });
 
-  it('returns credential-refreshed runtime recovery without waiting for a deferred restart to complete', async () => {
+  it('returns credential-refreshed runtime recovery without requesting a restart', async () => {
     const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async () => ({
       status: 'refreshed' as const,
       credential: buildConnectedServiceCredentialRecord({
@@ -805,11 +943,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         refreshWindowMs: 60_000,
       },
     }));
-    let resolveRestart: () => void = () => {};
-    const restartDeferred = new Promise<void>((resolve) => {
-      resolveRestart = resolve;
-    });
-    const restartSession = vi.fn(() => restartDeferred);
+    const restartSession = vi.fn(async () => {});
 
     const resultPromise = handleConnectedServiceRuntimeAuthFailureForSession({
       getChildren: () => [{
@@ -858,20 +992,19 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       }),
     ]);
 
-    resolveRestart();
     await resultPromise;
 
     expect(observed).toMatchObject({
       status: 'resolved',
       result: {
         status: 'credential_refreshed',
-        restartRequested: true,
+        restartRequested: false,
       },
     });
-    expect(restartSession).toHaveBeenCalledOnce();
+    expect(restartSession).not.toHaveBeenCalled();
   });
 
-  it('begins continuation for credential refresh before requesting restart', async () => {
+  it('continues after credential refresh without requesting restart', async () => {
     const events: string[] = [];
     const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async () => ({
       status: 'refreshed' as const,
@@ -949,13 +1082,13 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       },
     })).resolves.toMatchObject({
       status: 'credential_refreshed',
-      restartRequested: true,
+      restartRequested: false,
     });
 
     expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith({
       tracked: expect.objectContaining({ happySessionId: 'sess_1' }),
       sessionId: 'sess_1',
-      attemptId: 'connected-service-auth-switch|restart_requested|openai-codex:group:main:primary:',
+      attemptId: 'connected-service-auth-switch|hot_applied|openai-codex:group:main:primary:',
       normalizedBindings: {
         v: 1,
         bindingsByServiceId: {
@@ -968,10 +1101,88 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
         },
       },
       serviceIds: new Set(['openai-codex']),
-      action: 'restart_requested',
+      action: 'hot_applied',
       switchReason: 'automatic_runtime_failure',
     });
-    expect(events).toEqual(['continue', 'restart']);
+    expect(events).toEqual(['continue']);
+    expect(restartSession).not.toHaveBeenCalled();
+  });
+
+  it('passes the failing session id into runtime credential refresh so active-home materialization failures are session-scoped', async () => {
+    const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'refresh_failed' as const,
+      credential: null,
+      diagnostic: {
+        serviceId: 'openai-codex' as const,
+        profileId: 'primary',
+        reason: 'runtime_auth_failure' as const,
+        status: 'refresh_failed' as const,
+        category: 'provider_403' as const,
+        providerStatus: 403,
+        providerErrorCode: 'materialization_failed',
+        expiresAt: 999,
+        expiryAgeMs: 1,
+        refreshWindowMs: 60_000,
+      },
+    }));
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
+    const switchAfterClassifiedFailure = vi.fn(async () => ({
+      status: 'no_eligible_member' as const,
+      generation: 1,
+      groupExhausted: true as const,
+      retryAtMs: null,
+      excluded: [],
+    }));
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'primary',
+                groupId: 'main',
+              },
+            },
+          },
+        },
+      }],
+      switchCoordinator: { switchAfterClassifiedFailure },
+      credentialRefreshService: {
+        refreshConnectedServiceCredentialForRuntimeAuthFailure,
+      },
+      continueAfterRuntimeAuthSwitch,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: {
+        kind: 'auth_expired',
+        limitCategory: 'auth_invalid',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        resetsAtMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+    })).resolves.toMatchObject({
+      status: 'switch_attempted',
+      result: { status: 'no_eligible_member' },
+    });
+
+    expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledWith({
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      sessionId: 'sess_1',
+    });
+    expect(continueAfterRuntimeAuthSwitch).not.toHaveBeenCalled();
   });
 
   it('serializes runtime forced refresh through the session auth-switch core', async () => {
@@ -1068,14 +1279,15 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       },
     })).resolves.toMatchObject({
       status: 'credential_refreshed',
-      restartRequested: true,
+      restartRequested: false,
     });
 
     expect(coreRuns).toEqual([{
       sessionId: 'sess_1',
       reason: 'automatic_runtime_failure',
     }]);
-    expect(events).toEqual(['core:start', 'refresh', 'restart', 'core:end']);
+    expect(events).toEqual(['core:start', 'refresh', 'core:end']);
+    expect(restartSession).not.toHaveBeenCalled();
   });
 
   it('does not force-refresh the same active profile twice in the failure window', async () => {
@@ -1244,7 +1456,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       classification,
     })).resolves.toMatchObject({
       status: 'credential_refreshed',
-      restartRequested: true,
+      restartRequested: false,
     });
 
     await expect(handleConnectedServiceRuntimeAuthFailureForSession({
@@ -1270,7 +1482,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     });
 
     expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledTimes(1);
-    expect(restartSession).toHaveBeenCalledOnce();
+    expect(restartSession).not.toHaveBeenCalled();
     expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
   });
 
@@ -1358,7 +1570,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     await expect(handleConnectedServiceRuntimeAuthFailureForSession(baseInput))
       .resolves.toMatchObject({
         status: 'credential_refreshed',
-        restartRequested: true,
+        restartRequested: false,
       });
 
     await expect(handleConnectedServiceRuntimeAuthFailureForSession({
@@ -1381,7 +1593,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       });
 
     expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledTimes(1);
-    expect(restartSession).toHaveBeenCalledOnce();
+    expect(restartSession).not.toHaveBeenCalled();
     expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
   });
 
@@ -1470,7 +1682,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     await expect(handleConnectedServiceRuntimeAuthFailureForSession(baseInput))
       .resolves.toMatchObject({
         status: 'credential_refreshed',
-        restartRequested: true,
+        restartRequested: false,
       });
 
     await expect(handleConnectedServiceRuntimeAuthFailureForSession(baseInput))
@@ -1587,7 +1799,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     await expect(handleConnectedServiceRuntimeAuthFailureForSession(baseInput))
       .resolves.toMatchObject({
         status: 'credential_refreshed',
-        restartRequested: true,
+        restartRequested: false,
       });
 
     await expect(handleConnectedServiceRuntimeAuthFailureForSession(baseInput))
@@ -1603,7 +1815,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       });
 
     expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledTimes(1);
-    expect(restartSession).toHaveBeenCalledOnce();
+    expect(restartSession).not.toHaveBeenCalled();
     expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
   });
 
@@ -1949,17 +2161,15 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       },
     })).resolves.toMatchObject({
       status: 'credential_refreshed',
-      restartRequested: true,
+      restartRequested: false,
     });
 
     expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledWith({
       serviceId: 'openai-codex',
       profileId: 'primary',
+      sessionId: 'sess_1',
     });
-    expect(restartSession).toHaveBeenCalledWith(expect.objectContaining({
-      happySessionId: 'sess_1',
-      pid: 123,
-    }));
+    expect(restartSession).not.toHaveBeenCalled();
     expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
   });
 
@@ -2022,6 +2232,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledWith({
       serviceId: 'openai-codex',
       profileId: 'primary',
+      sessionId: 'sess_1',
     });
     expect(switchAfterClassifiedFailure).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'sess_1',
@@ -2089,6 +2300,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledWith({
       serviceId: 'openai-codex',
       profileId: 'primary',
+      sessionId: 'sess_1',
     });
     expect(switchAfterClassifiedFailure).not.toHaveBeenCalled();
   });
@@ -2937,6 +3149,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     const refreshConnectedServiceCredentialForRuntimeAuthFailure = vi.fn(async (input: Readonly<{
       serviceId: 'claude-subscription';
       profileId: string;
+      sessionId: string;
     }>) => ({
       status: 'refreshed' as const,
       credential: buildConnectedServiceCredentialRecord({
@@ -3025,12 +3238,13 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
       },
     })).resolves.toMatchObject({
       status: 'credential_refreshed',
-      restartRequested: true,
+      restartRequested: false,
     });
 
     expect(refreshConnectedServiceCredentialForRuntimeAuthFailure).toHaveBeenCalledWith({
       serviceId: 'claude-subscription',
       profileId: 'healthy-member',
+      sessionId: 'sess_1',
     });
     expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith(expect.objectContaining({
       normalizedBindings: {
@@ -3044,7 +3258,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
           },
         },
       },
-      action: 'restart_requested',
+      action: 'hot_applied',
     }));
   });
 

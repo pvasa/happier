@@ -90,5 +90,7 @@ describe('Settings → Account (secret key copy)', () => {
 
         const expected = formatSecretKeyForBackup('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
         expect(clipboardMocks.setStringAsync).toHaveBeenCalledWith(expected);
+        expect(modalMocks.alert).not.toHaveBeenCalledWith('common.success', 'settingsAccount.secretKeyCopied');
+        expect(screen.findByTestId('settings-account-secret-key-copy-copied')).toBeTruthy();
     });
 });

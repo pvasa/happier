@@ -25,6 +25,7 @@ import {
   resolveTestDaemonOwnershipLeasesDir,
   startTestDaemon,
 } from './daemon';
+import { repoRootDir } from '../paths';
 import { spawnDetachedTestProcess } from '../process/testSpawn';
 import { seedCliAuthForServer } from '../cliAuth';
 
@@ -116,6 +117,10 @@ describe('startTestDaemon', () => {
         | { env?: NodeJS.ProcessEnv }
         | undefined;
       expect(launchCall?.env?.HAPPIER_E2E_CLI_SNAPSHOT_NODE_MODULES_MODE).toBe('copy');
+      const launchOptions = cliLaunchSpecMock.resolveCliTestLaunchSpec.mock.calls.at(0)?.[1] as
+        | { snapshotDir?: string }
+        | undefined;
+      expect(launchOptions?.snapshotDir).toBe(resolve(repoRootDir(), '.project', 'tmp', 'cli-source-snapshot'));
 
       await daemon.stop();
     } finally {

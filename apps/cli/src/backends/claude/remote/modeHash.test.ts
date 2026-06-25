@@ -42,8 +42,24 @@ describe('hashClaudeEnhancedModeForQueue', () => {
             claudeUnifiedTerminalHost: 'auto',
         } as any));
 
-        expect(next).not.toBe(base);
-    });
+    expect(next).not.toBe(base);
+  });
+
+  it('changes when unified terminal resume choice changes', () => {
+    const base = hashClaudeEnhancedModeForQueue(makeMode({
+      claudeUnifiedTerminalEnabled: true,
+      claudeUnifiedTerminalHost: 'auto',
+      claudeUnifiedTerminalResumeChoice: 'ask_every_time',
+    } as any));
+
+    const next = hashClaudeEnhancedModeForQueue(makeMode({
+      claudeUnifiedTerminalEnabled: true,
+      claudeUnifiedTerminalHost: 'auto',
+      claudeUnifiedTerminalResumeChoice: 'resume_full_session',
+    } as any));
+
+    expect(next).not.toBe(base);
+  });
 
     it('changes when unified terminal host changes', () => {
         const base = hashClaudeEnhancedModeForQueue(makeMode({

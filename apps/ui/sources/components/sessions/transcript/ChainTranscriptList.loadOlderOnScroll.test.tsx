@@ -10,6 +10,7 @@ let syncTuningState = {
     transcriptFlashListEstimatedItemSize: 120,
     transcriptBackwardPrefetchThresholdPx: 800,
     transcriptOlderLoadCooldownMs: 2500,
+    transcriptOlderLoadSpinnerDelayMs: 0,
 };
 
 vi.mock('@/sync/sync', () => ({
@@ -17,6 +18,15 @@ vi.mock('@/sync/sync', () => ({
         getSyncTuning: () => syncTuningState,
     },
 }));
+
+let catchingUpNewerState = false;
+vi.mock('@/sync/store/hooks', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/store/hooks')>();
+    return {
+        ...actual,
+        useSessionCatchingUpNewer: () => catchingUpNewerState,
+    };
+});
 
 let scrollToEndSpy: ReturnType<typeof vi.fn> | null = null;
 let scrollToIndexSpy: ReturnType<typeof vi.fn> | null = null;
@@ -82,7 +92,9 @@ describe('ChainTranscriptList', () => {
             transcriptFlashListEstimatedItemSize: 120,
             transcriptBackwardPrefetchThresholdPx: 800,
             transcriptOlderLoadCooldownMs: 2500,
+            transcriptOlderLoadSpinnerDelayMs: 0,
         };
+        catchingUpNewerState = false;
         renderedMessageViewProps = [];
         standardCleanup();
     });
@@ -525,7 +537,7 @@ describe('ChainTranscriptList', () => {
         expect(loadOlder).toHaveBeenCalledTimes(1);
     });
 
-    it('loads older from an exact web edge while passive exact-zero scroll remains suspended', async () => {
+    it('loads older from an exact web edge using the genuine-top scroll frame', async () => {
         const { Platform } = await import('react-native');
         const originalPlatform = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
@@ -551,11 +563,14 @@ describe('ChainTranscriptList', () => {
             await act(async () => {
                 invokeTestInstanceHandler(list, 'onLayout', { nativeEvent: { layout: { height: 500 } } });
                 list.props.onContentSizeChange(0, 500);
+                // The genuine-top web scroll frame (scrollTop 0) is now classified 'edge-reached', so it
+                // loads directly — one step earlier than the redundant `onStartReached` nudge below.
                 list.props.onScroll({ nativeEvent: { target: webScroller } });
                 await settleListEffects();
             });
-            expect(loadOlder).not.toHaveBeenCalled();
+            expect(loadOlder).toHaveBeenCalledTimes(1);
 
+            // The redundant edge callback does not double-load while the first load is in flight.
             await act(async () => {
                 list.props.onStartReached();
                 await settleListEffects();
@@ -569,6 +584,179 @@ describe('ChainTranscriptList', () => {
         } finally {
             Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
         }
+    });
+
+    it('re-arms a parked-inside web viewport from a genuine-top frame after cooldown (edge-reached classification)', async () => {
+        // Sidechain twin of the main ChatList genuine-top closer
+        // (ChatList.flashListV2.test.tsx "re-arms a parked-inside web viewport from a genuine-top
+        // frame after cooldown"). A continuous web DOM-scroll parked inside the threshold (a tall top
+        // row keeps the offset off zero) must re-arm an older-load when the genuine top (scrollTop 0)
+        // is finally reached, even though `onStartReached` never fires — proving the fix is
+        // independent of the top row's kind/height.
+        const { Platform } = await import('react-native');
+        const originalPlatform = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        vi.useFakeTimers({ now: new Date(0) });
+        try {
+            scrollToIndexShouldReject = false;
+            const loadOlder = vi.fn(async () => ({ loaded: 1, hasMore: true, status: 'loaded' as const }));
+            // A tall content surface so the viewport can park inside the threshold without being at
+            // the genuine top (scrollHeight - clientHeight = 1500px of scroll runway).
+            const scrollEl = {
+                scrollTop: 100,
+                scrollHeight: 2000,
+                clientHeight: 500,
+            };
+
+            const screen = await renderChainTranscriptList({
+                sessionId: 's1',
+                messages: [{ kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'hi', isThinking: false }],
+                metadata: null,
+                interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+                loadOlder,
+            });
+
+            const list = getFlashList(screen);
+            const scrollTo = async (scrollTop: number) => {
+                scrollEl.scrollTop = scrollTop;
+                await act(async () => {
+                    list.props.onScroll({ nativeEvent: { target: scrollEl }, target: scrollEl });
+                    await settleListEffects();
+                });
+            };
+
+            await act(async () => {
+                invokeTestInstanceHandler(list, 'onLayout', { nativeEvent: { layout: { height: 500 } } });
+                list.props.onContentSizeChange(0, 2000);
+                await settleListEffects();
+            });
+
+            // Park inside the threshold (a tall top row keeps the offset off zero): one load fires.
+            await scrollTo(100);
+            expect(loadOlder).toHaveBeenCalledTimes(1);
+
+            // Cooldown elapses while still parked inside, with NO observed threshold exit. A further
+            // mid-band scroll must NOT chain another load (anti-burst).
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(2500);
+            });
+            await scrollTo(80);
+            expect(loadOlder).toHaveBeenCalledTimes(1);
+
+            // Reaching the genuine top (scrollTop 0) is classified 'edge-reached', which satisfies the
+            // machine's exact-edge re-arm and loads exactly one more older page — independent of any
+            // threshold exit and of the top row's kind/height.
+            await scrollTo(0);
+            expect(loadOlder).toHaveBeenCalledTimes(2);
+
+            // A mid-band frame after the genuine-top re-arm still does not widen the band: no extra
+            // load without a fresh exit -> re-enter or another genuine-top frame.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(2500);
+            });
+            await scrollTo(120);
+            expect(loadOlder).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.useRealTimers();
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+        }
+    });
+
+    it('re-arms a parked-inside web viewport from a near-top fractional frame after cooldown (EPSILON classification)', async () => {
+        // Sidechain twin of the main ChatList EPSILON closer. The web scroll element reports
+        // `scrollTop` as an integer-rounded (dpr=1) or sub-pixel-residue (Retina) value, so a viewport
+        // resting at the genuine top is rarely EXACTLY 0 — it commonly settles at ~1. The near-top
+        // frame must still classify 'edge-reached' (genuine-top epsilon) and re-arm an older-load.
+        const { Platform } = await import('react-native');
+        const originalPlatform = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        vi.useFakeTimers({ now: new Date(0) });
+        try {
+            scrollToIndexShouldReject = false;
+            const loadOlder = vi.fn(async () => ({ loaded: 1, hasMore: true, status: 'loaded' as const }));
+            const scrollEl = {
+                scrollTop: 100,
+                scrollHeight: 2000,
+                clientHeight: 500,
+            };
+
+            const screen = await renderChainTranscriptList({
+                sessionId: 's1',
+                messages: [{ kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'hi', isThinking: false }],
+                metadata: null,
+                interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+                loadOlder,
+            });
+
+            const list = getFlashList(screen);
+            const scrollTo = async (scrollTop: number) => {
+                scrollEl.scrollTop = scrollTop;
+                await act(async () => {
+                    list.props.onScroll({ nativeEvent: { target: scrollEl }, target: scrollEl });
+                    await settleListEffects();
+                });
+            };
+
+            await act(async () => {
+                invokeTestInstanceHandler(list, 'onLayout', { nativeEvent: { layout: { height: 500 } } });
+                list.props.onContentSizeChange(0, 2000);
+                await settleListEffects();
+            });
+
+            // Park inside the threshold: one load fires.
+            await scrollTo(100);
+            expect(loadOlder).toHaveBeenCalledTimes(1);
+
+            // Cooldown elapses while still parked inside, with NO observed threshold exit.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(2500);
+            });
+            await scrollTo(80);
+            expect(loadOlder).toHaveBeenCalledTimes(1);
+
+            // Reaching the genuine top reports a near-top fractional scrollTop (1), NOT exactly 0. The
+            // EPSILON classifier marks it 'edge-reached', re-arming the machine and loading one more.
+            await scrollTo(1);
+            expect(loadOlder).toHaveBeenCalledTimes(2);
+
+            // A frame past the epsilon band after the re-arm does not widen the band.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(2500);
+            });
+            await scrollTo(120);
+            expect(loadOlder).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.useRealTimers();
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+        }
+    });
+
+    it('renders the catch-up overlay while sync is catching this session up to newer activity', async () => {
+        // §13 wiring: the sidechain is non-inverted with no live-tail pinned-following composer, so the
+        // overlay shows whenever the per-session catch-up signal is in flight (no pinned gate, inset 0).
+        catchingUpNewerState = true;
+        const screen = await renderChainTranscriptList({
+            sessionId: 's1',
+            messages: [{ kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'hi', isThinking: false }],
+            metadata: null,
+            interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+            loadOlder: vi.fn(async () => ({ loaded: 0, hasMore: false, status: 'no_more' as const })),
+        });
+
+        expect(screen.findByTestId('transcript-catch-up-progress-overlay')).toBeTruthy();
+    });
+
+    it('does not render the catch-up overlay when the session is not catching up', async () => {
+        catchingUpNewerState = false;
+        const screen = await renderChainTranscriptList({
+            sessionId: 's1',
+            messages: [{ kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'hi', isThinking: false }],
+            metadata: null,
+            interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+            loadOlder: vi.fn(async () => ({ loaded: 0, hasMore: false, status: 'no_more' as const })),
+        });
+
+        expect(screen.findByTestId('transcript-catch-up-progress-overlay')).toBeNull();
     });
 
     it('does not load older while pinned at the bottom of a short transcript', async () => {

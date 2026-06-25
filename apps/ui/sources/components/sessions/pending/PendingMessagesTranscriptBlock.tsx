@@ -23,7 +23,9 @@ import { TranscriptSeparatorRow } from '@/components/sessions/transcript/separat
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { PendingMessagesDragReorderList } from './PendingMessagesDragReorderList';
 import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { canSteerUserMessageNow, supportsInFlightSteerUserMessage } from '@/sync/domains/session/control/submitMode';
 import { getPendingMessageVisualState } from './pendingMessageVisualState';
+import { useTerminalComposerClearAction } from '@/components/sessions/terminalComposer/useTerminalComposerClearAction';
 
 function getPendingText(message: PendingMessage | DiscardedPendingMessage): string {
     const raw = (message.displayText ?? message.text) ?? '';
@@ -38,39 +40,8 @@ function isKnownLiveSessionForPendingActions(session: ReturnType<typeof useSessi
     return session.active === true && session.presence === 'online';
 }
 
-function canSteerNowForSession(session: ReturnType<typeof useSession>): boolean {
-    const capabilities = session?.agentState?.capabilities;
-    const runtimeStatus = deriveSessionRuntimePresentationState({
-        active: session?.active,
-        activeAt: session?.activeAt,
-        presence: session?.presence,
-        thinking: session?.thinking,
-        thinkingAt: session?.thinkingAt,
-        latestTurnStatus: session?.latestTurnStatus,
-        latestTurnStatusObservedAt: session?.latestTurnStatusObservedAt,
-        meaningfulActivityAt: session?.meaningfulActivityAt,
-    }, Date.now());
-    return Boolean(
-        isKnownLiveSessionForPendingActions(session)
-        && runtimeStatus.working
-        && (session?.agentStateVersion ?? 0) > 0
-        && session?.agentState?.controlledByUser !== true
-        && (capabilities?.inFlightSteerAvailable ?? capabilities?.inFlightSteer) === true
-    );
-}
-
 function canSendNowForSession(session: ReturnType<typeof useSession>): boolean {
     return isKnownLiveSessionForPendingActions(session);
-}
-
-function supportsInFlightSteerForSession(session: ReturnType<typeof useSession>): boolean {
-    const capabilities = session?.agentState?.capabilities;
-    return Boolean(
-        isKnownLiveSessionForPendingActions(session)
-        && (session?.agentStateVersion ?? 0) > 0
-        && session?.agentState?.controlledByUser !== true
-        && (capabilities?.inFlightSteerSupported ?? capabilities?.inFlightSteer) === true
-    );
 }
 
 export type PendingMessageEditRequest = Readonly<{
@@ -89,9 +60,9 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     const { theme } = useUnistyles();
     const session = useSession(props.sessionId);
 
-    const canSteerNow = canSteerNowForSession(session);
+    const canSteerNow = canSteerUserMessageNow({ session });
     const canSendNow = canSendNowForSession(session);
-    const supportsInFlightSteer = supportsInFlightSteerForSession(session);
+    const supportsInFlightSteer = supportsInFlightSteerUserMessage({ session });
     const runtimeStatus = deriveSessionRuntimePresentationState({
         active: session?.active,
         activeAt: session?.activeAt,
@@ -104,17 +75,28 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     }, Date.now());
     const pendingCount = props.pendingMessages.length;
     const discardedCount = props.discardedMessages.length;
-    const showNonSteerableNotice = Boolean(
-        pendingCount > 0
-        && runtimeStatus.working
-        && supportsInFlightSteer
-        && !canSteerNow
-    );
     // Lane X (incident cmq8y3nlx): the CLI publishes `user_terminal_draft` when steering is
     // starved by a draft sitting in the terminal composer — the notice must say so honestly
     // instead of the generic mode-change wording.
     const steerBlockedByTerminalDraft =
         session?.agentState?.capabilities?.inFlightSteerUnavailableReason === 'user_terminal_draft';
+    const terminalComposerClearSupported =
+        session?.agentState?.capabilities?.terminalComposerClearSupported !== false;
+    const terminalComposerDraftPresent =
+        session?.agentState?.capabilities?.terminalComposerDraftPresent === true;
+    const terminalDraftBlocksPendingDelivery =
+        steerBlockedByTerminalDraft || terminalComposerDraftPresent;
+    const showNonSteerableNotice = Boolean(
+        pendingCount > 0
+        && (
+            terminalDraftBlocksPendingDelivery
+            || (
+                runtimeStatus.working
+                && supportsInFlightSteer
+                && !canSteerNow
+            )
+        )
+    );
 
     const maxHeightSetting = useSetting('transcriptPendingQueueMaxHeightPx');
     const maxHeightPx =
@@ -155,6 +137,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     const [scrollViewportHeightPx, setScrollViewportHeightPx] = React.useState<number | null>(null);
     const [scrollOffsetY, setScrollOffsetY] = React.useState<number | null>(null);
     const [materializingLocalIdMap, setMaterializingLocalIdMap] = React.useState<Record<string, true>>({});
+    const terminalComposerClear = useTerminalComposerClearAction(props.sessionId);
     const scrollRef = React.useRef<ScrollView | null>(null);
     const materializingLocalIds = React.useMemo(
         () => new Set(Object.keys(materializingLocalIdMap)),
@@ -748,6 +731,11 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         typeof scrollContentHeightPx === 'number' && Number.isFinite(scrollContentHeightPx) && scrollContentHeightPx > 0
             ? Math.max(1, Math.min(Math.trunc(scrollContentHeightPx), maxHeight))
             : undefined;
+    const showTerminalComposerClearAction = Boolean(
+        pendingCount > 0
+        && terminalComposerClearSupported
+        && terminalDraftBlocksPendingDelivery
+    );
 
     return (
         <View testID="pendingMessages.block" style={styles.messageContainer} renderToHardwareTextureAndroid={true}>
@@ -788,13 +776,46 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             >
                                 <Ionicons name="pause-circle-outline" size={13} color={theme.colors.text.secondary} />
                                 <Text
-                                    testID={steerBlockedByTerminalDraft ? 'pendingMessages.steerBlockedTerminalDraftNotice' : undefined}
+                                    testID={terminalDraftBlocksPendingDelivery ? 'pendingMessages.steerBlockedTerminalDraftNotice' : undefined}
                                     style={[styles.nonSteerableNoticeText, { color: theme.colors.text.secondary }]}
                                 >
-                                    {steerBlockedByTerminalDraft
+                                    {terminalDraftBlocksPendingDelivery
                                         ? t('session.pendingMessages.steerBlockedTerminalDraftNotice')
                                         : t('session.pendingMessages.nonSteerableNotice')}
                                 </Text>
+                                {showTerminalComposerClearAction ? (
+                                    <Pressable
+                                        testID="pendingMessages.clearTerminalComposer"
+                                        accessibilityRole="button"
+                                        accessibilityLabel={t('session.pendingMessages.clearTerminalComposer.action')}
+                                        accessibilityState={{ disabled: terminalComposerClear.busy, busy: terminalComposerClear.busy }}
+                                        disabled={terminalComposerClear.busy}
+                                        onPress={() => {
+                                            void terminalComposerClear.clearTerminalComposer();
+                                        }}
+                                        style={({ pressed }) => ([
+                                            styles.nonSteerableNoticeAction,
+                                            {
+                                                borderColor: theme.colors.border.default,
+                                                backgroundColor: pressed ? theme.colors.surface.pressedOverlay : theme.colors.surface.base,
+                                                opacity: terminalComposerClear.busy ? 0.7 : 1,
+                                            },
+                                        ])}
+                                    >
+                                        {terminalComposerClear.busy ? (
+                                            <ActivitySpinner
+                                                testID="pendingMessages.clearTerminalComposerSpinner"
+                                                size={10}
+                                                color={theme.colors.text.secondary}
+                                            />
+                                        ) : (
+                                            <Ionicons name="backspace-outline" size={12} color={theme.colors.text.secondary} />
+                                        )}
+                                        <Text style={[styles.nonSteerableNoticeActionText, { color: theme.colors.text.secondary }]}>
+                                            {t('session.pendingMessages.clearTerminalComposer.action')}
+                                        </Text>
+                                    </Pressable>
+                                ) : null}
                             </View>
                         ) : null}
 
@@ -967,13 +988,32 @@ const styles = StyleSheet.create(() => ({
         borderWidth: 1,
         flexDirection: 'row',
         alignItems: 'center',
+        flexWrap: 'wrap',
         gap: 6,
     },
     nonSteerableNoticeText: {
+        flexGrow: 1,
         flexShrink: 1,
+        minWidth: 180,
         fontSize: 12,
         lineHeight: 16,
         ...Typography.default(),
+    },
+    nonSteerableNoticeAction: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 7,
+        paddingVertical: 3,
+        borderRadius: 7,
+        borderWidth: 1,
+        minHeight: 24,
+        alignSelf: 'flex-start',
+    },
+    nonSteerableNoticeActionText: {
+        fontSize: 12,
+        lineHeight: 16,
+        ...Typography.default('semiBold'),
     },
     userMessageWrapper: {
         maxWidth: '100%',

@@ -55,6 +55,16 @@ function listFlattenedRollbackEligibleTurnStartSeqs(value: unknown): ReadonlySet
     return startSeqs;
 }
 
+function hasConversationRollbackCapability(session: Session | null | undefined): boolean {
+    if (!session) return false;
+    const agentId = inferAgentIdFromSessionMetadata(session.metadata);
+    return evaluateAgentSessionCapabilitySupport({
+        agentId,
+        capability: 'sessionRollback.conversation',
+        metadata: session.metadata,
+    }) === 'supported';
+}
+
 export function resolveConversationRollbackSupport(params: Readonly<{
     session: Session | null | undefined;
 }>): Readonly<{
@@ -141,7 +151,7 @@ export function resolveTranscriptRollbackActions(params: Readonly<{
     rollbackRanges: readonly SessionRollbackRangeV1[];
 }>): Readonly<Record<string, TranscriptRollbackAction>> {
     const support = resolveConversationRollbackSupport({ session: params.session });
-    if (support.supportsRollbackToPoint) {
+    if (support.supportsRollbackToPoint || hasConversationRollbackCapability(params.session)) {
         const sessionTurnsProjection = readSessionTurnsProjection(params.session?.sessionTurns);
         const trustedStartSeqs = sessionTurnsProjection
             ? listTrustedRuntimeTurnStartSeqs(sessionTurnsProjection)

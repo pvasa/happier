@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
-import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { delimiter, dirname, join } from 'node:path';
 
 import type {
@@ -297,9 +298,31 @@ function resolveStagedManagedProviderWorkspaceDir(
   return join(dirname(resolveStagedManagedProviderCommandPath(providerId, stage, env)), '..', 'workspace');
 }
 
+function buildManagedPackageInstallEnvironment(
+  env: NodeJS.ProcessEnv,
+  workspaceDir: string,
+): NodeJS.ProcessEnv {
+  const childEnv = buildManagedPnpmEnvironment(env);
+  delete childEnv.INIT_CWD;
+  delete childEnv.npm_command;
+  delete childEnv.npm_config_user_agent;
+  delete childEnv.npm_execpath;
+  delete childEnv.npm_lifecycle_event;
+  delete childEnv.npm_lifecycle_script;
+  delete childEnv.npm_node_execpath;
+  delete childEnv.npm_package_json;
+  delete childEnv.npm_package_manager;
+  for (const key of Object.keys(childEnv)) {
+    if (key.startsWith('npm_package_') || key.startsWith('YARN_')) {
+      delete childEnv[key];
+    }
+  }
+  childEnv.PWD = workspaceDir;
+  return childEnv;
+}
+
 async function writeManagedPackageLauncher(params: Readonly<{
   outputPath: string;
-  pnpmCommand: string;
   workspaceDir: string;
   binaryName: string;
   runtimePathEntries?: ReadonlyArray<string>;
@@ -311,25 +334,229 @@ async function writeManagedPackageLauncher(params: Readonly<{
       ? `${runtimePathEntries.join(process.platform === 'win32' ? ';' : ':')}${process.platform === 'win32' ? ';' : ':'}`
       : '';
   if (process.platform === 'win32') {
+    const binaryPath = join(params.workspaceDir, 'node_modules', '.bin', `${params.binaryName}.cmd`);
     await writeFile(
       params.outputPath,
-      `@echo off\r\nset "PATH=${pathPrefix}%PATH%"\r\n"${params.pnpmCommand}" --dir "${params.workspaceDir}" exec "${params.binaryName}" %*\r\n`,
+      `@echo off\r\nset "PATH=${pathPrefix}%PATH%"\r\n"${binaryPath}" %*\r\nexit /b %ERRORLEVEL%\r\n`,
       'utf8',
     );
     return;
   }
 
+  const binaryPath = join(params.workspaceDir, 'node_modules', '.bin', params.binaryName);
   await writeFile(
     params.outputPath,
-    `#!/bin/sh\nPATH="${pathPrefix}$PATH"\nexport PATH\nexec "${params.pnpmCommand}" --dir "${params.workspaceDir}" exec "${params.binaryName}" "$@"\n`,
+    `#!/bin/sh\nPATH="${pathPrefix}$PATH"\nexport PATH\nexec "${binaryPath}" "$@"\n`,
     'utf8',
   );
   await chmod(params.outputPath, 0o755);
 }
 
+function resolveOpenCodePlatformName(platform: ProviderCliInstallPlatform): 'darwin' | 'linux' | 'windows' {
+  return platform === 'win32' ? 'windows' : platform;
+}
+
+function resolveOpenCodeArchName(arch: string): 'x64' | 'arm64' | 'arm' | string {
+  if (arch === 'x64' || arch === 'arm64' || arch === 'arm') return arch;
+  return arch;
+}
+
+function hasOpenCodeLinuxMuslRuntime(): boolean {
+  if (process.platform !== 'linux') return false;
+  try {
+    return existsSync('/etc/alpine-release');
+  } catch {
+    // Ignore filesystem probes that are blocked by the host.
+  }
+  try {
+    const result = spawnSync('ldd', ['--version'], { encoding: 'utf8' });
+    return `${result.stdout || ''}${result.stderr || ''}`.toLowerCase().includes('musl');
+  } catch {
+    return false;
+  }
+}
+
+function supportsOpenCodeAvx2(params: Readonly<{
+  platform: ProviderCliInstallPlatform;
+  arch: string;
+  env: NodeJS.ProcessEnv;
+  spawn: typeof spawnSync;
+}>): boolean {
+  if (params.arch !== 'x64') return false;
+
+  if (params.platform === 'linux') {
+    try {
+      const cpuinfo = readFileSync('/proc/cpuinfo', 'utf8');
+      return /(^|\s)avx2(\s|$)/i.test(cpuinfo);
+    } catch {
+      return false;
+    }
+  }
+
+  if (params.platform === 'darwin') {
+    try {
+      const result = params.spawn('sysctl', ['-n', 'hw.optional.avx2_0'], {
+        encoding: 'utf8',
+        env: params.env,
+        timeout: 1500,
+      });
+      if (result.status !== 0) return false;
+      return String(result.stdout ?? '').trim() === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  if (params.platform === 'win32') {
+    const command =
+      '(Add-Type -MemberDefinition "[DllImport(""kernel32.dll"")] public static extern bool IsProcessorFeaturePresent(int ProcessorFeature);" -Name Kernel32 -Namespace Win32 -PassThru)::IsProcessorFeaturePresent(40)';
+    for (const executable of ['powershell.exe', 'pwsh.exe', 'pwsh', 'powershell']) {
+      try {
+        const result = params.spawn(executable, ['-NoProfile', '-NonInteractive', '-Command', command], {
+          encoding: 'utf8',
+          env: params.env,
+          timeout: 3000,
+          windowsHide: true,
+        });
+        if (result.status !== 0) continue;
+        const output = String(result.stdout ?? '').trim().toLowerCase();
+        if (output === 'true' || output === '1') return true;
+        if (output === 'false' || output === '0') return false;
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return false;
+}
+
+function resolveOpenCodePlatformPackageCandidates(params: Readonly<{
+  platform: ProviderCliInstallPlatform;
+  arch: string;
+  env: NodeJS.ProcessEnv;
+  spawn: typeof spawnSync;
+}>): ReadonlyArray<string> {
+  const platform = resolveOpenCodePlatformName(params.platform);
+  const arch = resolveOpenCodeArchName(params.arch);
+  const base = `opencode-${platform}-${arch}`;
+  const baseline = arch === 'x64' && !supportsOpenCodeAvx2(params);
+
+  if (platform === 'linux') {
+    if (hasOpenCodeLinuxMuslRuntime()) {
+      if (arch === 'x64') {
+        return baseline
+          ? [`${base}-baseline-musl`, `${base}-musl`, `${base}-baseline`, base]
+          : [`${base}-musl`, `${base}-baseline-musl`, base, `${base}-baseline`];
+      }
+      return [`${base}-musl`, base];
+    }
+
+    if (arch === 'x64') {
+      return baseline
+        ? [`${base}-baseline`, base, `${base}-baseline-musl`, `${base}-musl`]
+        : [base, `${base}-baseline`, `${base}-musl`, `${base}-baseline-musl`];
+    }
+    return [base, `${base}-musl`];
+  }
+
+  if (arch === 'x64') return baseline ? [`${base}-baseline`, base] : [base, `${base}-baseline`];
+  return [base];
+}
+
+function readOptionalDependencyNames(packageJson: unknown): ReadonlySet<string> {
+  if (!packageJson || typeof packageJson !== 'object' || Array.isArray(packageJson)) return new Set();
+  const optionalDependencies = (packageJson as { optionalDependencies?: unknown }).optionalDependencies;
+  if (!optionalDependencies || typeof optionalDependencies !== 'object' || Array.isArray(optionalDependencies)) {
+    return new Set();
+  }
+  return new Set(Object.keys(optionalDependencies));
+}
+
+async function resolvePnpmPackageJsonPaths(params: Readonly<{
+  workspaceDir: string;
+  packageName: string;
+}>): Promise<ReadonlyArray<string>> {
+  const pnpmDir = join(params.workspaceDir, 'node_modules', '.pnpm');
+  const encodedName = params.packageName.replace('/', '+');
+  const prefix = `${encodedName}@`;
+  try {
+    const entries = await readdir(pnpmDir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
+      .map((entry) => join(pnpmDir, entry.name, 'node_modules', params.packageName, 'package.json'));
+  } catch {
+    return [];
+  }
+}
+
+async function resolvePackageJsonPaths(params: Readonly<{
+  workspaceDir: string;
+  packageName: string;
+  packageJsonPath: string;
+}>): Promise<ReadonlyArray<string>> {
+  const paths: string[] = [];
+  const requireFromOpenCode = createRequire(params.packageJsonPath);
+  const requireFromWorkspace = createRequire(join(params.workspaceDir, 'package.json'));
+  for (const requireFrom of [requireFromOpenCode, requireFromWorkspace]) {
+    try {
+      paths.push(requireFrom.resolve(`${params.packageName}/package.json`));
+    } catch {
+      // Fall back to package-manager-specific layouts below.
+    }
+  }
+  paths.push(...await resolvePnpmPackageJsonPaths({
+    workspaceDir: params.workspaceDir,
+    packageName: params.packageName,
+  }));
+  return [...new Set(paths)];
+}
+
+async function materializeOpenCodeManagedPackageBinary(params: Readonly<{
+  workspaceDir: string;
+  platform: ProviderCliInstallPlatform;
+  env: NodeJS.ProcessEnv;
+  spawnSync: typeof spawnSync;
+}>): Promise<Readonly<{ packageName: string }>> {
+  const packageDir = join(params.workspaceDir, 'node_modules', 'opencode-ai');
+  const packageJsonPath = join(packageDir, 'package.json');
+  const rawPackageJson = await readFile(packageJsonPath, 'utf8');
+  const optionalDependencyNames = readOptionalDependencyNames(JSON.parse(rawPackageJson));
+  const sourceBinary = params.platform === 'win32' ? 'opencode.exe' : 'opencode';
+  const targetBinary = join(packageDir, 'bin', sourceBinary);
+  const candidates = resolveOpenCodePlatformPackageCandidates({
+    platform: params.platform,
+    arch: process.arch,
+    env: params.env,
+    spawn: params.spawnSync,
+  }).filter((packageName) => optionalDependencyNames.has(packageName));
+
+  for (const packageName of candidates) {
+    for (const platformPackageJsonPath of await resolvePackageJsonPaths({
+      workspaceDir: params.workspaceDir,
+      packageName,
+      packageJsonPath,
+    })) {
+      try {
+        const sourceBinaryPath = join(dirname(platformPackageJsonPath), 'bin', sourceBinary);
+        await copyFile(sourceBinaryPath, targetBinary);
+        await chmod(targetBinary, 0o755);
+        return { packageName };
+      } catch {
+        // Try the next installed location for this platform package.
+      }
+    }
+  }
+
+  throw new Error(
+    `OpenCode managed install did not include a usable platform binary package for ${params.platform}/${process.arch}.`,
+  );
+}
+
 async function installManagedPackageProviderCli(params: Readonly<{
   providerId: AgentId;
   managedInstall: Extract<ProviderCliManagedInstallSpec, { kind: 'managed_package' }>;
+  platform: ProviderCliInstallPlatform;
   env: NodeJS.ProcessEnv;
   logPath: string;
   deps: InstallProviderCliDeps;
@@ -374,15 +601,16 @@ async function installManagedPackageProviderCli(params: Readonly<{
     'utf8',
   );
 
-  const childEnv = buildManagedPnpmEnvironment(params.env);
+  const childEnv = buildManagedPackageInstallEnvironment(params.env, workspaceDir);
   if (runtimePathEntries.length > 0) {
     childEnv.PATH = [...runtimePathEntries, String(childEnv.PATH ?? params.env.PATH ?? '')]
       .filter((value) => value.length > 0)
       .join(delimiter);
   }
-  const addArgs = ['--dir', workspaceDir, 'add', params.managedInstall.packageName];
+  const addArgs = ['--dir', workspaceDir, 'add', params.managedInstall.packageName, '--ignore-scripts'];
   const spawn = params.deps.spawnSync ?? spawnSync;
   const result = spawn(pnpmCommand, addArgs, {
+    cwd: workspaceDir,
     encoding: 'utf8',
     env: childEnv,
     windowsHide: true,
@@ -403,9 +631,18 @@ async function installManagedPackageProviderCli(params: Readonly<{
     throw new Error(String(result.stderr ?? '').trim() || `pnpm add failed (${result.status ?? 'unknown'})`);
   }
 
+  if (params.managedInstall.packageBinarySetup?.kind === 'opencode_platform_binary') {
+    const materialized = await materializeOpenCodeManagedPackageBinary({
+      workspaceDir,
+      platform: params.platform,
+      env: childEnv,
+      spawnSync: spawn,
+    });
+    appendLogLine(params.logPath, `# opencode platform package: ${materialized.packageName}`);
+  }
+
   await writeManagedPackageLauncher({
     outputPath: launcherPath,
-    pnpmCommand,
     workspaceDir: launcherWorkspaceDir,
     binaryName: params.managedInstall.binaryName,
     runtimePathEntries,
@@ -616,6 +853,7 @@ export async function installProviderCli(params: Readonly<{
       await installManagedPackageProviderCli({
         providerId: params.providerId,
         managedInstall: plan.managedInstall,
+        platform: params.platform,
         env,
         logPath,
         deps,

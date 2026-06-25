@@ -308,6 +308,8 @@ export function createOpenCodeServerRuntime(params: {
   const configOverrides: Record<string, unknown> = {};
   let omitCustomMessageIdForResumedSession = false;
   let ensuredMcpServersForDirectory = false;
+  let mcpServerRegistrationInFlight: Promise<void> | null = null;
+  let mcpServerRegistrationRerunRequested = false;
   const ensuredMcpServerNames = new Set<string>();
 
   let turnDeferred: Deferred<void> | null = null;
@@ -831,6 +833,88 @@ export function createOpenCodeServerRuntime(params: {
     }
 
     throw new Error('OpenCode server compactContext requires an active model');
+  };
+
+  const modelIsSelectable = (model: Readonly<{
+    providerID: string;
+    modelID: string;
+    modelRecord?: unknown;
+  }>): boolean => {
+    const providerID = normalizeString(model.providerID);
+    const modelID = normalizeString(model.modelID);
+    if (!providerID || !modelID) return false;
+    if (isKnownUnavailableOpenCodeModel({ providerID, modelID })) return false;
+
+    const record = asRecord(model.modelRecord);
+    if (!record) return true;
+    const status = normalizeString(record.status);
+    if (status && status !== 'active') return false;
+    const capabilities = asRecord(record.capabilities);
+    const input = capabilities ? asRecord(capabilities.input) : null;
+    if (input && input.text === false) return false;
+    return true;
+  };
+
+  const findModelForProvider = (
+    providers: ReadonlyArray<{ id: string; models?: Record<string, unknown> }>,
+    providerID: string,
+    modelID: string,
+  ): OpenCodeModelRef | null => {
+    const normalizedProviderId = normalizeString(providerID);
+    const normalizedModelId = normalizeString(modelID);
+    if (!normalizedProviderId || !normalizedModelId) return null;
+
+    const providerInfo = providers.find((providerRecord) => normalizeString(providerRecord.id) === normalizedProviderId);
+    const models = asRecord(providerInfo?.models);
+    if (!models) {
+      return modelIsSelectable({ providerID: normalizedProviderId, modelID: normalizedModelId })
+        ? { providerID: normalizedProviderId, modelID: normalizedModelId }
+        : null;
+    }
+
+    const modelRecord = models[normalizedModelId]
+      ?? Object.values(models).find((candidate) => normalizeString(asRecord(candidate)?.id) === normalizedModelId);
+    if (!modelRecord) return null;
+    const resolvedModelId = normalizeString(asRecord(modelRecord)?.id) || normalizedModelId;
+    return modelIsSelectable({ providerID: normalizedProviderId, modelID: resolvedModelId, modelRecord })
+      ? { providerID: normalizedProviderId, modelID: resolvedModelId }
+      : null;
+  };
+
+  const resolveModelOverride = async (rawModelId: string): Promise<OpenCodeModelRef | null> => {
+    const trimmed = rawModelId.trim();
+    if (!trimmed) return null;
+
+    const parsed = parseOpenCodeModelId(trimmed);
+    if (parsed) {
+      return modelIsSelectable(parsed) ? parsed : null;
+    }
+
+    const c = await ensureClient();
+    const [config, providers] = await Promise.all([
+      c.globalConfigGet().catch(() => ({})),
+      c.providersList().catch(() => []),
+    ]);
+    const defaultProviderId = resolveOpenCodeDefaultProviderIdFromModelId(
+      normalizeString((config as Record<string, unknown>).model),
+    );
+    const defaultProviderMatch = defaultProviderId
+      ? findModelForProvider(providers, defaultProviderId, trimmed)
+      : null;
+    if (defaultProviderMatch) return defaultProviderMatch;
+
+    const matches = providers
+      .map((providerInfo) => findModelForProvider(providers, providerInfo.id, trimmed))
+      .filter((candidate): candidate is OpenCodeModelRef => candidate !== null);
+    if (matches.length === 1) return matches[0];
+
+    if (defaultProviderId) {
+      return modelIsSelectable({ providerID: defaultProviderId, modelID: trimmed })
+        ? { providerID: defaultProviderId, modelID: trimmed }
+        : null;
+    }
+
+    throw new Error(`Invalid OpenCode model id: ${rawModelId}`);
   };
 
   const attachSubscriptionIfNeeded = async (): Promise<void> => {
@@ -3185,7 +3269,7 @@ export function createOpenCodeServerRuntime(params: {
     resetTurnEventState();
   };
 
-  const ensureMcpServersForCurrentDirectoryBestEffort = async (): Promise<void> => {
+  const registerMcpServersForCurrentDirectoryBestEffort = async (): Promise<void> => {
     if (ensuredMcpServersForDirectory) return;
     if (!params.mcpServers || Object.keys(params.mcpServers).length === 0) return;
     const c = await ensureClient();
@@ -3219,6 +3303,26 @@ export function createOpenCodeServerRuntime(params: {
       }
     }
     ensuredMcpServersForDirectory = hadFailures !== true;
+  };
+
+  const scheduleMcpServersForCurrentDirectoryBestEffort = (): void => {
+    if (ensuredMcpServersForDirectory) return;
+    if (mcpServerRegistrationInFlight) {
+      mcpServerRegistrationRerunRequested = true;
+      return;
+    }
+    mcpServerRegistrationRerunRequested = false;
+    mcpServerRegistrationInFlight = registerMcpServersForCurrentDirectoryBestEffort()
+      .catch((error) => {
+        logger.debug('[OpenCodeServer] MCP server registration failed (non-fatal)', error);
+      })
+      .finally(() => {
+        mcpServerRegistrationInFlight = null;
+        if (!mcpServerRegistrationRerunRequested) return;
+        mcpServerRegistrationRerunRequested = false;
+        ensuredMcpServersForDirectory = false;
+        scheduleMcpServersForCurrentDirectoryBestEffort();
+      });
   };
 
   const drainPendingAfterStartOrLoad = async (): Promise<void> => {
@@ -3276,7 +3380,7 @@ export function createOpenCodeServerRuntime(params: {
       await attachSubscriptionIfNeeded();
       const c = await ensureClient();
 
-      await ensureMcpServersForCurrentDirectoryBestEffort();
+      scheduleMcpServersForCurrentDirectoryBestEffort();
 
       const resumeId = typeof opts.resumeId === 'string' ? opts.resumeId.trim() : '';
       if (resumeId) {
@@ -3284,7 +3388,7 @@ export function createOpenCodeServerRuntime(params: {
         sessionId = existing.id ?? resumeId;
         providerActivityTracker.resetForProviderSession(sessionId);
         omitCustomMessageIdForResumedSession = true;
-        const sessionDirectory = normalizeString((existing as any)?.directory).trim();
+        const sessionDirectory = normalizeString(existing.directory).trim();
         if (sessionDirectory) {
           try {
             c.setDirectoryOverride(sessionDirectory);
@@ -3292,7 +3396,7 @@ export function createOpenCodeServerRuntime(params: {
             // non-fatal
           }
           ensuredMcpServersForDirectory = false;
-          await ensureMcpServersForCurrentDirectoryBestEffort();
+          scheduleMcpServersForCurrentDirectoryBestEffort();
         }
         await c.sessionUpdate({ sessionId: sessionId!, permission: [...resolveSessionPermissionRuleset()] as unknown[] });
         publishDynamicSessionOptionsBestEffort();
@@ -3349,7 +3453,7 @@ export function createOpenCodeServerRuntime(params: {
       sessionId = created.id;
       providerActivityTracker.resetForProviderSession(sessionId);
       omitCustomMessageIdForResumedSession = false;
-      const createdDirectory = normalizeString((created as any)?.directory).trim();
+      const createdDirectory = normalizeString(created.directory).trim();
       if (createdDirectory) {
         try {
           c.setDirectoryOverride(createdDirectory);
@@ -3357,7 +3461,7 @@ export function createOpenCodeServerRuntime(params: {
           // non-fatal
         }
         ensuredMcpServersForDirectory = false;
-        await ensureMcpServersForCurrentDirectoryBestEffort();
+        scheduleMcpServersForCurrentDirectoryBestEffort();
       }
       publishDynamicSessionOptionsBestEffort();
       publishNativeTodosWorkStateBestEffort();
@@ -3375,6 +3479,7 @@ export function createOpenCodeServerRuntime(params: {
     async sendPromptWithMeta(paramsWithMeta: { text: string; localId?: string | null }): Promise<void> {
       if (!sessionId) throw new Error('OpenCode server session was not started');
       const c = await ensureClient();
+      scheduleMcpServersForCurrentDirectoryBestEffort();
       pendingProviderAutonomousBackgroundWake = null;
 
       const effectiveText = typeof paramsWithMeta.text === 'string' ? paramsWithMeta.text : '';
@@ -3723,6 +3828,7 @@ export function createOpenCodeServerRuntime(params: {
       suppressSessionErrorAbortNotificationForSessionId = null;
       for (const key of Object.keys(configOverrides)) delete configOverrides[key];
       ensuredMcpServersForDirectory = false;
+      mcpServerRegistrationRerunRequested = false;
       if (ensuredMcpServerNames.size > 0) {
         try {
           const c = await ensureClient();
@@ -3787,14 +3893,7 @@ export function createOpenCodeServerRuntime(params: {
         publishDynamicSessionOptionsBestEffort();
         return;
       }
-      const parsed = parseOpenCodeModelId(trimmed);
-      if (!parsed) throw new Error(`Invalid OpenCode model id: ${modelId}`);
-      if (isKnownUnavailableOpenCodeModel(parsed)) {
-        selectedModel = null;
-        publishDynamicSessionOptionsBestEffort();
-        return;
-      }
-      selectedModel = parsed;
+      selectedModel = await resolveModelOverride(trimmed);
       publishDynamicSessionOptionsBestEffort();
     },
   };

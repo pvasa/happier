@@ -1,11 +1,146 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  evaluateConnectedServiceSwitchApplyPolicy,
   evaluatePredictiveSoftSwitchLiveSessionRequirement,
   evaluatePredictiveSoftSwitchPolicy,
   evaluatePredictiveSoftSwitchSessionApplyPolicy,
   evaluatePredictiveSoftSwitchTrackedLiveSessionPolicy,
 } from './predictiveSoftSwitchPolicy';
+
+const directLiveExternalTokenInjectionCapability = {
+  directLiveHotAuth: {
+    supportsInTurnApply: true,
+    requiresExactRuntimeIdentity: true,
+    refreshSelectionResync: 'required',
+    authMode: {
+      kind: 'external_token_injection',
+      surface: 'codex_chatgpt_auth_tokens',
+    },
+  },
+} as const;
+
+describe('evaluateConnectedServiceSwitchApplyPolicy', () => {
+  it('requires direct live hot apply for healthy sibling fanout', () => {
+    expect(evaluateConnectedServiceSwitchApplyPolicy({
+      context: 'healthy_sibling',
+      reason: 'same_provider_account_exhausted',
+      applyMode: 'restart_resume',
+    })).toEqual({
+      status: 'suppress',
+      reason: 'direct_live_hot_apply_required',
+      allowDirectLiveHotApply: true,
+      allowTransportRecycle: false,
+      allowRestartResume: false,
+    });
+  });
+
+  it('allows busy direct-live-capable healthy sibling fanout immediately', () => {
+    expect(evaluateConnectedServiceSwitchApplyPolicy({
+      context: 'healthy_sibling',
+      reason: 'same_provider_account_exhausted',
+      turnState: {
+        inFlight: true,
+        safeToApply: false,
+      },
+      runtimeAuthApply: directLiveExternalTokenInjectionCapability,
+    })).toEqual({
+      status: 'allow',
+      allowDirectLiveHotApply: true,
+      allowTransportRecycle: false,
+      allowRestartResume: false,
+    });
+  });
+
+  it('does not treat in-turn direct-live support as available without the exact identity contract', () => {
+    expect(evaluateConnectedServiceSwitchApplyPolicy({
+      context: 'healthy_sibling',
+      reason: 'same_provider_account_exhausted',
+      turnState: {
+        inFlight: true,
+        safeToApply: false,
+      },
+      runtimeAuthApply: {
+        directLiveHotAuth: {
+          supportsInTurnApply: true,
+          requiresExactRuntimeIdentity: false,
+          refreshSelectionResync: 'required',
+          authMode: {
+            kind: 'external_token_injection',
+            surface: 'codex_chatgpt_auth_tokens',
+          },
+        },
+      },
+    })).toEqual({
+      status: 'defer',
+      reason: 'turn_boundary_required',
+      policy: 'defer_until_turn_boundary',
+      allowDirectLiveHotApply: true,
+      allowTransportRecycle: false,
+      allowRestartResume: false,
+    });
+  });
+
+  it('does not treat external-token in-turn direct-live support as available without refresh resync', () => {
+    expect(evaluateConnectedServiceSwitchApplyPolicy({
+      context: 'healthy_sibling',
+      reason: 'same_provider_account_exhausted',
+      turnState: {
+        inFlight: true,
+        safeToApply: false,
+      },
+      runtimeAuthApply: {
+        directLiveHotAuth: {
+          supportsInTurnApply: true,
+          requiresExactRuntimeIdentity: true,
+          refreshSelectionResync: 'not_applicable',
+          authMode: {
+            kind: 'external_token_injection',
+            surface: 'codex_chatgpt_auth_tokens',
+          },
+        },
+      },
+    })).toEqual({
+      status: 'defer',
+      reason: 'turn_boundary_required',
+      policy: 'defer_until_turn_boundary',
+      allowDirectLiveHotApply: true,
+      allowTransportRecycle: false,
+      allowRestartResume: false,
+    });
+  });
+
+  it('defers busy unsupported healthy sibling fanout to the turn boundary', () => {
+    expect(evaluateConnectedServiceSwitchApplyPolicy({
+      context: 'healthy_sibling',
+      reason: 'same_provider_account_exhausted',
+      turnState: {
+        inFlight: true,
+        safeToApply: false,
+      },
+    })).toEqual({
+      status: 'defer',
+      reason: 'turn_boundary_required',
+      policy: 'defer_until_turn_boundary',
+      allowDirectLiveHotApply: true,
+      allowTransportRecycle: false,
+      allowRestartResume: false,
+    });
+  });
+
+  it('allows usage-limit fallback for the original failed session', () => {
+    expect(evaluateConnectedServiceSwitchApplyPolicy({
+      context: 'original_failed_session',
+      reason: 'usage_limit',
+      applyMode: 'restart_resume',
+    })).toEqual({
+      status: 'allow',
+      allowDirectLiveHotApply: true,
+      allowTransportRecycle: true,
+      allowRestartResume: true,
+    });
+  });
+});
 
 describe('evaluatePredictiveSoftSwitchPolicy', () => {
   it('suppresses live-session predictive soft-threshold switching for restart-only providers', () => {
@@ -29,12 +164,25 @@ describe('evaluatePredictiveSoftSwitchPolicy', () => {
     })).toEqual({ status: 'allow' });
   });
 
-  it('suppresses predictive soft-threshold switching while a turn is in flight', () => {
+  it('allows direct-live-capable predictive soft-threshold switching while a turn is in flight', () => {
     expect(evaluatePredictiveSoftSwitchPolicy({
       context: 'live_session',
       reason: 'soft_threshold',
       predictiveSoftSwitchMode: 'supported',
       turnState: { inFlight: true },
+      runtimeAuthApply: directLiveExternalTokenInjectionCapability,
+    })).toEqual({ status: 'allow' });
+  });
+
+  it('suppresses unsupported predictive soft-threshold switching while a turn is in flight', () => {
+    expect(evaluatePredictiveSoftSwitchPolicy({
+      context: 'live_session',
+      reason: 'soft_threshold',
+      predictiveSoftSwitchMode: 'supported',
+      turnState: { inFlight: true },
+      runtimeAuthApply: {
+        directLiveHotAuth: 'unsupported',
+      },
     })).toEqual({
       status: 'suppress',
       reason: 'predictive_soft_switch_turn_in_flight',

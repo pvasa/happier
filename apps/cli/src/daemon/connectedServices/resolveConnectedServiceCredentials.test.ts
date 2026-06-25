@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol';
 
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
-import { resolveConnectedServiceCredentials } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
+import {
+  ConnectedServiceCredentialResolutionError,
+  resolveConnectedServiceCredentials,
+} from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
 import type { ConnectedServiceCredentialApi } from '@/api/connectedServices/connectedServiceCredentialApi';
 import type { Credentials } from '@/persistence';
 
@@ -93,6 +96,36 @@ describe('resolveConnectedServiceCredentials', () => {
     expect(api.getAccountEncryptionMode).toHaveBeenCalledTimes(1);
     expect(api.getConnectedServiceCredentialPlain).toHaveBeenCalledWith({ serviceId: 'openai-codex', profileId: 'work' });
     expect(api.getConnectedServiceCredentialSealed).not.toHaveBeenCalled();
+  });
+
+  it('throws a structured missing-credential error with service/profile identity', async () => {
+    const api = {
+      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getConnectedServiceCredentialPlain: vi.fn(async () => null),
+      getConnectedServiceCredentialSealed: vi.fn(async () => null),
+    };
+
+    const credentials: Credentials = {
+      token: 't',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(9) },
+    };
+
+    await expect(resolveConnectedServiceCredentials({
+      credentials,
+      api: api as ConnectedServiceCredentialApi,
+      bindings: [{ serviceId: 'claude-subscription', profileId: 'batiplus' }],
+    })).rejects.toMatchObject({
+      name: 'ConnectedServiceCredentialResolutionError',
+      kind: 'missing_credential',
+      serviceId: 'claude-subscription',
+      profileId: 'batiplus',
+    });
+
+    await expect(resolveConnectedServiceCredentials({
+      credentials,
+      api: api as ConnectedServiceCredentialApi,
+      bindings: [{ serviceId: 'claude-subscription', profileId: 'batiplus' }],
+    })).rejects.toBeInstanceOf(ConnectedServiceCredentialResolutionError);
   });
 
   it('falls back to plaintext credentials when the account-mode probe errors', async () => {

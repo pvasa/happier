@@ -1,3 +1,3 @@
-import { ConnectedServiceGroupDetailView } from '@/components/settings/connectedServices/group/ConnectedServiceGroupDetailView';
+import { PoolDetailView } from '@/components/settings/connectedServices/pools/PoolDetailView';
 
-export default ConnectedServiceGroupDetailView;
+export default PoolDetailView;

@@ -112,7 +112,7 @@ describe("startServer DB provider selection", () => {
         });
 
         expect(process.env.DATABASE_URL).toBe(
-            `${pathToFileURL(join(homeDir, "happy server #light", "happier-server-light.sqlite")).href}?socket_timeout=30`,
+            `${pathToFileURL(join(homeDir, "happy server #light", "happier-server-light.sqlite")).href}?socket_timeout=30&connection_limit=1`,
         );
     });
 });

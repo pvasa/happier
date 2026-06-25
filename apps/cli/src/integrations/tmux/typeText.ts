@@ -3,6 +3,12 @@ import type {
   TerminalInjectionDuplicateRisk,
   TerminalInjectionFailurePhase,
 } from '../terminalHost/_types';
+import { splitStringByCodePoints } from '../terminalHost/chunks';
+import {
+  createTerminalHostDeadline,
+  remainingTerminalHostDeadlineMs,
+} from '../terminalHost/deadline';
+import { resolvePromptSubmitTimeoutMs } from '../terminalHost/promptSubmitTimeout';
 
 export type TmuxCommandExecutor = (
   args: readonly string[],
@@ -48,15 +54,6 @@ function waitFor(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-function chunkText(text: string, chunkSize: number): string[] {
-  const codePoints = Array.from(text);
-  const chunks: string[] = [];
-  for (let index = 0; index < codePoints.length; index += chunkSize) {
-    chunks.push(codePoints.slice(index, index + chunkSize).join(''));
-  }
-  return chunks;
-}
-
 async function commandSucceeded(
   executor: TmuxCommandExecutor,
   args: readonly string[],
@@ -67,26 +64,13 @@ async function commandSucceeded(
   return result !== null && result.returncode === 0 ? 'success' : 'failed';
 }
 
-function createDeadline(timeoutMs: number | undefined): number | undefined {
-  return timeoutMs !== undefined && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
-}
-
-function remainingTimeoutMs(deadline: number | undefined): number | undefined {
-  if (deadline === undefined) return undefined;
-  return Math.max(0, deadline - Date.now());
-}
-
-function isDeadlineExpired(deadline: number | undefined): boolean {
-  return remainingTimeoutMs(deadline) === 0;
-}
-
 async function timedCommandSucceeded(
   executor: TmuxCommandExecutor,
   args: readonly string[],
   deadline: number | undefined,
   options?: Readonly<{ stdin?: string }>,
 ): Promise<'success' | 'failed' | 'timeout'> {
-  const timeoutMs = remainingTimeoutMs(deadline);
+  const timeoutMs = remainingTerminalHostDeadlineMs(deadline);
   if (timeoutMs === 0) return 'timeout';
   return commandSucceeded(executor, args, {
     ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
@@ -118,11 +102,11 @@ export async function typeTextViaSendKeys(params: Readonly<{
     });
   }
 
-  const deadline = createDeadline(params.timeoutMs);
+  const deadline = createTerminalHostDeadline(params.timeoutMs);
   const normalizedLines = params.text.replace(/\r\n?/g, '\n').split('\n');
   for (const [lineIndex, line] of normalizedLines.entries()) {
     if (line.length > 0) {
-      for (const chunk of chunkText(line, params.chunkSize)) {
+      for (const chunk of splitStringByCodePoints(line, params.chunkSize)) {
         const typed = await timedCommandSucceeded(params.executor, [
           'send-keys',
           '-t',
@@ -175,38 +159,16 @@ export async function typeTextViaSendKeys(params: Readonly<{
     }
   }
 
-  if (isDeadlineExpired(deadline)) {
-    return failedResult({
-      reason: 'timeout',
-      phase: 'after_write_before_enter',
-      duplicateRisk: progress.textMayHaveReachedPane || progress.newlineMayHaveReachedPane ? 'possible' : 'none',
-      progress,
-    });
-  }
   const submitDelayMs = params.submitDelayMs ?? 0;
   if (submitDelayMs > 0) {
-    const timeoutMs = remainingTimeoutMs(deadline);
-    if (timeoutMs === 0) {
-      return failedResult({
-        reason: 'timeout',
-        phase: 'after_write_before_enter',
-        duplicateRisk: progress.textMayHaveReachedPane || progress.newlineMayHaveReachedPane ? 'possible' : 'none',
-        progress,
-      });
-    }
-    if (timeoutMs !== undefined && timeoutMs < submitDelayMs) {
-      await (params.wait ?? waitFor)(timeoutMs);
-      return failedResult({
-        reason: 'timeout',
-        phase: 'after_write_before_enter',
-        duplicateRisk: progress.textMayHaveReachedPane || progress.newlineMayHaveReachedPane ? 'possible' : 'none',
-        progress,
-      });
-    }
     await (params.wait ?? waitFor)(submitDelayMs);
   }
 
-  const submitted = await timedCommandSucceeded(params.executor, ['send-keys', '-t', params.target, 'C-m'], deadline);
+  const submitDeadline = createTerminalHostDeadline(resolvePromptSubmitTimeoutMs({
+    remainingTimeoutMs: remainingTerminalHostDeadlineMs(deadline),
+    fallbackTimeoutMs: params.timeoutMs,
+  }));
+  const submitted = await timedCommandSucceeded(params.executor, ['send-keys', '-t', params.target, 'C-m'], submitDeadline);
   if (submitted === 'timeout') {
     progress.submitMayHaveReachedPane = true;
     return failedResult({

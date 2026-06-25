@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createTestTranscriptMeasurementReconciler } from './transcriptMeasurementReconciler';
+import { createTestTranscriptMeasurementReconciler, isStructuralSignatureDelta } from './transcriptMeasurementReconciler';
 import type { TranscriptItemHeightValiditySignature } from './transcriptItemHeightCache';
 
 function streamingSignature(
@@ -271,5 +271,79 @@ describe('transcriptMeasurementReconciler', () => {
 
             expect(reconciler.resolveReservation(signature)).toBeUndefined();
         });
+    });
+});
+
+describe('isStructuralSignatureDelta (per-item floor reset trigger)', () => {
+    const toolGroupHeader = (status: 'running' | 'completed'): TranscriptItemHeightValiditySignature =>
+        stableSignature({
+            itemId: 'group-1#header',
+            kind: 'tool-group-header',
+            structuralKey: `group-1|count:2|status:${status}|expanded:false`,
+            expansionKey: 'tools:collapsed|thinking:none',
+        });
+
+    it('re-seeds a settled tool-group header when its status changes running→completed (the shrink that left the gap)', () => {
+        expect(isStructuralSignatureDelta(toolGroupHeader('running'), toolGroupHeader('completed'))).toBe(true);
+    });
+
+    it('does not re-seed a settled row whose content is unchanged', () => {
+        expect(isStructuralSignatureDelta(toolGroupHeader('completed'), toolGroupHeader('completed'))).toBe(false);
+    });
+
+    it('does NOT re-seed while a row streams (its monotonic floor must prevent append overlap)', () => {
+        const a = streamingSignature({ structuralKey: 'message-1:tok-10' });
+        const b = streamingSignature({ structuralKey: 'message-1:tok-20' });
+        expect(isStructuralSignatureDelta(a, b)).toBe(false);
+    });
+
+    it('does NOT re-seed a growing tool-progress row on content change (excluded like streaming)', () => {
+        const a = stableSignature({ rowState: 'tool-progress', structuralKey: 'tool-1:out-10' });
+        const b = stableSignature({ rowState: 'tool-progress', structuralKey: 'tool-1:out-20' });
+        expect(isStructuralSignatureDelta(a, b)).toBe(false);
+    });
+
+    it('re-seeds on a streaming→stable finalize (rowState change)', () => {
+        expect(isStructuralSignatureDelta(streamingSignature(), stableSignature())).toBe(true);
+    });
+
+    it('re-seeds on expand/collapse', () => {
+        expect(isStructuralSignatureDelta(
+            stableSignature({ expansionKey: 'tools:collapsed|thinking:none' }),
+            stableSignature({ expansionKey: 'tools:expanded|thinking:none' }),
+        )).toBe(true);
+    });
+});
+
+describe('per-item floor re-seeds after a settled shrink (tool-group header gap fix, end-to-end)', () => {
+    it('drops the stale taller floor once the header structural change triggers a reset', () => {
+        const reconciler = createTestTranscriptMeasurementReconciler();
+        const running = stableSignature({
+            itemId: 'group-1#header', kind: 'tool-group-header',
+            structuralKey: 'group-1|status:running', expansionKey: 'tools:collapsed|thinking:none',
+        });
+        const completed = stableSignature({
+            itemId: 'group-1#header', kind: 'tool-group-header',
+            structuralKey: 'group-1|status:completed', expansionKey: 'tools:collapsed|thinking:none',
+        });
+
+        // Running header measured tall (e.g. 36px with the running indicator).
+        reconciler.recordMeasuredHeight({ signature: running, heightPx: 36 });
+
+        // Pre-reset: the completed header (a different structuralKey) misses the exact cache and
+        // inherits the running floor (keyed without structuralKey) — the stale 36 over-reservation
+        // whose self-fulfilling minHeight produced the persistent gap.
+        expect(reconciler.resolveReservation(completed)).toEqual({ kind: 'floor', minHeight: 36 });
+
+        // The shell fires the reset because the settled header's structuralKey changed.
+        expect(isStructuralSignatureDelta(running, completed)).toBe(true);
+        reconciler.resetReservationForStructuralChange({ itemId: 'group-1#header', signature: completed });
+
+        // Reset-pending: no reservation is served, so the row measures its natural (shorter) height.
+        expect(reconciler.resolveReservation(completed)).toBeUndefined();
+
+        // The natural completed height re-seeds the reservation — no more 36px over-reservation.
+        reconciler.recordMeasuredHeight({ signature: completed, heightPx: 33 });
+        expect(reconciler.resolveReservation(completed)).toEqual({ kind: 'exact', minHeight: 33 });
     });
 });

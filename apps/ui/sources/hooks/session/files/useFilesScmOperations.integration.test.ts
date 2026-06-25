@@ -15,6 +15,7 @@ const {
     trackingCapture,
     mockMachineRPC,
     readMachineTargetForSession,
+    readMachineControlTargetForSession,
     resolvePreferredServerIdForSessionId,
 	} = vi.hoisted(() => ({
 	    mockSessionRPC: vi.fn(),
@@ -29,16 +30,26 @@ const {
 	        (err as Error & { rpcErrorCode?: string }).rpcErrorCode = 'RPC_METHOD_NOT_AVAILABLE';
 	        throw err;
 	    }),
-        readMachineTargetForSession: vi.fn(() => null),
-        resolvePreferredServerIdForSessionId: vi.fn(() => undefined),
+    readMachineTargetForSession: vi.fn(() => null),
+    readMachineControlTargetForSession: vi.fn(() => null),
+    resolvePreferredServerIdForSessionId: vi.fn(() => undefined),
 	}));
 
-	vi.mock('@/sync/api/session/apiSocket', () => ({
-	    apiSocket: {
-	        sessionRPC: mockSessionRPC,
-	        machineRPC: mockMachineRPC,
-	    },
-	}));
+vi.mock('@/sync/api/session/apiSocket', () => ({
+    apiSocket: {
+        sessionRPC: mockSessionRPC,
+        machineRPC: mockMachineRPC,
+    },
+}));
+
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
+    sessionRpcWithServerScope: (params: {
+        sessionId: string;
+        method: string;
+        payload: unknown;
+        timeoutMs?: number;
+    }) => mockSessionRPC(params.sessionId, params.method, params.payload, { timeoutMs: params.timeoutMs }),
+}));
 
 // sessions ops import sync for non-git helpers; keep this test node-safe.
 vi.mock('@/sync/sync', () => ({
@@ -71,13 +82,19 @@ vi.mock('@/scm/scmStatusSync', () => ({
     },
 }));
 
-vi.mock('@/sync/ops/sessionMachineTarget', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/ops/sessionMachineTarget')>();
-    return {
-        ...actual,
-        readMachineTargetForSession,
-    };
-});
+vi.mock('@/sync/ops/sessionMachineTarget', () => ({
+    canUseSessionRpc: () => true,
+    readMachineTargetForSession,
+    readMachineControlTargetForSession,
+    resolveMachinePathFromSessionBase: ({
+        basePath,
+        requestPath,
+    }: {
+        basePath: string;
+        requestPath?: string;
+    }) => requestPath && requestPath !== '.' ? requestPath : basePath,
+    shouldFallbackToSessionRpc: () => true,
+}));
 
 vi.mock('@/track', () => ({
     tracking: {
@@ -89,7 +106,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdFo
     resolvePreferredServerIdForSessionId,
 }));
 
-import { sessionScmStatusSnapshot } from '@/sync/ops';
+import { sessionScmStatusSnapshot } from '@/sync/ops/sessionScm';
 import { projectManager } from '@/sync/runtime/orchestration/projectManager';
 import { storage } from '@/sync/domains/state/storage';
 import { renderHook } from '@/dev/testkit';
@@ -155,6 +172,8 @@ describe('useFilesScmOperations integration', () => {
         trackingCapture.mockReset();
         readMachineTargetForSession.mockReset();
         readMachineTargetForSession.mockReturnValue(null);
+        readMachineControlTargetForSession.mockReset();
+        readMachineControlTargetForSession.mockReturnValue(null);
         resolvePreferredServerIdForSessionId.mockReset();
         resolvePreferredServerIdForSessionId.mockReturnValue(undefined);
 

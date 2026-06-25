@@ -45,6 +45,11 @@ async function withFakeServer<T>(
 
   const child = spawn(process.execPath, [scriptPath], {
     cwd: testDir,
+    env: {
+      ...process.env,
+      CODEX_HOME: '',
+      HAPPIER_E2E_FAKE_CODEX_APP_SERVER_INITIAL_ACCOUNT_ID: 'acct-1',
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const output = readline.createInterface({ input: child.stdout });
@@ -100,6 +105,11 @@ async function withPersistentFakeServer<T>(
 
   const child = spawn(process.execPath, [scriptPath], {
     cwd: params.testDir,
+    env: {
+      ...process.env,
+      CODEX_HOME: '',
+      HAPPIER_E2E_FAKE_CODEX_APP_SERVER_INITIAL_ACCOUNT_ID: 'acct-1',
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const output = readline.createInterface({ input: child.stdout });
@@ -133,6 +143,110 @@ async function withPersistentFakeServer<T>(
 }
 
 describe('fake Codex app-server harness', () => {
+  it('models connected-service account login, account reads, and rate-limit reads', async () => {
+    await withFakeServer(
+      {},
+      async ({ request, requestLogPath }) => {
+        await expect(request('account/read')).resolves.toMatchObject({
+          result: {
+            account: {
+              email: 'acct-1@example.test',
+              planType: 'pro',
+            },
+          },
+        });
+
+        await expect(request('account/login/start', {
+          type: 'chatgptAuthTokens',
+          accessToken: 'access-token-for-backup',
+          chatgptAccountId: 'acct-backup',
+        })).resolves.toMatchObject({
+          result: { ok: true },
+        });
+
+        await expect(request('account/read')).resolves.toMatchObject({
+          result: {
+            account: {
+              email: 'acct-backup@example.test',
+              planType: 'pro',
+            },
+          },
+        });
+
+        await expect(request('account/rateLimits/read')).resolves.toMatchObject({
+          result: {
+            plan_type: 'pro',
+            primary: expect.objectContaining({
+              used_percent: 3,
+              resets_at: expect.any(String),
+            }),
+          },
+        });
+
+        const requests = await readFakeCodexAppServerRequestLog(requestLogPath);
+        expect(requests).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            method: 'account/login/start',
+            params: expect.objectContaining({
+              chatgptAccountId: 'acct-backup',
+            }),
+          }),
+          expect.objectContaining({ method: 'account/rateLimits/read' }),
+        ]));
+      },
+    );
+  });
+
+  it('emits structured usage-limit failed turns for recovery flows', async () => {
+    await withFakeServer(
+      {},
+      async ({ request, requestLogPath, notifications }) => {
+        await expect(request('turn/start', {
+          threadId: 'thread-started',
+          input: [{ type: 'text', text: 'usage-limit-structured' }],
+        })).resolves.toMatchObject({
+          result: {
+            threadId: 'thread-started',
+            turn: { id: expect.any(String) },
+          },
+        });
+
+        await expect.poll(
+          () => notifications.find((entry) => entry.method === 'turn/completed'),
+          { timeout: 5_000 },
+        ).toMatchObject({
+          method: 'turn/completed',
+          params: expect.objectContaining({
+            threadId: 'thread-started',
+            turn: expect.objectContaining({
+              status: 'failed',
+              error: expect.objectContaining({
+                codexErrorInfo: 'UsageLimitExceeded',
+                rateLimits: expect.objectContaining({
+                  primary: expect.objectContaining({
+                    usedPercent: 100,
+                  }),
+                }),
+              }),
+            }),
+          }),
+        });
+
+        const requests = await readFakeCodexAppServerRequestLog(requestLogPath);
+        expect(requests).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            method: 'happier/test/turn/completed',
+            params: expect.objectContaining({
+              threadId: 'thread-started',
+              promptText: 'usage-limit-structured',
+              status: 'failed',
+            }),
+          }),
+        ]));
+      },
+    );
+  });
+
   it('keeps objective-required goal set behavior by default', async () => {
     await withFakeServer(
       {

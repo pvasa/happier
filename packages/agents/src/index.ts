@@ -139,8 +139,10 @@ export {
 
 export {
   CLAUDE_UNIFIED_TERMINAL_HOSTS,
+  CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICES,
   KIMI_PROVIDER_FIELDS,
   type ClaudeUnifiedTerminalHost,
+  type ClaudeUnifiedTerminalResumeChoice,
   normalizeCodexBackendMode,
   normalizeKimiAcpPythonSelector,
   type CodexBackendMode,
@@ -180,13 +182,25 @@ export {
     resolvePermissionModeGroupForAgent,
     normalizePermissionModeForAgent,
     normalizePermissionModeForGroup,
+    resolveProviderNativePermissionModeForAgent,
+    type ProviderNativePermissionMode,
     resolveLatestPermissionIntent,
 } from './permissions/index.js';
 
 export {
     CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
+    CLAUDE_LOCAL_PERMISSION_BRIDGE_STOPPED_REASON,
+    CLAUDE_UNIFIED_TERMINAL_RESUME_CHOICE_REQUEST_SOURCE,
     isClaudeLocalPermissionBridgeAgentStateRequest,
+    isClaudeUnifiedTerminalResumeChoiceAgentStateRequest,
 } from './providers/claude/permissionRequestSource.js';
+export {
+    DEFAULT_AGENT_STATE_EQUIVALENT_REQUEST_COMPLETION_WINDOW_MS,
+    isAgentStateRequestCoveredByCompletedRequests,
+    readAgentStateRequestCompletedAt,
+    type AgentStateRequestCoverageOptions,
+    type AgentStateRequestCoverageRecord,
+} from './runtime/agentStateRequestCoverage.js';
 export {
   CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
   CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES,

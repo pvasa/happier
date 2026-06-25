@@ -7,6 +7,10 @@ import { readStoredSessionMessage } from '@/sync/runtime/readStoredSessionConten
 import { markStreamingMessagesAppliedForSessionUiTelemetry } from '@/sync/runtime/performance/sessionUiTelemetry';
 import { recordRealtimeFanoutSocketMessageRoute } from '@/sync/runtime/performance/realtimeFanoutTelemetry';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
+import {
+    storedSessionMessageContentAttentionImpact,
+    storedSessionMessageContentAttentionImpactOrNull,
+} from '@/sync/domains/messages/messageUserAttention';
 import type {
     SessionRealtimeProjectionCandidate,
     SessionRealtimeProjectionMode,
@@ -187,6 +191,11 @@ function applyProjectionOnlySessionPatch(params: Readonly<{
     applyCacheOnlySessionProjectionPatch?: HandleSessionMessageSocketUpdateParams['applyCacheOnlySessionProjectionPatch'];
     fetchSessions: () => void;
 }>): void {
+    if (storedSessionMessageContentAttentionImpactOrNull(params.rawMessage?.content) === null) {
+        params.fetchSessions();
+        return;
+    }
+
     if (params.applyCacheOnlySessionProjectionPatch?.({
         sessionId: params.sessionId,
         updateData: params.updateData,
@@ -200,37 +209,19 @@ function applyProjectionOnlySessionPatch(params: Readonly<{
         params.fetchSessions();
         return;
     }
-    const nextSessionSeq = computeNextSessionSeqFromUpdate({
-        currentSessionSeq: params.session.seq ?? 0,
-        updateType: 'new-message',
-        containerSeq: params.updateData.seq,
-        messageSeq: params.messageSeq ?? undefined,
+    const patch = buildMessageSessionProjectionPatch({
+        session: params.session,
+        updateData: params.updateData,
+        rawMessage: params.rawMessage,
+        messageSeq: params.messageSeq,
+        updateType: params.updateType,
     });
-    const updateCreatedAt = finiteNumber(params.updateData.createdAt);
-    const messageCreatedAt = finiteNumber(params.rawMessage?.createdAt);
-    const meaningfulActivityCandidate = messageCreatedAt ?? updateCreatedAt;
-    const currentUpdatedAt = finiteNumber(params.session.updatedAt);
-    const currentMeaningfulActivityAt = finiteNumber(params.session.meaningfulActivityAt);
-    const nextUpdatedAt = updateCreatedAt === null
-        ? params.session.updatedAt
-        : Math.max(currentUpdatedAt ?? updateCreatedAt, updateCreatedAt);
-    const nextMeaningfulActivityAt = meaningfulActivityCandidate === null
-        ? params.session.meaningfulActivityAt
-        : Math.max(currentMeaningfulActivityAt ?? meaningfulActivityCandidate, meaningfulActivityCandidate);
 
-    if (
-        nextSessionSeq === (params.session.seq ?? 0)
-        && nextUpdatedAt === params.session.updatedAt
-        && (nextMeaningfulActivityAt ?? null) === (params.session.meaningfulActivityAt ?? null)
-    ) {
-        return;
-    }
+    if (!hasSessionProjectionPatch(patch)) return;
 
     params.applySessions([{
         ...params.session,
-        updatedAt: nextUpdatedAt,
-        meaningfulActivityAt: nextMeaningfulActivityAt,
-        seq: nextSessionSeq,
+        ...patch,
     }]);
 }
 
@@ -279,6 +270,7 @@ function buildMessageSessionProjectionPatch(params: Readonly<{
     updateType: 'new-message' | 'message-updated';
 }>): SessionProjectionPatch {
     const currentSeq = params.session.seq ?? 0;
+    const attentionImpact = storedSessionMessageContentAttentionImpact(params.rawMessage?.content);
     const nextSessionSeq = computeNextSessionSeqFromUpdate({
         currentSessionSeq: currentSeq,
         updateType: 'new-message',
@@ -287,7 +279,9 @@ function buildMessageSessionProjectionPatch(params: Readonly<{
     });
     const updateCreatedAt = finiteNumber(params.updateData?.createdAt);
     const messageCreatedAt = finiteNumber(params.rawMessage?.createdAt);
-    const nextMeaningfulActivityAt = messageCreatedAt ?? updateCreatedAt;
+    const nextMeaningfulActivityAt = attentionImpact.affectsMeaningfulActivity
+        ? messageCreatedAt ?? updateCreatedAt
+        : null;
     const currentUpdatedAt = finiteNumber(params.session.updatedAt) ?? 0;
     const currentMeaningfulActivityAt = finiteNumber(params.session.meaningfulActivityAt);
 

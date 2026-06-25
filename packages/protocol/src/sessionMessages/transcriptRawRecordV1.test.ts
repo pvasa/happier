@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  agentEventAttentionImpact,
   TranscriptRawAgentEventV1Schema,
   TranscriptRawRecordV1Schema,
+  type TranscriptRawAgentEventV1,
   type RuntimeConfigOutcomeChangeKeyV1,
   type RuntimeConfigOutcomeStatusV1,
   type RuntimeConfigOutcomeTimingV1,
@@ -74,6 +76,42 @@ describe('TranscriptRawRecordV1Schema', () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+
+  it('parses terminal composer draft blocked session events', () => {
+    const parsed = TranscriptRawAgentEventV1Schema.safeParse({
+      type: 'terminal-composer-draft-blocked',
+      reason: 'idle_draft_guard',
+      stateAtMs: 1781788925696,
+      message: 'A terminal composer draft is blocking delivery.',
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it('classifies maintenance events as non-unread system activity', () => {
+    const maintenanceEventTypes = [
+      'connected-service-account-switch',
+      'connected-service-account-switch-deferral',
+      'connected-service-account-switch-deferral-completed',
+      'connected-service-account-switch-deferral-superseded',
+      'connected-service-account-switch-attempt',
+      'provider-state-sharing-degraded',
+    ] as const satisfies ReadonlyArray<TranscriptRawAgentEventV1['type']>;
+
+    for (const type of maintenanceEventTypes) {
+      expect(agentEventAttentionImpact({ type })).toEqual({
+        affectsUnread: false,
+        affectsMeaningfulActivity: false,
+      });
+    }
+
+    expect(agentEventAttentionImpact({
+      type: 'ready',
+    })).toEqual({
+      affectsUnread: true,
+      affectsMeaningfulActivity: true,
+    });
   });
 
   it('parses codex turn_aborted lifecycle records', () => {
@@ -453,6 +491,47 @@ describe('TranscriptRawRecordV1Schema', () => {
       'openai-codex': {
         status: 'weakly_verified',
         reason: 'provider_account_email_verified_without_account_id',
+      },
+    });
+  });
+
+  it('preserves exact shared-auth-surface switch attempt verification details', () => {
+    const parsed = TranscriptRawRecordV1Schema.safeParse({
+      role: 'agent',
+      content: {
+        type: 'event',
+        id: 'event-account-switch-attempt-shared-surface-verification',
+        data: {
+          type: 'connected-service-account-switch-attempt',
+          ok: true,
+          action: 'hot_applied',
+          verificationByServiceId: {
+            'claude-subscription': {
+              status: 'verified',
+              sharedAuthSurfaceId: 'claude-team',
+              proofStrength: 'exact',
+              source: 'runtime_identity_probe',
+            },
+          },
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error('expected parse success');
+    const content = parsed.data.content;
+    expect(content.type).toBe('event');
+    if (content.type !== 'event') throw new Error('expected event content');
+    expect(content.data.type).toBe('connected-service-account-switch-attempt');
+    if (content.data.type !== 'connected-service-account-switch-attempt') {
+      throw new Error('expected connected-service account switch attempt');
+    }
+    expect(content.data.verificationByServiceId).toEqual({
+      'claude-subscription': {
+        status: 'verified',
+        sharedAuthSurfaceId: 'claude-team',
+        proofStrength: 'exact',
+        source: 'runtime_identity_probe',
       },
     });
   });

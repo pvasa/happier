@@ -1,4 +1,5 @@
 import { parseClaudeScreenState, type ClaudeScreenState } from './tuiControls/screenState';
+import { isClaudeComposerCaptureStyleUnavailablePlaceholderCandidate } from './tuiControls/composerCaptureClassification';
 import { isControllerTypedSlashCommandResidue } from './tuiControls/slashControls';
 
 const DEFAULT_DRAFT_CLEAR_SETTLE_MS = 250;
@@ -11,6 +12,8 @@ export type OwnComposerDraftGuardResult =
   | Readonly<{ status: 'cleared'; screen: ClaudeScreenState; attempts: number }>
   /** Composer holds text we did NOT write — a genuine user draft that must never be touched. */
   | Readonly<{ status: 'foreign_draft'; screen: ClaudeScreenState }>
+  /** Composer text may be a dim Claude suggestion, but the capture lacks style evidence. */
+  | Readonly<{ status: 'capture_style_unavailable'; screen: ClaudeScreenState }>
   /** Screen is generating: the clear key (Escape) would interrupt the running turn. */
   | Readonly<{ status: 'generating'; screen: ClaudeScreenState }>
   | Readonly<{ status: 'capture_failed' }>
@@ -27,7 +30,10 @@ export type OwnComposerDraftGuardResult =
  * AFTER a predecessor's leftover injection and submitted the concatenation as one corrupted prompt.
  */
 export async function clearOwnLeftoverComposerDraft(opts: Readonly<{
-  captureInputState: () => Promise<Readonly<{ currentInput: string }>>;
+  captureInputState: () => Promise<Readonly<{
+    currentInput: string;
+    cursor?: Readonly<{ x: number; y: number }> | undefined;
+  }>>;
   /** Sends ONE composer-clear keypress (Escape). Only invoked for exact-match own leftovers. */
   sendClearKey: () => Promise<void>;
   ownComposerTexts: Readonly<{ matches: (draft: string) => boolean }>;
@@ -42,15 +48,18 @@ export async function clearOwnLeftoverComposerDraft(opts: Readonly<{
     timer.unref?.();
   }));
 
-  async function capture(): Promise<ClaudeScreenState | null> {
+  async function capture(): Promise<Readonly<{ screen: ClaudeScreenState; rawText: string }> | null> {
     try {
-      return parseClaudeScreenState((await opts.captureInputState()).currentInput);
+      const inputState = await opts.captureInputState();
+      const rawText = inputState.currentInput;
+      return { screen: parseClaudeScreenState(rawText, { cursor: inputState.cursor }), rawText };
     } catch {
       return null;
     }
   }
 
-  function classify(screen: ClaudeScreenState): 'empty' | 'own' | 'foreign' | 'generating' {
+  function classify(captureResult: Readonly<{ screen: ClaudeScreenState; rawText: string }>): 'empty' | 'own' | 'foreign' | 'capture_style_unavailable' | 'generating' {
+    const { screen, rawText } = captureResult;
     const content = screen.composerContent ?? '';
     if (content.length === 0) return 'empty';
     if (screen.generating) return 'generating';
@@ -59,16 +68,23 @@ export async function clearOwnLeftoverComposerDraft(opts: Readonly<{
     // of the persisted transcript, so a respawned registry can never exact-match their residue.
     // The finite controller vocabulary (/model, /effort) is still OUR OWN text and stays
     // clearable; everything else (incl. user-typed slash drafts like /compact …) stays foreign.
-    return isControllerTypedSlashCommandResidue(content) ? 'own' : 'foreign';
+    if (isControllerTypedSlashCommandResidue(content)) return 'own';
+    if (isClaudeComposerCaptureStyleUnavailablePlaceholderCandidate(rawText, screen)) {
+      return 'capture_style_unavailable';
+    }
+    return 'foreign';
   }
 
-  let screen = await capture();
-  if (!screen) return { status: 'capture_failed' };
-  switch (classify(screen)) {
+  let captured = await capture();
+  if (!captured) return { status: 'capture_failed' };
+  let screen = captured.screen;
+  switch (classify(captured)) {
     case 'empty':
       return { status: 'no_draft', screen };
     case 'generating':
       return { status: 'generating', screen };
+    case 'capture_style_unavailable':
+      return { status: 'capture_style_unavailable', screen };
     case 'foreign':
       return { status: 'foreign_draft', screen };
     case 'own':
@@ -84,13 +100,16 @@ export async function clearOwnLeftoverComposerDraft(opts: Readonly<{
     await wait(settleMs);
     const recaptured = await capture();
     if (!recaptured) return { status: 'capture_failed' };
-    screen = recaptured;
+    captured = recaptured;
+    screen = recaptured.screen;
     opts.onClearAttempt?.({ attempt, screen });
-    switch (classify(screen)) {
+    switch (classify(captured)) {
       case 'empty':
         return { status: 'cleared', screen, attempts: attempt };
       case 'generating':
         return { status: 'generating', screen };
+      case 'capture_style_unavailable':
+        return { status: 'capture_style_unavailable', screen };
       case 'foreign':
         // The draft changed under us (user started typing): stop immediately, never touch it.
         return { status: 'foreign_draft', screen };

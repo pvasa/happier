@@ -1,6 +1,7 @@
 import type { AgentBackend, AgentFactoryOptions, McpServerConfig } from '@/agent/core';
 import type { PermissionMode } from '@/api/types';
 import { PiRpcBackend } from '@/backends/pi/rpc/PiRpcBackend';
+import { readConnectedServiceChildSelectionsFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { requireProviderCliLaunchSpec } from '@/runtime/managedTools/requireProviderCliLaunchSpec';
 import { providers } from '@happier-dev/agents';
 
@@ -37,17 +38,61 @@ export function buildPiRpcArgs(opts?: Readonly<{ permissionMode?: PermissionMode
   return args;
 }
 
+type PiConnectedServiceLaunchSelection = Readonly<{
+  provider: string;
+  startupModel: string;
+  modelScope: string;
+}>;
+
+function resolvePiLaunchSelectionForConnectedService(serviceId: string): PiConnectedServiceLaunchSelection | null {
+  switch (serviceId) {
+    case 'openai-codex':
+      return { provider: 'openai-codex', startupModel: 'gpt-5.5', modelScope: 'openai-codex/*' };
+    case 'openai':
+      return { provider: 'openai', startupModel: 'gpt-5.4', modelScope: 'openai/*' };
+    case 'claude-subscription':
+    case 'anthropic':
+      return { provider: 'anthropic', startupModel: 'claude-opus-4-8', modelScope: 'anthropic/*' };
+    default:
+      return null;
+  }
+}
+
+function resolvePiLaunchSelectionFromConnectedServiceSelection(
+  env: Readonly<Record<string, string>>,
+): PiConnectedServiceLaunchSelection | null {
+  for (const selection of readConnectedServiceChildSelectionsFromEnv(env)) {
+    const launchSelection = resolvePiLaunchSelectionForConnectedService(selection.serviceId);
+    if (launchSelection) return launchSelection;
+  }
+  return null;
+}
+
 export function createPiBackend(options: PiBackendOptions): AgentBackend {
   const env = Object.fromEntries(
     Object.entries(options.env ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
   );
   const processEnv = { ...process.env, ...env };
   const thinkingLevel = providers.pi.resolvePiThinkingLevelFromEnv(env);
+  const launchSelection = resolvePiLaunchSelectionFromConnectedServiceSelection(env);
   const launch = requireProviderCliLaunchSpec('pi', { processEnv });
   return new PiRpcBackend({
     cwd: options.cwd,
     command: launch.command,
-    args: [...launch.args, ...buildPiRpcArgs({ permissionMode: options.permissionMode, thinkingLevel })],
+    args: [
+      ...launch.args,
+      ...(launchSelection
+        ? [
+          '--provider',
+          launchSelection.provider,
+          '--model',
+          launchSelection.startupModel,
+          '--models',
+          launchSelection.modelScope,
+        ]
+        : []),
+      ...buildPiRpcArgs({ permissionMode: options.permissionMode, thinkingLevel }),
+    ],
     happierSessionId: options.happierSessionId ?? null,
     env: {
       ...env,

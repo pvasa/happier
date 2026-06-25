@@ -137,6 +137,13 @@ function createRuntime(params: Readonly<{
     let lastMenuTriggerState: MenuTriggerState | null = null;
     let lastLinkBubbleState: LinkBubbleState | null = null;
 
+    const cancelPendingDocChange = () => {
+        if (docChangeTimer) {
+            clearTimeout(docChangeTimer);
+            docChangeTimer = null;
+        }
+    };
+
     const emitDocChanged = (editor: Editor) => {
         try {
             postEnvelope({ v: 1, type: 'docChanged', payload: { doc: editor.getMarkdown() } });
@@ -249,7 +256,10 @@ function createRuntime(params: Readonly<{
             if (docChangeTimer) {
                 clearTimeout(docChangeTimer);
             }
-            docChangeTimer = setTimeout(() => emitDocChanged(editor), config.changeDebounceMs);
+            docChangeTimer = setTimeout(() => {
+                docChangeTimer = null;
+                emitDocChanged(editor);
+            }, config.changeDebounceMs);
         },
         onSelectionUpdate: () => {
             if (selectionTimer) {
@@ -267,6 +277,7 @@ function createRuntime(params: Readonly<{
 
     const setDoc = (nextDoc: string) => {
         const current = editor.getMarkdown();
+        cancelPendingDocChange();
         if (current === nextDoc) {
             return;
         }
@@ -275,7 +286,7 @@ function createRuntime(params: Readonly<{
             // Encode-on-input via the shared seed helper so the risky-markdown
             // pre-pass runs on this seed boundary too (raw HTML / comments →
             // byte-verbatim atoms).
-            seedMarkdown(editor, nextDoc);
+            seedMarkdown(editor, nextDoc, { preserveViewState: true });
         } finally {
             applyingRemote = false;
         }
@@ -295,6 +306,7 @@ function createRuntime(params: Readonly<{
             const doc = typeof payload.doc === 'string' ? payload.doc : '';
             const readOnly = payload.readOnly === true;
             editor.setEditable(!readOnly);
+            cancelPendingDocChange();
             applyingRemote = true;
             try {
                 // Encode-on-input via the shared seed helper (see `setDoc`).

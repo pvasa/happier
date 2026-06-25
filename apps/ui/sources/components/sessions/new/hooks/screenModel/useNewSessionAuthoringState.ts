@@ -2,11 +2,12 @@ import * as React from 'react';
 
 import { buildNewSessionAuthoringContext } from '@/components/sessions/authoring/context/buildNewSessionAuthoringContext';
 import {
-    buildNewSessionAuthoringDraftFromResolvedInputs,
+    buildLiveNewSessionAuthoringDraftFromResolvedInputs,
     buildPersistedNewSessionDraftFromAuthoringDraft,
 } from '@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
 import type { SessionAuthoringDraft } from '@/components/sessions/authoring/draft/sessionAuthoringDraft';
-import { clearNewSessionDraft, saveNewSessionDraft } from '@/sync/domains/state/persistence';
+import { WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT } from '@/components/ui/forms/largeTextInputPolicy';
+import { saveNewSessionDraft } from '@/sync/domains/state/persistence';
 import { resolveTerminalSpawnOptions } from '@/sync/domains/settings/terminalSettings';
 import { normalizeSessionAuthoringConnectedServices } from '@/sync/domains/sessionAuthoring/sessionAuthoringNormalization';
 import type { NewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
@@ -20,7 +21,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 
 type PersistedDraft = ReturnType<typeof buildPersistedNewSessionDraftFromAuthoringDraft>;
-type BuildResolvedInputs = Parameters<typeof buildNewSessionAuthoringDraftFromResolvedInputs>[0];
+type BuildResolvedInputs = Parameters<typeof buildLiveNewSessionAuthoringDraftFromResolvedInputs>[0];
 type BuildPersistedInputs = Parameters<typeof buildPersistedNewSessionDraftFromAuthoringDraft>[0];
 
 export function useNewSessionAuthoringState(params: Readonly<{
@@ -70,11 +71,13 @@ export function useNewSessionAuthoringState(params: Readonly<{
     const draftPersistenceEnabledRef = React.useRef(true);
     const draftPersistenceGenerationRef = React.useRef(0);
 
-    const buildCurrentAuthoringDraft = React.useCallback((effectiveAutomationDraft: NewSessionAutomationDraft) => buildNewSessionAuthoringDraftFromResolvedInputs({
+    const shouldOmitLiveDisplayText = params.sessionPrompt.length > WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT;
+
+    const buildCurrentAuthoringDraft = React.useCallback((effectiveAutomationDraft: NewSessionAutomationDraft) => buildLiveNewSessionAuthoringDraftFromResolvedInputs({
         directory: params.selectedPath,
         checkoutCreationDraft: params.checkoutCreationDraft,
         prompt: params.sessionPrompt,
-        displayText: params.sessionPrompt,
+        ...(shouldOmitLiveDisplayText ? {} : { displayText: params.sessionPrompt }),
         agentId: params.agentType,
         backendTarget: params.backendTarget,
         transcriptStorage: params.transcriptStorage ?? null,
@@ -115,6 +118,7 @@ export function useNewSessionAuthoringState(params: Readonly<{
         params.sessionConfigOptionOverrides,
         params.sessionPrompt,
         params.settings,
+        shouldOmitLiveDisplayText,
         params.transcriptStorage,
         params.useProfiles,
     ]);

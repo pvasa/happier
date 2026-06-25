@@ -247,6 +247,64 @@ describe('handleSessionNewMessageUpdate', () => {
     expect(provenSeqs).toEqual([43]);
   });
 
+  it('suppresses provider-owned CLI user catch-up rows without proving agent-queue delivery', () => {
+    const pendingMessages: any[] = [];
+    const provenSeqs: number[] = [];
+    const emitted: any[] = [];
+    const localId = 'claude-jsonl:main:user:tui-direct-1';
+    const update = {
+      id: 'catchup-provider-owned-user',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 'sess_1',
+        message: {
+          id: 'm-provider-owned-user',
+          seq: 56,
+          content: {
+            t: 'plain',
+            v: {
+              role: 'user',
+              content: { type: 'text', text: 'message typed directly in Claude TUI' },
+              localId,
+              meta: { source: 'cli', sentFrom: 'cli' },
+            },
+          },
+          localId,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    } as unknown as Update;
+
+    handleSessionNewMessageUpdate({
+      update,
+      sessionId: 'sess_1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      receivedMessageIds: new Set<string>(['m-provider-owned-user']),
+      allowReprocessReceivedMessageIds: true,
+      lastObservedMessageSeq: 56,
+      lastObservedUserMessageSeq: 55,
+      hasSelfEchoSuppressedLocalId: () => false,
+      hasAgentQueueEchoSuppressedLocalId: () => false,
+      markAgentQueueEchoSuppressedLocalId: () => void 0,
+      hasPendingQueueMaterializedLocalId: () => false,
+      deleteMaterializedLocalId: () => void 0,
+      pendingMessageCallback: null,
+      pendingMessages,
+      isProviderOwnedUserMessageEcho: (message) => message.localId === localId,
+      onUserMessageDeliveryProvenByLocalEcho: (seq) => provenSeqs.push(seq),
+      emit: (event, payload) => emitted.push({ event, payload }),
+      debug: () => void 0,
+      debugLargeJson: () => void 0,
+    });
+
+    expect(pendingMessages).toHaveLength(0);
+    expect(provenSeqs).toEqual([]);
+    expect(emitted.some((e: any) => e.event === 'user-message')).toBe(true);
+  });
+
   it('delivers legacy string user prompts to the agent queue', () => {
     const pendingMessages: any[] = [];
     const emitted: any[] = [];
@@ -461,6 +519,118 @@ describe('handleSessionNewMessageUpdate', () => {
     expect(emitted.some((e: any) => e.event === 'user-message')).toBe(true);
   });
 
+  it('does not use agent-queue echo suppression as a pre-delivery gate when a live callback is attached', () => {
+    const delivered: any[] = [];
+    const emitted: any[] = [];
+
+    const update = {
+      id: 'u1',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 'sess_1',
+        message: {
+          id: 'm1',
+          seq: 1,
+          content: {
+            t: 'plain',
+            v: {
+              role: 'user',
+              content: { type: 'text', text: 'hello live runner' },
+              localId: 'l1',
+              meta: { source: 'ui', sentFrom: 'ios' },
+            },
+          },
+          localId: 'l1',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    } as unknown as Update;
+
+    handleSessionNewMessageUpdate({
+      update,
+      sessionId: 'sess_1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      receivedMessageIds: new Set<string>(),
+      lastObservedMessageSeq: 0,
+      lastObservedUserMessageSeq: 0,
+      hasSelfEchoSuppressedLocalId: () => false,
+      hasAgentQueueEchoSuppressedLocalId: () => true,
+      markAgentQueueEchoSuppressedLocalId: () => void 0,
+      hasPendingQueueMaterializedLocalId: () => false,
+      deleteMaterializedLocalId: () => void 0,
+      pendingMessageCallback: (message, info) => delivered.push({ message, info }),
+      pendingMessages: [],
+      emit: (event, payload) => emitted.push({ event, payload }),
+      debug: () => void 0,
+      debugLargeJson: () => void 0,
+    });
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.message?.content?.text).toBe('hello live runner');
+    expect(delivered[0]?.info).toEqual({ seq: 1 });
+    expect(emitted.some((e: any) => e.event === 'user-message')).toBe(true);
+  });
+
+  it('suppresses passive committed transcript writes with non-cli metadata even when a live callback is attached', () => {
+    const delivered: any[] = [];
+    const provenSeqs: number[] = [];
+    const emitted: any[] = [];
+
+    const update = {
+      id: 'u-passive-write',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 'sess_1',
+        message: {
+          id: 'm-passive-write',
+          seq: 12,
+          content: {
+            t: 'plain',
+            v: {
+              role: 'user',
+              content: { type: 'text', text: 'imported transcript row' },
+              localId: 'passive-write-1',
+              meta: { source: 'import', sentFrom: 'history' },
+            },
+          },
+          localId: 'passive-write-1',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    } as unknown as Update;
+
+    handleSessionNewMessageUpdate({
+      update,
+      sessionId: 'sess_1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      receivedMessageIds: new Set<string>(),
+      lastObservedMessageSeq: 0,
+      lastObservedUserMessageSeq: 0,
+      hasSelfEchoSuppressedLocalId: () => false,
+      hasAgentQueueEchoSuppressedLocalId: () => true,
+      hasPassiveCommittedUserMessageLocalId: (localId: string) => localId === 'passive-write-1',
+      markAgentQueueEchoSuppressedLocalId: () => void 0,
+      hasPendingQueueMaterializedLocalId: () => false,
+      deleteMaterializedLocalId: () => void 0,
+      pendingMessageCallback: (message, info) => delivered.push({ message, info }),
+      pendingMessages: [],
+      onUserMessageDeliveryProvenByLocalEcho: (seq) => provenSeqs.push(seq),
+      emit: (event, payload) => emitted.push({ event, payload }),
+      debug: () => void 0,
+      debugLargeJson: () => void 0,
+    });
+
+    expect(delivered).toEqual([]);
+    expect(provenSeqs).toEqual([]);
+    expect(emitted.some((e: any) => e.event === 'user-message')).toBe(true);
+  });
+
   it('does not redeliver deterministic daemon-initial-prompt user messages already sent by this agent process', () => {
     const pendingMessages: any[] = [];
     const emitted: any[] = [];
@@ -614,10 +784,85 @@ describe('handleSessionNewMessageUpdate', () => {
       const echoProven: number[] = [];
       const delivered = runWithDeliveredHook(update, {
         hasAgentQueueEchoSuppressedLocalId: () => true,
+        pendingMessages: [{
+          role: 'user',
+          content: { type: 'text', text: 'hi' },
+          localId: 'local-1',
+          meta: {},
+        } as any],
         onUserMessageDeliveryProvenByLocalEcho: (seq: number) => echoProven.push(seq),
       });
       expect(delivered).toEqual([]);
       expect(echoProven).toEqual([11]);
+    });
+
+    it('routes a post-handoff structured local prompt echo to the echo-proof hook after it has left pending memory', () => {
+      const echoProven: number[] = [];
+      const update = {
+        id: 'u-structured-echo',
+        createdAt: Date.now(),
+        body: {
+          t: 'new-message',
+          sid: 'sess_1',
+          message: {
+            id: 'm-structured-echo',
+            seq: 13,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'user',
+                content: { type: 'text', text: 'already handed off' },
+                localId: 'local-handed-off-1',
+                meta: { source: 'ui', sentFrom: 'ios' },
+              },
+            },
+            localId: 'local-handed-off-1',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        },
+      } as unknown as Update;
+      const delivered = runWithDeliveredHook(update, {
+        hasAgentQueueDeliveredLocalId: (localId: string) => localId === 'local-handed-off-1',
+        onUserMessageDeliveryProvenByLocalEcho: (seq: number) => echoProven.push(seq),
+      });
+      expect(delivered).toEqual([]);
+      expect(echoProven).toEqual([13]);
+    });
+
+    it('routes a post-handoff coerced local prompt echo to the echo-proof hook after it has left pending memory', () => {
+      const echoProven: number[] = [];
+      const update = {
+        id: 'u-coerced-echo',
+        createdAt: Date.now(),
+        body: {
+          t: 'new-message',
+          sid: 'sess_1',
+          message: {
+            id: 'm-coerced-echo',
+            seq: 14,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'user',
+                content: 'already handed off legacy',
+                localId: 'local-handed-off-legacy-1',
+                meta: { source: 'ui', sentFrom: 'ios' },
+              },
+            },
+            localId: 'local-handed-off-legacy-1',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        },
+      } as unknown as Update;
+
+      const delivered = runWithDeliveredHook(update, {
+        hasAgentQueueDeliveredLocalId: (localId: string) => localId === 'local-handed-off-legacy-1',
+        onUserMessageDeliveryProvenByLocalEcho: (seq: number) => echoProven.push(seq),
+      });
+      expect(delivered).toEqual([]);
+      expect(echoProven).toEqual([14]);
     });
 
     it('passes the row seq to the pending message callback so it can travel with the queued message', () => {

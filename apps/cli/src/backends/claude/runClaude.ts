@@ -884,6 +884,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         };
 
         const baseQueuedText = structuredRouting?.queuedText ?? message.content.text;
+        const deliveryAttribution = {
+            userMessageSeq: deliveryInfo?.seq ?? null,
+            userMessageLocalId: message.localId ?? null,
+        };
 
         // Structured Happier user messages must be treated as plain text (no special command parsing).
         if (!structuredRouting) {
@@ -891,20 +895,20 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
             if (specialCommand.type === 'compact') {
                 logger.debug('[start] Detected /compact command');
-                messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode, { userMessageSeq: deliveryInfo?.seq ?? null });
+                messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode, deliveryAttribution);
                 logger.debugLargeJson('[start] /compact command pushed to queue:', message);
                 return;
             }
 
             if (specialCommand.type === 'clear') {
                 logger.debug('[start] Detected /clear command');
-                messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode, { userMessageSeq: deliveryInfo?.seq ?? null });
+                messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode, deliveryAttribution);
                 logger.debugLargeJson('[start] /clear command pushed to queue:', message);
                 return;
             }
         }
 
-        messageQueue.push(baseQueuedText, enhancedMode, { userMessageSeq: deliveryInfo?.seq ?? null });
+        messageQueue.push(baseQueuedText, enhancedMode, deliveryAttribution);
         logger.debugLargeJson('User message pushed to queue:', message)
     });
 
@@ -1619,16 +1623,20 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                         ...currentClaudeRemoteMetaState,
                     };
                     const baseQueuedText = structuredRouting?.queuedText ?? message.content.text;
+                    const deliveryAttribution = {
+                        userMessageSeq: deliveryInfo?.seq ?? null,
+                        userMessageLocalId: message.localId ?? null,
+                    };
 
                     if (!structuredRouting) {
                         const specialCommand = parseSpecialCommand(message.content.text);
                         if (specialCommand.type === 'compact' || specialCommand.type === 'clear') {
-                            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode, { userMessageSeq: deliveryInfo?.seq ?? null });
+                            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode, deliveryAttribution);
                             return;
                         }
                     }
 
-                    messageQueue.push(baseQueuedText, enhancedMode, { userMessageSeq: deliveryInfo?.seq ?? null });
+                    messageQueue.push(baseQueuedText, enhancedMode, deliveryAttribution);
                 });
 
                 if (timing.enabled) {

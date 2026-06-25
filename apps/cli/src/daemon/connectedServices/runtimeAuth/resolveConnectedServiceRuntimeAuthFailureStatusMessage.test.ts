@@ -179,6 +179,22 @@ describe('resolveConnectedServiceRuntimeAuthFailureStatusMessage', () => {
     expect(status?.message).toContain('restarting');
   });
 
+  it('does not imply a restart when credential refresh is awaiting provider confirmation', () => {
+    const status = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
+      ok: true,
+      result: {
+        status: 'credential_refreshed',
+        restartRequested: false,
+      },
+    });
+
+    expect(status).toMatchObject({
+      code: 'credential_refreshed_awaiting_provider_outcome',
+      message: expect.stringContaining('provider confirmation'),
+    });
+    expect(status?.message).not.toContain('restart');
+  });
+
   it('returns a visible status note when provider state sharing is required', () => {
     const status = resolveConnectedServiceRuntimeAuthFailureStatusMessage({
       ok: true,

@@ -47,7 +47,7 @@ type UsageLimitRecoveryPayload = Readonly<{
     issueFingerprint?: string | null;
     rememberPreference?: boolean;
     resumePromptMode?: 'standard' | 'off' | 'custom';
-    operation?: 'check_now' | 'switch_account_now';
+    operation?: 'check_now' | 'switch_account_now' | 'consume_reset_credit';
     provider?: string;
 }>;
 
@@ -404,6 +404,49 @@ export async function sessionUsageLimitSwitchAccountNow(
             ? { resumePromptMode: opts.resumePromptMode }
             : {}),
         operation: 'switch_account_now' as const,
+    };
+    if (isInactiveSession(sessionId)) {
+        const target = await resolveUsageLimitRecoveryMachineControlTarget(sessionId, opts);
+        if (!target) {
+            return await runUsageLimitRecoveryRpc(
+                sessionId,
+                SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW,
+                payload,
+                opts,
+            );
+        }
+        return await runUsageLimitRecoveryMachineRpc(
+            sessionId,
+            RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
+            payload,
+            opts,
+            target,
+        );
+    }
+    return await runUsageLimitRecoveryRpcWithMachineFallback(
+        sessionId,
+        SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW,
+        RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
+        payload,
+        opts,
+    );
+}
+
+export async function sessionUsageLimitConsumeResetCredit(
+    sessionId: string,
+    opts?: UsageLimitRecoveryOperationOptions & Readonly<{
+        provider?: string | null;
+        resumePromptMode?: UsageLimitRecoveryResumePromptMode | null;
+    }>,
+): Promise<SessionUsageLimitRecoveryOperationResult> {
+    const provider = typeof opts?.provider === 'string' ? opts.provider.trim() : '';
+    const payload = {
+        sessionId,
+        ...(provider.length > 0 ? { provider } : {}),
+        ...(opts?.resumePromptMode === 'standard' || opts?.resumePromptMode === 'off' || opts?.resumePromptMode === 'custom'
+            ? { resumePromptMode: opts.resumePromptMode }
+            : {}),
+        operation: 'consume_reset_credit' as const,
     };
     if (isInactiveSession(sessionId)) {
         const target = await resolveUsageLimitRecoveryMachineControlTarget(sessionId, opts);

@@ -36,6 +36,7 @@ const modalConfirm = vi.fn();
 const modalAlert = vi.fn();
 const modalPrompt = vi.fn();
 const reorderPendingMessages = vi.fn();
+const actionExecute = vi.fn();
 
 let sessionValue: any = null;
 let settingValues: Record<string, unknown> = {};
@@ -124,6 +125,12 @@ vi.mock('@/sync/ops', () => ({
     sessionAbort: (...args: any[]) => sessionAbort(...args),
 }));
 
+vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
+    createDefaultActionExecutor: () => ({
+        execute: (...args: any[]) => actionExecute(...args),
+    }),
+}));
+
 vi.mock('@/components/markdown/MarkdownView', () => ({
     MarkdownView: 'MarkdownView',
 }));
@@ -177,6 +184,8 @@ describe('PendingMessagesTranscriptBlock', () => {
         modalConfirm.mockReset();
         modalAlert.mockReset();
         reorderPendingMessages.mockReset();
+        actionExecute.mockReset();
+        actionExecute.mockResolvedValue({ ok: true, result: { ok: true, status: 'cleared' } });
         sessionValue = null;
         settingValues = {};
     });
@@ -503,6 +512,220 @@ describe('PendingMessagesTranscriptBlock', () => {
 
         expect(screen.findByTestId('pendingMessages.nonSteerableNotice')).toBeTruthy();
         expect(screen.findByTestId('pendingMessages.steerBlockedTerminalDraftNotice')).toBeTruthy();
+    });
+
+    it('offers a user-confirmed clear-composer action when a terminal draft blocks delivery', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        sessionValue = {
+            thinking: true,
+            thinkingAt: Date.now(),
+            active: true,
+            presence: 'online',
+            agentStateVersion: 1,
+            agentState: {
+                controlledByUser: false,
+                capabilities: {
+                    inFlightSteer: true,
+                    inFlightSteerSupported: true,
+                    inFlightSteerAvailable: false,
+                    inFlightSteerUnavailableReason: 'user_terminal_draft',
+                },
+            },
+        };
+
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [{ id: 'p1', text: 'hello', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} }],
+            discardedMessages: [],
+        }));
+
+        expect(screen.findByTestId('pendingMessages.clearTerminalComposer')).toBeTruthy();
+    });
+
+    it('offers clear-composer when an idle terminal draft blocks pending delivery', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        sessionValue = {
+            thinking: false,
+            active: true,
+            presence: 'online',
+            agentStateVersion: 1,
+            agentState: {
+                controlledByUser: false,
+                capabilities: {
+                    terminalComposerClearSupported: true,
+                    terminalComposerDraftPresent: true,
+                },
+            },
+        };
+
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [{ id: 'p1', text: 'hello', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} }],
+            discardedMessages: [],
+        }));
+
+        expect(screen.findByTestId('pendingMessages.nonSteerableNotice')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.steerBlockedTerminalDraftNotice')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.clearTerminalComposer')).toBeTruthy();
+    });
+
+    it('does not invoke clear-composer when confirmation is cancelled', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        modalConfirm.mockResolvedValueOnce(false);
+        sessionValue = {
+            thinking: true,
+            thinkingAt: Date.now(),
+            active: true,
+            presence: 'online',
+            agentStateVersion: 1,
+            agentState: {
+                controlledByUser: false,
+                capabilities: {
+                    inFlightSteer: true,
+                    inFlightSteerSupported: true,
+                    inFlightSteerAvailable: false,
+                    inFlightSteerUnavailableReason: 'user_terminal_draft',
+                },
+            },
+        };
+
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [{ id: 'p1', text: 'hello', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} }],
+            discardedMessages: [],
+        }));
+
+        await screen.pressByTestIdAsync('pendingMessages.clearTerminalComposer');
+
+        expect(modalConfirm).toHaveBeenCalledTimes(1);
+        expect(actionExecute).not.toHaveBeenCalled();
+    });
+
+    it('invokes the clear-composer session action after confirmation', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        modalConfirm.mockResolvedValueOnce(true);
+        actionExecute.mockResolvedValueOnce({ ok: true, result: { ok: true, status: 'cleared' } });
+        sessionValue = {
+            thinking: true,
+            thinkingAt: Date.now(),
+            active: true,
+            presence: 'online',
+            agentStateVersion: 1,
+            agentState: {
+                controlledByUser: false,
+                capabilities: {
+                    inFlightSteer: true,
+                    inFlightSteerSupported: true,
+                    inFlightSteerAvailable: false,
+                    inFlightSteerUnavailableReason: 'user_terminal_draft',
+                },
+            },
+        };
+
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [{ id: 'p1', text: 'hello', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} }],
+            discardedMessages: [],
+        }));
+
+        await screen.pressByTestIdAsync('pendingMessages.clearTerminalComposer');
+
+        expect(actionExecute).toHaveBeenCalledTimes(1);
+        expect(actionExecute).toHaveBeenCalledWith(
+            'session.terminalComposer.clear',
+            { sessionId: 's1' },
+            expect.objectContaining({
+                defaultSessionId: 's1',
+                surface: 'ui_button',
+            }),
+        );
+        expect(modalAlert).not.toHaveBeenCalled();
+    });
+
+    it('shows clear-composer as busy while the confirmed action is running', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        modalConfirm.mockResolvedValueOnce(true);
+        const actionStarted = createDeferred<void>();
+        const releaseAction = createDeferred<{ ok: true; result: { ok: true; status: 'cleared' } }>();
+        actionExecute.mockImplementationOnce(async () => {
+            actionStarted.resolve(undefined);
+            return await releaseAction.promise;
+        });
+        sessionValue = {
+            thinking: true,
+            thinkingAt: Date.now(),
+            active: true,
+            presence: 'online',
+            agentStateVersion: 1,
+            agentState: {
+                controlledByUser: false,
+                capabilities: {
+                    inFlightSteer: true,
+                    inFlightSteerSupported: true,
+                    inFlightSteerAvailable: false,
+                    inFlightSteerUnavailableReason: 'user_terminal_draft',
+                },
+            },
+        };
+
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [{ id: 'p1', text: 'hello', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} }],
+            discardedMessages: [],
+        }));
+
+        const action = screen.findByTestId('pendingMessages.clearTerminalComposer');
+        let pressPromise: Promise<void> = Promise.resolve();
+        await act(async () => {
+            pressPromise = Promise.resolve(action!.props.onPress());
+            await actionStarted.promise;
+        });
+
+        expect(screen.findByTestId('pendingMessages.clearTerminalComposerSpinner')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.clearTerminalComposer')!.props.accessibilityState).toMatchObject({
+            busy: true,
+            disabled: true,
+        });
+
+        await act(async () => {
+            releaseAction.resolve({ ok: true, result: { ok: true, status: 'cleared' } });
+            await pressPromise;
+        });
+    });
+
+    it('surfaces clear-composer unsupported or failure results', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        modalConfirm.mockResolvedValueOnce(true);
+        actionExecute.mockResolvedValueOnce({
+            ok: true,
+            result: { ok: false, status: 'unsupported', error: 'unsupported' },
+        });
+        sessionValue = {
+            thinking: true,
+            thinkingAt: Date.now(),
+            active: true,
+            presence: 'online',
+            agentStateVersion: 1,
+            agentState: {
+                controlledByUser: false,
+                capabilities: {
+                    inFlightSteer: true,
+                    inFlightSteerSupported: true,
+                    inFlightSteerAvailable: false,
+                    inFlightSteerUnavailableReason: 'user_terminal_draft',
+                },
+            },
+        };
+
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [{ id: 'p1', text: 'hello', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} }],
+            discardedMessages: [],
+        }));
+
+        await screen.pressByTestIdAsync('pendingMessages.clearTerminalComposer');
+
+        expect(modalAlert).toHaveBeenCalledTimes(1);
     });
 
     it('does not expose steer-now or non-steerable notice for stale terminal thinking', async () => {

@@ -93,6 +93,51 @@ describe('useSessionVisibleReadSeq', () => {
         }
     });
 
+    it('ignores trailing maintenance events that do not affect unread state', async () => {
+        const previousState = storage.getState();
+        try {
+            seedSessionMessages('s-1', {
+                'm-visible': {
+                    id: 'm-visible',
+                    kind: 'agent-text',
+                    localId: null,
+                    createdAt: 1,
+                    text: 'Visible assistant message',
+                    seq: 945,
+                } as any,
+                'm-switch': {
+                    id: 'm-switch',
+                    kind: 'agent-event',
+                    localId: null,
+                    createdAt: 2,
+                    seq: 946,
+                    event: {
+                        type: 'connected-service-account-switch',
+                        serviceId: 'openai-codex',
+                        groupId: 'codex-main',
+                        fromProfileId: 'profile-a',
+                        toProfileId: 'profile-b',
+                        reason: 'usage_limit',
+                        mode: 'hot_apply',
+                    },
+                } as any,
+            }, ['m-visible', 'm-switch']);
+
+            const hook = await renderHook(() => useSessionVisibleReadSeq('s-1', {
+                sessionSeq: 946,
+                latestTurnStatus: 'in_progress',
+            }), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent()).toBe(945);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('does not re-render the consumer when committed message content streams without changing seq', async () => {
         const previousState = storage.getState();
         try {
@@ -141,6 +186,49 @@ describe('useSessionVisibleReadSeq', () => {
 
             expect(hook.getCurrent()).toBe(12);
             expect(renderCount).toBe(initialRenderCount);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('does not reread committed message seqs on unrelated store publishes', async () => {
+        const previousState = storage.getState();
+        try {
+            let seqReadCount = 0;
+            const message = {
+                id: 'm-1',
+                kind: 'agent-text',
+                localId: null,
+                createdAt: 1,
+                text: 'hello',
+                get seq() {
+                    seqReadCount += 1;
+                    return 12;
+                },
+            } as any;
+            seedSessionMessages('s-1', { 'm-1': message }, ['m-1']);
+
+            const hook = await renderHook(() => useSessionVisibleReadSeq('s-1', {
+                sessionSeq: 20,
+                latestTurnStatus: 'in_progress',
+            }), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            expect(hook.getCurrent()).toBe(12);
+            expect(seqReadCount).toBeGreaterThan(0);
+
+            seqReadCount = 0;
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    realtimeStatus: state.realtimeStatus === 'connected' ? 'disconnected' : 'connected',
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(12);
+            expect(seqReadCount).toBe(0);
 
             await hook.unmount();
         } finally {

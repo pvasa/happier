@@ -217,6 +217,116 @@ describe('useSessions', () => {
         }
     });
 
+    it('does not rescan unchanged session list shell data on unrelated store publishes', async () => {
+        const previousState = storage.getState();
+        try {
+            const firstData: SessionListViewItem[] = [
+                {
+                    type: 'header',
+                    title: 'Active',
+                    headerKind: 'active',
+                    groupKey: 'server:server-a:active',
+                    serverId: 'server-a',
+                },
+            ];
+
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessionListViewData: firstData,
+            }));
+
+            const hook = await renderHook(() => useSessionListViewData(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const first = hook.getCurrent();
+
+            Object.defineProperty(firstData[0], 'title', {
+                configurable: true,
+                get: () => {
+                    throw new Error('unchanged session list data must not be signed again');
+                },
+            });
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessions: { ...state.sessions },
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(first);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('uses the latest equivalent session list reference for future fast paths', async () => {
+        const previousState = storage.getState();
+        try {
+            const firstData: SessionListViewItem[] = [
+                {
+                    type: 'header',
+                    title: 'Active',
+                    headerKind: 'active',
+                    groupKey: 'server:server-a:active',
+                    serverId: 'server-a',
+                },
+            ];
+            const equivalentData: SessionListViewItem[] = [
+                {
+                    type: 'header',
+                    title: 'Active',
+                    headerKind: 'active',
+                    groupKey: 'server:server-a:active',
+                    serverId: 'server-a',
+                },
+            ];
+
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessionListViewData: firstData,
+            }));
+
+            const hook = await renderHook(() => useSessionListViewData(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const first = hook.getCurrent();
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionListViewData: equivalentData,
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(first);
+
+            Object.defineProperty(equivalentData[0], 'title', {
+                configurable: true,
+                get: () => {
+                    throw new Error('latest equivalent session list data must not be signed again');
+                },
+            });
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessions: { ...state.sessions },
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(first);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('updates session list shell data when visible title or pending badge fields change', async () => {
         const previousState = storage.getState();
         try {
@@ -493,6 +603,139 @@ describe('useSessions', () => {
             expect(hook.getCurrent()).toBe(first);
             expect(Object.keys(hook.getCurrent())).toEqual(['server-a']);
             expect(renderCount).toBe(1);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('does not rescan selected server session list data when only unselected server caches change', async () => {
+        const previousState = storage.getState();
+        try {
+            const selectedData: SessionListViewItem[] = [
+                {
+                    type: 'header',
+                    title: 'Server A',
+                    headerKind: 'active',
+                    groupKey: 'server:server-a:active',
+                    serverId: 'server-a',
+                },
+            ];
+            const unrelatedData: SessionListViewItem[] = [
+                {
+                    type: 'header',
+                    title: 'Server B',
+                    headerKind: 'active',
+                    groupKey: 'server:server-b:active',
+                    serverId: 'server-b',
+                },
+            ];
+
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessionListViewDataByServerId: {
+                    'server-a': selectedData,
+                    'server-b': unrelatedData,
+                },
+            }));
+
+            const hook = await renderHook(() => useSessionListViewDataByServerId(['server-a']), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const first = hook.getCurrent();
+
+            Object.defineProperty(selectedData[0], 'title', {
+                configurable: true,
+                get: () => {
+                    throw new Error('unchanged selected server data must not be signed again');
+                },
+            });
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionListViewDataByServerId: {
+                        ...state.sessionListViewDataByServerId,
+                        'server-b': [{
+                            ...unrelatedData[0],
+                            subtitle: 'Updated unrelated server',
+                        }],
+                    },
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(first);
+            expect(Object.keys(hook.getCurrent())).toEqual(['server-a']);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('uses the latest equivalent all-server session list reference for future fast paths', async () => {
+        const previousState = storage.getState();
+        try {
+            const firstData: SessionListViewItem[] = [
+                {
+                    type: 'header',
+                    title: 'Server A',
+                    headerKind: 'active',
+                    groupKey: 'server:server-a:active',
+                    serverId: 'server-a',
+                },
+            ];
+            const equivalentData: SessionListViewItem[] = [
+                {
+                    type: 'header',
+                    title: 'Server A',
+                    headerKind: 'active',
+                    groupKey: 'server:server-a:active',
+                    serverId: 'server-a',
+                },
+            ];
+
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessionListViewDataByServerId: {
+                    'server-a': firstData,
+                },
+            }));
+
+            const hook = await renderHook(() => useSessionListViewDataByServerId(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const first = hook.getCurrent();
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionListViewDataByServerId: {
+                        'server-a': equivalentData,
+                    },
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(first);
+
+            Object.defineProperty(equivalentData[0], 'title', {
+                configurable: true,
+                get: () => {
+                    throw new Error('latest equivalent all-server data must not be signed again');
+                },
+            });
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessions: { ...state.sessions },
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(first);
 
             await hook.unmount();
         } finally {

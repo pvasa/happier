@@ -7,7 +7,6 @@ import { CenteredInfoTile } from '@/components/ui/lists/CenteredInfoTile';
 import { t } from '@/text';
 import { router } from 'expo-router';
 import { Modal } from '@/modal';
-import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import Constants from 'expo-constants';
@@ -27,10 +26,13 @@ import type { SessionGettingStartedDecisionKind } from './gettingStartedModel';
 import type { SessionGettingStartedViewModel } from './gettingStartedModel';
 import { buildSessionGettingStartedViewModel, computeMachinesSummaryForServerIds } from './gettingStartedModel';
 import { Text } from '@/components/ui/text/Text';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { buildHappierCliCommandName, buildHappierCliInstallCommand } from './happierCliInstallCommand';
 import { listSessionGettingStartedCliCommands } from './listSessionGettingStartedCliCommands';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
+import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 export type SessionGettingStartedGuidanceVariant = 'phone' | 'sidebar' | 'primaryPane' | 'newSessionBlocking';
 
@@ -355,19 +357,11 @@ function buildSteps(model: SessionGettingStartedGuidanceViewModel): SessionGetti
     }
 }
 
-async function copyTextToClipboard(params: Readonly<{ label: string; text: string }>): Promise<void> {
-    try {
-        await Clipboard.setStringAsync(params.text);
-        Modal.alert(t('common.copied'), t('items.copiedToClipboard', { label: params.label }));
-    } catch {
-        Modal.alert(t('common.error'), t('textSelection.failedToCopy'));
-    }
-}
-
 function SessionGettingStartedGuidanceViewImpl(props: SessionGettingStartedGuidanceViewProps): React.ReactElement {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const { model } = props;
+    const copyFeedback = useTemporaryCopyFeedback();
 
     const title = titleForKind(model.kind);
     const subtitle = subtitleForKind(model.kind, model.targetLabel);
@@ -421,6 +415,14 @@ function SessionGettingStartedGuidanceViewImpl(props: SessionGettingStartedGuida
 
     const showCliFollowUp = steps.length > 0 && (!showSetupPrimaryCard || showManualSteps) && isDeferredCliFollowUpReady;
     const showCliFollowUpTitle = showSetupPrimaryCard && showCliFollowUp;
+    const copyStepCommand = React.useCallback(async (params: Readonly<{ id: string; text: string }>) => {
+        const copied = await setClipboardStringSafe(params.text);
+        if (copied) {
+            copyFeedback.markCopied(params.id);
+            return;
+        }
+        Modal.alert(t('common.error'), t('textSelection.failedToCopy'));
+    }, [copyFeedback]);
 
     return (
         <ScrollView
@@ -518,9 +520,16 @@ function SessionGettingStartedGuidanceViewImpl(props: SessionGettingStartedGuida
                                           accessibilityRole="button"
                                           accessibilityLabel={t('common.copyWithLabel', { label: step.copyLabel ?? t('common.command') })}
                                           style={styles.codeCopyButton}
-                                          onPress={() => copyTextToClipboard({ label: step.copyLabel ?? t('common.command'), text: step.command ?? '' })}
+                                          onPress={() => {
+                                              void copyStepCommand({ id: step.id, text: step.command ?? '' });
+                                          }}
                                       >
-                                          {normalizeNodeForView(
+                                          {copyFeedback.isCopied(step.id) ? (
+                                              <CopiedPill
+                                                  visible
+                                                  testID={`session-getting-started-copy-${step.id}-copied`}
+                                              />
+                                          ) : normalizeNodeForView(
                                               <Ionicons name="copy-outline" size={16} color={theme.colors.text.secondary} />,
                                           )}
                                       </Pressable>

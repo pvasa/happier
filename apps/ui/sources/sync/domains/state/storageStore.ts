@@ -14,6 +14,7 @@ import { createSessionFoldersDomain } from '../../store/domains/sessionFolders';
 import { createSessionsDomain } from '../../store/domains/sessions';
 import { createSettingsDomain } from '../../store/domains/settings';
 import { createTodosDomain } from '../../store/domains/todos';
+import { createTranscriptLoadingDomain } from '../../store/domains/transcriptLoading';
 import type { StorageState } from '../../store/types';
 import { registerStorageStateReader } from './storageStateReaderBridge';
 
@@ -30,6 +31,7 @@ export const storage = create<StorageState>()((set, get) => {
     const pendingDomain = createPendingDomain<StorageState>({ set, get });
     const petsDomain = createPetsDomain<StorageState>({ set, get });
     const messagesDomain = createMessagesDomain<StorageState>({ set, get });
+    const transcriptLoadingDomain = createTranscriptLoadingDomain<StorageState>({ set, get });
     const realtimeDomain = createRealtimeDomain<StorageState>({ set, get });
     const artifactsDomain = createArtifactsDomain<StorageState>({ set, get });
     const automationsDomain = createAutomationsDomain<StorageState>({ set, get });
@@ -50,6 +52,7 @@ export const storage = create<StorageState>()((set, get) => {
         ...petsDomain,
         ...pendingDomain,
         ...messagesDomain,
+        ...transcriptLoadingDomain,
         ...realtimeDomain,
     };
 });

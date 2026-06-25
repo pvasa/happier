@@ -249,6 +249,33 @@ describe('SessionTurnLifecycle', () => {
         ]);
     });
 
+    it('emits the terminal boundary callback even when the terminal mutation write rejects', async () => {
+        const events: Array<readonly [string, string | undefined]> = [];
+        let rejectTerminalWrite = false;
+        const lifecycle = createSessionTurnLifecycle({
+            sessionId: 's1',
+            createId: () => 'turn-write-rejects',
+            enqueueSessionTurn: async (mutation) => {
+                if (rejectTerminalWrite && mutation.action === 'complete') {
+                    throw new Error('terminal write failed');
+                }
+            },
+            onTurnLifecycleEvent: (event, terminalStatus) => {
+                events.push([event, terminalStatus]);
+            },
+        });
+
+        await lifecycle.beginTurn({ provider: 'codex' });
+        rejectTerminalWrite = true;
+        await expect(lifecycle.completeTurn({ provider: 'codex' })).rejects.toThrow('terminal write failed');
+
+        expect(events).toEqual([
+            ['prompt_or_steer', undefined],
+            ['assistant_message_end', 'completed'],
+        ]);
+        expect(lifecycle.hasActiveTurn()).toBe(false);
+    });
+
     it('emits turn lifecycle callbacks for ACP task markers from resumed provider work', async () => {
         const events: Array<readonly [string, string | undefined]> = [];
         const lifecycle = createSessionTurnLifecycle({
@@ -260,15 +287,20 @@ describe('SessionTurnLifecycle', () => {
             },
         });
 
-        lifecycle.observeAcpLifecycleMarker({
+        const started = lifecycle.observeAcpLifecycleMarker({
             provider: 'pi',
             body: { type: 'task_started', id: 'provider-turn-1' },
         });
-        lifecycle.observeAcpLifecycleMarker({
+        await started.pendingWrite;
+        const failed = lifecycle.observeAcpLifecycleMarker({
             provider: 'pi',
             body: { type: 'turn_failed', id: 'provider-turn-1' },
         });
 
+        expect(events).toEqual([
+            ['task_started', undefined],
+        ]);
+        await failed.pendingWrite;
         expect(events).toEqual([
             ['task_started', undefined],
             ['assistant_message_end', 'failed'],

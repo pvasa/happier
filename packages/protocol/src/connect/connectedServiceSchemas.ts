@@ -152,6 +152,66 @@ export type ConnectedServiceQuotaSourceV1 = z.infer<typeof ConnectedServiceQuota
 export const ConnectedServiceQuotaConfidenceV1Schema = z.enum(['exact', 'derived', 'estimated', 'stale', 'unknown']);
 export type ConnectedServiceQuotaConfidenceV1 = z.infer<typeof ConnectedServiceQuotaConfidenceV1Schema>;
 
+export const ConnectedServiceQuotaRecoveryCreditKindV1Schema = z.enum([
+    'usage_limit_reset',
+    'rate_limit_reset',
+    'quota_reset',
+    'unknown',
+]);
+export type ConnectedServiceQuotaRecoveryCreditKindV1 =
+    z.infer<typeof ConnectedServiceQuotaRecoveryCreditKindV1Schema>;
+
+export const ConnectedServiceQuotaRecoveryCreditStatusV1Schema = z.enum([
+    'available',
+    'redeeming',
+    'redeemed',
+    'expired',
+    'unknown',
+]);
+export type ConnectedServiceQuotaRecoveryCreditStatusV1 =
+    z.infer<typeof ConnectedServiceQuotaRecoveryCreditStatusV1Schema>;
+
+export const ConnectedServiceQuotaRecoveryCreditV1Schema = z
+    .object({
+        providerCreditId: z.string().trim().min(1).optional(),
+        kind: ConnectedServiceQuotaRecoveryCreditKindV1Schema,
+        status: ConnectedServiceQuotaRecoveryCreditStatusV1Schema,
+        providerResetType: z.string().trim().min(1).optional(),
+        appliesToProviderLimitId: z.string().trim().min(1).nullable().optional(),
+        title: z.string().trim().min(1).nullable().optional(),
+        description: z.string().trim().min(1).nullable().optional(),
+        grantedAtMs: z.number().int().nonnegative().nullable().optional(),
+        expiresAtMs: z.number().int().nonnegative().nullable().optional(),
+        redeemStartedAtMs: z.number().int().nonnegative().nullable().optional(),
+        redeemedAtMs: z.number().int().nonnegative().nullable().optional(),
+    })
+    .strict();
+export type ConnectedServiceQuotaRecoveryCreditV1 =
+    z.infer<typeof ConnectedServiceQuotaRecoveryCreditV1Schema>;
+
+export const ConnectedServiceQuotaRecoveryCreditsV1Schema = z
+    .object({
+        kind: z.literal('usage_limit_resets'),
+        availableCount: z.number().int().nonnegative(),
+        totalCount: z.number().int().nonnegative().optional(),
+        nextExpiresAtMs: z.number().int().nonnegative().nullable().optional(),
+        source: ConnectedServiceQuotaSourceV1Schema.optional(),
+        confidence: ConnectedServiceQuotaConfidenceV1Schema.optional(),
+        credits: z.array(ConnectedServiceQuotaRecoveryCreditV1Schema).default([]),
+    })
+    .strict()
+    .superRefine((value, ctx) => {
+        if (typeof value.totalCount === 'number' && value.totalCount < value.availableCount) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'totalCount must be greater than or equal to availableCount',
+                path: ['totalCount'],
+            });
+        }
+    });
+export type ConnectedServiceQuotaRecoveryCreditsV1 =
+    z.infer<typeof ConnectedServiceQuotaRecoveryCreditsV1Schema>;
+
 export const ConnectedServiceQuotaMeterScopeV1Schema = z.enum([
     'primary',
     'secondary',
@@ -288,6 +348,7 @@ export const ConnectedServiceQuotaSnapshotV1Schema = z
         confidence: ConnectedServiceQuotaConfidenceV1Schema.optional(),
         evidence: ConnectedServiceQuotaEvidenceV1Schema.optional(),
         meters: z.array(ConnectedServiceQuotaMeterV1Schema),
+        recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1Schema.optional(),
     });
 
 export type ConnectedServiceQuotaSnapshotV1 = z.infer<typeof ConnectedServiceQuotaSnapshotV1Schema>;

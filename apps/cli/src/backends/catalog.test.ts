@@ -212,6 +212,17 @@ describe('AGENTS', () => {
     await expect(resolveDescriptor('codex')).resolves.toMatchObject({
       providerId: 'codex',
       refreshedCredentialApplication: { mode: 'restart_required' },
+      runtimeAuthApply: {
+        directLiveHotAuth: {
+          supportsInTurnApply: true,
+          requiresExactRuntimeIdentity: true,
+          refreshSelectionResync: 'required',
+          authMode: {
+            kind: 'external_token_injection',
+            surface: 'codex_chatgpt_auth_tokens',
+          },
+        },
+      },
     });
     await expect(resolveDescriptor('gemini')).resolves.toEqual({
       providerId: 'gemini',
@@ -220,6 +231,7 @@ describe('AGENTS', () => {
       refreshedCredentialApplication: { mode: 'restart_required' },
       predictiveSoftSwitch: { mode: 'unsupported' },
       sameAccountFanoutStrategy: 'none',
+      runtimeAuthApply: { directLiveHotAuth: 'unsupported' },
     });
     await expect(resolveDescriptor('kilo')).resolves.toEqual({
       providerId: 'kilo',
@@ -228,6 +240,7 @@ describe('AGENTS', () => {
       refreshedCredentialApplication: { mode: 'no_restart_required' },
       predictiveSoftSwitch: { mode: 'unsupported', liveSessionRequirement: { kind: 'none' } },
       sameAccountFanoutStrategy: 'none',
+      runtimeAuthApply: { directLiveHotAuth: 'unsupported' },
     });
   });
 
@@ -475,6 +488,7 @@ describe('AGENTS', () => {
             providerEmail: null,
           },
         }),
+        applyConnectedServiceAuthGeneration: async () => ({ ok: true }),
         invalidateTransports: async () => {},
         persistAuthStore: async () => {},
       },

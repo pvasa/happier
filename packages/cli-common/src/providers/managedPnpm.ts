@@ -3,9 +3,10 @@ import { chmod, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises
 import type { FileHandle } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
 
-import { fetchGitHubLatestRelease } from '@happier-dev/release-runtime';
+import { fetchGitHubLatestRelease, planArchiveExtraction } from '@happier-dev/release-runtime';
 
 import { resolveWindowsCommandOnPath } from '../process/index.js';
+import { runCommandStreaming } from '../process/runCommandStreaming.js';
 import { createManagedToolScratchDir } from './createManagedToolScratchDir.js';
 import { downloadGitHubReleaseAsset } from './downloadGitHubReleaseAsset.js';
 import { resolvePnpmReleaseAsset, PNPM_GITHUB_REPO } from './pnpmRelease.js';
@@ -163,6 +164,39 @@ function shouldBootstrapManagedPnpm(processEnv: NodeJS.ProcessEnv): boolean {
   return raw !== '0';
 }
 
+function isArchiveAssetName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith('.tar.gz') || lower.endsWith('.tar.xz') || lower.endsWith('.zip');
+}
+
+async function extractManagedPnpmArchive(params: Readonly<{
+  archivePath: string;
+  archiveName: string;
+  outputPath: string;
+}>): Promise<void> {
+  const binDir = dirname(params.outputPath);
+  await mkdir(binDir, { recursive: true });
+  const extractionPlan = planArchiveExtraction({
+    archiveName: params.archiveName,
+    archivePath: params.archivePath,
+    destDir: binDir,
+    os: process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux',
+  });
+  await runCommandStreaming({
+    cmd: extractionPlan.command.cmd,
+    args: extractionPlan.command.args,
+    context: 'managed pnpm extract',
+  });
+
+  const outputStat = await stat(params.outputPath).catch(() => null);
+  if (!outputStat?.isFile()) {
+    throw new Error(`Managed pnpm archive did not contain ${params.outputPath}`);
+  }
+  if (process.platform !== 'win32') {
+    await chmod(params.outputPath, 0o755);
+  }
+}
+
 async function installManagedPnpm(
   processEnv: NodeJS.ProcessEnv,
   deps: EnsureManagedPnpmDeps,
@@ -202,8 +236,16 @@ async function installManagedPnpm(
       await rm(nextDir, { recursive: true, force: true });
       await mkdir(dirname(nextBinPath), { recursive: true });
       await rm(nextBinPath, { force: true });
-      await rename(downloadPath, nextBinPath);
-      if (process.platform !== 'win32') {
+      if (isArchiveAssetName(asset.name)) {
+        await extractManagedPnpmArchive({
+          archivePath: downloadPath,
+          archiveName: asset.name,
+          outputPath: nextBinPath,
+        });
+      } else {
+        await rename(downloadPath, nextBinPath);
+      }
+      if (process.platform !== 'win32' && !isArchiveAssetName(asset.name)) {
         await chmod(nextBinPath, 0o755);
       }
 

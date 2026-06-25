@@ -88,14 +88,12 @@ describe('ToolCallsGroupView (motion wiring)', () => {
             toolMessages,
         });
 
-        expect(screen.findAllByTestId('transcript-enter-wrapper')).toHaveLength(2);
-
-        const collapsible = screen.findByTestId('transcript-collapsible') as any;
-        expect(collapsible).not.toBeNull();
-        expect(collapsible?.props.expanded).toBe(false);
+        expect(screen.findAllByTestId('transcript-enter-wrapper')).toHaveLength(0);
+        expect(screen.findByTestId('transcript-collapsible')).toBeNull();
 
         await screen.pressByTestIdAsync('transcript-tool-calls-preview-more');
 
+        expect(screen.findAllByTestId('transcript-enter-wrapper')).toHaveLength(2);
         const collapsibleAfter = screen.findByTestId('transcript-collapsible') as any;
         expect(collapsibleAfter?.props.expanded).toBe(true);
     });

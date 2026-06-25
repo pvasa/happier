@@ -4,10 +4,12 @@ import { WebView } from 'react-native-webview';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
 import { sanitizeRenderedMermaidSvg } from './mermaidSanitize';
 import { Text } from '@/components/ui/text/Text';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 
 // Style for Web platform
@@ -27,15 +29,16 @@ export const MermaidRenderer = React.memo((props: {
     const { theme } = useUnistyles();
     const [dimensions, setDimensions] = React.useState({ width: 0, height: 200 });
     const [svgContent, setSvgContent] = React.useState<string | null>(null);
+    const copyFeedback = useTemporaryCopyFeedback();
 
     const copyMermaid = React.useCallback(async () => {
-        try {
-            await Clipboard.setStringAsync(props.content);
-            Modal.alert(t('common.success'), t('markdown.codeCopied'), [{ text: t('common.ok'), style: 'cancel' }]);
-        } catch (error) {
-            Modal.alert(t('common.error'), t('markdown.copyFailed'), [{ text: t('common.ok'), style: 'cancel' }]);
+        const copied = await setClipboardStringSafe(props.content);
+        if (copied) {
+            copyFeedback.markCopied('mermaid');
+            return;
         }
-    }, [props.content]);
+        Modal.alert(t('common.error'), t('markdown.copyFailed'), [{ text: t('common.ok'), style: 'cancel' }]);
+    }, [copyFeedback, props.content]);
 
     const onLayout = React.useCallback((event: any) => {
         const { width } = event.nativeEvent.layout;
@@ -112,7 +115,11 @@ export const MermaidRenderer = React.memo((props: {
                 <View style={style.diagramWrapper}>
                     <View style={style.copyButtonWrapper}>
                         <Pressable testID="mermaid-copy-button" style={style.copyButton} onPress={copyMermaid}>
-                            <Text style={style.copyButtonText}>{t('common.copy')}</Text>
+                            {copyFeedback.isCopied('mermaid') ? (
+                                <CopiedPill visible testID="mermaid-copy-feedback" />
+                            ) : (
+                                <Text style={style.copyButtonText}>{t('common.copy')}</Text>
+                            )}
                         </Pressable>
                     </View>
                     <WebDiv
@@ -195,7 +202,11 @@ export const MermaidRenderer = React.memo((props: {
             <View style={[style.innerContainer, { height: dimensions.height }]}>
                 <View style={style.copyButtonWrapper}>
                     <Pressable testID="mermaid-copy-button" style={style.copyButton} onPress={copyMermaid}>
-                        <Text style={style.copyButtonText}>{t('common.copy')}</Text>
+                        {copyFeedback.isCopied('mermaid') ? (
+                            <CopiedPill visible testID="mermaid-copy-feedback" />
+                        ) : (
+                            <Text style={style.copyButtonText}>{t('common.copy')}</Text>
+                        )}
                     </Pressable>
                 </View>
                 <WebView

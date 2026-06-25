@@ -94,6 +94,21 @@ export const ACCOUNT_CONNECTED_SERVICES_SETTING_DEFINITIONS = defineSettingDefin
             serializeCurrentProperties: buildPinnedMeterSummaryProperties,
         },
     },
+    connectedServicesCollapsedItemKeysV1: {
+        schema: z.record(z.string(), z.boolean()).default({}),
+        default: {},
+        description:
+            'Connected-service account/pool-member collapse state, keyed by serviceId:account:profileId / serviceId:pool:groupId:profileId. Sparse: only stores deviations from the per-variant default.',
+        storageScope: 'account',
+        analytics: {
+            trackCurrentState: true,
+            trackChanges: true,
+            valueKind: 'count',
+            privacy: 'count_only',
+            identityScope: 'person',
+            serializeCurrent: objectKeyCount,
+        },
+    },
     connectedServicesQuotaSummaryStrategyByKey: {
         schema: z.record(z.string(), z.enum(['primary', 'min_remaining'])).default({}),
         default: {},

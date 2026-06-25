@@ -14,6 +14,7 @@ type DaemonReportDeps = {
     retryTimeoutMs?: number;
     retryIntervalMs?: number;
     reportAttemptTimeoutMs?: number;
+    onReported?: (opts: { sessionId: string }) => Promise<void> | void;
 };
 
 function isTransientDaemonReportError(error: string): boolean {
@@ -127,6 +128,11 @@ export async function reportSessionToDaemonIfRunning(opts: {
             const result = await notifyFn(opts.sessionId, opts.metadata, { timeoutMs: boundedAttemptTimeoutMs });
             if (!result?.error) {
                 logger.debug(`[START] Reported session ${opts.sessionId} to daemon`);
+                try {
+                    await deps.onReported?.({ sessionId: opts.sessionId });
+                } catch (error) {
+                    logger.debug('[START] Failed to run daemon session-reported callback', error);
+                }
                 return;
             }
 

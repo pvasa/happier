@@ -167,6 +167,13 @@ function isAccountScopedCapacityIssue(issue: ConnectedServiceRecoveryPolicyIssue
     && issue.quotaScope === 'account';
 }
 
+export function isTemporaryRetryOwnedConnectedServiceRuntimeFailure(
+  issue: ConnectedServiceRecoveryPolicyIssue,
+): boolean {
+  return issue.kind === 'temporary_throttle'
+    || (issue.kind === 'capacity' && !isAccountScopedCapacityIssue(issue));
+}
+
 function hasProviderSharedStateRecoveryAction(issue: ConnectedServiceRecoveryPolicyIssue): boolean {
   return 'recoveryAction' in issue
     && issue.recoveryAction?.kind === 'provider_state_sharing_required';
@@ -192,7 +199,7 @@ export function decideConnectedServiceRecovery(
   // account-independent: switching accounts or restarting the session never helps. Retry the
   // SAME session with backoff, exactly like temporary throttles (incident 2026-06-12, lane
   // TRANSIENT). Account-scoped capacity is a member-local limiter and remains switchable.
-  if (issue.kind === 'temporary_throttle' || (issue.kind === 'capacity' && !isAccountScopedCapacityIssue(issue))) {
+  if (isTemporaryRetryOwnedConnectedServiceRuntimeFailure(issue)) {
     return {
       action: 'temporary_retry',
       serviceId: issue.serviceId,

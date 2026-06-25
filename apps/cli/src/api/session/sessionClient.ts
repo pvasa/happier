@@ -10,8 +10,8 @@ import { configuration } from '@/configuration';
 import { resolveLoopbackHttpUrl } from '../client/loopbackUrl';
 import type { RawJSONLines } from '@/backends/claude/types';
 import {
-    CLAUDE_JSONL_LOCAL_ID_PREFIX,
     buildClaudeJsonlLocalId,
+    buildClaudeJsonlLocalIdFromMessageKey,
     buildClaudeJsonlMessageKey,
     extractClaudeJsonlMessageKeyFromLocalId,
     extractClaudeJsonlMessageKeyFromSessionContent,
@@ -37,7 +37,10 @@ import { createUserScopedSocket } from './sockets';
 import { isToolTraceEnabled, recordAcpToolTraceEventIfNeeded, recordClaudeToolTraceEvents, recordCodexToolTraceEventIfNeeded } from './toolTrace';
 import { updateSessionAgentStateWithAck, updateSessionMetadataWithAck } from './stateUpdates';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
-import { isSessionContinuationRecoveryBlockingPendingDrain } from '@happier-dev/protocol';
+import {
+    isSessionContinuationRecoveryBlockingPendingDrain,
+    readSessionUserMessageDeliveryIntentMeta,
+} from '@happier-dev/protocol';
 import type { PrimaryTurnStatusV1, SessionMessageRole } from '@happier-dev/protocol';
 import { calculateCost } from '@/utils/pricing';
 import { buildAcpAgentMessageEnvelope, shouldTraceAcpMessageType } from './acpMessageEnvelope';
@@ -117,7 +120,7 @@ import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
 import { updateMetadataBestEffort } from './sessionWritesBestEffort';
 import { normalizeAgentPromptPayload } from '@/agent/core/AgentPromptPayload';
-import type { MaterializeNextPendingResult } from './sessionClientPort';
+import type { MaterializeNextPendingResult, UserMessageProviderAcceptanceQuery } from './sessionClientPort';
 import {
     CommittedUserMessageSeqTracker,
     type CommittedUserMessageSeqWaitOptions,
@@ -143,6 +146,50 @@ import {
     type KnownPendingQueueState,
     type PendingQueueState,
 } from './pendingQueueState';
+import {
+    blocksPendingMaterializationDuringActiveTurn,
+    type PendingMaterializationActiveTurnPolicy,
+} from './pendingMaterializationActiveTurnPolicy';
+import type { ProviderOwnedUserMessageEchoClassifier } from './providerOwnedUserMessageEcho';
+
+type SessionRuntimeControlKey = keyof SessionRuntimeControls;
+
+const SESSION_RUNTIME_CONTROL_KEYS = [
+    'refreshGoal',
+    'setGoal',
+    'clearGoal',
+    'listVendorPlugins',
+    'listSkills',
+    'startInlineReview',
+    'invalidateConnectedServiceAuthTransports',
+    'applyConnectedServiceAuthGeneration',
+    'readConnectedServiceRuntimeIdentity',
+    'enableUsageLimitWaitResume',
+    'cancelUsageLimitWaitResume',
+    'checkUsageLimitRecoveryNow',
+    'clearTerminalComposer',
+    'handleUserMessage',
+] as const satisfies readonly SessionRuntimeControlKey[];
+
+function copyCallableSessionRuntimeControls(
+    target: Partial<SessionRuntimeControls>,
+    controls: SessionRuntimeControls | Partial<SessionRuntimeControls> | null | undefined,
+): void {
+    if (!controls) return;
+    const writableTarget = target as Record<SessionRuntimeControlKey, unknown>;
+    const source = controls as Record<SessionRuntimeControlKey, unknown>;
+    for (const key of SESSION_RUNTIME_CONTROL_KEYS) {
+        const value = source[key];
+        if (typeof value === 'function') writableTarget[key] = value;
+    }
+}
+
+function clearSessionRuntimeControls(target: Partial<SessionRuntimeControls>): void {
+    const writableTarget = target as Record<SessionRuntimeControlKey, unknown>;
+    for (const key of SESSION_RUNTIME_CONTROL_KEYS) {
+        delete writableTarget[key];
+    }
+}
 
 function arePendingQueueStatesEqual(left: PendingQueueState, right: PendingQueueState): boolean {
     if (left.known !== right.known) return false;
@@ -212,13 +259,23 @@ export class ApiSessionClient extends EventEmitter {
     // pendingMaterializedLocalIds: optimistic UI rows awaiting materialization.
     // committedLocalIdsAwaitingEcho: committed outbound rows awaiting socket echo.
     // pendingQueueMaterializedLocalIds: pending queue rows already emitted locally.
-    // agentQueueEchoSuppressedLocalIds: RPC prompt attempts already fed to the live agent.
+    // agentQueueEchoSuppressedLocalIds: local prompt echoes already handled for the live queue.
+    // agentQueueDeliveredLocalIds: prompt attempts already handed to the live agent queue.
+    // providerAcceptedUserMessageLocalIdsAwaitingSeq: prompt attempts accepted by provider before
+    //   their socket echo assigned a durable seq.
+    // passiveCommittedUserMessageLocalIds: transcript-only user writes that must not become inbound prompts.
     private readonly pendingMaterializedLocalIds = new Set<string>();
     private readonly committedLocalIdsAwaitingEcho = new Set<string>();
     private readonly pendingQueueMaterializedLocalIds = new Set<string>();
     private readonly agentQueueEchoSuppressedLocalIds = new Set<string>();
+    private readonly agentQueueDeliveredLocalIds = new Set<string>();
+    private readonly providerAcceptedUserMessageLocalIdsAwaitingSeq = new Set<string>();
+    private readonly passiveCommittedUserMessageLocalIds = new Set<string>();
     private readonly committedLocalIdCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private readonly agentQueueEchoSuppressedLocalIdCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    private readonly agentQueueDeliveredLocalIdCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    private readonly providerAcceptedUserMessageLocalIdCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    private readonly passiveCommittedUserMessageLocalIdCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private pendingWakeSeq = 0;
     private pendingQueueState: PendingQueueState = UNKNOWN_PENDING_QUEUE_STATE;
     private pendingQueueStateReconcileInFlight: Promise<boolean> | null = null;
@@ -240,6 +297,7 @@ export class ApiSessionClient extends EventEmitter {
     private lastObservedUserMessageSeq = 0;
     /** Owed-delivery watermark (A-F2/D15b): highest user-row seq handed to the agent loop this process. */
     private highestDeliveredUserMessageSeq: number | null = null;
+    private highestProviderAcceptedUserMessageSeq: number | null = null;
     private deliveredUserMessageSeqPersistInFlight = false;
     /**
      * A3-HIGH-1: when true (launchers wired for provider-acceptance confirmation), the watermark
@@ -275,6 +333,9 @@ export class ApiSessionClient extends EventEmitter {
     private readonly sessionMutationOutbox: SessionMutationOutbox;
     readonly sessionTurnLifecycle: SessionTurnLifecycleController;
     private readonly sessionRuntimeControls: Partial<SessionRuntimeControls> = {};
+    private readonly baseSessionRuntimeControls: Partial<SessionRuntimeControls> = {};
+    private readonly sessionRuntimeControlRegistrations = new Set<Partial<SessionRuntimeControls>>();
+    private providerOwnedUserMessageEchoClassifier: ProviderOwnedUserMessageEchoClassifier | null = null;
     readonly executionRuns = {
         start: async (request: unknown) =>
             await startExecutionRun({
@@ -694,32 +755,39 @@ export class ApiSessionClient extends EventEmitter {
         void this.sessionConnectionSupervisor.start();
     }
 
-    setSessionRuntimeControls(controls: SessionRuntimeControls | null): void {
-        delete this.sessionRuntimeControls.refreshGoal;
-        delete this.sessionRuntimeControls.setGoal;
-        delete this.sessionRuntimeControls.clearGoal;
-        delete this.sessionRuntimeControls.listVendorPlugins;
-        delete this.sessionRuntimeControls.listSkills;
-        delete this.sessionRuntimeControls.startInlineReview;
-        delete this.sessionRuntimeControls.invalidateConnectedServiceAuthTransports;
-        delete this.sessionRuntimeControls.enableUsageLimitWaitResume;
-        delete this.sessionRuntimeControls.cancelUsageLimitWaitResume;
-        delete this.sessionRuntimeControls.checkUsageLimitRecoveryNow;
-        delete this.sessionRuntimeControls.handleUserMessage;
-        if (!controls) return;
-        if (typeof controls.refreshGoal === 'function') this.sessionRuntimeControls.refreshGoal = controls.refreshGoal;
-        if (typeof controls.setGoal === 'function') this.sessionRuntimeControls.setGoal = controls.setGoal;
-        if (typeof controls.clearGoal === 'function') this.sessionRuntimeControls.clearGoal = controls.clearGoal;
-        if (typeof controls.listVendorPlugins === 'function') this.sessionRuntimeControls.listVendorPlugins = controls.listVendorPlugins;
-        if (typeof controls.listSkills === 'function') this.sessionRuntimeControls.listSkills = controls.listSkills;
-        if (typeof controls.startInlineReview === 'function') this.sessionRuntimeControls.startInlineReview = controls.startInlineReview;
-        if (typeof controls.invalidateConnectedServiceAuthTransports === 'function') {
-            this.sessionRuntimeControls.invalidateConnectedServiceAuthTransports = controls.invalidateConnectedServiceAuthTransports;
+    private rebuildSessionRuntimeControls(): void {
+        clearSessionRuntimeControls(this.sessionRuntimeControls);
+        copyCallableSessionRuntimeControls(this.sessionRuntimeControls, this.baseSessionRuntimeControls);
+        for (const registration of this.sessionRuntimeControlRegistrations) {
+            copyCallableSessionRuntimeControls(this.sessionRuntimeControls, registration);
         }
-        if (typeof controls.enableUsageLimitWaitResume === 'function') this.sessionRuntimeControls.enableUsageLimitWaitResume = controls.enableUsageLimitWaitResume;
-        if (typeof controls.cancelUsageLimitWaitResume === 'function') this.sessionRuntimeControls.cancelUsageLimitWaitResume = controls.cancelUsageLimitWaitResume;
-        if (typeof controls.checkUsageLimitRecoveryNow === 'function') this.sessionRuntimeControls.checkUsageLimitRecoveryNow = controls.checkUsageLimitRecoveryNow;
-        if (typeof controls.handleUserMessage === 'function') this.sessionRuntimeControls.handleUserMessage = controls.handleUserMessage;
+    }
+
+    setSessionRuntimeControls(controls: SessionRuntimeControls | null): void {
+        clearSessionRuntimeControls(this.baseSessionRuntimeControls);
+        copyCallableSessionRuntimeControls(this.baseSessionRuntimeControls, controls);
+        this.rebuildSessionRuntimeControls();
+    }
+
+    registerSessionRuntimeControls(controls: Partial<SessionRuntimeControls> | null): () => void {
+        const registration: Partial<SessionRuntimeControls> = {};
+        copyCallableSessionRuntimeControls(registration, controls);
+        if (Object.keys(registration).length === 0) {
+            return () => {};
+        }
+        this.sessionRuntimeControlRegistrations.add(registration);
+        this.rebuildSessionRuntimeControls();
+        let disposed = false;
+        return () => {
+            if (disposed) return;
+            disposed = true;
+            this.sessionRuntimeControlRegistrations.delete(registration);
+            this.rebuildSessionRuntimeControls();
+        };
+    }
+
+    setProviderOwnedUserMessageEchoClassifier(classifier: ProviderOwnedUserMessageEchoClassifier | null): void {
+        this.providerOwnedUserMessageEchoClassifier = classifier;
     }
 
     private debugTranscriptRecoveryFetchError(localId: string, error: unknown): void {
@@ -791,14 +859,24 @@ export class ApiSessionClient extends EventEmitter {
         return await reconcile;
     }
 
-    shouldAttemptPendingMaterialization(): boolean {
-        if (this.isPendingMaterializationBlocked()) return false;
+    shouldAttemptPendingMaterialization(opts: {
+        activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy;
+    } = {}): boolean {
+        if (this.isPendingMaterializationBlocked(opts)) return false;
         return this.pendingQueueState.known && this.pendingQueueState.pendingCount > 0;
     }
 
-    private isPendingMaterializationBlocked(): boolean {
-        return this.sessionTurnLifecycle.hasActiveTurn()
-            || isActiveLatestTurnStatus(this.latestTurnStatus)
+    private isPendingMaterializationBlocked(opts: {
+        activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy;
+    } = {}): boolean {
+        const activeTurnBlocked = blocksPendingMaterializationDuringActiveTurn(opts.activeTurnDeliveryPolicy);
+        return (
+            activeTurnBlocked
+            && (
+                this.sessionTurnLifecycle.hasActiveTurn()
+                || isActiveLatestTurnStatus(this.latestTurnStatus)
+            )
+        )
             || isSessionContinuationRecoveryBlockingPendingDrain(this.metadata);
     }
 
@@ -852,16 +930,16 @@ export class ApiSessionClient extends EventEmitter {
             return;
         }
         this.lastOwedUserMessageCatchUpAt = now;
-        const watermark = readDeliveredUserMessageSeqV1(this.metadata as unknown as Record<string, unknown> | null);
+        const watermarkState = this.readDeliveredUserMessageWatermarkState();
         const afterSeq = Math.max(0, Math.min(
-            watermark ?? Number.MAX_SAFE_INTEGER,
+            watermarkState.effective ?? Number.MAX_SAFE_INTEGER,
             this.lastObservedUserMessageSeq,
         ));
         this.owedUserMessageCatchUpInFlight = true;
         logger.debug('[pendingQueue] owed user-message turn-end catch-up', {
             sessionId: this.sessionId,
             afterSeq,
-            deliveredWatermark: watermark,
+            deliveredWatermark: watermarkState.effective,
             lastObservedUserMessageSeq: this.lastObservedUserMessageSeq,
         });
         try {
@@ -899,9 +977,11 @@ export class ApiSessionClient extends EventEmitter {
         await this.syncSessionSnapshotFromServer({ reason: 'explicit-drain' });
     }
 
-    private async reconcileTurnStatusBeforePendingMaterializationIfNeeded(): Promise<boolean> {
+    private async reconcileTurnStatusBeforePendingMaterializationIfNeeded(opts: {
+        activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy;
+    } = {}): Promise<boolean> {
         if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) return true;
-        if (this.isPendingMaterializationBlocked()) {
+        if (this.isPendingMaterializationBlocked(opts)) {
             await this.refreshStaleBlockedTurnStatusIfNeeded();
             return true;
         }
@@ -1105,6 +1185,14 @@ export class ApiSessionClient extends EventEmitter {
         return this.agentQueueEchoSuppressedLocalIds.has(localId);
     }
 
+    private hasAgentQueueDeliveredLocalId(localId: string): boolean {
+        return this.agentQueueDeliveredLocalIds.has(localId);
+    }
+
+    private hasPassiveCommittedUserMessageLocalId(localId: string): boolean {
+        return this.passiveCommittedUserMessageLocalIds.has(localId);
+    }
+
     private hasPendingQueueMaterializedLocalId(localId: string): boolean {
         return this.pendingQueueMaterializedLocalIds.has(localId);
     }
@@ -1122,6 +1210,83 @@ export class ApiSessionClient extends EventEmitter {
         }, configuration.transcriptRecoveryMaxWaitMs);
         timer.unref?.();
         this.agentQueueEchoSuppressedLocalIdCleanupTimers.set(localId, timer);
+    }
+
+    private markAgentQueueDeliveredLocalId(localId: string): void {
+        if (!localId) return;
+        this.agentQueueDeliveredLocalIds.add(localId);
+        const existingTimer = this.agentQueueDeliveredLocalIdCleanupTimers.get(localId) ?? null;
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+        const timer = setTimeout(() => {
+            this.agentQueueDeliveredLocalIdCleanupTimers.delete(localId);
+            this.agentQueueDeliveredLocalIds.delete(localId);
+        }, configuration.transcriptRecoveryMaxWaitMs);
+        timer.unref?.();
+        this.agentQueueDeliveredLocalIdCleanupTimers.set(localId, timer);
+    }
+
+    private markProviderAcceptedUserMessageLocalIdAwaitingSeq(localId: string): void {
+        if (!localId) return;
+        this.providerAcceptedUserMessageLocalIdsAwaitingSeq.add(localId);
+        const existingTimer = this.providerAcceptedUserMessageLocalIdCleanupTimers.get(localId) ?? null;
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+        const timer = setTimeout(() => {
+            this.providerAcceptedUserMessageLocalIdCleanupTimers.delete(localId);
+            this.providerAcceptedUserMessageLocalIdsAwaitingSeq.delete(localId);
+        }, configuration.transcriptRecoveryMaxWaitMs);
+        timer.unref?.();
+        this.providerAcceptedUserMessageLocalIdCleanupTimers.set(localId, timer);
+    }
+
+    private clearProviderAcceptedUserMessageLocalIdAwaitingSeq(localId: string): void {
+        this.providerAcceptedUserMessageLocalIdsAwaitingSeq.delete(localId);
+        const timer = this.providerAcceptedUserMessageLocalIdCleanupTimers.get(localId) ?? null;
+        if (timer) {
+            clearTimeout(timer);
+            this.providerAcceptedUserMessageLocalIdCleanupTimers.delete(localId);
+        }
+    }
+
+    private persistProviderAcceptedCommittedUserMessageSeq(localId: string, seq: number | null): void {
+        if (!localId || seq === null || !this.providerAcceptedUserMessageLocalIdsAwaitingSeq.has(localId)) {
+            return;
+        }
+        this.clearProviderAcceptedUserMessageLocalIdAwaitingSeq(localId);
+        this.highestProviderAcceptedUserMessageSeq = Math.max(
+            this.highestProviderAcceptedUserMessageSeq ?? -1,
+            seq,
+        );
+        this.persistDeliveredUserMessageWatermark(seq);
+    }
+
+    private recordCommittedUserMessageSeq(localId: unknown, seq: unknown): number | null {
+        const committedSeq = this.committedUserMessageSeqTracker.record(
+            typeof localId === 'string' ? localId : null,
+            seq,
+        );
+        if (typeof localId === 'string') {
+            this.persistProviderAcceptedCommittedUserMessageSeq(localId, committedSeq);
+        }
+        return committedSeq;
+    }
+
+    private markPassiveCommittedUserMessageLocalId(localId: string): void {
+        if (!localId) return;
+        this.passiveCommittedUserMessageLocalIds.add(localId);
+        const existingTimer = this.passiveCommittedUserMessageLocalIdCleanupTimers.get(localId) ?? null;
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+        const timer = setTimeout(() => {
+            this.passiveCommittedUserMessageLocalIdCleanupTimers.delete(localId);
+            this.passiveCommittedUserMessageLocalIds.delete(localId);
+        }, configuration.transcriptRecoveryMaxWaitMs);
+        timer.unref?.();
+        this.passiveCommittedUserMessageLocalIdCleanupTimers.set(localId, timer);
     }
 
     private markCommittedLocalIdAwaitingEcho(localId: string): void {
@@ -1183,6 +1348,26 @@ export class ApiSessionClient extends EventEmitter {
             return false;
         };
 
+        const deliveryIntent = readSessionUserMessageDeliveryIntentMeta(message.meta);
+        if (
+            deliveryIntent === 'explicit_pending'
+            && isActiveLatestTurnStatus(this.latestTurnStatus)
+            && opts.catchUpAfterSeqIsExplicit !== true
+        ) {
+            logger.debug('[DELIVERY-DECISION] explicit pending user-message held during active turn', {
+                sessionId: this.sessionId,
+                updateId: update?.id,
+                msgSeq,
+                messageLocalId: message.localId,
+                catchUpAfterSeq: opts.catchUpAfterSeq,
+                catchUpAfterSeqIsExplicit: opts.catchUpAfterSeqIsExplicit,
+                latestTurnStatus: this.latestTurnStatus ?? null,
+                decision: false,
+                reason: 'explicit_pending_active_turn',
+            });
+            return false;
+        }
+
         if (!update?.id?.startsWith('catchup-')) return true;
 
         if (message.meta?.source === 'daemon-initial-prompt') {
@@ -1242,22 +1427,26 @@ export class ApiSessionClient extends EventEmitter {
                 lastObservedUserMessageSeq: this.lastObservedUserMessageSeq,
                 hasSelfEchoSuppressedLocalId: (localId) => this.hasSelfEchoSuppressedLocalId(localId),
                 hasAgentQueueEchoSuppressedLocalId: (localId) => this.hasAgentQueueEchoSuppressedLocalId(localId),
+                hasPassiveCommittedUserMessageLocalId: (localId) => this.hasPassiveCommittedUserMessageLocalId(localId),
                 markAgentQueueEchoSuppressedLocalId: (localId) => this.markAgentQueueEchoSuppressedLocalId(localId),
+                hasAgentQueueDeliveredLocalId: (localId) => this.hasAgentQueueDeliveredLocalId(localId),
+                markAgentQueueDeliveredLocalId: (localId) => this.markAgentQueueDeliveredLocalId(localId),
                 hasPendingQueueMaterializedLocalId: (localId) => this.hasPendingQueueMaterializedLocalId(localId),
                 deleteMaterializedLocalId: (localId) => this.deleteMaterializedLocalId(localId),
                 pendingMessageCallback: this.pendingMessageCallback,
                 pendingMessages: this.pendingMessages,
+                isProviderOwnedUserMessageEcho: this.providerOwnedUserMessageEchoClassifier ?? undefined,
                 shouldDeliverUserMessageToAgentQueue: (message, update) =>
                     this.shouldDeliverUserMessageToAgentQueueFromUpdate(message, update, {
                         catchUpAfterSeq: opts.catchUpAfterSeq,
                         catchUpAfterSeqIsExplicit: opts.catchUpAfterSeqIsExplicit,
                     }),
                 onUserMessageDeliveredToAgentQueue: (seq) => this.recordDeliveredUserMessageSeq(seq),
-                // Echo-proven rows never carried a seq through this queue handoff. That includes
-                // provider-native transcript rows that already reached provider custody before
-                // Happier mirrored them, so they keep persist-at-echo semantics even when queue
-                // handoffs defer to provider acceptance.
-                onUserMessageDeliveryProvenByLocalEcho: (seq) => this.persistDeliveredUserMessageWatermark(seq),
+                // Echo-proven rows carried a seq through an earlier local handoff path even when
+                // the current socket row is only the transcript echo. Provider-native transcript
+                // rows are suppressed separately, and provider-acceptance-deferred sessions must
+                // still wait for the terminal/provider confirmation before persisting the watermark.
+                onUserMessageDeliveryProvenByLocalEcho: (seq) => this.recordDeliveredUserMessageSeq(seq),
                 onObservedMessage: (message) => {
                     this.observeTurnAssistantTextFromSessionContent(message.body, {
                         source: 'transcript',
@@ -1330,10 +1519,15 @@ export class ApiSessionClient extends EventEmitter {
             return;
         }
         const message = body.message;
-        if (message?.messageRole !== 'user') {
+        const messageRole =
+            message?.messageRole
+            ?? message?.content?.v?.role
+            ?? message?.content?.role
+            ?? null;
+        if (messageRole !== 'user') {
             return;
         }
-        this.committedUserMessageSeqTracker.record(message.localId, message.seq);
+        this.recordCommittedUserMessageSeq(message.localId, message.seq);
     }
 
     private async getAccountId(): Promise<string | null> {
@@ -1877,11 +2071,15 @@ export class ApiSessionClient extends EventEmitter {
 
             if (ack && ack.ok === true) {
                 this.pendingCommitRetryAttemptsByLocalId.delete(localId);
+                if (params.markAsUserMessage === true) {
+                    this.markAgentQueueEchoSuppressedLocalId(ack.localId ?? localId);
+                    this.markAgentQueueDeliveredLocalId(ack.localId ?? localId);
+                }
                 this.markCommittedLocalIdAwaitingEcho(localId);
                 this.lastObservedMessageSeq = Math.max(this.lastObservedMessageSeq, ack.seq);
                 if (params.markAsUserMessage === true) {
                     this.lastObservedUserMessageSeq = Math.max(this.lastObservedUserMessageSeq, ack.seq);
-                    this.committedUserMessageSeqTracker.record(ack.localId ?? localId, ack.seq);
+                    this.recordCommittedUserMessageSeq(ack.localId ?? localId, ack.seq);
                 }
                 return ack.seq;
             }
@@ -1956,12 +2154,16 @@ export class ApiSessionClient extends EventEmitter {
 
         if (ack && ack.ok === true) {
             this.pendingCommitRetryAttemptsByLocalId.delete(localId);
+            if (params.markAsUserMessage === true) {
+                this.markAgentQueueEchoSuppressedLocalId(ack.localId ?? localId);
+                this.markAgentQueueDeliveredLocalId(ack.localId ?? localId);
+            }
             this.markCommittedLocalIdAwaitingEcho(localId);
             // ACK confirms persistence. Do not inject a synthetic update here: outbound sends are not prompts.
             this.lastObservedMessageSeq = Math.max(this.lastObservedMessageSeq, ack.seq);
             if (params.markAsUserMessage === true) {
                 this.lastObservedUserMessageSeq = Math.max(this.lastObservedUserMessageSeq, ack.seq);
-                this.committedUserMessageSeqTracker.record(ack.localId ?? localId, ack.seq);
+                this.recordCommittedUserMessageSeq(ack.localId ?? localId, ack.seq);
             }
             return ack.seq;
         }
@@ -2231,7 +2433,7 @@ export class ApiSessionClient extends EventEmitter {
 
         this.commitSessionMessageBestEffort({
             message: this.buildOutboundSessionMessagePayload(content),
-            localId: `${CLAUDE_JSONL_LOCAL_ID_PREFIX}${key}`,
+            localId: buildClaudeJsonlLocalIdFromMessageKey(key),
             sidechainId,
             messageRole: 'event',
             logErrorMessage: '[SOCKET] Failed to commit Claude JSONL consumed marker (non-fatal)',
@@ -2345,15 +2547,12 @@ export class ApiSessionClient extends EventEmitter {
             body,
         });
         if (lifecycleMarker.pendingWrite) {
-            this.trackSessionTurnWrite(lifecycleMarker.pendingWrite, {
-                latestTurnStatus: lifecycleMarker.body.type === 'task_started'
-                    ? 'in_progress'
-                    : lifecycleMarker.body.type === 'task_complete'
-                        ? 'completed'
-                        : lifecycleMarker.body.type === 'turn_failed'
-                            ? 'failed'
-                            : 'cancelled',
-            });
+            this.trackSessionTurnWrite(
+                lifecycleMarker.pendingWrite,
+                lifecycleMarker.body.type === 'task_started'
+                    ? { latestTurnStatus: 'in_progress' }
+                    : {},
+            );
         }
         const { normalizedBody, content, localId, sidechainId } = this.prepareAcpAgentMessage({
             provider,
@@ -2498,7 +2697,7 @@ export class ApiSessionClient extends EventEmitter {
         const content = this.buildUserTextMessageContent(text, opts.meta);
         const payload = this.buildOutboundSessionMessagePayload(content);
         // Suppress agent-queue delivery for our own committed user messages; these are writes, not prompts.
-        this.markAgentQueueEchoSuppressedLocalId(opts.localId);
+        this.markPassiveCommittedUserMessageLocalId(opts.localId);
         await this.enqueueMessageCommit(() =>
             this.commitSessionMessage({
                 message: payload,
@@ -2573,13 +2772,16 @@ export class ApiSessionClient extends EventEmitter {
             meta,
             createdAt: Date.now(),
         } satisfies UserMessage;
-        if (!this.hasAgentQueueEchoSuppressedLocalId(localId)) {
+        if (!this.hasAgentQueueDeliveredLocalId(localId)) {
+            // Mark before invoking the callback: the runner may synchronously re-enter session
+            // handling and observe a transcript echo for this same localId before this RPC returns.
+            this.markAgentQueueEchoSuppressedLocalId(localId);
+            this.markAgentQueueDeliveredLocalId(localId);
             if (this.pendingMessageCallback) {
                 this.pendingMessageCallback(prompt, { seq: null });
             } else {
                 this.pendingMessages.push(prompt);
             }
-            this.markAgentQueueEchoSuppressedLocalId(localId);
         }
 
         this.sendUserTextMessage(text, { localId, meta });
@@ -2923,8 +3125,10 @@ export class ApiSessionClient extends EventEmitter {
      * behind, which only widens redelivery (never loses messages).
      */
     private recordDeliveredUserMessageSeq(seq: number): void {
+        if (!Number.isInteger(seq) || seq < 0) return;
         if (this.deliveredUserMessageWatermarkDeferredToProviderAcceptance) {
             // Volatile custody only (queue residency, parked locals): wait for provider acceptance.
+            this.highestDeliveredUserMessageSeq = Math.max(this.highestDeliveredUserMessageSeq ?? -1, seq);
             return;
         }
         this.persistDeliveredUserMessageWatermark(seq);
@@ -2938,29 +3142,142 @@ export class ApiSessionClient extends EventEmitter {
         this.deliveredUserMessageWatermarkDeferredToProviderAcceptance = true;
     }
 
+    private normalizeProviderAcceptedUserMessageLocalIds(localIds: readonly string[] | null | undefined): string[] {
+        const seen = new Set<string>();
+        const normalized: string[] = [];
+        for (const value of localIds ?? []) {
+            const localId = typeof value === 'string' ? value.trim() : '';
+            if (!localId || seen.has(localId)) continue;
+            seen.add(localId);
+            normalized.push(localId);
+        }
+        return normalized;
+    }
+
     /**
      * Persist the owed-delivery watermark for a batch the provider actually accepted (or that
-     * otherwise provably left local volatile custody). Null/absent seq is a no-op: an
-     * unattributed batch keeps the watermark behind, which only widens redelivery.
+     * otherwise provably left local volatile custody). Local ids let this join provider acceptance
+     * with a later server echo when the batch reached the provider before its durable seq existed.
      */
-    confirmUserMessageDeliveredToProvider(seq: number | null | undefined): void {
-        if (typeof seq !== 'number') return;
-        this.persistDeliveredUserMessageWatermark(seq);
+    confirmUserMessageDeliveredToProvider(
+        seq: number | null | undefined,
+        opts?: { localIds?: readonly string[] | null },
+    ): void {
+        const localIds = this.normalizeProviderAcceptedUserMessageLocalIds(opts?.localIds);
+        let highestAcceptedSeq = typeof seq === 'number' ? seq : null;
+
+        for (const localId of localIds) {
+            const committedSeq = this.committedUserMessageSeqTracker.get(localId);
+            if (committedSeq !== null) {
+                highestAcceptedSeq = Math.max(highestAcceptedSeq ?? -1, committedSeq);
+                this.clearProviderAcceptedUserMessageLocalIdAwaitingSeq(localId);
+            } else {
+                this.markProviderAcceptedUserMessageLocalIdAwaitingSeq(localId);
+            }
+        }
+
+        if (highestAcceptedSeq !== null) {
+            this.highestProviderAcceptedUserMessageSeq = Math.max(
+                this.highestProviderAcceptedUserMessageSeq ?? -1,
+                highestAcceptedSeq,
+            );
+            this.persistDeliveredUserMessageWatermark(highestAcceptedSeq);
+        }
+    }
+
+    hasUserMessageProviderAcceptance(query: UserMessageProviderAcceptanceQuery): boolean {
+        const providerAccepted = this.readDeliveredUserMessageWatermarkState().providerAccepted;
+        const explicitSeqs = new Set<number>();
+        for (const seq of query.userMessageSeqs ?? []) {
+            if (Number.isInteger(seq) && seq >= 0) {
+                explicitSeqs.add(seq);
+            }
+        }
+        const scalarSeq = Number.isInteger(query.userMessageSeq) && query.userMessageSeq! >= 0
+            ? query.userMessageSeq!
+            : null;
+        if (providerAccepted !== null) {
+            if (explicitSeqs.size > 0) {
+                return [...explicitSeqs].every((seq) => seq <= providerAccepted);
+            } else if (scalarSeq !== null && scalarSeq <= providerAccepted) {
+                return true;
+            }
+        } else if (explicitSeqs.size > 0) {
+            return false;
+        }
+
+        for (const localId of this.normalizeProviderAcceptedUserMessageLocalIds(query.localIds)) {
+            if (this.providerAcceptedUserMessageLocalIdsAwaitingSeq.has(localId)) return true;
+            const committedSeq = this.committedUserMessageSeqTracker.get(localId);
+            if (committedSeq !== null && providerAccepted !== null && committedSeq <= providerAccepted) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private readDeliveredUserMessageWatermarkState(): Readonly<{
+        persisted: number | null;
+        inMemory: number | null;
+        effective: number | null;
+        providerAccepted: number | null;
+    }> {
+        const persisted = readDeliveredUserMessageSeqV1(this.metadata as unknown as Record<string, unknown> | null);
+        const inMemory = this.highestDeliveredUserMessageSeq;
+        const providerAccepted = Math.max(
+            persisted ?? -1,
+            this.highestProviderAcceptedUserMessageSeq ?? -1,
+            this.deliveredUserMessageWatermarkDeferredToProviderAcceptance ? -1 : inMemory ?? -1,
+        );
+        const effective = this.deliveredUserMessageWatermarkDeferredToProviderAcceptance
+            ? providerAccepted
+            : Math.max(persisted ?? -1, inMemory ?? -1);
+        return {
+            persisted,
+            inMemory,
+            effective: effective >= 0 ? effective : null,
+            providerAccepted: providerAccepted >= 0 ? providerAccepted : null,
+        };
     }
 
     private persistDeliveredUserMessageWatermark(seq: number): void {
         if (!Number.isInteger(seq) || seq < 0) return;
+        if (this.deliveredUserMessageWatermarkDeferredToProviderAcceptance) {
+            this.highestProviderAcceptedUserMessageSeq = Math.max(
+                this.highestProviderAcceptedUserMessageSeq ?? -1,
+                seq,
+            );
+        }
         this.highestDeliveredUserMessageSeq = Math.max(this.highestDeliveredUserMessageSeq ?? -1, seq);
         void this.persistDeliveredUserMessageSeq();
     }
 
+    private readDeliveredUserMessagePersistTarget(): number | null {
+        const target = this.deliveredUserMessageWatermarkDeferredToProviderAcceptance
+            ? this.highestProviderAcceptedUserMessageSeq
+            : this.highestDeliveredUserMessageSeq;
+        return target !== null && Number.isInteger(target) && target >= 0 ? target : null;
+    }
+
+    private canPersistDeliveredUserMessageTarget(target: number): boolean {
+        if (!this.deliveredUserMessageWatermarkDeferredToProviderAcceptance) return true;
+        return (this.highestProviderAcceptedUserMessageSeq ?? -1) >= target;
+    }
+
     private async persistDeliveredUserMessageSeq(): Promise<void> {
         if (this.deliveredUserMessageSeqPersistInFlight) return;
-        const target = this.highestDeliveredUserMessageSeq;
+        const target = this.readDeliveredUserMessagePersistTarget();
         if (target === null) return;
+        if (!this.canPersistDeliveredUserMessageTarget(target)) return;
         this.deliveredUserMessageSeqPersistInFlight = true;
+        let persistedTarget = false;
         try {
-            await this.updateMetadata((metadata) => mergeDeliveredUserMessageSeqV1(metadata, target).metadata);
+            await this.updateMetadata((metadata) => {
+                if (!this.canPersistDeliveredUserMessageTarget(target)) return metadata;
+                persistedTarget = true;
+                return mergeDeliveredUserMessageSeqV1(metadata, target).metadata;
+            });
         } catch (error) {
             logger.debug('[API] Failed to persist delivered user-message watermark (best-effort)', error);
             return;
@@ -2968,7 +3285,12 @@ export class ApiSessionClient extends EventEmitter {
             this.deliveredUserMessageSeqPersistInFlight = false;
         }
         // A newer delivery may have arrived while the write was in flight; converge.
-        if (this.highestDeliveredUserMessageSeq !== null && this.highestDeliveredUserMessageSeq > target) {
+        const nextTarget = this.readDeliveredUserMessagePersistTarget();
+        if (
+            nextTarget !== null
+            && this.canPersistDeliveredUserMessageTarget(nextTarget)
+            && (nextTarget > target || (nextTarget === target && !persistedTarget))
+        ) {
             void this.persistDeliveredUserMessageSeq();
         }
     }
@@ -3028,12 +3350,14 @@ export class ApiSessionClient extends EventEmitter {
 
     private trackSessionTurnWrite(
         update: Promise<void>,
-        record: Readonly<{ latestTurnStatus: PrimaryTurnStatusV1 }>,
+        record: Readonly<{ latestTurnStatus?: PrimaryTurnStatusV1 }>,
     ): void {
-        this.latestTurnStatus = record.latestTurnStatus;
+        if (record.latestTurnStatus !== undefined) {
+            this.latestTurnStatus = record.latestTurnStatus;
+        }
         const tracked = update.catch((error) => {
             logger.debug('[API] Failed to update primary turn runtime state (non-fatal)', {
-                latestTurnStatus: record.latestTurnStatus,
+                latestTurnStatus: record.latestTurnStatus ?? null,
                 error: serializeAxiosErrorForLog(error),
             });
         });
@@ -3142,6 +3466,9 @@ export class ApiSessionClient extends EventEmitter {
         this.pendingQueueMaterializedLocalIds.clear();
         this.committedUserMessageSeqTracker.clear();
         this.agentQueueEchoSuppressedLocalIds.clear();
+        this.agentQueueDeliveredLocalIds.clear();
+        this.providerAcceptedUserMessageLocalIdsAwaitingSeq.clear();
+        this.passiveCommittedUserMessageLocalIds.clear();
         this.queuedDisconnectedSessionMessages.clear();
         for (const timer of this.committedLocalIdCleanupTimers.values()) {
             clearTimeout(timer);
@@ -3151,6 +3478,18 @@ export class ApiSessionClient extends EventEmitter {
             clearTimeout(timer);
         }
         this.agentQueueEchoSuppressedLocalIdCleanupTimers.clear();
+        for (const timer of this.agentQueueDeliveredLocalIdCleanupTimers.values()) {
+            clearTimeout(timer);
+        }
+        this.agentQueueDeliveredLocalIdCleanupTimers.clear();
+        for (const timer of this.providerAcceptedUserMessageLocalIdCleanupTimers.values()) {
+            clearTimeout(timer);
+        }
+        this.providerAcceptedUserMessageLocalIdCleanupTimers.clear();
+        for (const timer of this.passiveCommittedUserMessageLocalIdCleanupTimers.values()) {
+            clearTimeout(timer);
+        }
+        this.passiveCommittedUserMessageLocalIdCleanupTimers.clear();
         this.pendingCommitRetryAttemptsByLocalId.clear();
         await this.sessionMutationOutbox.close();
         try {
@@ -3400,7 +3739,7 @@ export class ApiSessionClient extends EventEmitter {
             materializeResult.message?.messageRole === 'user'
             && materializeResult.message.localId
         ) {
-            this.committedUserMessageSeqTracker.record(
+            this.recordCommittedUserMessageSeq(
                 materializeResult.message.localId,
                 materializeResult.message.seq,
             );
@@ -3433,6 +3772,7 @@ export class ApiSessionClient extends EventEmitter {
 
     async materializeNextPendingMessageSafely(opts: {
         reconcileWhenEmpty?: 'force' | 'throttled' | 'skip';
+        activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy;
     } = {}): Promise<MaterializeNextPendingResult> {
         const supervisorState = this.sessionConnectionSupervisor?.getState();
         if (supervisorState?.phase === 'auth_failed') {
@@ -3467,7 +3807,9 @@ export class ApiSessionClient extends EventEmitter {
         if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
             return { type: 'no_pending' };
         }
-        const refreshedTurnStatus = await this.reconcileTurnStatusBeforePendingMaterializationIfNeeded();
+        const refreshedTurnStatus = await this.reconcileTurnStatusBeforePendingMaterializationIfNeeded({
+            activeTurnDeliveryPolicy: opts.activeTurnDeliveryPolicy,
+        });
         if (!refreshedTurnStatus) {
             this.logPendingMaterializationSkip('turn_status_refresh_failed');
             return { type: 'no_pending' };
@@ -3475,8 +3817,10 @@ export class ApiSessionClient extends EventEmitter {
         if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
             return { type: 'no_pending' };
         }
-        if (this.isPendingMaterializationBlocked()) {
-            this.logPendingMaterializationSkip('blocked');
+        if (this.isPendingMaterializationBlocked({ activeTurnDeliveryPolicy: opts.activeTurnDeliveryPolicy })) {
+            this.logPendingMaterializationSkip('blocked', {
+                activeTurnDeliveryPolicy: opts.activeTurnDeliveryPolicy,
+            });
             return { type: 'no_pending' };
         }
 
@@ -3489,10 +3833,14 @@ export class ApiSessionClient extends EventEmitter {
      * shape (QA A-F3/C-F2); log why the drain was skipped so it is diagnosable from
      * runner logs without instrumented builds.
      */
-    private logPendingMaterializationSkip(reason: 'blocked' | 'turn_status_refresh_failed'): void {
+    private logPendingMaterializationSkip(
+        reason: 'blocked' | 'turn_status_refresh_failed',
+        opts: { activeTurnDeliveryPolicy?: PendingMaterializationActiveTurnPolicy } = {},
+    ): void {
         logger.debug('[pendingQueue] materialization skipped', {
             sessionId: this.sessionId,
             reason,
+            activeTurnDeliveryPolicy: opts.activeTurnDeliveryPolicy ?? 'block',
             hasCanonicalActiveTurn: this.sessionTurnLifecycle.hasActiveTurn(),
             latestTurnStatus: this.latestTurnStatus ?? null,
             continuationRecoveryBlocked: isSessionContinuationRecoveryBlockingPendingDrain(this.metadata),

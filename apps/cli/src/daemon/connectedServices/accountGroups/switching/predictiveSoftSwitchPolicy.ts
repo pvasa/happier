@@ -7,6 +7,7 @@ import {
 } from '../../connectedServiceChildEnvironment';
 import { resolveConnectedServiceGroupHomeDir } from '../../homes/resolveConnectedServiceHomeDir';
 import type {
+  ConnectedServiceRuntimeAuthApplyCapability,
   ConnectedServicePredictiveSoftSwitchLiveSessionRequirement,
 } from '../../credentials/lifecycleTypes';
 import type { CatalogAgentId } from '@/backends/types';
@@ -23,19 +24,55 @@ type PredictiveSoftSwitchCapability = 'supported' | 'unsupported';
 
 type PredictiveSoftSwitchTurnState = Readonly<{
   inFlight: boolean;
+  safeToApply?: boolean;
 }>;
 
 type PredictiveSoftSwitchSessionApplyMode = 'hot_apply' | 'restart_resume' | 'spawn_next_turn';
+
+type ConnectedServiceSwitchApplyMode =
+  | 'direct_live_hot_auth'
+  | PredictiveSoftSwitchSessionApplyMode
+  | 'transport_recycle';
+
+type ConnectedServiceSwitchApplyContext =
+  | 'pre_spawn'
+  | 'healthy_live_session'
+  | 'healthy_sibling'
+  | 'original_failed_session'
+  | 'manual';
+
+export type ConnectedServiceSwitchApplyPolicyDecision =
+  | Readonly<{
+      status: 'allow';
+      allowDirectLiveHotApply: boolean;
+      allowTransportRecycle: boolean;
+      allowRestartResume: boolean;
+    }>
+  | Readonly<{
+      status: 'defer';
+      reason: 'turn_boundary_required';
+      policy: 'defer_until_turn_boundary';
+      allowDirectLiveHotApply: boolean;
+      allowTransportRecycle: boolean;
+      allowRestartResume: boolean;
+    }>
+  | Readonly<{
+      status: 'suppress';
+      reason: 'direct_live_hot_apply_required';
+      allowDirectLiveHotApply: boolean;
+      allowTransportRecycle: boolean;
+      allowRestartResume: boolean;
+    }>;
 
 export type PredictiveSoftSwitchPolicyDecision =
   | Readonly<{ status: 'allow' }>
   | Readonly<{
       status: 'suppress';
-	      reason:
-	        | 'predictive_soft_switch_restart_required'
-	        | 'predictive_soft_switch_turn_in_flight'
-	        | 'predictive_soft_switch_shared_group_auth_surface_required'
-	        | 'predictive_soft_switch_session_not_tracked';
+      reason:
+        | 'predictive_soft_switch_restart_required'
+        | 'predictive_soft_switch_turn_in_flight'
+        | 'predictive_soft_switch_shared_group_auth_surface_required'
+        | 'predictive_soft_switch_session_not_tracked';
     }>;
 
 export type PredictiveSoftSwitchSessionApplyDecision =
@@ -46,6 +83,96 @@ export type PredictiveSoftSwitchSessionApplyDecision =
     }>;
 
 type PredictiveSoftSwitchContext = 'pre_spawn' | 'live_session';
+
+function normalizeDirectApplyMode(mode: ConnectedServiceSwitchApplyMode | null | undefined): 'direct_live_hot_auth' | Exclude<ConnectedServiceSwitchApplyMode, 'direct_live_hot_auth' | 'hot_apply'> | null {
+  if (mode === undefined || mode === null) return null;
+  return mode === 'hot_apply' ? 'direct_live_hot_auth' : mode;
+}
+
+function supportsInTurnDirectLiveHotAuth(
+  capability: ConnectedServiceRuntimeAuthApplyCapability | null | undefined,
+): boolean {
+  const directLiveHotAuth = capability?.directLiveHotAuth;
+  if (typeof directLiveHotAuth !== 'object') return false;
+  if (directLiveHotAuth.supportsInTurnApply !== true) return false;
+  if (directLiveHotAuth.requiresExactRuntimeIdentity !== true) return false;
+
+  const { authMode } = directLiveHotAuth;
+  if (authMode.kind === 'external_token_injection') {
+    return directLiveHotAuth.refreshSelectionResync === 'required'
+      && authMode.surface.trim().length > 0;
+  }
+
+  if (authMode.kind === 'provider_owned') {
+    return directLiveHotAuth.refreshSelectionResync === 'not_applicable'
+      && authMode.name.trim().length > 0;
+  }
+
+  return directLiveHotAuth.refreshSelectionResync === 'not_applicable';
+}
+
+export function evaluateConnectedServiceSwitchApplyPolicy(input: Readonly<{
+  context: ConnectedServiceSwitchApplyContext;
+  reason: PredictiveSoftSwitchReason | 'manual' | 'diagnostic' | string;
+  applyMode?: ConnectedServiceSwitchApplyMode | null;
+  turnState?: PredictiveSoftSwitchTurnState | null;
+  runtimeAuthApply?: ConnectedServiceRuntimeAuthApplyCapability | null;
+}>): ConnectedServiceSwitchApplyPolicyDecision {
+  const directLiveOnly =
+    input.context === 'healthy_sibling'
+    || input.context === 'healthy_live_session'
+    || input.reason === 'same_provider_account_exhausted'
+    || input.reason === 'soft_threshold';
+  if (directLiveOnly) {
+    if (
+      input.context === 'healthy_sibling'
+      && input.turnState?.inFlight === true
+      && input.turnState.safeToApply === false
+      && !supportsInTurnDirectLiveHotAuth(input.runtimeAuthApply)
+    ) {
+      return {
+        status: 'defer',
+        reason: 'turn_boundary_required',
+        policy: 'defer_until_turn_boundary',
+        allowDirectLiveHotApply: true,
+        allowTransportRecycle: false,
+        allowRestartResume: false,
+      };
+    }
+    const applyMode = normalizeDirectApplyMode(input.applyMode);
+    if (applyMode === null || applyMode === 'direct_live_hot_auth') {
+      return {
+        status: 'allow',
+        allowDirectLiveHotApply: true,
+        allowTransportRecycle: false,
+        allowRestartResume: false,
+      };
+    }
+    return {
+      status: 'suppress',
+      reason: 'direct_live_hot_apply_required',
+      allowDirectLiveHotApply: true,
+      allowTransportRecycle: false,
+      allowRestartResume: false,
+    };
+  }
+
+  if (input.context === 'pre_spawn') {
+    return {
+      status: 'allow',
+      allowDirectLiveHotApply: false,
+      allowTransportRecycle: false,
+      allowRestartResume: false,
+    };
+  }
+
+  return {
+    status: 'allow',
+    allowDirectLiveHotApply: true,
+    allowTransportRecycle: true,
+    allowRestartResume: true,
+  };
+}
 
 function pathEquals(left: string | null | undefined, right: string | null | undefined): boolean {
   if (typeof left !== 'string' || typeof right !== 'string') return false;
@@ -116,6 +243,7 @@ export function evaluatePredictiveSoftSwitchPolicy(input: Readonly<{
   reason: PredictiveSoftSwitchReason;
   predictiveSoftSwitchMode: PredictiveSoftSwitchCapability;
   turnState?: PredictiveSoftSwitchTurnState | null;
+  runtimeAuthApply?: ConnectedServiceRuntimeAuthApplyCapability | null;
 }>): PredictiveSoftSwitchPolicyDecision {
   if (input.reason !== 'soft_threshold') return { status: 'allow' };
   // RD-QUO-10: the restart-required suppression only applies to LIVE sessions —
@@ -129,7 +257,10 @@ export function evaluatePredictiveSoftSwitchPolicy(input: Readonly<{
       reason: 'predictive_soft_switch_restart_required',
     };
   }
-  if (input.turnState?.inFlight === true) {
+  if (
+    input.turnState?.inFlight === true
+    && !supportsInTurnDirectLiveHotAuth(input.runtimeAuthApply)
+  ) {
     return {
       status: 'suppress',
       reason: 'predictive_soft_switch_turn_in_flight',
@@ -155,11 +286,19 @@ export function evaluatePredictiveSoftSwitchSessionApplyPolicy(input: Readonly<{
   sessionId?: string | null;
   applyMode?: PredictiveSoftSwitchSessionApplyMode | null;
 }>): PredictiveSoftSwitchSessionApplyDecision {
-  if (input.reason !== 'soft_threshold' && input.reason !== 'same_provider_account_exhausted') return { status: 'allow' };
+  const decision = evaluateConnectedServiceSwitchApplyPolicy({
+    context: input.reason === 'same_provider_account_exhausted'
+      ? 'healthy_sibling'
+      : input.reason === 'soft_threshold'
+        ? 'healthy_live_session'
+        : input.reason === 'usage_limit'
+          ? 'original_failed_session'
+          : 'manual',
+    reason: input.reason,
+    applyMode: input.applyMode,
+  });
+  if (decision.status === 'allow') return { status: 'allow' };
   if (typeof input.sessionId !== 'string' || input.sessionId.trim().length === 0) return { status: 'allow' };
-  if (input.applyMode === undefined || input.applyMode === null || input.applyMode === 'hot_apply') {
-    return { status: 'allow' };
-  }
   return {
     status: 'suppress',
     reason: 'predictive_soft_switch_hot_apply_required',

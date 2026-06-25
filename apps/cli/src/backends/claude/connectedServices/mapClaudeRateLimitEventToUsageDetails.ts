@@ -299,7 +299,15 @@ function readSyntheticRetryAfterMs(records: readonly Record<string, unknown>[]):
 
 function mapSyntheticClaudeApiErrorToUsageDetails(record: Record<string, unknown>): NormalizedProviderUsageLimitDetailsV1 | null {
   const records = collectSyntheticApiErrorRecords(record);
-  const status = readHttpStatus(readFirstField(records, ['apiErrorStatus', 'api_error_status', 'status', 'statusCode', 'status_code']));
+  const status = readHttpStatus(readFirstField(records, [
+    'apiErrorStatus',
+    'api_error_status',
+    'errorStatus',
+    'error_status',
+    'status',
+    'statusCode',
+    'status_code',
+  ]));
   const hasRateLimitEvidence = containsRateLimitEvidence(record);
   const hasUsageLimitEvidence = containsClaudeUsageLimitEvidence(record);
   const hasProviderCapacityEvidence = status === 529 || containsProviderCapacityEvidence(record);
@@ -324,7 +332,8 @@ function mapSyntheticClaudeApiErrorToUsageDetails(record: Record<string, unknown
   const timing = resolveClaudeUsageLimitResetTiming(record, Date.now());
   const resetAtMs = readSyntheticResetAtMs(records) ?? timing.resetAtMs;
   const retryAfterMs = readSyntheticRetryAfterMs(records) ?? timing.retryAfterMs;
-  const providerLimitId = readSyntheticProviderLimitId(records);
+  const providerLimitId = readSyntheticProviderLimitId(records)
+    ?? (status === 429 ? 'rate_limit' : undefined);
 
   return {
     v: 1,
@@ -423,7 +432,11 @@ function mapStopFailureHookRecordToUsageDetails(record: Record<string, unknown>)
     content: lastAssistantMessage,
     error: record.error,
     error_type: record.error_type,
-    apiErrorStatus: record.apiErrorStatus ?? record.api_error_status ?? record.status,
+    apiErrorStatus: record.apiErrorStatus
+      ?? record.api_error_status
+      ?? record.errorStatus
+      ?? record.error_status
+      ?? record.status,
   });
   if (direct && (assistantTiming.resetAtMs !== null || assistantTiming.retryAfterMs !== null)) {
     return {

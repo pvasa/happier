@@ -29,12 +29,12 @@ describe('typeTextViaSendKeys', () => {
     });
   });
 
-  it('reports possible duplicate risk after writing prompt bytes but timing out before submit', async () => {
-    let callCount = 0;
-    const executor: TmuxCommandExecutor = async () => {
-      callCount += 1;
+  it('submits after a complete write even when the write deadline is exhausted', async () => {
+    const calls: readonly string[][] = [];
+    const executor: TmuxCommandExecutor = async (args) => {
+      (calls as string[][]).push([...args]);
       return {
-        returncode: callCount === 1 ? 0 : 1,
+        returncode: 0,
         stdout: '',
         stderr: '',
         command: [],
@@ -49,17 +49,11 @@ describe('typeTextViaSendKeys', () => {
       submitDelayMs: 101,
       timeoutMs: 100,
       wait: async () => undefined,
-    })).resolves.toEqual({
-      success: false,
-      reason: 'timeout',
-      phase: 'after_write_before_enter',
-      duplicateRisk: 'possible',
-      progress: {
-        textMayHaveReachedPane: true,
-        newlineMayHaveReachedPane: false,
-        submitMayHaveReachedPane: false,
-      },
-    });
+    })).resolves.toEqual({ success: true });
+    expect(calls).toEqual([
+      ['send-keys', '-t', 'happy:claude.1', '-l', '--', 'queued prompt'],
+      ['send-keys', '-t', 'happy:claude.1', 'C-m'],
+    ]);
   });
 
   it('reports likely duplicate risk when the submit key may have reached the pane', async () => {

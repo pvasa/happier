@@ -53,6 +53,31 @@ describe('sessionRunnerRespawnDescriptor', () => {
     });
   });
 
+  it('round-trips existingSessionId through the respawn descriptor', () => {
+    const spawnOptions = {
+      directory: '/tmp/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      existingSessionId: 'sess-existing-1',
+    } satisfies SpawnSessionOptions;
+
+    const descriptor = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(spawnOptions);
+
+    expect(descriptor).toMatchObject({
+      version: 1,
+      directory: '/tmp/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      existingSessionId: 'sess-existing-1',
+    });
+
+    const restored = buildSpawnSessionOptionsFromRespawnDescriptorV1(descriptor!);
+    expect(restored).toMatchObject({
+      directory: '/tmp/repo',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      existingSessionId: 'sess-existing-1',
+      approvedNewDirectoryCreation: true,
+    });
+  });
+
   it('round-trips windows terminal modes through the respawn descriptor', () => {
     const spawnOptions = {
       directory: 'C:\\repo',

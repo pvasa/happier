@@ -187,4 +187,19 @@ describe('Session log screen', () => {
 
         expect(machineGetBugReportLogTailMock).not.toHaveBeenCalled();
     });
+
+    it('wires copy rows through item-local copy feedback', async () => {
+        sessionLogPath = '/tmp/.happier/logs/session.log';
+        sessionMachineId = 'machine-1';
+        canonicalMachineTarget = { machineId: 'machine-1', basePath: '/repo' };
+        const { default: SessionLogScreen } = await import('@/app/(app)/session/[id]/log');
+
+        const screen = await renderScreen(React.createElement(SessionLogScreen));
+        const itemByTitle = (title: string) =>
+            screen.findAllByType('Item' as any).find((node: any) => node.props?.title === title);
+
+        expect(itemByTitle('sessionLog.logPathTitle')?.props.copy).toBe('/tmp/.happier/logs/session.log');
+        expect(itemByTitle('sessionLog.logPathTitle')?.props.onPress).toBeUndefined();
+        expect(itemByTitle('sessionLog.copyVisibleTitle')?.props.onPress).toBeUndefined();
+    });
 });

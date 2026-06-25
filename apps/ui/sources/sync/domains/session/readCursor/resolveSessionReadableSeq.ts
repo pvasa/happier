@@ -1,5 +1,6 @@
 import type { PrimaryTurnStatusV1 } from '@happier-dev/protocol';
 
+import { messageAttentionImpact } from '@/sync/domains/messages/messageUserAttention';
 import type { Message } from '@/sync/domains/messages/messageTypes';
 
 export type ResolveSessionReadableSeqInput = Readonly<{
@@ -11,18 +12,34 @@ export type ResolveSessionReadableSeqInput = Readonly<{
     includeTerminalSessionSeq: boolean;
 }>;
 
-export function resolveSessionReadableSeq(input: ResolveSessionReadableSeqInput): number | null {
+export function resolveLatestUnreadAffectingCommittedMessageSeq(
+    messages: ReadonlyArray<Message> | null | undefined,
+): number | null {
     let readableSeq: number | null = null;
-    if (Array.isArray(input.messages)) {
-        for (const message of input.messages) {
-            readableSeq = maxReadSeq(readableSeq, normalizeReadSeq(message.seq));
-        }
+    if (!Array.isArray(messages)) return readableSeq;
+
+    for (const message of messages) {
+        if (!messageAttentionImpact(message).affectsUnread) continue;
+        readableSeq = maxReadSeq(readableSeq, normalizeReadSeq(message.seq));
     }
-    readableSeq = maxReadSeq(readableSeq, normalizeReadSeq(input.latestMessageSeq));
+
+    return readableSeq;
+}
+
+export function resolveSessionReadableSeq(input: ResolveSessionReadableSeqInput): number | null {
+    const hasCommittedMessageAttentionProjection = Array.isArray(input.messages) && input.messages.length > 0;
+    let readableSeq = resolveLatestUnreadAffectingCommittedMessageSeq(input.messages);
+    if (!hasCommittedMessageAttentionProjection) {
+        readableSeq = maxReadSeq(readableSeq, normalizeReadSeq(input.latestMessageSeq));
+    }
 
     readableSeq = maxReadSeq(readableSeq, normalizeReadSeq(input.latestReadyEventSeq));
 
-    if (input.includeTerminalSessionSeq && isTerminalTurnStatus(input.latestTurnStatus)) {
+    if (
+        !hasCommittedMessageAttentionProjection
+        && input.includeTerminalSessionSeq
+        && isTerminalTurnStatus(input.latestTurnStatus)
+    ) {
         readableSeq = maxReadSeq(readableSeq, normalizeReadSeq(input.sessionSeq));
     }
 

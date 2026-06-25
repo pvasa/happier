@@ -120,6 +120,9 @@ vi.mock('@expo/vector-icons', () => ({
 vi.mock('@expo/vector-icons/Ionicons', () => ({
     default: (props: Record<string, unknown>) => React.createElement('Ionicons', props),
 }));
+vi.mock('@react-navigation/native', () => ({
+    useIsFocused: () => true,
+}));
 
 vi.mock('@/assets/onboarding/planet-dark.jpg', () => ({ default: 'planet-dark.jpg' }));
 vi.mock('@/assets/onboarding/planet-light.jpg', () => ({ default: 'planet-light.jpg' }));
@@ -210,22 +213,32 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
     },
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    listServerProfiles: () => [
-        {
-            id: 'relay-1',
-            name: 'Relay One',
-            serverUrl: 'https://relay.example.test',
-            createdAt: 0,
-            updatedAt: 0,
-            lastUsedAt: 0,
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            listServerProfiles: () => [
+                {
+                    id: 'relay-1',
+                    name: 'Relay One',
+                    serverUrl: 'https://relay.example.test',
+                    createdAt: 0,
+                    updatedAt: 0,
+                    lastUsedAt: 0,
+                },
+            ],
+            upsertServerProfile: vi.fn((params: { serverUrl: string }) => ({
+                id: `server:${params.serverUrl}`,
+                name: params.serverUrl,
+                serverUrl: params.serverUrl,
+                createdAt: 0,
+                updatedAt: 0,
+                lastUsedAt: 0,
+            })),
         },
-    ],
-    upsertServerProfile: vi.fn((params: { serverUrl: string }) => ({
-        id: `server:${params.serverUrl}`,
-        serverUrl: params.serverUrl,
-    })),
-}));
+    });
+});
 
 vi.mock('@/sync/domains/server/serverConfig', () => ({
     validateServerUrl: () => ({ valid: true }),

@@ -11,17 +11,22 @@
  * - exactly one load in flight (`loading` phase is single-entry),
  * - arming requires an observed threshold EXIT -> ENTER transition; missing or
  *   invalid layout metrics count as OUTSIDE the threshold,
- * - loads are suspended while the offset is < 0, while passive scroll reports
- *   exact zero, while a viewport transaction is open, or while the initial fill
- *   is not done,
- * - explicit edge-reached triggers may use exact zero once so web callbacks that
- *   fire only at `scrollTop === 0` do not starve,
+ * - loads are suspended while the offset is < 0, while passive scroll reports a
+ *   near-top frame (offset within the genuine-top epsilon), while a viewport
+ *   transaction is open, or while the initial fill is not done,
+ * - explicit edge-reached triggers may use a near-top frame once so web callbacks
+ *   that fire only at the genuine top do not starve. The genuine top is rarely
+ *   EXACTLY `scrollTop === 0` (the browser reports integer-rounded / sub-pixel
+ *   residues), so the exact-edge acceptance and the passive suspension share the
+ *   same `TRANSCRIPT_WEB_GENUINE_TOP_EPSILON_PX` band the web classifier emits,
  * - a caller-timed cooldown follows every load (and every error) before any
  *   re-arm,
  * - hasMore=false is terminal until `reset` (session change).
  *
  * No timers, no React: callers own time (cooldownElapsed) and side effects.
  */
+
+import { TRANSCRIPT_WEB_GENUINE_TOP_EPSILON_PX } from '@/components/sessions/transcript/_constants';
 
 export type OlderPaginationPhase = 'idle' | 'armed' | 'loading' | 'cooldown';
 
@@ -96,12 +101,18 @@ function reduceScrollObserved(
         Number.isFinite(observation.thresholdPx) &&
         observation.thresholdPx > 0;
     const trigger = observation.trigger ?? 'scroll';
-    const allowsExactEdge = trigger === 'edge-reached' && observation.offsetY === 0;
+    // The genuine top is reported as a near-zero (integer-rounded / sub-pixel-residue) offset,
+    // not exactly 0, so accept the same epsilon band the web genuine-top classifier emits.
+    const atGenuineTop =
+        Number.isFinite(observation.offsetY) &&
+        observation.offsetY >= 0 &&
+        observation.offsetY <= TRANSCRIPT_WEB_GENUINE_TOP_EPSILON_PX;
+    const allowsExactEdge = trigger === 'edge-reached' && atGenuineTop;
     const inside = validMetrics && observation.offsetY <= observation.thresholdPx;
     const offsetSuspended =
         !Number.isFinite(observation.offsetY) ||
         observation.offsetY < 0 ||
-        (observation.offsetY === 0 && !allowsExactEdge);
+        (atGenuineTop && !allowsExactEdge);
 
     const suspendedReasons = withSuspendedReason(state.suspendedReasons, 'negative-offset', offsetSuspended);
     const exited = state.insideThreshold && !inside;

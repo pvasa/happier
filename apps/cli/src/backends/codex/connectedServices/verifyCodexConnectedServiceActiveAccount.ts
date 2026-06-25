@@ -5,6 +5,7 @@ import type {
   ConnectedServiceAccountTransitionVerificationResult,
 } from '@/daemon/connectedServices/accountTransitions/connectedServiceAccountTransition';
 import type { ConnectedServiceRuntimeAuthTargetInput } from '@/daemon/connectedServices/runtimeAuth/types';
+import { readCodexLiveAccountIdentity } from './codexLiveAccountIdentity';
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -14,12 +15,6 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
-}
-
-function normalizeEmail(value: string | null | undefined): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim().toLowerCase();
-  return trimmed.length > 0 ? trimmed : null;
 }
 
 function readCredentialRecord(input: ConnectedServiceRuntimeAuthTargetInput): ConnectedServiceCredentialRecordV1 | null {
@@ -73,31 +68,7 @@ function readAuthStoreProviderAccountIdReader(value: unknown): (() => Promise<Co
 }
 
 export function readCodexActiveProviderAccountId(value: unknown): string | null {
-  const record = readRecord(value);
-  if (!record) return null;
-  return readString(record.chatgptAccountId)
-    ?? readString(record.accountId)
-    ?? readString(record.account_id)
-    ?? readString(readRecord(record.account)?.id)
-    ?? readString(readRecord(record.account)?.accountId)
-    ?? readString(readRecord(record.auth)?.account_id)
-    ?? readString(readRecord(record.profile)?.accountId)
-    ?? readString(readRecord(record.profile)?.providerAccountId);
-}
-
-export function readCodexActiveProviderAccountEmail(value: unknown): string | null {
-  const record = readRecord(value);
-  if (!record) return null;
-  return normalizeEmail(
-    readString(record.email)
-      ?? readString(record.emailAddress)
-      ?? readString(record.email_address)
-      ?? readString(readRecord(record.account)?.email)
-      ?? readString(readRecord(record.account)?.emailAddress)
-      ?? readString(readRecord(record.account)?.email_address)
-      ?? readString(readRecord(record.auth)?.email)
-      ?? readString(readRecord(record.profile)?.email),
-  );
+  return readCodexLiveAccountIdentity(value).activeAccountId;
 }
 
 export async function verifyCodexConnectedServiceActiveAccount(
@@ -132,7 +103,7 @@ export async function verifyCodexConnectedServiceActiveAccount(
 
   let rawAccount: unknown;
   try {
-    rawAccount = await client.request('account/read');
+    rawAccount = await client.request('account/read', {});
   } catch (error) {
     const classification = classifyDaemonServerWorkError(error);
     return {
@@ -145,8 +116,6 @@ export async function verifyCodexConnectedServiceActiveAccount(
 
   const actualProviderAccountId = readCodexActiveProviderAccountId(rawAccount);
   if (!actualProviderAccountId) {
-    const actualProviderEmail = readCodexActiveProviderAccountEmail(rawAccount);
-    const expectedProviderEmail = normalizeEmail(record.oauth.providerEmail);
     const readAuthStoreProviderAccountId = readAuthStoreProviderAccountIdReader(selection);
     const authStoreProviderAccountIdProof = readAuthStoreProviderAccountId
       ? await readAuthStoreProviderAccountId()
@@ -172,27 +141,9 @@ export async function verifyCodexConnectedServiceActiveAccount(
           reason: 'provider_account_auth_store_mismatch',
         };
       }
-      if (actualProviderEmail && expectedProviderEmail && actualProviderEmail !== expectedProviderEmail) {
-        return {
-          status: 'mismatch',
-          expectedProviderAccountId,
-          actualProviderAccountId: null,
-          retryable: true,
-          reason: 'provider_account_email_mismatch',
-        };
-      }
     }
-    if (actualProviderEmail && expectedProviderEmail && actualProviderEmail !== expectedProviderEmail) {
-      return {
-        status: 'mismatch',
-        expectedProviderAccountId,
-        actualProviderAccountId: null,
-        retryable: true,
-        reason: 'provider_account_email_mismatch',
-      };
-    }
-    // Auth-store and email proof can diagnose mismatches, but Codex adoption success
-    // must be proven by the live app-server account id used by the runtime.
+    // Auth-store proof can diagnose exact mismatches. Email from account/read is
+    // diagnostic label evidence only and cannot prove or disprove Codex account id.
     return {
       status: 'unavailable',
       retryable: true,

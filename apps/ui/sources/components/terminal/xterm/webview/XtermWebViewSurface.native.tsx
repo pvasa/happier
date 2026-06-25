@@ -91,6 +91,14 @@ export const XtermWebViewSurface = React.forwardRef<XtermWebViewSurfaceHandle, X
             postEnvelope({ v: 1, type: 'write', payload: { data: pending } });
         }, [postEnvelope]);
 
+        const requestNativeFocus = React.useCallback(() => {
+            try {
+                webViewRef.current?.requestFocus();
+            } catch {
+                // Ignore focus command failures; xterm focus is still attempted inside the WebView.
+            }
+        }, []);
+
         React.useImperativeHandle(
             ref,
             () => ({
@@ -105,11 +113,12 @@ export const XtermWebViewSurface = React.forwardRef<XtermWebViewSurfaceHandle, X
                     postEnvelope({ v: 1, type: 'clear', payload: {} });
                 },
                 focus: () => {
+                    requestNativeFocus();
                     if (!readyRef.current) return;
                     postEnvelope({ v: 1, type: 'focus', payload: {} });
                 },
             }),
-            [flushPendingWrite, postEnvelope],
+            [flushPendingWrite, postEnvelope, requestNativeFocus],
         );
 
         React.useEffect(() => {
@@ -152,6 +161,7 @@ export const XtermWebViewSurface = React.forwardRef<XtermWebViewSurfaceHandle, X
                     ref={webViewRef}
                     source={{ html }}
                     style={{ flex: 1 }}
+                    keyboardDisplayRequiresUserAction={false}
                     onMessage={(event) => {
                         const raw = event.nativeEvent.data;
                         let parsed: any = null;
@@ -169,6 +179,7 @@ export const XtermWebViewSurface = React.forwardRef<XtermWebViewSurfaceHandle, X
                             const rows = payload && typeof payload.rows === 'number' ? payload.rows : NaN;
                             if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return;
                             readyRef.current = true;
+                            requestNativeFocus();
                             props.onReady(cols, rows);
                             postEnvelope({
                                 v: 1,

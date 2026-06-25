@@ -1,10 +1,12 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
+import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/components/ui/text/Text';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -13,38 +15,34 @@ import { sync } from '@/sync/sync';
 import { useProfile, useSettings } from '@/sync/store/hooks';
 import { useApplySettings } from '@/sync/store/settingsWriters';
 import { deleteConnectedServiceCredentialForAccount } from '@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount';
-import { deriveConnectedServiceAuthGroupIdFromName } from '@/sync/domains/connectedServices/deriveConnectedServiceAuthGroupIdFromName';
-import {
-  addConnectedServiceAuthGroupMemberV3,
-  createConnectedServiceAuthGroupV3,
-  deleteConnectedServiceAuthGroupV3,
-  listConnectedServiceAuthGroupsV3,
-  patchConnectedServiceAuthGroupMemberV3,
-  patchConnectedServiceAuthGroupV3,
-  removeConnectedServiceAuthGroupMemberV3,
-  setConnectedServiceAuthGroupActiveProfileV3,
-} from '@/sync/api/account/apiConnectedServiceAuthGroupsV3';
 import { getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
-import { connectedServiceProfileKey, resolveConnectedServiceProfileLabel } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
+import {
+  connectedServiceProfileKey,
+  pruneConnectedServiceProfilePreferencesForDeletedProfile,
+  resolveConnectedServiceProfileLabel,
+} from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
+import { deriveAccountHealth, type AccountHealth } from '@/sync/domains/connectedServices/deriveAccountHealth';
+import { resolveConnectedServiceCredentialHealthStatus } from '@/sync/domains/connectedServices/resolveConnectedServiceCredentialHealthStatus';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import {
   buildConnectedServiceCredentialRecord,
   ConnectedServiceIdSchema,
   ConnectedServiceProfileIdSchema,
   type ConnectedServiceId,
-  type ConnectedServiceAuthGroupV1,
 } from '@happier-dev/protocol';
-import type { ConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 
+import { AccountBlock } from './account/AccountBlock';
+import { buildConnectedServiceAccountRowActions } from './account/buildConnectedServiceAccountRowActions';
 import { ConnectedServiceDetailActionsGroup } from './detail/ConnectedServiceDetailActionsGroup';
-import { ConnectedServiceDetailGroupsGroup } from './detail/ConnectedServiceDetailGroupsGroup';
-import { ConnectedServiceDetailProfilesGroup } from './detail/ConnectedServiceDetailProfilesGroup';
-import { ConnectedServiceDetailQuotasSection } from './detail/ConnectedServiceDetailQuotasSection';
+import {
+  ConnectedServiceSegmentedShell,
+  type ConnectedServiceDetailSegment,
+} from './detail/ConnectedServiceSegmentedShell';
+import { PoolsList } from './pools/PoolsList';
+import { SettingsHeaderAddButton } from '../navigation/SettingsHeaderAddButton';
 import {
   isConnectedServiceCredentialReferencedByGroupError,
-  isConnectedServiceRuntimeCooldownError,
-  resolveConnectedServiceRuntimeCooldownOverridePrompt,
   resolveConnectedServiceSettingsErrorMessage,
 } from './errors/connectedServiceSettingsErrors';
 import { resolveConnectedServiceRuntimeGroupCapability } from './model/connectedServiceRuntimeFallbackCapability';
@@ -54,15 +52,12 @@ import {
   formatConnectedServiceProfileGroupReferenceLabels,
   resolveConnectedServiceProfileGroupReferenceLabels,
 } from './model/resolveConnectedServiceProfileGroupReferences';
-import { resolveConnectedServiceGroupMemberIdentity } from './model/connectedServiceGroupViewModel';
 import { resolveConnectedServiceOauthAddActionModesForPlatform } from './oauth/resolveConnectedServiceOauthAddActionModesForPlatform';
 import { promptConnectedServiceTokenValue } from './promptConnectedServiceTokenValue';
 import { storeConnectedServiceCredentialWithIdentityConfirmation } from './storeConnectedServiceCredentialWithIdentityConfirmation';
 import { runConnectedServiceCredentialStoredEffects } from './runConnectedServiceCredentialStoredEffects';
-import {
-  invalidateConnectedServiceGroupsRefreshSignal,
-  useConnectedServiceGroupsRefreshSignal,
-} from './connectedServiceGroupsRefreshSignal';
+import { invalidateConnectedServiceGroupsRefreshSignal } from './connectedServiceGroupsRefreshSignal';
+import { useConnectedServiceAuthGroups } from './model/useConnectedServiceAuthGroups';
 
 function asStringParam(value: unknown): string {
   if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : '';
@@ -103,26 +98,25 @@ function resolveConnectedServiceProjectionSignature(service: Readonly<{
   });
 }
 
-function clearAuthoritativeGroupsIfNeeded(
-  groups: ReadonlyArray<ConnectedServiceAuthGroupV1>,
-): ReadonlyArray<ConnectedServiceAuthGroupV1> {
-  return groups.length === 0 ? groups : [];
-}
+const HEALTH_SEVERITY_RANK: Readonly<Record<AccountHealth, number>> = {
+  error: 0,
+  attention: 1,
+  healthy: 2,
+};
 
 export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDetailView() {
   const { theme } = useUnistyles();
   const router = useRouter();
+  const navigation = useNavigation();
   const params = useLocalSearchParams();
   const auth = useAuth();
   const connectedServicesEnabled = useFeatureEnabled('connectedServices');
-  const quotasEnabled = useFeatureEnabled('connectedServices.quotas');
   const accountGroupsEnabled = useFeatureEnabled('connectedServices.accountGroups');
-  const accountFallbackEnabled = useFeatureEnabled('connectedServices.accountFallback');
+  const quotasEnabled = useFeatureEnabled('connectedServices.quotas');
   const profile = useProfile();
   const settings = useSettings();
   const applySettings = useApplySettings();
-  const [quotaSnapshotsByKey, setQuotaSnapshotsByKey] = React.useState<Record<string, ConnectedServiceQuotaSnapshotV1 | null>>({});
-  const [authoritativeGroups, setAuthoritativeGroups] = React.useState<ReadonlyArray<ConnectedServiceAuthGroupV1>>([]);
+  const [activeSegment, setActiveSegment] = React.useState<ConnectedServiceDetailSegment>('accounts');
 
   const rawServiceId = asStringParam((params as Record<string, unknown>).serviceId).trim();
   const parsedServiceId = ConnectedServiceIdSchema.safeParse(rawServiceId);
@@ -147,12 +141,23 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     [serviceId],
   );
   const runtimeGroupFallbackSupported = runtimeGroupCapability.runtimeFallbackSupported;
-  const authCredentials = auth.credentials ?? null;
-  const groupsRefreshSignal = useConnectedServiceGroupsRefreshSignal();
+  const groupConfigurationSupported = runtimeGroupCapability.groupConfigurationSupported;
   const serviceProjectionSignature = React.useMemo(
     () => resolveConnectedServiceProjectionSignature(svc),
     [svc],
   );
+
+  // Pools ("auth groups") read path + create flow. Member/policy mutations live
+  // in PoolDetailView; the shell only needs the list + create.
+  const authGroups = useConnectedServiceAuthGroups({
+    serviceId,
+    accountGroupsEnabled,
+    groupConfigurationSupported,
+    runtimeGroupFallbackSupported,
+    serviceProjectionSignature,
+  });
+
+  const poolsAvailable = accountGroupsEnabled && groupConfigurationSupported;
 
   const ensureCredentials = () => {
     if (!auth.credentials) {
@@ -165,11 +170,11 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     accountGroupsEnabled
       ? resolveConnectedServiceProfileGroupReferenceLabels({
         profileId,
-        groups: authoritativeGroups,
+        groups: authGroups.groups,
         projectedGroups: svc?.groups,
       })
       : []
-  ), [accountGroupsEnabled, authoritativeGroups, svc?.groups]);
+  ), [accountGroupsEnabled, authGroups.groups, svc?.groups]);
 
   const finishDisconnect = React.useCallback(async (
     profileId: string,
@@ -181,9 +186,20 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
       profileId,
       ...(opts?.cleanupGroupReferences ? { cleanupGroupReferences: true } : {}),
     });
+    applySettings(pruneConnectedServiceProfilePreferencesForDeletedProfile({
+      serviceId: serviceId!,
+      profileId,
+      connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
+      connectedServicesProfileLabelByKey: settings.connectedServicesProfileLabelByKey,
+    }));
     await sync.refreshProfile();
     invalidateConnectedServiceGroupsRefreshSignal();
-  }, [serviceId]);
+  }, [
+    applySettings,
+    serviceId,
+    settings.connectedServicesDefaultProfileByServiceId,
+    settings.connectedServicesProfileLabelByKey,
+  ]);
 
   const promptProfileId = async (opts?: { defaultValue?: string }) => {
     const res = await Modal.prompt(
@@ -365,7 +381,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     });
   };
 
-  const handleOpenGroup = (groupId: string) => {
+  const handleOpenPool = (groupId: string) => {
     if (!serviceId) return;
     router.push({
       pathname: '/(app)/settings/connected-services/group',
@@ -373,11 +389,12 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     });
   };
 
-  const handleSetDefaultProfile = async (profileId: string) => {
+  const handleToggleDefaultProfile = async (profileId: string) => {
     if (!serviceId) return;
     const exists = profiles.some((p) => p?.profileId === profileId);
+    const isDefault = profileId === defaultProfileId;
     const nextMap = { ...settings.connectedServicesDefaultProfileByServiceId };
-    if (!profileId) {
+    if (isDefault) {
       delete nextMap[serviceId];
     } else if (exists) {
       nextMap[serviceId] = profileId;
@@ -429,368 +446,53 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     applySettings({ connectedServicesProfileLabelByKey: nextMap });
   };
 
-  const setPinnedQuotaMeters = async (profileId: string, nextPinned: ReadonlyArray<string>) => {
-    if (!serviceId) return;
-    const key = connectedServiceProfileKey({ serviceId, profileId });
-    const nextMap = { ...settings.connectedServicesQuotaPinnedMeterIdsByKey };
-    if (nextPinned.length === 0) {
-      delete nextMap[key];
-    } else {
-      nextMap[key] = [...nextPinned];
-    }
-    applySettings({ connectedServicesQuotaPinnedMeterIdsByKey: nextMap });
-  };
+  const oauthAddActionModes = React.useMemo(
+    () => entry
+      ? resolveConnectedServiceOauthAddActionModesForPlatform({
+        platformOS: Platform.OS,
+        oauthAddActionModes: entry.oauthAddActionModes,
+      })
+      : [],
+    [entry],
+  );
 
-  const fetchAuthoritativeGroups = React.useCallback(async () => {
-    if (!serviceId || !accountGroupsEnabled || !authCredentials) return [];
-    return await listConnectedServiceAuthGroupsV3(authCredentials, { serviceId });
-  }, [accountGroupsEnabled, authCredentials, serviceId]);
-
-  const refreshAuthoritativeGroups = React.useCallback(async () => {
-    const groups = await fetchAuthoritativeGroups();
-    setAuthoritativeGroups(groups);
-    return groups;
-  }, [fetchAuthoritativeGroups]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-
-    if (!serviceId || !accountGroupsEnabled || !authCredentials) {
-      setAuthoritativeGroups(clearAuthoritativeGroupsIfNeeded);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    void (async () => {
-      try {
-        setAuthoritativeGroups(clearAuthoritativeGroupsIfNeeded);
-        const groups = await fetchAuthoritativeGroups();
-        if (!cancelled) setAuthoritativeGroups(groups);
-      } catch {
-        if (!cancelled) setAuthoritativeGroups(clearAuthoritativeGroupsIfNeeded);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [accountGroupsEnabled, authCredentials, fetchAuthoritativeGroups, groupsRefreshSignal, serviceId, serviceProjectionSignature]);
-
-  const upsertAuthoritativeGroup = React.useCallback((group: ConnectedServiceAuthGroupV1) => {
-    setAuthoritativeGroups((prev) => {
-      const existingIndex = prev.findIndex((candidate) => candidate.groupId === group.groupId);
-      if (existingIndex === -1) return [...prev, group];
-      const next = [...prev];
-      next[existingIndex] = group;
-      return next;
-    });
-  }, []);
-
-  const removeAuthoritativeGroup = React.useCallback((groupId: string) => {
-    setAuthoritativeGroups((prev) => prev.filter((group) => group.groupId !== groupId));
-  }, []);
-
-  const runGroupMutation = async <T,>(
-    mutation: () => Promise<T>,
-    opts?: Readonly<{
-      onSuccess?: (result: T) => void;
-      onError?: (error: unknown) => Promise<boolean>;
-    }>,
-  ) => {
-    try {
-      const result = await mutation();
-      opts?.onSuccess?.(result);
-      await sync.refreshProfile().catch(() => undefined);
-      await refreshAuthoritativeGroups().catch(() => undefined);
-    } catch (e: unknown) {
-      if (await opts?.onError?.(e)) return;
-      await Modal.alert(t('common.error'), resolveConnectedServiceSettingsErrorMessage(e));
-    }
-  };
-
-  const runAuthenticatedGroupMutation = async <T,>(
-    mutation: (credentials: ReturnType<typeof ensureCredentials>) => Promise<T>,
-    opts?: Readonly<{
-      onSuccess?: (result: T) => void;
-      onError?: (error: unknown) => Promise<boolean>;
-    }>,
-  ) => {
-    await runGroupMutation(() => mutation(ensureCredentials()), opts);
-  };
-
-  const promptGroupLabel = async (opts: Readonly<{ currentLabel?: string }> = {}) => {
-    const res = await Modal.prompt(
-      t('connectedServices.detail.groupActions.displayNameTitle'),
-      t('connectedServices.detail.groupActions.displayNameBody'),
-      {
-        placeholder: t('connectedServices.detail.groupActions.displayNamePlaceholder'),
-        defaultValue: opts.currentLabel,
-        confirmText: t('common.save'),
-        cancelText: t('common.cancel'),
-      },
-    );
-    if (typeof res !== 'string') return undefined;
-    const trimmed = res.trim();
-    return trimmed || null;
-  };
-
-  const promptMemberProfileId = async () => {
-    const res = await Modal.prompt(
-      t('connectedServices.detail.groupActions.memberProfileTitle'),
-      t('connectedServices.detail.groupActions.memberProfileBody'),
-      {
-        placeholder: t('connectedServices.detail.prompts.profileIdPlaceholder'),
-        confirmText: t('common.save'),
-        cancelText: t('common.cancel'),
-      },
-    );
-    const profileId = typeof res === 'string' ? res.trim() : '';
-    if (!profileId) return null;
-    const parsed = ConnectedServiceProfileIdSchema.safeParse(profileId);
-    if (!parsed.success) {
-      await Modal.alert(
-        t('connectedServices.detail.alerts.invalidProfileIdTitle'),
-        t('connectedServices.detail.alerts.invalidProfileIdBody'),
-      );
-      return null;
-    }
-    if (!profiles.some((candidate) => candidate.profileId === parsed.data)) {
-      await Modal.alert(
-        t('connectedServices.detail.alerts.unknownProfileTitle'),
-        t('connectedServices.detail.alerts.unknownProfileBody', { profileId: parsed.data, service: serviceLabel }),
-      );
-      return null;
-    }
-    return parsed.data;
-  };
-
-  const handleCreateGroup = async () => {
-    if (!serviceId || !accountGroupsEnabled || !runtimeGroupFallbackSupported) return;
-    const res = await Modal.prompt(
-      t('connectedServices.detail.groupActions.createTitle'),
-      t('connectedServices.detail.groupActions.createSubtitle'),
-      {
-        placeholder: t('connectedServices.detail.groupActions.displayNamePlaceholder'),
-        confirmText: t('common.create'),
-        cancelText: t('common.cancel'),
-      },
-    );
-    const displayName = typeof res === 'string' ? res.trim() : '';
-    if (!displayName) return;
-    const existingGroupIds = authoritativeGroups.map((group) => group.groupId);
-    const groupId = deriveConnectedServiceAuthGroupIdFromName({
-      name: displayName,
-      existingGroupIds,
-    }) ?? deriveConnectedServiceAuthGroupIdFromName({
-      name: 'group',
-      existingGroupIds,
-    });
-    if (!groupId) {
-      await Modal.alert(
-        t('connectedServices.detail.groupActions.invalidGroupIdTitle'),
-        t('connectedServices.detail.groupActions.invalidGroupIdBody'),
-      );
+  // Context-aware header "+": add account (Accounts segment) / create pool (Pools).
+  const handleHeaderAdd = React.useCallback(() => {
+    if (activeSegment === 'pools' && poolsAvailable) {
+      void authGroups.createPool();
       return;
     }
-    await runAuthenticatedGroupMutation(
-      async (credentials) => createConnectedServiceAuthGroupV3(credentials, {
-        serviceId,
-        groupId,
-        displayName,
-        members: [],
-        activeProfileId: null,
-      }),
-      { onSuccess: upsertAuthoritativeGroup },
-    );
-  };
-
-  const handleEditGroupLabel = async (groupId: string, currentLabel: string) => {
-    if (!serviceId) return;
-    const displayName = await promptGroupLabel({ currentLabel });
-    if (displayName === undefined) return;
-    await runAuthenticatedGroupMutation(
-      async (credentials) => patchConnectedServiceAuthGroupV3(credentials, {
-        serviceId,
-        groupId,
-        patch: { displayName },
-      }),
-      { onSuccess: upsertAuthoritativeGroup },
-    );
-  };
-
-  const handleSetGroupAutoSwitch = async (groupId: string, autoSwitch: boolean) => {
-    if (!serviceId || !runtimeGroupFallbackSupported || !accountFallbackEnabled) return;
-    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
-    if (!group) return;
-    await runAuthenticatedGroupMutation(
-      async (credentials) => patchConnectedServiceAuthGroupV3(credentials, {
-        serviceId,
-        groupId,
-        patch: { policy: { autoSwitch }, expectedGeneration: group.generation },
-      }),
-      { onSuccess: upsertAuthoritativeGroup },
-    );
-  };
-
-  const handleSetGroupStrategy = async (groupId: string, strategy: 'priority' | 'manual') => {
-    if (!serviceId || !runtimeGroupFallbackSupported || !accountFallbackEnabled) return;
-    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
-    if (!group) return;
-    await runAuthenticatedGroupMutation(
-      async (credentials) => patchConnectedServiceAuthGroupV3(credentials, {
-        serviceId,
-        groupId,
-        patch: { policy: { strategy }, expectedGeneration: group.generation },
-      }),
-      { onSuccess: upsertAuthoritativeGroup },
-    );
-  };
-
-  const handleDeleteGroup = async (groupId: string, label: string) => {
-    if (!serviceId) return;
-    const ok = await Modal.confirm(
-      t('connectedServices.detail.groupActions.deleteConfirmTitle'),
-      t('connectedServices.detail.groupActions.deleteConfirmBody', { group: label }),
-      { confirmText: t('common.delete'), cancelText: t('common.cancel') },
-    );
-    if (!ok) return;
-    await runAuthenticatedGroupMutation(
-      async (credentials) => deleteConnectedServiceAuthGroupV3(credentials, { serviceId, groupId }),
-      { onSuccess: (didDelete) => { if (didDelete) removeAuthoritativeGroup(groupId); } },
-    );
-  };
-
-  const handleAddMember = async (groupId: string, profileId: string) => {
-    if (!serviceId) return;
-    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
-    if (!group) return;
-    await runAuthenticatedGroupMutation(
-      async (credentials) => addConnectedServiceAuthGroupMemberV3(credentials, {
-        serviceId,
-        groupId,
-        profileId,
-        priority: 100,
-        enabled: true,
-        expectedGeneration: group.generation,
-      }),
-      { onSuccess: upsertAuthoritativeGroup },
-    );
-  };
-
-  const handleSetActiveMember = async (groupId: string, profileId: string, expectedGeneration: number) => {
-    if (!serviceId || !runtimeGroupFallbackSupported || !accountFallbackEnabled) return;
-    const runSetActiveMember = async (overrideRuntimeCooldown: boolean) => {
-      await runAuthenticatedGroupMutation(
-        async (credentials) => setConnectedServiceAuthGroupActiveProfileV3(credentials, {
-          serviceId,
-          groupId,
-          profileId,
-          expectedGeneration,
-          ...(overrideRuntimeCooldown ? { overrideRuntimeCooldown: true } : {}),
-        }),
-        { onSuccess: upsertAuthoritativeGroup },
-      );
-    };
-    await runAuthenticatedGroupMutation(
-      async (credentials) => setConnectedServiceAuthGroupActiveProfileV3(credentials, {
-        serviceId,
-        groupId,
-        profileId,
-        expectedGeneration,
-      }),
-      {
-        onSuccess: upsertAuthoritativeGroup,
-        onError: async (error) => {
-          if (!isConnectedServiceRuntimeCooldownError(error)) return false;
-          const prompt = resolveConnectedServiceRuntimeCooldownOverridePrompt(error);
-          const ok = await Modal.confirm(prompt.title, prompt.body, {
-            confirmText: prompt.confirmText,
-            cancelText: prompt.cancelText,
-          });
-          if (!ok) return true;
-          await runSetActiveMember(true);
-          return true;
-        },
-      },
-    );
-  };
-
-  const handleSetMemberEnabled = async (groupId: string, profileId: string, enabled: boolean) => {
-    if (!serviceId) return;
-    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
-    if (!group) return;
-    await runAuthenticatedGroupMutation(
-      async (credentials) => patchConnectedServiceAuthGroupMemberV3(credentials, {
-        serviceId,
-        groupId,
-        profileId,
-        patch: { enabled, expectedGeneration: group.generation },
-      }),
-      { onSuccess: upsertAuthoritativeGroup },
-    );
-  };
-
-  const handleEditMemberPriority = async (groupId: string, profileId: string, currentPriority: number) => {
-    if (!serviceId) return;
-    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
-    if (!group) return;
-    const res = await Modal.prompt(
-      t('connectedServices.detail.groupActions.priorityTitle'),
-      t('connectedServices.detail.groupActions.priorityBody'),
-      {
-        placeholder: String(currentPriority),
-        defaultValue: String(currentPriority),
-        confirmText: t('common.save'),
-        cancelText: t('common.cancel'),
-      },
-    );
-    if (typeof res !== 'string') return;
-    const priority = Number.parseInt(res.trim(), 10);
-    if (!Number.isFinite(priority)) {
-      await Modal.alert(
-        t('connectedServices.detail.groupActions.invalidPriorityTitle'),
-        t('connectedServices.detail.groupActions.invalidPriorityBody'),
-      );
+    if (entry?.supportsOauth) {
+      void handleAddOauthProfile(oauthAddActionModes[0] ?? null);
       return;
     }
-    await runAuthenticatedGroupMutation(
-      async (credentials) => patchConnectedServiceAuthGroupMemberV3(credentials, {
-        serviceId,
-        groupId,
-        profileId,
-        patch: { priority, expectedGeneration: group.generation },
-      }),
-      { onSuccess: upsertAuthoritativeGroup },
-    );
-  };
+    if (entry?.supportsToken) {
+      void handleConnectToken();
+    }
+  }, [activeSegment, authGroups, entry, oauthAddActionModes, poolsAvailable]);
 
-  const handleRemoveMember = async (groupId: string, profileId: string) => {
-    if (!serviceId) return;
-    const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
-    if (!group) return;
-    const memberLabel = resolveConnectedServiceGroupMemberIdentity({
-      serviceId,
-      profileId,
-      labelsByKey: settings.connectedServicesProfileLabelByKey,
-      profiles,
-    }).diagnosticLabel;
-    const ok = await Modal.confirm(
-      t('connectedServices.detail.groupActions.removeMemberConfirmTitle'),
-      t('connectedServices.detail.groupActions.removeMemberConfirmBody', { profileId: memberLabel }),
-      { confirmText: t('common.remove'), cancelText: t('common.cancel') },
-    );
-    if (!ok) return;
-    await runAuthenticatedGroupMutation(
-      async (credentials) => removeConnectedServiceAuthGroupMemberV3(credentials, {
-        serviceId,
-        groupId,
-        profileId,
-        expectedGeneration: group.generation,
-      }),
-      { onSuccess: upsertAuthoritativeGroup },
-    );
-  };
+  const canAdd = Boolean(entry) && (
+    (activeSegment === 'pools' && poolsAvailable)
+    || Boolean(entry?.supportsOauth)
+    || Boolean(entry?.supportsToken)
+  );
+
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerTitle: serviceLabel,
+      headerRight: canAdd
+        ? () => (
+          <SettingsHeaderAddButton
+            testID="connected-services-detail:header-add"
+            accessibilityLabel={activeSegment === 'pools'
+              ? t('connectedServices.pools.create.title')
+              : t('connectedServices.detail.addOauthProfileTitle')}
+            onPress={handleHeaderAdd}
+          />
+        )
+        : undefined,
+    });
+  }, [activeSegment, canAdd, handleHeaderAdd, navigation, serviceLabel]);
 
   if (!connectedServicesEnabled) {
     return (
@@ -816,67 +518,74 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     );
   }
 
-  const oauthAddActionModes = resolveConnectedServiceOauthAddActionModesForPlatform({
-    platformOS: Platform.OS,
-    oauthAddActionModes: entry.oauthAddActionModes,
-  });
+  const sortedProfiles = profiles
+    .map((p) => {
+      const profileId = typeof p?.profileId === 'string' ? p.profileId : '';
+      const status = resolveConnectedServiceCredentialHealthStatus(p?.status);
+      // Attention-first ordering uses the status dimension of the canonical
+      // health derivation (quota capacity is fetched inside AccountBlock).
+      const health = deriveAccountHealth({ status, capacityPct: null });
+      return { record: p, profileId, status, health };
+    })
+    .filter((entryRow) => entryRow.profileId.length > 0)
+    .sort((a, b) => {
+      const rank = HEALTH_SEVERITY_RANK[a.health] - HEALTH_SEVERITY_RANK[b.health];
+      if (rank !== 0) return rank;
+      return a.profileId.localeCompare(b.profileId);
+    });
 
-  return (
-    <ItemList>
-      <ConnectedServiceDetailProfilesGroup
-        title={serviceLabel}
-        serviceId={serviceId}
-        profiles={profiles}
-        defaultProfileId={defaultProfileId}
-        profileLabelsByKey={settings.connectedServicesProfileLabelByKey}
-        pinnedMeterIdsByKey={settings.connectedServicesQuotaPinnedMeterIdsByKey}
-        quotaSummaryStrategyByKey={settings.connectedServicesQuotaSummaryStrategyByKey}
-        quotaSnapshotsByKey={quotaSnapshotsByKey}
-        quotasEnabled={quotasEnabled}
-        onDisconnect={(profileId) => void handleDisconnect(profileId)}
-        onConnectOauth={(profileId) => void handleConnectOauth(profileId)}
-        onReplaceToken={(profileId) => void handleReplaceToken(profileId)}
-        onOpenProfile={(profileId) => handleOpenProfile(profileId)}
-        onSetDefaultProfile={(profileId) => void handleSetDefaultProfile(profileId)}
-        onEditProfileLabel={(profileId) => void handleEditProfileLabel(profileId)}
-      />
-
-      {accountGroupsEnabled ? (
-        <ConnectedServiceDetailGroupsGroup
-          serviceId={serviceId}
-          profiles={profiles}
-          profileLabelsByKey={settings.connectedServicesProfileLabelByKey}
-          pinnedMeterIdsByKey={settings.connectedServicesQuotaPinnedMeterIdsByKey}
-          quotaSummaryStrategyByKey={settings.connectedServicesQuotaSummaryStrategyByKey}
-          quotaSnapshotsByKey={quotaSnapshotsByKey}
-          quotasEnabled={quotasEnabled}
-          groups={authoritativeGroups}
-          accountFallbackEnabled={accountFallbackEnabled}
-          groupConfigurationSupported={runtimeGroupCapability.groupConfigurationSupported}
-          runtimeGroupFallbackSupported={runtimeGroupFallbackSupported}
-          onCreateGroup={() => void handleCreateGroup()}
-          onOpenGroup={(groupId) => handleOpenGroup(groupId)}
-          onSetGroupAutoSwitch={(groupId, autoSwitch) => void handleSetGroupAutoSwitch(groupId, autoSwitch)}
-          onSetGroupStrategy={(groupId, strategy) => void handleSetGroupStrategy(groupId, strategy)}
-          onDeleteGroup={(groupId, label) => void handleDeleteGroup(groupId, label)}
-          onAddMember={(groupId, profileId) => void handleAddMember(groupId, profileId)}
-          onSetActiveMember={(groupId, profileId, expectedGeneration) => void handleSetActiveMember(groupId, profileId, expectedGeneration)}
-          onSetMemberEnabled={(groupId, profileId, enabled) => void handleSetMemberEnabled(groupId, profileId, enabled)}
-          onEditMemberPriority={(groupId, profileId, currentPriority) => void handleEditMemberPriority(groupId, profileId, currentPriority)}
-          onRemoveMember={(groupId, profileId) => void handleRemoveMember(groupId, profileId)}
-        />
-      ) : null}
-
-      {quotasEnabled ? (
-        <ConnectedServiceDetailQuotasSection
-          serviceId={serviceId}
-          profiles={profiles}
-          profileLabelsByKey={settings.connectedServicesProfileLabelByKey}
-          pinnedMeterIdsByKey={settings.connectedServicesQuotaPinnedMeterIdsByKey}
-          onSetPinnedMeterIds={(profileId, nextPinned) => void setPinnedQuotaMeters(profileId, nextPinned)}
-          onSnapshot={(key, snapshot) => setQuotaSnapshotsByKey((prev) => ({ ...prev, [key]: snapshot }))}
-        />
-      ) : null}
+  const accountsContent = (
+    <>
+      <ItemGroup title={serviceLabel}>
+        {sortedProfiles.length === 0 ? (
+          <EmptyState
+            testID="connected-services-accounts:empty"
+            icon={<Ionicons name="key-outline" size={28} color={theme.colors.text.secondary} />}
+            title={t('connectedServices.detail.profiles.empty')}
+          />
+        ) : null}
+        {sortedProfiles.map((row, index) => {
+          const { profileId, status, record } = row;
+          const isDefault = profileId === defaultProfileId;
+          const kind = record.kind === 'token' ? 'token' : record.kind === 'oauth' ? 'oauth' : null;
+          const label = resolveConnectedServiceProfileLabel({
+            labelsByKey: settings.connectedServicesProfileLabelByKey,
+            serviceId,
+            profileId,
+          });
+          const identityDisplay = resolveConnectedServiceProfileIdentityDisplay({
+            profileId,
+            label,
+            providerEmail: typeof record.providerEmail === 'string' ? record.providerEmail : '',
+          });
+          const title = identityDisplay.primaryLabel;
+          const poolLabels = resolveProfileGroupReferenceLabels(profileId);
+          const actions = buildConnectedServiceAccountRowActions({
+            kind,
+            status,
+            onOpen: () => handleOpenProfile(profileId),
+            onEditLabel: () => void handleEditProfileLabel(profileId),
+            onReplaceToken: () => void handleReplaceToken(profileId),
+            onReconnect: () => void handleConnectOauth(profileId),
+            onDisconnect: () => void handleDisconnect(profileId),
+          });
+          return (
+            <AccountBlock
+              key={profileId}
+              serviceId={serviceId}
+              profileId={profileId}
+              title={title}
+              identityLabel={identityDisplay.secondaryLabel}
+              status={status}
+              isDefault={isDefault}
+              onToggleDefault={() => void handleToggleDefaultProfile(profileId)}
+              poolLabels={poolLabels}
+              actions={actions}
+              showDivider={index < sortedProfiles.length - 1}
+            />
+          );
+        })}
+      </ItemGroup>
 
       <ConnectedServiceDetailActionsGroup
         supportsOauth={Boolean(entry.supportsOauth)}
@@ -888,7 +597,30 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
         onConnectToken={() => void handleConnectToken()}
         onOpenTokenSetupUrl={(url) => void handleOpenTokenSetupUrl(url)}
       />
+    </>
+  );
 
+  return (
+    <ItemList>
+      <ConnectedServiceSegmentedShell
+        activeSegment={activeSegment}
+        onSelectSegment={setActiveSegment}
+        poolsAvailable={poolsAvailable}
+        accountsContent={accountsContent}
+        poolsContent={(
+          <PoolsList
+            serviceId={serviceId}
+            profiles={profiles}
+            profileLabelsByKey={settings.connectedServicesProfileLabelByKey}
+            groups={authGroups.groups}
+            loadStatus={authGroups.loadStatus}
+            quotasEnabled={quotasEnabled}
+            groupConfigurationSupported={groupConfigurationSupported}
+            onOpenPool={handleOpenPool}
+            onCreatePool={() => void authGroups.createPool()}
+          />
+        )}
+      />
     </ItemList>
   );
 });

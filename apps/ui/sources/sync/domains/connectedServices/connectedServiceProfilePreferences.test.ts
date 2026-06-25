@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   connectedServiceProfileKey,
+  pruneConnectedServiceProfilePreferencesForDeletedProfile,
   resolveConnectedServiceDefaultProfileId,
   resolveConnectedServiceProfileLabel,
 } from './connectedServiceProfilePreferences';
@@ -58,5 +59,30 @@ describe('connectedServiceProfilePreferences', () => {
       defaultProfileByServiceId: { anthropic: 'missing' },
     });
     expect(selected).toBe('personal');
+  });
+
+  it('removes deleted profile labels, legacy labels, and matching defaults without touching other profiles', () => {
+    const next = pruneConnectedServiceProfilePreferencesForDeletedProfile({
+      serviceId: 'anthropic',
+      profileId: 'work/team',
+      connectedServicesDefaultProfileByServiceId: {
+        anthropic: 'work/team',
+        'openai-codex': 'happier',
+      },
+      connectedServicesProfileLabelByKey: {
+        'anthropic/work%2Fteam': 'Work Team',
+        'anthropic/work/team': 'Legacy Work Team',
+        'anthropic/personal': 'Personal',
+      },
+    });
+
+    expect(next).toEqual({
+      connectedServicesDefaultProfileByServiceId: {
+        'openai-codex': 'happier',
+      },
+      connectedServicesProfileLabelByKey: {
+        'anthropic/personal': 'Personal',
+      },
+    });
   });
 });

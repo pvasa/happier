@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import {
   TranscriptRawAgentEventV1Schema,
   type SessionStoredMessageContent,
@@ -67,6 +65,21 @@ function buildQuotaLifecycleTranscriptEvent(
   };
 }
 
+function buildQuotaLifecycleTranscriptEventId(params: Readonly<{
+  transition: ConnectedServiceQuotaLifecycleTransition;
+  event: ReturnType<typeof TranscriptRawAgentEventV1Schema.parse>;
+}>): string {
+  const issueFingerprint = typeof params.transition.issueFingerprint === 'string' && params.transition.issueFingerprint.trim().length > 0
+    ? params.transition.issueFingerprint
+    : `${params.transition.serviceId}:${params.transition.groupId}`;
+  return [
+    params.event.type,
+    normalizeEventIdPart(issueFingerprint),
+    normalizeEventIdPart(params.transition.cycleId),
+    normalizeEventIdPart(params.transition.reason),
+  ].join(':');
+}
+
 /**
  * RD-QUO-13: transcript producer for the quota lifecycle edges. Commits a
  * `provider-quota-wait` / `provider-quota-recovered` raw agent event into every
@@ -89,12 +102,10 @@ export async function commitConnectedServiceQuotaLifecycleSessionEvents(params: 
         sessionId,
       });
       if (!rawSession) continue;
-      const eventId = [
-        parsedEvent.data.type,
-        normalizeEventIdPart(params.transition.serviceId),
-        normalizeEventIdPart(params.transition.groupId),
-        randomUUID(),
-      ].join(':');
+      const eventId = buildQuotaLifecycleTranscriptEventId({
+        transition: params.transition,
+        event: parsedEvent.data,
+      });
       await commitSessionStoredMessage({
         token: params.credentials.token,
         sessionId,

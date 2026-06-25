@@ -14,6 +14,16 @@ describe('resolveTabBarMetrics', () => {
             .toBeGreaterThan(resolveTabBarMetrics('regular', true).tabPaddingVertical);
     });
 
+    it('aligns horizontal padding to the vertical (base) padding', () => {
+        for (const size of ['compact', 'regular', 'large'] as const) {
+            const labeled = resolveTabBarMetrics(size, true);
+            expect(labeled.tabPaddingHorizontal).toBe(labeled.tabPaddingVertical);
+        }
+        expect(resolveTabBarMetrics('compact', true).tabPaddingHorizontal).toBe(4);
+        expect(resolveTabBarMetrics('regular', true).tabPaddingHorizontal).toBe(6);
+        expect(resolveTabBarMetrics('large', true).tabPaddingHorizontal).toBe(8);
+    });
+
     it('rounds the active pill more when labels are shown (taller tab)', () => {
         expect(resolveTabBarMetrics('regular', true).activePillRadius)
             .toBeGreaterThan(resolveTabBarMetrics('regular', false).activePillRadius);

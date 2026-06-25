@@ -13,9 +13,11 @@ describe('ActionIdSchema', () => {
     expect(ActionIdSchema.parse('session.goal.get')).toBe('session.goal.get');
     expect(ActionIdSchema.parse('session.goal.set')).toBe('session.goal.set');
     expect(ActionIdSchema.parse('session.goal.clear')).toBe('session.goal.clear');
+    expect(ActionIdSchema.parse('session.terminalComposer.clear')).toBe('session.terminalComposer.clear');
     expect(ActionIdSchema.parse('session.usageLimit.waitResume.enable')).toBe('session.usageLimit.waitResume.enable');
     expect(ActionIdSchema.parse('session.usageLimit.waitResume.cancel')).toBe('session.usageLimit.waitResume.cancel');
     expect(ActionIdSchema.parse('session.usageLimit.checkNow')).toBe('session.usageLimit.checkNow');
+    expect(ActionIdSchema.parse('session.usageLimit.consumeResetCredit')).toBe('session.usageLimit.consumeResetCredit');
     expect(ActionIdSchema.parse('session.vendor_plugin_catalog.list')).toBe('session.vendor_plugin_catalog.list');
     expect(ActionIdSchema.parse('session.skill_catalog.list')).toBe('session.skill_catalog.list');
     expect(ActionIdSchema.parse('session.transcript.get')).toBe('session.transcript.get');

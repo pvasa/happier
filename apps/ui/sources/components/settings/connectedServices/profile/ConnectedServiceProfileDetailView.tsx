@@ -7,19 +7,30 @@ import { useUnistyles } from 'react-native-unistyles';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { Switch } from '@/components/ui/forms/Switch';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
+import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Text } from '@/components/ui/text/Text';
+import { buildConnectedServiceAccountRowActions, CONNECTED_SERVICE_RECONNECT_ICON } from '../account/buildConnectedServiceAccountRowActions';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { useAuth } from '@/auth/context/AuthContext';
 import { sync } from '@/sync/sync';
 import { useProfile, useSettings } from '@/sync/store/hooks';
 import { useApplySettings } from '@/sync/store/settingsWriters';
-import { deleteConnectedServiceCredentialForAccount } from '@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount';
-import { connectedServiceProfileKey, resolveConnectedServiceProfileLabel } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
-import { buildConnectedServiceCredentialRecord, ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { useConnectedServiceQuotaSnapshot } from '@/hooks/server/connectedServices/useConnectedServiceQuotaSnapshot';
+import { deleteConnectedServiceCredentialForAccount } from '@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount';
+import {
+  connectedServiceProfileKey,
+  pruneConnectedServiceProfilePreferencesForDeletedProfile,
+  resolveConnectedServiceProfileLabel,
+} from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
+import { getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { resolveConnectedServiceCredentialHealthStatus } from '@/sync/domains/connectedServices/resolveConnectedServiceCredentialHealthStatus';
+import { buildConnectedServiceCredentialRecord, ConnectedServiceIdSchema, type ConnectedServiceCredentialHealthStatusV1, type ConnectedServiceId } from '@happier-dev/protocol';
 
-import { ConnectedServiceQuotaCard } from '../ConnectedServiceQuotaCard';
+import { AccountBlock } from '../account/AccountBlock';
 import {
   isConnectedServiceCredentialReferencedByGroupError,
   resolveConnectedServiceSettingsErrorMessage,
@@ -31,7 +42,6 @@ import {
 } from '../model/resolveConnectedServiceProfileGroupReferences';
 import { resolveConnectedServiceProfileIdentityDisplay } from '../model/resolveConnectedServiceIdentityDisplay';
 import { promptConnectedServiceTokenValue } from '../promptConnectedServiceTokenValue';
-import { getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { storeConnectedServiceCredentialWithIdentityConfirmation } from '../storeConnectedServiceCredentialWithIdentityConfirmation';
 import { runConnectedServiceCredentialStoredEffects } from '../runConnectedServiceCredentialStoredEffects';
 
@@ -39,6 +49,72 @@ function asStringParam(value: unknown): string {
   if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : '';
   return typeof value === 'string' ? value : '';
 }
+
+function statusSubtitle(status: ConnectedServiceCredentialHealthStatusV1): string {
+  if (status === 'connected') return t('connectedServices.detail.profiles.connected');
+  if (status === 'refreshing') return t('connectedServices.detail.profiles.refreshing');
+  if (status === 'refresh_failed_retryable') return t('connectedServices.detail.profiles.refreshFailedRetryable');
+  return t('connectedServices.detail.profiles.needsReauth');
+}
+
+function formatLastRefreshed(fetchedAtMs: number | null | undefined): string | null {
+  if (typeof fetchedAtMs !== 'number' || !Number.isFinite(fetchedAtMs)) return null;
+  try {
+    return new Date(fetchedAtMs).toLocaleString();
+  } catch {
+    return String(fetchedAtMs);
+  }
+}
+
+/**
+ * "Connection" + "Last refreshed" rows. Reads the SHARED
+ * quota snapshot hook (deduped by the shared store, so this does not double-fetch
+ * the snapshot the {@link AccountBlock} above already mounts) to surface the
+ * last-refreshed timestamp. Only rendered for connected accounts where a quota
+ * snapshot is meaningful.
+ */
+const ConnectionSection = React.memo(function ConnectionSection(props: Readonly<{
+  serviceId: ConnectedServiceId;
+  profileId: string;
+  providerEmail?: string | null;
+  connectedVia: string;
+  testID: string;
+}>) {
+  const { snapshot } = useConnectedServiceQuotaSnapshot({
+    serviceId: props.serviceId,
+    profileId: props.profileId,
+  });
+  const lastRefreshed = formatLastRefreshed(snapshot?.fetchedAt ?? null);
+
+  return (
+    <ItemGroup title={t('connectedServices.profile.connectionGroupTitle')}>
+      <Item
+        title={t('connectedServices.profile.profileId')}
+        subtitle={props.profileId}
+        showChevron={false}
+      />
+      {props.providerEmail ? (
+        <Item
+          title={t('connectedServices.profile.email')}
+          subtitle={props.providerEmail}
+          showChevron={false}
+        />
+      ) : null}
+      <Item
+        title={t('connectedServices.profile.connectedVia')}
+        subtitle={props.connectedVia}
+        showChevron={false}
+      />
+      {lastRefreshed ? (
+        <Item
+          title={t('connectedServices.profile.lastRefreshed')}
+          subtitle={lastRefreshed}
+          showChevron={false}
+        />
+      ) : null}
+    </ItemGroup>
+  );
+});
 
 export const ConnectedServiceProfileDetailView = React.memo(function ConnectedServiceProfileDetailView() {
   const { theme } = useUnistyles();
@@ -50,7 +126,6 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
   const applySettings = useApplySettings();
 
   const connectedServicesEnabled = useFeatureEnabled('connectedServices');
-  const quotasEnabled = useFeatureEnabled('connectedServices.quotas');
   const accountGroupsEnabled = useFeatureEnabled('connectedServices.accountGroups');
 
   const rawServiceId = asStringParam((params as Record<string, unknown>).serviceId).trim();
@@ -101,30 +176,30 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
     );
   }
 
-  const status = profileRecord?.status === 'connected'
-    ? 'connected'
-    : profileRecord?.status === 'refreshing'
-      ? 'refreshing'
-      : profileRecord?.status === 'refresh_failed_retryable'
-        ? 'refresh_failed_retryable'
-        : 'needs_reauth';
-  const kind = profileRecord?.kind === 'token' ? 'token' : profileRecord?.kind === 'oauth' ? 'oauth' : null;
-  const providerEmail = typeof profileRecord?.providerEmail === 'string' ? profileRecord.providerEmail : '';
-  const providerAccountId = typeof profileRecord?.providerAccountId === 'string' ? profileRecord.providerAccountId : '';
+  const status = resolveConnectedServiceCredentialHealthStatus(profileRecord.status);
+  const kind = profileRecord.kind === 'token' ? 'token' : profileRecord.kind === 'oauth' ? 'oauth' : null;
+  const providerEmail = typeof profileRecord.providerEmail === 'string' ? profileRecord.providerEmail : '';
+  const providerAccountId = typeof profileRecord.providerAccountId === 'string' ? profileRecord.providerAccountId : '';
 
   const label = resolveConnectedServiceProfileLabel({
     labelsByKey: settings.connectedServicesProfileLabelByKey,
     serviceId,
     profileId,
   });
-  const title = label || profileId;
-  const profileConfirmationLabel = resolveConnectedServiceProfileIdentityDisplay({
+  const identityDisplay = resolveConnectedServiceProfileIdentityDisplay({
     profileId,
     label,
     providerEmail,
-  }).diagnosticLabel;
+  });
+  const title = identityDisplay.primaryLabel;
+  const profileConfirmationLabel = identityDisplay.diagnosticLabel;
 
   const isDefault = (settings.connectedServicesDefaultProfileByServiceId[serviceId] ?? '') === profileId;
+  const isConnected = status === 'connected';
+
+  const poolLabels = accountGroupsEnabled
+    ? resolveConnectedServiceProfileGroupReferenceLabels({ profileId, projectedGroups: svc.groups })
+    : [];
 
   const ensureCredentials = () => {
     if (!auth.credentials) {
@@ -160,6 +235,12 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
         profileId,
         ...(cleanup ? { cleanupGroupReferences: true } : {}),
       });
+      applySettings(pruneConnectedServiceProfilePreferencesForDeletedProfile({
+        serviceId,
+        profileId,
+        connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
+        connectedServicesProfileLabelByKey: settings.connectedServicesProfileLabelByKey,
+      }));
       await sync.refreshProfile();
       router.back();
     };
@@ -190,7 +271,7 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
     }
   };
 
-  const handleSetDefault = async () => {
+  const handleSetDefault = () => {
     const nextMap = { ...settings.connectedServicesDefaultProfileByServiceId };
     if (isDefault) delete nextMap[serviceId];
     else nextMap[serviceId] = profileId;
@@ -255,98 +336,165 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
     applySettings({ connectedServicesProfileLabelByKey: nextMap });
   };
 
-  const pinnedKey = connectedServiceProfileKey({ serviceId, profileId });
-  const pinnedMeterIds = settings.connectedServicesQuotaPinnedMeterIdsByKey[pinnedKey] ?? [];
-
-  const setPinnedQuotaMeters = async (nextPinned: ReadonlyArray<string>) => {
-    const nextMap = { ...settings.connectedServicesQuotaPinnedMeterIdsByKey };
-    if (nextPinned.length === 0) delete nextMap[pinnedKey];
-    else nextMap[pinnedKey] = [...nextPinned];
-    applySettings({ connectedServicesQuotaPinnedMeterIdsByKey: nextMap });
+  const handleReconnect = () => {
+    router.push({ pathname: '/settings/connected-services/oauth', params: { serviceId, profileId } });
   };
+
+  const handleAddToPool = () => {
+    router.push({ pathname: '/settings/connected-services/[serviceId]', params: { serviceId } });
+  };
+
+  // Header kebab actions reuse the canonical mutation flows (replace token,
+  // reconnect). The connected/needs-re-auth split mirrors the actions section.
+  const headerActions = buildConnectedServiceAccountRowActions({
+    kind,
+    status,
+    onReplaceToken: () => void handleReplaceToken(),
+    onReconnect: handleReconnect,
+  });
 
   return (
     <ItemList>
-      <ItemGroup title={`${serviceLabel} • ${title}`}>
-        <Item
-          title={t('connectedServices.profile.profileId')}
-          subtitle={profileId}
-          showChevron={false}
-        />
-        <Item
-          title={t('connectedServices.profile.status')}
-          subtitle={status === 'connected'
-            ? t('connectedServices.detail.profiles.connected')
-            : status === 'refreshing'
-              ? t('connectedServices.detail.profiles.refreshing')
-              : status === 'refresh_failed_retryable'
-                ? t('connectedServices.detail.profiles.refreshFailedRetryable')
-                : t('connectedServices.detail.profiles.needsReauth')}
-          showChevron={false}
-        />
-        {providerEmail ? (
+      {isConnected ? (
+        <ItemGroup>
+          <AccountBlock
+            testID="connected-service-profile-account"
+            serviceId={serviceId}
+            profileId={profileId}
+            title={title}
+            identityLabel={identityDisplay.secondaryLabel}
+            status={status}
+            isDefault={isDefault}
+            onToggleDefault={handleSetDefault}
+            poolLabels={poolLabels}
+            actions={headerActions}
+          />
+        </ItemGroup>
+      ) : (
+        <ItemGroup title={`${serviceLabel} • ${title}`}>
           <Item
-            title={t('connectedServices.profile.email')}
-            subtitle={providerEmail}
+            title={t('connectedServices.profile.status')}
+            subtitle={status === 'needs_reauth' ? undefined : statusSubtitle(status)}
+            rightElement={
+              <StatusPill
+                testID="connected-service-profile:status-pill"
+                variant={status === 'needs_reauth' ? 'danger' : 'warning'}
+                label={statusSubtitle(status)}
+              />
+            }
             showChevron={false}
           />
-        ) : null}
-        {providerAccountId ? (
+          {providerEmail ? (
+            <Item
+              title={t('connectedServices.profile.email')}
+              subtitle={providerEmail}
+              showChevron={false}
+            />
+          ) : null}
           <Item
-            title={t('connectedServices.profile.accountId')}
-            subtitle={providerAccountId}
+            title={t('connectedServices.profile.profileId')}
+            subtitle={profileId}
             showChevron={false}
           />
-        ) : null}
-      </ItemGroup>
+          {providerAccountId ? (
+            <Item
+              title={t('connectedServices.profile.accountId')}
+              subtitle={providerAccountId}
+              showChevron={false}
+            />
+          ) : null}
+        </ItemGroup>
+      )}
 
-      {quotasEnabled && status === 'connected' ? (
-        <ConnectedServiceQuotaCard
-          serviceId={serviceId}
-          profileId={profileId}
-          title={t('connectedServices.profile.quotaTitle')}
-          pinnedMeterIds={pinnedMeterIds}
-          onSetPinnedMeterIds={(next) => void setPinnedQuotaMeters(next)}
-        />
+      {accountGroupsEnabled ? (
+        <ItemGroup title={t('connectedServices.profile.poolsGroupTitle')}>
+          {poolLabels.length > 0 ? (
+            poolLabels.map((poolLabel, index) => (
+              <Item
+                key={`${poolLabel}:${index}`}
+                testID={`connected-service-profile-pool:${index}`}
+                title={poolLabel}
+                icon={<Ionicons name="layers-outline" size={22} color={theme.colors.text.secondary} />}
+                showChevron={false}
+              />
+            ))
+          ) : (
+            <EmptyState
+              testID="connected-service-profile-pools:empty"
+              titleTestID="connected-service-profile-pools:empty:title"
+              icon={<Ionicons name="layers-outline" size={28} color={theme.colors.text.secondary} />}
+              title={t('connectedServices.profile.pools.emptyTitle')}
+              subtitle={t('connectedServices.profile.pools.emptySubtitle')}
+            />
+          )}
+          <Item
+            testID="connected-service-profile-action:add-to-pool"
+            title={t('connectedServices.profile.addToPool')}
+            subtitle={t('connectedServices.profile.addToPoolSubtitle')}
+            icon={<Ionicons name="add-circle-outline" size={22} color={theme.colors.accent.blue} />}
+            onPress={handleAddToPool}
+          />
+        </ItemGroup>
       ) : null}
 
-      <ItemGroup title={t('connectedServices.detail.actionsGroupTitle')}>
+      <ItemGroup title={t('connectedServices.profile.settingsGroupTitle')}>
         <Item
-          title={isDefault ? t('connectedServices.detail.actions.unsetDefault') : t('connectedServices.detail.actions.setDefault')}
-          subtitle={isDefault ? t('connectedServices.profile.defaultSubtitle') : t('connectedServices.profile.setDefaultSubtitle')}
-          icon={<Ionicons name={isDefault ? 'star' : 'star-outline'} size={22} color={theme.colors.accent.blue} />}
-          onPress={() => void handleSetDefault()}
+          testID="connected-service-profile-action:set-default"
+          title={t('connectedServices.profile.setDefaultRowTitle')}
+          subtitle={isDefault
+            ? t('connectedServices.profile.defaultSubtitle')
+            : t('connectedServices.profile.setDefaultSubtitle')}
+          rightElement={
+            <Switch
+              testID="connected-service-profile:default-switch"
+              value={isDefault}
+              onValueChange={handleSetDefault}
+              accessibilityLabel={t(isDefault
+                ? 'connectedServices.detail.actions.unsetDefault'
+                : 'connectedServices.detail.actions.setDefault')}
+            />
+          }
+          showChevron={false}
         />
         <Item
+          testID="connected-service-profile-action:edit-label"
           title={t('connectedServices.detail.actions.editLabel')}
           subtitle={t('connectedServices.detail.setProfileLabelSubtitle')}
           icon={<Ionicons name="pencil-outline" size={22} color={theme.colors.accent.blue} />}
           onPress={() => void handleEditLabel()}
         />
-        {kind === 'token' ? (
-          <Item
-            title={t('connectedServices.detail.actions.replaceToken')}
-            subtitle={t('connectedServices.profile.replaceTokenSubtitle')}
-            icon={<Ionicons name="key-outline" size={22} color={theme.colors.accent.blue} />}
-            onPress={() => void handleReplaceToken()}
-          />
-        ) : null}
-        {status === 'connected' ? (
-          <Item
-            title={t('modals.disconnect')}
-            subtitle={t('connectedServices.profile.disconnectSubtitle')}
-            icon={<Ionicons name="trash-outline" size={22} color={theme.colors.state.danger.foreground} />}
-            onPress={() => void handleDisconnect()}
-          />
-        ) : kind !== 'token' && status === 'needs_reauth' ? (
+      </ItemGroup>
+
+      {isConnected ? (
+        <ConnectionSection
+          serviceId={serviceId}
+          profileId={profileId}
+          providerEmail={providerEmail}
+          connectedVia={kind === 'token'
+            ? t('connectedServices.profile.connectedViaToken')
+            : t('connectedServices.profile.connectedViaOauth')}
+          testID="connected-service-profile"
+        />
+      ) : kind === 'oauth' && status === 'needs_reauth' ? (
+        <ItemGroup title={t('connectedServices.profile.connectionGroupTitle')}>
           <Item
             testID="connected-services-profile-action:reconnect"
             title={t('connectedServices.detail.actions.reconnect')}
             subtitle={t('connectedServices.profile.reconnectSubtitle')}
-            icon={<Ionicons name="refresh-outline" size={22} color={theme.colors.accent.blue} />}
-            onPress={() => router.push({ pathname: '/settings/connected-services/oauth', params: { serviceId, profileId } })}
+            icon={<Ionicons name={CONNECTED_SERVICE_RECONNECT_ICON} size={22} color={theme.colors.accent.blue} />}
+            onPress={handleReconnect}
           />
-        ) : null}
+        </ItemGroup>
+      ) : null}
+
+      <ItemGroup title={t('connectedServices.profile.removeGroupTitle')}>
+        <Item
+          testID="connected-service-profile-action:disconnect"
+          title={t('modals.disconnect')}
+          subtitle={t('connectedServices.profile.disconnectSubtitle')}
+          icon={<Ionicons name="trash-outline" size={22} color={theme.colors.state.danger.foreground} />}
+          onPress={() => void handleDisconnect()}
+        />
       </ItemGroup>
     </ItemList>
   );

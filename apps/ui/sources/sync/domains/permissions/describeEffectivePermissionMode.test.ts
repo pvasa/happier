@@ -41,7 +41,7 @@ describe('describeEffectivePermissionMode', () => {
         expect(reasonCodes(res)).toContain('plan_not_supported_for_provider');
     });
 
-    it('emits mapping reason when provider canonicalization changes the mode', () => {
+    it('emits provider-native mapping reason when provider canonicalization changes the mode', () => {
         const res = describeEffectivePermissionMode({
             agentType: 'claude',
             selectedMode: 'safe-yolo',
@@ -49,7 +49,10 @@ describe('describeEffectivePermissionMode', () => {
             applyTiming: 'immediate',
         });
 
-        expect(reasonCodes(res)).toContain('mode_mapped_for_provider');
+        expect(res.reasons).toContainEqual({
+            code: 'mode_mapped_for_provider',
+            params: { providerMode: 'auto' },
+        });
     });
 
     it('emits codex-like read-only enforcement reason', () => {

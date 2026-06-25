@@ -58,6 +58,9 @@ describe('ClaudeAgentTeamLaunchCard', () => {
                     }),
                 },
             }),
+            {
+                bypassPendingQueueReason: 'subagent_control_command',
+            },
         );
     });
 

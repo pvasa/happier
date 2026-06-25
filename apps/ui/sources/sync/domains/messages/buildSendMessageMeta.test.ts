@@ -37,6 +37,7 @@ describe('buildSendMessageMeta', () => {
             claudeLocalPermissionBridgeEnabled: true,
             claudeLocalPermissionBridgeWaitIndefinitely: false,
             claudeLocalPermissionBridgeTimeoutSeconds: 123,
+            claudeUnifiedTerminalResumeChoice: 'resume_from_summary',
         });
         const meta = buildSendMessageMeta(buildArgs({ settings, displayText: 'hello', agentId: 'claude' }));
         const extras = meta as Record<string, unknown>;
@@ -47,6 +48,7 @@ describe('buildSendMessageMeta', () => {
         expect(extras.claudeLocalPermissionBridgeEnabled).toBe(true);
         expect(extras.claudeLocalPermissionBridgeWaitIndefinitely).toBe(false);
         expect(extras.claudeLocalPermissionBridgeTimeoutSeconds).toBe(123);
+        expect(extras.claudeUnifiedTerminalResumeChoice).toBe('resume_from_summary');
         expect(meta.sentFrom).toBe('e2e');
         expect(meta.source).toBe('ui');
     });
@@ -58,6 +60,7 @@ describe('buildSendMessageMeta', () => {
         expect(extras.claudeRemoteAgentSdkEnabled).toBeUndefined();
         expect(extras.claudeRemoteSettingSources).toBeUndefined();
         expect(extras.claudeRemoteSettingSourcesV2).toBeUndefined();
+        expect(extras.claudeUnifiedTerminalResumeChoice).toBeUndefined();
     });
 
     it('keeps only base metadata when agentId is null', () => {

@@ -38,14 +38,14 @@ describe('evaluateTmuxPaneLiveness', () => {
     expect(liveness.paneCurrentCommand).not.toContain('sk-ant-secret-value');
   });
 
-  it('returns not alive for dead or missing panes', async () => {
+  it('returns not alive for dead panes and inconclusive for failed probes', async () => {
     const deadExecutor: TmuxPaneLivenessExecutor = async (args) => ({
       returncode: 0,
       stdout: '1\t12345\tzsh\n',
       stderr: '',
       command: [...args],
     });
-    const missingExecutor: TmuxPaneLivenessExecutor = async (args) => ({
+    const failedProbeExecutor: TmuxPaneLivenessExecutor = async (args) => ({
       returncode: 1,
       stdout: '',
       stderr: 'can not find pane',
@@ -57,9 +57,10 @@ describe('evaluateTmuxPaneLiveness', () => {
       paneDead: true,
       panePid: 12345,
     });
-    await expect(evaluateTmuxPaneLiveness({ executor: missingExecutor, target: 'missing', observedAt: 101 })).resolves.toEqual({
+    await expect(evaluateTmuxPaneLiveness({ executor: failedProbeExecutor, target: 'missing', observedAt: 101 })).resolves.toEqual({
       paneAlive: false,
-      paneDead: true,
+      probeInconclusive: true,
+      paneScreenDumpError: 'can not find pane',
       observedAt: 101,
     });
   });

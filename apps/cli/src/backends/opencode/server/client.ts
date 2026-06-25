@@ -280,7 +280,9 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
       }),
   );
 
-  const refreshBaseUrlIfManagedBestEffort = async (): Promise<void> => {
+  const refreshBaseUrlIfManagedBestEffort = async (opts: Readonly<{
+    allowEnsure: boolean;
+  }>): Promise<void> => {
     if (!usingManagedServer) return;
 
     const state = await readSharedManagedOpenCodeServerStateBestEffort().catch(() => null);
@@ -291,8 +293,12 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
       }
     }
 
-    // Avoid spawning/killing a managed server on the first sign of an SSE disconnect.
-    // Prefer using the existing baseUrl when it still looks healthy.
+    if (!opts.allowEnsure) {
+      return;
+    }
+
+    // Transport-level request failures can refresh the managed server. SSE disconnects use
+    // allowEnsure=false above so a quiet event stream cannot kill or replace a slow server.
     if (!state) {
       const healthy = await probeHealth(baseUrl).catch(() => false);
       if (healthy) return;
@@ -346,7 +352,7 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
         throw error;
       }
       logger.debug('[OpenCodeServer] Retrying managed HTTP request after transient transport failure', error);
-      await refreshBaseUrlIfManagedBestEffort();
+      await refreshBaseUrlIfManagedBestEffort({ allowEnsure: true });
       await waitForManagedServerHealthAfterRefreshBestEffort();
       return await request(baseUrl);
     }
@@ -666,7 +672,7 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
                 : '[OpenCodeServer] SSE stream ended; reconnecting (best-effort)',
               error,
             );
-            await refreshBaseUrlIfManagedBestEffort();
+            await refreshBaseUrlIfManagedBestEffort({ allowEnsure: false });
             const delayMs = resolveSseReconnectDelayMs(attempt, env);
             attempt += 1;
             await sleepUntilOrAbort(delayMs, combinedAbort.signal);

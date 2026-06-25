@@ -28,6 +28,7 @@ import { continueSessionWithReplay } from '@/session/replay/continueWithReplay';
 import { readAuthenticationStatus } from '@/api/client/httpStatusError';
 import {
   ConnectedServiceIdSchema,
+  ConnectedServiceQuotaRecoveryCreditConsumeRequestV1Schema,
   ConnectedServiceQuotaSnapshotV1Schema,
   SessionConnectedServiceAuthSwitchRpcParamsSchema,
   type ConnectedServiceId,
@@ -38,6 +39,7 @@ import {
   ConnectedServiceRuntimeAuthFailureKindSchema,
   type ConnectedServiceRuntimeFailureClassification,
 } from './connectedServices/runtimeAuth/types';
+import { isTemporaryRetryOwnedConnectedServiceRuntimeFailure } from './connectedServices/runtimeAuth/ConnectedServiceRecoveryPolicy';
 import { resolveRuntimeAuthRecoveryDurableWaitPlan } from './connectedServices/runtimeAuth/RuntimeAuthRecoveryScheduler';
 import {
   isProvenRuntimeAuthRecoverySuccess,
@@ -242,6 +244,7 @@ export function createDaemonControlApp({
   getChildren,
   machineId,
   stopSession,
+  prepareStopSession,
   spawnSession,
   requestShutdown,
   beforeShutdown,
@@ -252,6 +255,7 @@ export function createDaemonControlApp({
   handleConnectedServiceUsageLimitWaitResumeCancel,
   handleSessionConnectedServiceAuthSwitch,
   handleConnectedServiceQuotaSnapshot,
+  handleConnectedServiceQuotaRecoveryCreditConsume,
   handleCodexChatGptAuthTokensRefresh,
   runtimeAuthRecoveryScheduler,
   isShuttingDown,
@@ -259,6 +263,7 @@ export function createDaemonControlApp({
   getChildren: () => TrackedSession[];
   machineId: string;
   stopSession: (sessionId: string) => Promise<boolean>;
+  prepareStopSession?: (child: TrackedSession) => Promise<void> | void;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   requestShutdown: () => void;
   beforeShutdown?: () => Promise<void>;
@@ -290,6 +295,12 @@ export function createDaemonControlApp({
     sessionId: string;
     serviceId: ConnectedServiceId;
     snapshot: ConnectedServiceQuotaSnapshotV1;
+  }>) => Promise<unknown>;
+  handleConnectedServiceQuotaRecoveryCreditConsume?: (input: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    idempotencyKey: string;
+    providerCreditId?: string;
   }>) => Promise<unknown>;
   handleCodexChatGptAuthTokensRefresh?: (input: Readonly<{
     sessionId: string;
@@ -522,39 +533,10 @@ export function createDaemonControlApp({
     const switchesThisTurn = request.body.switchesThisTurn ?? 0;
     const resumePromptMode = request.body.resumePromptMode;
     const classification = request.body.classification as ConnectedServiceRuntimeFailureClassification;
-    const intake = await beginRuntimeAuthRecoveryIntake({
-      runtimeAuthRecoveryScheduler,
-      sessionId,
-      switchesThisTurn,
-      classification,
-    });
-    if (!intake.ok) {
-      const diagnostic = readSafeDaemonControlErrorDiagnostic(intake.error);
-      logger.warn('[CONTROL SERVER] Connected-service runtime auth recovery intake failed', {
-        ...buildConnectedServiceRuntimeAuthSwitchAttemptLogContext({
-          sessionId,
-          classification,
-          handlerFailure: {
-            errorCode: 'runtime_auth_recovery_intake_failed',
-            errorName: diagnostic.name,
-            errorMessage: diagnostic.message,
-          },
-          routedThroughFsm: false,
-          startedAtMs,
-          finishedAtMs: Date.now(),
-        }),
-        kind: classification.kind,
-        error: diagnostic,
-      });
-      reply.code(503);
-      return {
-        ok: false as const,
-        errorCode: 'connected_service_runtime_auth_recovery_intake_failed' as const,
-      };
-    }
-    // Daemon-lifecycle guard: if the daemon is shutting down, do NOT run the recovery
-    // handler (no switch/restart/continuation). The classified failure has already
-    // been durably recorded above, so a healthy future daemon can re-drive it.
+    // Daemon-lifecycle guard: if the daemon is shutting down, do NOT run the
+    // recovery handler and do NOT create a new durable recovery intent from this
+    // in-band report. Already-persisted intents remain owned by the scheduler and
+    // can be re-driven by a healthy future daemon.
     if (isShuttingDown?.() === true) {
       return {
         ok: true as const,
@@ -563,6 +545,38 @@ export function createDaemonControlApp({
           reason: 'recovery_deferred_shutdown' as const,
         },
       };
+    }
+    if (!isTemporaryRetryOwnedConnectedServiceRuntimeFailure(classification)) {
+      const intake = await beginRuntimeAuthRecoveryIntake({
+        runtimeAuthRecoveryScheduler,
+        sessionId,
+        switchesThisTurn,
+        classification,
+      });
+      if (!intake.ok) {
+        const diagnostic = readSafeDaemonControlErrorDiagnostic(intake.error);
+        logger.warn('[CONTROL SERVER] Connected-service runtime auth recovery intake failed', {
+          ...buildConnectedServiceRuntimeAuthSwitchAttemptLogContext({
+            sessionId,
+            classification,
+            handlerFailure: {
+              errorCode: 'runtime_auth_recovery_intake_failed',
+              errorName: diagnostic.name,
+              errorMessage: diagnostic.message,
+            },
+            routedThroughFsm: false,
+            startedAtMs,
+            finishedAtMs: Date.now(),
+          }),
+          kind: classification.kind,
+          error: diagnostic,
+        });
+        reply.code(503);
+        return {
+          ok: false as const,
+          errorCode: 'connected_service_runtime_auth_recovery_intake_failed' as const,
+        };
+      }
     }
     try {
       const result = await handleConnectedServiceRuntimeAuthFailure({
@@ -845,6 +859,10 @@ export function createDaemonControlApp({
           result: z.unknown(),
         }),
         401: authSchema401,
+        503: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('daemon_shutting_down'),
+        }),
         501: z.object({
           ok: z.literal(false),
           errorCode: z.literal('connected_service_quota_snapshot_handler_unavailable'),
@@ -853,6 +871,13 @@ export function createDaemonControlApp({
     },
     preHandler: requireAuth,
   }, async (request, reply) => {
+    if (isShuttingDown?.() === true) {
+      reply.code(503);
+      return {
+        ok: false as const,
+        errorCode: 'daemon_shutting_down' as const,
+      };
+    }
     if (!handleConnectedServiceQuotaSnapshot) {
       reply.code(501);
       return {
@@ -864,6 +889,50 @@ export function createDaemonControlApp({
       sessionId: request.body.sessionId,
       serviceId: request.body.serviceId,
       snapshot: request.body.snapshot,
+    });
+    return { ok: true as const, result };
+  });
+
+  typed.post('/connected-service-quota-recovery-credit/consume', {
+    schema: {
+      body: ConnectedServiceQuotaRecoveryCreditConsumeRequestV1Schema,
+      response: {
+        200: z.object({
+          ok: z.literal(true),
+          result: z.unknown(),
+        }),
+        401: authSchema401,
+        503: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('daemon_shutting_down'),
+        }),
+        501: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('connected_service_quota_recovery_credit_consume_handler_unavailable'),
+        }),
+      },
+    },
+    preHandler: requireAuth,
+  }, async (request, reply) => {
+    if (isShuttingDown?.() === true) {
+      reply.code(503);
+      return {
+        ok: false as const,
+        errorCode: 'daemon_shutting_down' as const,
+      };
+    }
+    if (!handleConnectedServiceQuotaRecoveryCreditConsume) {
+      reply.code(501);
+      return {
+        ok: false as const,
+        errorCode: 'connected_service_quota_recovery_credit_consume_handler_unavailable' as const,
+      };
+    }
+    const result = await handleConnectedServiceQuotaRecoveryCreditConsume({
+      serviceId: request.body.serviceId,
+      profileId: request.body.profileId,
+      idempotencyKey: request.body.idempotencyKey,
+      ...(request.body.providerCreditId ? { providerCreditId: request.body.providerCreditId } : {}),
     });
     return { ok: true as const, result };
   });
@@ -1304,6 +1373,12 @@ export function createDaemonControlApp({
               if (!id) continue;
               try {
                 // eslint-disable-next-line no-await-in-loop
+                await prepareStopSession?.(child);
+              } catch (error) {
+                logger.debug(`[CONTROL SERVER] Failed to prepare session ${id} before stop`, error);
+              }
+              try {
+                // eslint-disable-next-line no-await-in-loop
                 await stopSession(id);
               } catch (error) {
                 logger.debug(`[CONTROL SERVER] Failed to stop session ${id}`, error);
@@ -1329,6 +1404,7 @@ export function startDaemonControlServer({
   getChildren,
   machineId,
   stopSession,
+  prepareStopSession,
   spawnSession,
   requestShutdown,
   beforeShutdown,
@@ -1339,6 +1415,7 @@ export function startDaemonControlServer({
   handleConnectedServiceUsageLimitWaitResumeCancel,
   handleSessionConnectedServiceAuthSwitch,
   handleConnectedServiceQuotaSnapshot,
+  handleConnectedServiceQuotaRecoveryCreditConsume,
   handleCodexChatGptAuthTokensRefresh,
   runtimeAuthRecoveryScheduler,
   isShuttingDown,
@@ -1346,6 +1423,7 @@ export function startDaemonControlServer({
   getChildren: () => TrackedSession[];
   machineId: string;
   stopSession: (sessionId: string) => Promise<boolean>;
+  prepareStopSession?: (child: TrackedSession) => Promise<void> | void;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   requestShutdown: () => void;
   beforeShutdown?: () => Promise<void>;
@@ -1375,6 +1453,12 @@ export function startDaemonControlServer({
     serviceId: ConnectedServiceId;
     snapshot: ConnectedServiceQuotaSnapshotV1;
   }>) => Promise<unknown>;
+  handleConnectedServiceQuotaRecoveryCreditConsume?: (input: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    idempotencyKey: string;
+    providerCreditId?: string;
+  }>) => Promise<unknown>;
   handleCodexChatGptAuthTokensRefresh?: (input: Readonly<{
     sessionId: string;
     selection: CodexChatGptAuthTokensRefreshSelection;
@@ -1386,6 +1470,7 @@ export function startDaemonControlServer({
       getChildren,
       machineId,
       stopSession,
+      prepareStopSession,
       spawnSession,
       requestShutdown,
       beforeShutdown,
@@ -1396,6 +1481,7 @@ export function startDaemonControlServer({
       handleConnectedServiceUsageLimitWaitResumeCancel,
       handleSessionConnectedServiceAuthSwitch,
       handleConnectedServiceQuotaSnapshot,
+      handleConnectedServiceQuotaRecoveryCreditConsume,
       handleCodexChatGptAuthTokensRefresh,
       runtimeAuthRecoveryScheduler,
       isShuttingDown,

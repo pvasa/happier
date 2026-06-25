@@ -11,6 +11,7 @@ import {
 } from './promptEchoSuppression';
 import { seedClaudeUnifiedPersistedPromptEchoes } from './promptEchoSeed';
 import { createClaudeOwnComposerTextLog, type ClaudeOwnComposerTextLog } from './ownComposerTextLog';
+import { normalizeClaudeUnifiedPromptIdentityText } from './promptIdentity';
 
 type ClaudeUnifiedSessionBindingClient = Pick<
   SessionClientPort,
@@ -80,7 +81,7 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
   // END, which for long autonomous turns is far beyond the fixed accepted-prompt echo window. Track
   // steered echoes separately: unexpired until the steered turn completes (onReady), then bounded by
   // one echo window so a stale entry can never suppress a later identical terminal-typed prompt.
-  const pendingSteerEchoes: Array<{ text: string; expiresAtMs: number | null }> = [];
+  const pendingSteerEchoes: Array<{ normalizedText: string; expiresAtMs: number | null }> = [];
   let readyTurnContext: ReadyNotificationTurnContext | undefined;
   let canonicalTurnOpen = false;
   let canonicalTurnStartPromise: Promise<void> | null = null;
@@ -98,6 +99,8 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
     if (pendingSteerEchoes.length === 0 || message.type !== 'user') return false;
     const content = message.message?.content;
     if (typeof content !== 'string') return false;
+    const normalizedContent = normalizeClaudeUnifiedPromptIdentityText(content);
+    if (normalizedContent.length === 0) return false;
     const referenceMs = nowMs();
     while (pendingSteerEchoes.length > 0) {
       const head = pendingSteerEchoes[0];
@@ -105,7 +108,7 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
       pendingSteerEchoes.shift();
     }
     const head = pendingSteerEchoes[0];
-    if (!head || head.text !== content) return false;
+    if (!head || head.normalizedText !== normalizedContent) return false;
     pendingSteerEchoes.shift();
     return true;
   }
@@ -254,7 +257,10 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
         const suppressEcho = shouldSuppressAcceptedPromptEcho();
         if (acceptedPrompt.acceptedAs === 'in_flight_steer') {
           if (suppressEcho) {
-            pendingSteerEchoes.push({ text: acceptedPrompt.message, expiresAtMs: null });
+            const normalizedText = normalizeClaudeUnifiedPromptIdentityText(acceptedPrompt.message);
+            if (normalizedText.length > 0) {
+              pendingSteerEchoes.push({ normalizedText, expiresAtMs: null });
+            }
           }
           await recordPromptTurnProgress();
           return;

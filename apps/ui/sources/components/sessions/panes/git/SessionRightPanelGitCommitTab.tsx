@@ -73,6 +73,10 @@ export type SessionRightPanelGitCommitTabProps = Readonly<{
         | { ok: false; error: string }
     >;
     onClearSelection?: () => void;
+    commitSelectionAvailable?: boolean;
+    selectionModeActive?: boolean;
+    onEnterSelectionMode?: () => void;
+    onExitSelectionMode?: () => void;
     commitAdjacentPushAction?: ScmCommitAdjacentPushAction;
 
     scmStatusFiles: ScmStatusFiles | null;
@@ -154,6 +158,10 @@ export const SessionRightPanelGitCommitTab = React.memo((props: SessionRightPane
                         selectionCount={props.repositorySelectedCount}
                         onClearSelection={props.onClearSelection}
                         onSelectAllSelection={props.onSelectAll}
+                        commitSelectionAvailable={props.commitSelectionAvailable}
+                        selectionModeActive={props.selectionModeActive}
+                        onEnterSelectionMode={props.onEnterSelectionMode}
+                        onExitSelectionMode={props.onExitSelectionMode}
                         pushAction={props.commitAdjacentPushAction}
                     />
                 </View>
@@ -180,6 +188,10 @@ const CommitComposerFooter = React.memo((props: Readonly<{
     selectionCount: number;
     onClearSelection?: () => void;
     onSelectAllSelection?: () => void;
+    commitSelectionAvailable?: boolean;
+    selectionModeActive?: boolean;
+    onEnterSelectionMode?: () => void;
+    onExitSelectionMode?: () => void;
     pushAction?: ScmCommitAdjacentPushAction;
 }>) => {
     const [localDraftMessage, setLocalDraftMessage] = React.useState(() => String(props.externalDraftMessage ?? ''));
@@ -231,6 +243,10 @@ const CommitComposerFooter = React.memo((props: Readonly<{
             selectionCount={props.selectionCount}
             onClearSelection={props.onClearSelection}
             onSelectAllSelection={props.onSelectAllSelection}
+            commitSelectionAvailable={props.commitSelectionAvailable}
+            selectionModeActive={props.selectionModeActive}
+            onEnterSelectionMode={props.onEnterSelectionMode}
+            onExitSelectionMode={props.onExitSelectionMode}
             variant="railFooter"
             pushAction={props.pushAction}
         />
@@ -691,16 +707,32 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
         virtualizedChangedFilesLength: virtualizedChangedFiles.length,
         virtualizedStatsColumnWidth,
     };
+    // `renderItem` (below) reads everything from `virtualizedRowStateRef` so its
+    // identity stays stable for FlatList perf. RN's FlatList only re-renders
+    // cells when `data` or `extraData` change — NOT when `renderItem` (or a ref
+    // it reads) changes. So `extraData` MUST carry every dynamic value that
+    // affects a row's rendered output, including the per-row render callbacks.
+    // Omitting `renderFileActions` is what made the commit-selection "+" appear
+    // only after an unrelated data change flushed the cached cells. (The shared
+    // `DiffFilesListView` already follows this discipline by putting
+    // `renderFileRow` in its own `listExtraData`.) `renderFileActions` /
+    // `renderFileTrailingActions` change identity on selection-mode entry/exit
+    // AND on every per-file selection toggle, so including them keeps the "+"
+    // and its checked state in sync immediately.
     const virtualizedRowExtraData = React.useMemo(() => ({
         statsColumnWidth: virtualizedStatsColumnWidth,
         textPrimary: themeTextPrimary,
         textSecondary: themeTextSecondary,
         virtualizedChangedFilesLength: virtualizedChangedFiles.length,
+        renderFileActions: props.renderFileActions,
+        renderFileTrailingActions: props.renderFileTrailingActions,
     }), [
         themeTextPrimary,
         themeTextSecondary,
         virtualizedChangedFiles.length,
         virtualizedStatsColumnWidth,
+        props.renderFileActions,
+        props.renderFileTrailingActions,
     ]);
 
     const renderVirtualizedRow = React.useCallback(({ item: file, index }: { item: ScmFileStatus; index: number }) => {

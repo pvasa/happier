@@ -8,7 +8,7 @@ import {
   type ActionId,
   type ApprovalRequestV1,
 } from '@happier-dev/protocol';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import {
     sessionExecutionRunAction,
@@ -309,6 +309,16 @@ export function createDefaultActionExecutor(opts?: Readonly<{
         },
       });
     },
+    sessionTerminalComposerClear: async ({ sessionId, expectedStateAtMs, serverId }) =>
+      await sessionRpcWithServerScope({
+        sessionId,
+        serverId,
+        method: SESSION_RPC_METHODS.SESSION_TERMINAL_COMPOSER_CLEAR,
+        payload: {
+          sessionId,
+          ...(typeof expectedStateAtMs === 'number' ? { expectedStateAtMs } : {}),
+        },
+      }),
     sessionModeSet: async ({ sessionId, modeId }) => {
       const session = (storage.getState() as any)?.sessions?.[sessionId] ?? null;
       const control = resolveSessionModeActionControl(session);

@@ -30,6 +30,7 @@ describe('rpcHandlers.sessionGoals', () => {
   let sessionUsageLimitWaitResumeCancel: ReturnType<typeof vi.fn>;
   let sessionUsageLimitCheckNow: ReturnType<typeof vi.fn>;
   let sessionUsageLimitSwitchAccountNow: ReturnType<typeof vi.fn>;
+  let sessionUsageLimitConsumeResetCredit: ReturnType<typeof vi.fn>;
   let createCliActionDepsParams: unknown[];
 
   beforeEach(() => {
@@ -57,6 +58,11 @@ describe('rpcHandlers.sessionGoals', () => {
     sessionUsageLimitSwitchAccountNow = vi.fn(async () => ({
       ok: true,
       status: 'switch_applied',
+      sessionId: 'resolved-session',
+    }));
+    sessionUsageLimitConsumeResetCredit = vi.fn(async () => ({
+      ok: true,
+      status: 'ready',
       sessionId: 'resolved-session',
     }));
     createCliActionDepsParams = [];
@@ -118,6 +124,7 @@ describe('rpcHandlers.sessionGoals', () => {
             sessionUsageLimitWaitResumeCancel,
             sessionUsageLimitCheckNow,
             sessionUsageLimitSwitchAccountNow,
+            sessionUsageLimitConsumeResetCredit,
           };
         },
       },
@@ -282,6 +289,25 @@ describe('rpcHandlers.sessionGoals', () => {
       status: 'switch_applied',
       sessionId: 'resolved-session',
     });
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'session-prefix',
+      provider: ' codex ',
+      operation: 'consume_reset_credit',
+      resumePromptMode: 'off',
+    }))).toEqual({
+      ok: true,
+      status: 'ready',
+      sessionId: 'resolved-session',
+    });
+    expect(parseUsageLimitResult(await handlers.get(RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW)?.({
+      sessionId: 'session-prefix',
+      operation: 'consume_the_moon',
+    }))).toEqual({
+      ok: false,
+      status: 'malformed_response',
+      sessionId: 'session-prefix',
+      errorCode: 'invalid_parameters',
+    });
 
     expect(sessionUsageLimitWaitResumeEnable).toHaveBeenCalledWith({
       sessionId: 'resolved-session',
@@ -298,6 +324,11 @@ describe('rpcHandlers.sessionGoals', () => {
     expect(sessionUsageLimitSwitchAccountNow).toHaveBeenCalledWith({
       sessionId: 'resolved-session',
       provider: 'codex',
+    });
+    expect(sessionUsageLimitConsumeResetCredit).toHaveBeenCalledWith({
+      sessionId: 'resolved-session',
+      provider: 'codex',
+      resumePromptMode: 'off',
     });
   });
 

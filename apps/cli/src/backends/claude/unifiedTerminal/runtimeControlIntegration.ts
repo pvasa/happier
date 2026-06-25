@@ -8,6 +8,7 @@ import type { InFlightConfigApplyOutcome } from '@/agent/runtime/permission/bind
 import { resolveClaudeUltracodeForModel } from '@/backends/claude/utils/claudeEffort';
 
 import type { EnhancedMode } from '../loop';
+import { controlResultToChangeOutcome } from './tuiControls/outcome';
 import type {
   ClaudeDesiredRuntimeConfig,
   ClaudePromptSubmitMetadata,
@@ -57,6 +58,8 @@ export type ClaudeUnifiedRuntimeControlApplyResult = Readonly<{
   promptMayProceed: boolean;
   /** True when at least one control was attempted (i.e. the desired config differed from the baseline). */
   attempted: boolean;
+  /** Low-level unsafe-window/control reason that blocked a dependent prompt, when known. */
+  blockedReason?: string | undefined;
 }>;
 
 export type ClaudeUnifiedRuntimeConfigOutcomeSessionEvent = Readonly<{
@@ -95,8 +98,23 @@ export function buildClaudeUnifiedRuntimeConfigOutcomeSessionEvent(event: Readon
   };
 }
 
+const STUCK_UNSAFE_WINDOW_REASON_PREFIX = 'stuck_unsafe_window:';
+
+export function isClaudeUnifiedRuntimeControlUserDraftBlocker(reason: string | null | undefined): boolean {
+  if (typeof reason !== 'string') return false;
+  const trimmed = reason.trim();
+  if (trimmed === 'user_draft') return true;
+  if (!trimmed.startsWith(STUCK_UNSAFE_WINDOW_REASON_PREFIX)) return false;
+  return trimmed.slice(STUCK_UNSAFE_WINDOW_REASON_PREFIX.length).trim() === 'user_draft';
+}
+
 export type ClaudeUnifiedRuntimeControlBridge = Readonly<{
   applyBeforePrompt(mode: EnhancedMode): Promise<ClaudeUnifiedRuntimeControlApplyResult>;
+  /**
+   * Apply a metadata-only runtime config change without coupling it to prompt injection.
+   * Used for UI "immediate" permission picker changes that publish metadata but do not send text.
+   */
+  applyOutOfBand(mode: EnhancedMode): Promise<ClaudeUnifiedRuntimeControlApplyResult>;
   /**
    * Lane Q: apply a steered message's PERMISSION/PLAN MODE delta to the RUNNING turn (probe Q-A
    * steer-safe generating window) so the message can steer instead of deferring to turn end.
@@ -236,6 +254,81 @@ function describeGroup(status: RuntimeConfigOutcomeStatusV1, changes: readonly C
   }
 }
 
+function addChange(
+  target: RuntimeConfigChangeOutcome[],
+  change: RuntimeConfigChangeOutcome,
+): void {
+  target.push(change);
+}
+
+export function buildClaudeUnifiedRuntimeControlDisabledOutcomeEvents(params: Readonly<{
+  mode: EnhancedMode;
+  baselineMode?: EnhancedMode | undefined;
+  sessionModeEmissionEnabled?: boolean | undefined;
+}>): ClaudeUnifiedRuntimeConfigOutcomeEvent[] {
+  const desired = mapEnhancedModeToDesiredRuntimeConfig(params.mode);
+  const baseline = params.baselineMode ? mapEnhancedModeToDesiredRuntimeConfig(params.baselineMode) : {};
+  const delta = computeDesiredDelta(desired, baseline);
+  if (isEmptyDesired(delta)) return [];
+
+  const changes: RuntimeConfigChangeOutcome[] = [];
+  const restartResult = { kind: 'requires_restart', reason: 'tui_runtime_control_disabled' } as const;
+  if (delta.model !== undefined) {
+    addChange(changes, controlResultToChangeOutcome({ key: 'model', requested: delta.model, result: restartResult }));
+  }
+  if (delta.reasoningEffort !== undefined) {
+    addChange(changes, controlResultToChangeOutcome({
+      key: 'reasoningEffort',
+      requested: delta.reasoningEffort,
+      result: restartResult,
+    }));
+  }
+  if (delta.ultracode !== undefined) {
+    addChange(changes, controlResultToChangeOutcome({
+      key: 'launchOption',
+      requested: delta.ultracode,
+      result: restartResult,
+    }));
+  }
+  if (delta.permissionMode !== undefined || delta.agentModeId !== undefined) {
+    const key: RuntimeConfigOutcomeChangeKeyV1 =
+      params.sessionModeEmissionEnabled === true && delta.agentModeId === 'plan'
+        ? 'sessionMode'
+        : 'permissionMode';
+    addChange(changes, controlResultToChangeOutcome({
+      key,
+      requested: key === 'sessionMode' ? 'plan' : (delta.permissionMode ?? null),
+      result: restartResult,
+    }));
+  }
+  if (delta.maxThinkingTokens !== undefined) {
+    addChange(changes, controlResultToChangeOutcome({
+      key: 'maxThinkingTokens',
+      requested: delta.maxThinkingTokens,
+      result: { kind: 'unsupported', reason: 'no_tui_control' },
+    }));
+  }
+
+  const grouped = new Map<RuntimeConfigOutcomeStatusV1, ClaudeUnifiedRuntimeConfigOutcomeChange[]>();
+  for (const change of changes) {
+    const list = grouped.get(change.status) ?? [];
+    list.push({
+      key: change.key,
+      ...(change.requested !== undefined ? { requested: change.requested } : {}),
+      ...(change.previous !== undefined ? { previous: change.previous } : {}),
+      ...(change.effective !== undefined ? { effective: change.effective } : {}),
+      ...(change.reason !== undefined ? { reason: change.reason } : {}),
+    });
+    grouped.set(change.status, list);
+  }
+
+  return [...grouped].map(([status, groupedChanges]) => ({
+    status,
+    message: describeGroup(status, groupedChanges),
+    changes: groupedChanges,
+  }));
+}
+
 /** Upper bound for the blocked-apply injection retry delay (L5(a) bounded backoff). */
 export const MAX_BLOCKED_APPLY_RETRY_MS = 15_000;
 
@@ -261,11 +354,14 @@ export function resolveBlockedApplyRetryMs(
  */
 export const DEFAULT_BLOCKED_APPLY_STARVATION_THRESHOLD = 6;
 
-export type BlockedApplyStarvationInfo = Readonly<{ consecutiveBlockedApplies: number }>;
+export type BlockedApplyStarvationInfo = Readonly<{
+  consecutiveBlockedApplies: number;
+  blockedReason?: string | null;
+}>;
 
 export type BlockedApplyStarvationTracker = Readonly<{
   /** Records one blocked apply; returns the consecutive count. Fires the callback ONCE per episode. */
-  recordBlocked(): number;
+  recordBlocked(blockedReason?: string | null): number;
   /** A successful (proceeding) apply ends the episode; the next starvation escalates again. */
   reset(): void;
 }>;
@@ -286,11 +382,14 @@ export function createBlockedApplyStarvationTracker(opts: Readonly<{
   let consecutiveBlockedApplies = 0;
   let escalated = false;
   return {
-    recordBlocked(): number {
+    recordBlocked(blockedReason?: string | null): number {
       consecutiveBlockedApplies += 1;
       if (consecutiveBlockedApplies >= threshold && !escalated) {
         escalated = true;
-        opts.onStarvation({ consecutiveBlockedApplies });
+        opts.onStarvation({
+          consecutiveBlockedApplies,
+          ...(blockedReason ? { blockedReason } : {}),
+        });
       }
       return consecutiveBlockedApplies;
     },
@@ -389,29 +488,60 @@ export function createClaudeUnifiedRuntimeControlBridge(
     }
   }
 
+  function resolveBlockedApplyReason(outcome: RuntimeConfigApplyOutcome): string | undefined {
+    if (outcome.promptMayProceed) return undefined;
+    const blockedChange = outcome.changes.find((change) =>
+      change.status === 'failed'
+      || change.status === 'requires_interactive_control'
+      || change.timing === 'scheduled_for_next_prompt'
+      || change.timing === 'queued_until_safe_window'
+      || change.timing === 'next_idle'
+    );
+    const reason = blockedChange?.reason;
+    if (typeof reason !== 'string') return undefined;
+    const trimmed = reason.trim();
+    if (trimmed.length === 0) return undefined;
+    return isClaudeUnifiedRuntimeControlUserDraftBlocker(trimmed) ? 'user_draft' : trimmed;
+  }
+
+  async function applyDesiredMode(
+    mode: EnhancedMode,
+    reason: 'before_prompt' | 'out_of_band',
+  ): Promise<ClaudeUnifiedRuntimeControlApplyResult> {
+    const desired = mapEnhancedModeToDesiredRuntimeConfig(mode);
+    const delta = computeDesiredDelta(desired, committed);
+    if (isEmptyDesired(delta)) {
+      return { promptMayProceed: true, attempted: false };
+    }
+    // F5: the first apply whose desired mode equals the pending startup claim is a VERIFICATION
+    // of the launch flag — a confirming already-effective result must stay silent.
+    const verifyingStartupModeClaim =
+      pendingStartupModeClaim !== null
+      && desired.permissionMode === pendingStartupModeClaim.permissionMode
+      && sameAgentModeId(desired.agentModeId, pendingStartupModeClaim.agentModeId);
+    const outcome = await controller.applyDesiredRuntimeConfig({ desired: delta, reason });
+    await controller.whenControlIdle();
+    emitOutcome(outcome, { suppressSilentModeConfirmation: verifyingStartupModeClaim });
+    if (outcome.promptMayProceed) {
+      // Commit the full desired config as the new baseline so resolved controls (including non-blocking
+      // unsupported / requires_restart notices) are not re-attempted/re-emitted on the next prompt.
+      committed = desired;
+      pendingStartupModeClaim = null;
+    }
+    const blockedReason = resolveBlockedApplyReason(outcome);
+    return {
+      promptMayProceed: outcome.promptMayProceed,
+      attempted: true,
+      ...(!outcome.promptMayProceed && blockedReason ? { blockedReason } : {}),
+    };
+  }
+
   return {
     async applyBeforePrompt(mode: EnhancedMode): Promise<ClaudeUnifiedRuntimeControlApplyResult> {
-      const desired = mapEnhancedModeToDesiredRuntimeConfig(mode);
-      const delta = computeDesiredDelta(desired, committed);
-      if (isEmptyDesired(delta)) {
-        return { promptMayProceed: true, attempted: false };
-      }
-      // F5: the first apply whose desired mode equals the pending startup claim is a VERIFICATION
-      // of the launch flag — a confirming already-effective result must stay silent.
-      const verifyingStartupModeClaim =
-        pendingStartupModeClaim !== null
-        && desired.permissionMode === pendingStartupModeClaim.permissionMode
-        && sameAgentModeId(desired.agentModeId, pendingStartupModeClaim.agentModeId);
-      const outcome = await controller.applyDesiredRuntimeConfig({ desired: delta, reason: 'before_prompt' });
-      await controller.whenControlIdle();
-      emitOutcome(outcome, { suppressSilentModeConfirmation: verifyingStartupModeClaim });
-      if (outcome.promptMayProceed) {
-        // Commit the full desired config as the new baseline so resolved controls (including non-blocking
-        // unsupported / requires_restart notices) are not re-attempted/re-emitted on the next prompt.
-        committed = desired;
-        pendingStartupModeClaim = null;
-      }
-      return { promptMayProceed: outcome.promptMayProceed, attempted: true };
+      return await applyDesiredMode(mode, 'before_prompt');
+    },
+    async applyOutOfBand(mode: EnhancedMode): Promise<ClaudeUnifiedRuntimeControlApplyResult> {
+      return await applyDesiredMode(mode, 'out_of_band');
     },
     async applyPermissionModeForInFlightSteer(mode: EnhancedMode): Promise<InFlightConfigApplyOutcome> {
       const desired = mapEnhancedModeToDesiredRuntimeConfig(mode);

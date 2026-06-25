@@ -388,20 +388,37 @@ export async function findAllHappyProcesses(): Promise<HappyProcessInfo[]> {
 }
 
 export async function findHappyProcessByPid(pid: number): Promise<HappyProcessInfo | null> {
+  const classified = await classifyProcessByPid(pid);
+  if (classified.kind === 'happy') return classified.process;
+  return null;
+}
+
+export type ProcessByPidClassification =
+  | Readonly<{ kind: 'happy'; process: HappyProcessInfo }>
+  | Readonly<{ kind: 'not_happy' }>
+  | Readonly<{ kind: 'unknown' }>;
+
+function classifyRawProcessByPid(proc: RawProcessInfo): ProcessByPidClassification {
+  const happy = classifyHappyProcess(proc);
+  return happy ? { kind: 'happy', process: happy } : { kind: 'not_happy' };
+}
+
+export async function classifyProcessByPid(pid: number): Promise<ProcessByPidClassification> {
   const procfs = await getProcessInfoByPidProcfs(pid);
   if (procfs) {
-    return classifyHappyProcess(procfs);
+    return classifyRawProcessByPid(procfs);
   }
   const posixProc = getProcessInfoByPidPosix(pid);
   if (posixProc) {
-    return classifyHappyProcess(posixProc);
+    return classifyRawProcessByPid(posixProc);
   }
   const windowsProc = await getProcessInfoByPidWindows(pid);
   if (windowsProc) {
-    return classifyHappyProcess(windowsProc);
+    return classifyRawProcessByPid(windowsProc);
   }
   const all = await findAllHappyProcesses();
-  return all.find((p) => p.pid === pid) ?? null;
+  const happy = all.find((p) => p.pid === pid);
+  return happy ? { kind: 'happy', process: happy } : { kind: 'unknown' };
 }
 
 /**

@@ -24,6 +24,15 @@ function generatingScreen(draft: string): string {
   ].join('\n');
 }
 
+function plainSuggestionScreen(suggestion: string): string {
+  return [
+    '────────────────────────────────────────────────',
+    `❯ ${suggestion}`,
+    '────────────────────────────────────────────────',
+    '  ⏵⏵ auto mode on (shift+tab to cycle)',
+  ].join('\n');
+}
+
 function ownLog(...texts: string[]) {
   const log = createClaudeOwnComposerTextLog();
   for (const text of texts) log.record(text);
@@ -92,7 +101,10 @@ describe('clearOwnLeftoverComposerDraft (C11: idle pre-injection own-leftover gu
 
   it('NEVER touches a genuine user draft (no recorded match) and reports foreign_draft', async () => {
     const result = await clearOwnLeftoverComposerDraft({
-      captureInputState: async () => ({ currentInput: idleScreen('my half-typed genuine thought') }),
+      captureInputState: async () => ({
+        currentInput: idleScreen('my half-typed genuine thought'),
+        cursor: { x: 33, y: 1 },
+      }),
       sendClearKey: async () => {
         throw new Error('must not clear a genuine user draft');
       },
@@ -100,6 +112,52 @@ describe('clearOwnLeftoverComposerDraft (C11: idle pre-injection own-leftover gu
       wait: async () => undefined,
     });
     expect(result.status).toBe('foreign_draft');
+  });
+
+  it('reports capture_style_unavailable when a plain capture has visible unowned composer text', async () => {
+    const result = await clearOwnLeftoverComposerDraft({
+      captureInputState: async () => ({ currentInput: idleScreen('check the output') }),
+      sendClearKey: async () => {
+        throw new Error('must not clear unverified composer content');
+      },
+      ownComposerTexts: ownLog(OWN_TEXT),
+      wait: async () => undefined,
+    });
+    expect(result.status).toBe('capture_style_unavailable');
+  });
+
+  it('does not let unrelated chrome styling suppress the plain-capture placeholder fallback', async () => {
+    const esc = String.fromCharCode(0x1b);
+    const result = await clearOwnLeftoverComposerDraft({
+      captureInputState: async () => ({
+        currentInput: [
+          `${esc}[38;2;136;136;136m────────────────────────────────────────────────${esc}[m`,
+          '❯ check the output',
+          `${esc}[38;2;136;136;136m────────────────────────────────────────────────${esc}[m`,
+        ].join('\n'),
+      }),
+      sendClearKey: async () => {
+        throw new Error('must not clear unverified composer content');
+      },
+      ownComposerTexts: ownLog(OWN_TEXT),
+      wait: async () => undefined,
+    });
+    expect(result.status).toBe('capture_style_unavailable');
+  });
+
+  it('reports no_draft for a plain Claude suggestion when tmux cursor proves the composer is empty', async () => {
+    const result = await clearOwnLeftoverComposerDraft({
+      captureInputState: async () => ({
+        currentInput: plainSuggestionScreen('what can you help me with'),
+        cursor: { x: 2, y: 1 },
+      }),
+      sendClearKey: async () => {
+        throw new Error('must not clear a placeholder suggestion');
+      },
+      ownComposerTexts: ownLog(OWN_TEXT),
+      wait: async () => undefined,
+    });
+    expect(result.status).toBe('no_draft');
   });
 
   it('never sends the clear key while the screen is generating (Escape would interrupt the turn)', async () => {
@@ -115,10 +173,13 @@ describe('clearOwnLeftoverComposerDraft (C11: idle pre-injection own-leftover gu
   });
 
   it('stops clearing when the draft mutates into foreign text mid-episode (user started typing)', async () => {
-    const captures = [idleScreen(OWN_TEXT), idleScreen(`${OWN_TEXT} plus my new words`)];
+    const captures = [
+      { currentInput: idleScreen(OWN_TEXT) },
+      { currentInput: idleScreen(`${OWN_TEXT} plus my new words`), cursor: { x: 63, y: 1 } },
+    ];
     let clears = 0;
     const result = await clearOwnLeftoverComposerDraft({
-      captureInputState: async () => ({ currentInput: captures.shift() ?? idleScreen('') }),
+      captureInputState: async () => captures.shift() ?? { currentInput: idleScreen('') },
       sendClearKey: async () => {
         clears += 1;
       },
@@ -166,7 +227,10 @@ describe('clearOwnLeftoverComposerDraft (C11: idle pre-injection own-leftover gu
 
   it('still treats non-controller slash drafts as foreign (user-typed /compact must never be cleared)', async () => {
     const result = await clearOwnLeftoverComposerDraft({
-      captureInputState: async () => ({ currentInput: idleScreen('/compact focus on the tests') }),
+      captureInputState: async () => ({
+        currentInput: idleScreen('/compact focus on the tests'),
+        cursor: { x: 31, y: 1 },
+      }),
       sendClearKey: async () => {
         throw new Error('must not clear a user-typed slash draft outside the controller vocabulary');
       },

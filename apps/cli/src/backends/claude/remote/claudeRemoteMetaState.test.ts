@@ -6,6 +6,7 @@ describe('applyClaudeRemoteMetaState', () => {
   it('defaults unified terminal metadata to disabled auto host', () => {
     expect((DEFAULT_CLAUDE_REMOTE_META_STATE as any).claudeUnifiedTerminalEnabled).toBe(false);
     expect((DEFAULT_CLAUDE_REMOTE_META_STATE as any).claudeUnifiedTerminalHost).toBe('auto');
+    expect((DEFAULT_CLAUDE_REMOTE_META_STATE as any).claudeUnifiedTerminalResumeChoice).toBe('ask_every_time');
   });
 
   it('defaults claudeRemoteSettingSourcesV2 to user+project+local (matches Claude Code default behavior)', () => {
@@ -101,6 +102,28 @@ describe('applyClaudeRemoteMetaState', () => {
       claudeUnifiedTerminalHost: 'screen',
     });
     expect((next as any).claudeUnifiedTerminalHost).toBe('zellij');
+  });
+
+  it('applies valid unified terminal resume-choice values only', () => {
+    const summary = applyClaudeRemoteMetaState(DEFAULT_CLAUDE_REMOTE_META_STATE, {
+      claudeUnifiedTerminalResumeChoice: 'resume_from_summary',
+    });
+    expect((summary as any).claudeUnifiedTerminalResumeChoice).toBe('resume_from_summary');
+
+    const full = applyClaudeRemoteMetaState(summary, {
+      claudeUnifiedTerminalResumeChoice: 'resume_full_session',
+    });
+    expect((full as any).claudeUnifiedTerminalResumeChoice).toBe('resume_full_session');
+
+    const ask = applyClaudeRemoteMetaState(full, {
+      claudeUnifiedTerminalResumeChoice: 'ask_every_time',
+    });
+    expect((ask as any).claudeUnifiedTerminalResumeChoice).toBe('ask_every_time');
+
+    const next = applyClaudeRemoteMetaState(ask, {
+      claudeUnifiedTerminalResumeChoice: 'resume_partial_session',
+    });
+    expect((next as any).claudeUnifiedTerminalResumeChoice).toBe('ask_every_time');
   });
 
   it('normalizes claudeRemoteDebugCategories arrays when provided', () => {

@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import * as Clipboard from 'expo-clipboard';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { useAuth } from '@/auth/context/AuthContext';
@@ -13,9 +12,12 @@ import { decodeBase64 } from '@/encryption/base64';
 import { parsePairingDeepLink } from '@/auth/pairing/pairingUrl';
 import { QRCode } from '@/components/qr/QRCode';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { CopiedPill } from '@/components/ui/copy/CopiedPill';
+import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { Text } from '@/components/ui/text/Text';
 import { Modal } from '@/modal';
 import { t } from '@/text';
+import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { Typography } from '@/constants/Typography';
 import { getActiveServerUrl } from '@/sync/domains/server/serverProfiles';
@@ -117,6 +119,7 @@ export const AddPhoneSettingsView = React.memo(function AddPhoneSettingsView() {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const auth = useAuth();
+    const copyFeedback = useTemporaryCopyFeedback();
     const pairingDecision = useFeatureDecision('auth.pairing.desktopQrMobileScan');
     const pairingState = pairingDecision?.state ?? 'unknown';
     const pairingEnabled = pairingState === 'enabled';
@@ -226,14 +229,22 @@ export const AddPhoneSettingsView = React.memo(function AddPhoneSettingsView() {
                                     testID="add-phone-pairing-link"
                                     accessibilityRole="button"
                                     onPress={async () => {
-                                        await Clipboard.setStringAsync(deepLink);
-                                        await Modal.alertAsync(t('common.success'), t('common.copied'));
+                                        const copied = await setClipboardStringSafe(deepLink);
+                                        if (copied) {
+                                            copyFeedback.markCopied('pairingLink');
+                                            return;
+                                        }
+                                        await Modal.alertAsync(t('common.error'), t('items.failedToCopyToClipboard'));
                                     }}
                                     style={styles.linkRow}
                                 >
                                     <Text style={styles.linkText} numberOfLines={3}>
                                         {deepLink}
                                     </Text>
+                                    <CopiedPill
+                                        visible={copyFeedback.isCopied('pairingLink')}
+                                        testID="add-phone-pairing-link-copied"
+                                    />
                                 </Pressable>
                             ) : null}
 

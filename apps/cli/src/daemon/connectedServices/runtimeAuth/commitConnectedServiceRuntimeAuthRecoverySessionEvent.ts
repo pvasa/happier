@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import {
   TranscriptRawAgentEventV1Schema,
   type SessionStoredMessageContent,
@@ -39,12 +37,36 @@ function normalizeEventIdPart(value: string | null | undefined): string {
   return normalized.replace(/[^a-zA-Z0-9._:-]+/gu, '_');
 }
 
+function normalizeEventIdBooleanPart(value: boolean | null | undefined): string {
+  return typeof value === 'boolean' ? String(value) : 'none';
+}
+
+function normalizeEventIdNumberPart(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(Math.trunc(value)) : 'none';
+}
+
 function parseRuntimeAuthRecoveryEvent(
   value: unknown,
 ): ConnectedServiceRuntimeAuthRecoveryTranscriptEventV1 | null {
   const parsed = TranscriptRawAgentEventV1Schema.safeParse(value);
   if (!parsed.success || parsed.data.type !== 'connected-service-runtime-auth-recovery') return null;
   return parsed.data;
+}
+
+function buildRuntimeAuthRecoveryTranscriptEventId(
+  event: ConnectedServiceRuntimeAuthRecoveryTranscriptEventV1,
+): string {
+  return [
+    'connected-service-runtime-auth-recovery',
+    normalizeEventIdPart(event.serviceId),
+    normalizeEventIdPart(event.groupId),
+    normalizeEventIdPart(event.profileId),
+    normalizeEventIdPart(event.status),
+    normalizeEventIdNumberPart(event.attempt),
+    normalizeEventIdNumberPart(event.nextRetryAtMs),
+    normalizeEventIdBooleanPart(event.terminal),
+    normalizeEventIdPart(event.reason),
+  ].join(':');
 }
 
 export async function commitConnectedServiceRuntimeAuthRecoverySessionEvent(params: Readonly<{
@@ -61,14 +83,7 @@ export async function commitConnectedServiceRuntimeAuthRecoverySessionEvent(para
   });
   if (!rawSession) return;
 
-  const eventId = [
-    'connected-service-runtime-auth-recovery',
-    normalizeEventIdPart(event.serviceId),
-    normalizeEventIdPart(event.groupId),
-    normalizeEventIdPart(event.profileId),
-    normalizeEventIdPart(event.status),
-    randomUUID(),
-  ].join(':');
+  const eventId = buildRuntimeAuthRecoveryTranscriptEventId(event);
 
   await commitSessionStoredMessage({
     token: params.credentials.token,

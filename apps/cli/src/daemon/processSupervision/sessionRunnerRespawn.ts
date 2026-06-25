@@ -64,7 +64,7 @@ function toTerminationEvent(exit: DaemonChildExit): TerminationEvent {
   if (typeof exit.code === 'number' && Number.isFinite(exit.code)) {
     return { type: 'exited', code: Math.max(0, Math.trunc(exit.code)) };
   }
-  if (exit.reason === 'process-missing') return { type: 'missing' };
+  if (exit.reason === 'process-missing' || exit.reason === 'process-reused') return { type: 'missing' };
   if (exit.reason === 'process-error') {
     return { type: 'spawn_error', errorName: 'Error', errorMessage: 'process-error' };
   }

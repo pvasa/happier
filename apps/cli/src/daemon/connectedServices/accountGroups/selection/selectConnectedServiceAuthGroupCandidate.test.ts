@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+  isConnectedServiceAuthGroupSoftSwitchCandidateMeaningfullyBetter,
+  reconcileMemberRuntimeStateWithFreshQuotaEvidence,
   selectConnectedServiceAuthGroupCandidate,
   type ConnectedServiceAuthGroupMemberRuntimeState,
 } from './selectConnectedServiceAuthGroupCandidate';
@@ -18,6 +20,20 @@ function member(profileId: string, priority: number, createdAtMs: number) {
 }
 
 describe('selectConnectedServiceAuthGroupCandidate', () => {
+  it('does not treat the active profile as a meaningfully better soft-switch target', () => {
+    expect(isConnectedServiceAuthGroupSoftSwitchCandidateMeaningfullyBetter({
+      activeProfileId: 'active',
+      candidate: {
+        ...member('active', 1, 1),
+        leastLimitedScore: 95,
+      },
+      policy: {
+        ...basePolicy,
+        softSwitchRemainingPercent: 20,
+      },
+    })).toBe(false);
+  });
+
   it('selects the next eligible member by priority', () => {
     const result = selectConnectedServiceAuthGroupCandidate({
       nowMs: 1_000,
@@ -157,6 +173,77 @@ describe('selectConnectedServiceAuthGroupCandidate', () => {
       profileId: 'healthy-backup',
       reason: 'cooldown',
     }));
+  });
+
+  it('clears stale cooldown blockers when fresh usable quota evidence proves the member is healthy', () => {
+    const result = selectConnectedServiceAuthGroupCandidate({
+      nowMs: 1_000,
+      quotaFreshnessMs: 60_000,
+      activeProfileId: 'active',
+      allowCurrentProfileRetry: true,
+      policy: {
+        ...basePolicy,
+        strategy: 'least_limited',
+        cooldownMs: 30_000,
+        honorProviderResetsAt: true,
+        softSwitchRemainingPercent: 15,
+      },
+      members: [
+        member('active', 1, 1),
+        member('backup', 2, 2),
+      ],
+      memberStatesByProfileId: new Map([
+        ['active', {
+          cooldownStartedAtMs: 900,
+          cooldownUntilMs: 60_000,
+          providerResetsAtMs: 60_000,
+          quotaSnapshot: {
+            capturedAtMs: 950,
+            effectiveMeterId: 'weekly',
+            effectiveRemainingPercent: 52,
+          },
+        }],
+        ['backup', {
+          quotaSnapshot: {
+            capturedAtMs: 950,
+            effectiveMeterId: 'weekly',
+            effectiveRemainingPercent: 90,
+          },
+        }],
+      ]),
+    });
+
+    expect(result.selected?.profileId).toBe('active');
+    expect(result.excluded).not.toContainEqual(expect.objectContaining({
+      profileId: 'active',
+      reason: 'cooldown',
+    }));
+  });
+
+  it('removes generic cooldown fields from reconciled runtime state when fresh quota is usable', () => {
+    const reconciled = reconcileMemberRuntimeStateWithFreshQuotaEvidence({
+      nowMs: 1_000,
+      policy: {
+        ...basePolicy,
+        cooldownMs: 30_000,
+        honorProviderResetsAt: true,
+      },
+      state: {
+        cooldownStartedAtMs: 900,
+        cooldownUntilMs: 60_000,
+        exhaustedUntilMs: 60_000,
+        providerResetsAtMs: 60_000,
+      },
+      quotaSnapshot: {
+        capturedAtMs: 950,
+        effectiveMeterId: 'weekly',
+        effectiveRemainingPercent: 52,
+      },
+    });
+
+    expect(reconciled).toEqual({
+      providerResetsAtMs: 60_000,
+    });
   });
 
   it('starts on the current low-quota member when no safe better candidate exists', () => {

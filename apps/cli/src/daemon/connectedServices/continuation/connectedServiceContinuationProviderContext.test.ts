@@ -8,9 +8,14 @@ import type { TrackedSession } from '@/daemon/types';
 type ContinuationContextModule = Readonly<{
   resolveConnectedServiceContinuationProviderContextAvailability: (input: {
     tracked: Pick<TrackedSession, 'happySessionMetadataFromLocalWebhook' | 'spawnOptions' | 'vendorResumeId'>;
+    persistedSessionMetadata?: unknown;
   }) => Promise<boolean>;
   replayPendingConnectedServiceContinuationsForTrackedSessions: (input: {
     trackedSessions: Iterable<Pick<TrackedSession, 'happySessionId' | 'happySessionMetadataFromLocalWebhook' | 'spawnOptions' | 'vendorResumeId'>>;
+    resolvePersistedSessionMetadata?: (input: {
+      sessionId: string;
+      tracked: Pick<TrackedSession, 'happySessionId' | 'happySessionMetadataFromLocalWebhook' | 'spawnOptions' | 'vendorResumeId'>;
+    }) => Promise<unknown> | unknown;
     resolvePendingContinuation: (input: {
       sessionId: string;
       exactProviderContextAvailable: boolean;
@@ -348,6 +353,78 @@ describe('connected service continuation provider context', () => {
     }
   });
 
+  it('uses re-read persisted metadata identity and provider resume context when tracked spawn options are incomplete', async () => {
+    const {
+      resolveConnectedServiceContinuationProviderContextAvailability,
+    } = await loadContinuationContextModule();
+
+    const root = await mkdtemp(join(tmpdir(), 'happier-pi-persisted-continuation-context-'));
+    try {
+      const sessionFile = join(
+        root,
+        'pi-agent-dir',
+        'sessions',
+        '--tmp-project--',
+        '2026-06-01T12-00-00-000Z_pi-persisted-session-1.jsonl',
+      );
+      const persistedSessionMetadata = {
+        path: '/tmp/project',
+        flavor: 'pi',
+        host: 'host',
+        homeDir: '/home/user',
+        happyHomeDir: '/home/user/.happy',
+        happyLibDir: '/home/user/.happy/lib',
+        happyToolsDir: '/home/user/.happy/tools',
+        connectedServices: {
+          v: 1,
+          bindingsByServiceId: {
+            openai: {
+              source: 'connected',
+              selection: 'profile',
+              profileId: 'profile-1',
+            },
+          },
+        },
+        connectedServiceMaterializationIdentityV1: {
+          v: 1,
+          id: 'metadata-materialization-1',
+          createdAtMs: 1_000,
+        },
+        agentRuntimeDescriptorV1: {
+          v: 1,
+          providerId: 'pi',
+          provider: {
+            resumeStrategy: 'sessionFileAbsolutePreferred',
+            vendorSessionId: 'pi-persisted-session-1',
+            sessionFile,
+          },
+        },
+        piSessionFile: sessionFile,
+      };
+      const tracked = trackedSession({
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'pi' },
+        },
+      });
+
+      await expect(resolveConnectedServiceContinuationProviderContextAvailability({
+        tracked,
+        persistedSessionMetadata,
+      })).resolves.toBe(false);
+
+      await mkdir(join(root, 'pi-agent-dir', 'sessions', '--tmp-project--'), { recursive: true });
+      await writeFile(sessionFile, '{}\n');
+
+      await expect(resolveConnectedServiceContinuationProviderContextAvailability({
+        tracked,
+        persistedSessionMetadata,
+      })).resolves.toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not bypass exact provider-context checks when connected-service bindings exist only in metadata', async () => {
     const {
       resolveConnectedServiceContinuationProviderContextAvailability,
@@ -448,6 +525,94 @@ describe('connected service continuation provider context', () => {
       expect(resolvePendingContinuation).toHaveBeenCalledTimes(2);
     } finally {
       await rm(claudeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('replays pending continuations with re-read persisted metadata for bare reattached sessions', async () => {
+    const {
+      replayPendingConnectedServiceContinuationsForTrackedSessions,
+    } = await loadContinuationContextModule();
+
+    const root = await mkdtemp(join(tmpdir(), 'happier-pi-persisted-continuation-replay-'));
+    const resolvePendingContinuation = vi.fn(async () => {});
+    const sessionFile = join(
+      root,
+      'pi-agent-dir',
+      'sessions',
+      '--tmp-project--',
+      '2026-06-01T13-00-00-000Z_pi-replay-session-1.jsonl',
+    );
+    const persistedSessionMetadata = {
+      path: '/tmp/project',
+      flavor: 'pi',
+      connectedServices: {
+        v: 1,
+        bindingsByServiceId: {
+          openai: {
+            source: 'connected',
+            selection: 'profile',
+            profileId: 'profile-1',
+          },
+        },
+      },
+      connectedServiceMaterializationIdentityV1: {
+        v: 1,
+        id: 'metadata-materialization-1',
+        createdAtMs: 1_000,
+      },
+      agentRuntimeDescriptorV1: {
+        v: 1,
+        providerId: 'pi',
+        provider: {
+          resumeStrategy: 'sessionFileAbsolutePreferred',
+          vendorSessionId: 'pi-replay-session-1',
+          sessionFile,
+        },
+      },
+      piSessionFile: sessionFile,
+    };
+    const resolvePersistedSessionMetadata = vi.fn(async () => persistedSessionMetadata);
+
+    try {
+      await mkdir(join(root, 'pi-agent-dir', 'sessions', '--tmp-project--'), { recursive: true });
+      await writeFile(sessionFile, '{}\n');
+
+      const tracked = trackedSession({
+        happySessionId: 'session-needs-persisted-context',
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'pi' },
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              openai: {
+                source: 'connected',
+                selection: 'profile',
+                profileId: 'profile-1',
+              },
+            },
+          },
+        },
+      });
+
+      await expect(replayPendingConnectedServiceContinuationsForTrackedSessions({
+        trackedSessions: [tracked],
+        resolvePersistedSessionMetadata,
+        resolvePendingContinuation,
+      })).resolves.toEqual({
+        attemptedSessionIds: ['session-needs-persisted-context'],
+      });
+
+      expect(resolvePersistedSessionMetadata).toHaveBeenCalledWith({
+        sessionId: 'session-needs-persisted-context',
+        tracked,
+      });
+      expect(resolvePendingContinuation).toHaveBeenCalledWith({
+        sessionId: 'session-needs-persisted-context',
+        exactProviderContextAvailable: true,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

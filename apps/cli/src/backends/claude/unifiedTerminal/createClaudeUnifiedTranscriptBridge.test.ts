@@ -128,6 +128,58 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
     }
   });
 
+  it('binds a known resumed session to the canonical transcript path when no transcriptPath or SessionStart is available', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unified-transcript-known-canonical-'));
+    tempDirs.push(dir);
+    const workspaceDir = join(dir, 'workspace');
+    const claudeConfigDir = join(dir, 'claude-config');
+    const sessionId = 'sess_known_canonical';
+    const projectDir = getProjectPath(workspaceDir, claudeConfigDir);
+    await mkdir(projectDir, { recursive: true });
+    const transcriptPath = join(projectDir, `${sessionId}.jsonl`);
+    await writeFile(transcriptPath, '');
+
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const onTranscriptMessage = vi.fn();
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId,
+      transcriptPath: null,
+      workingDirectory: workspaceDir,
+      claudeConfigDir,
+      onTranscriptMessage,
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      transcriptMissingWarningMs: 0,
+    });
+
+    try {
+      await bridge.start({ abortSignal: new AbortController().signal });
+      expect(subscribedHook).toBeTypeOf('function');
+      await appendJsonl(transcriptPath, {
+        type: 'assistant',
+        uuid: 'known_canonical_assistant_row',
+        timestamp: new Date().toISOString(),
+        sessionId,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'hello from known canonical transcript' }],
+        },
+      } as RawJSONLines);
+
+      await waitUntil(() => onTranscriptMessage.mock.calls.length === 1);
+      expect(onTranscriptMessage).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'assistant',
+        uuid: 'known_canonical_assistant_row',
+      }));
+    } finally {
+      await bridge.dispose();
+    }
+  });
+
 
 
   it('suppresses historical resume rows in a fresh Happier session while emitting the newly accepted prompt', async () => {

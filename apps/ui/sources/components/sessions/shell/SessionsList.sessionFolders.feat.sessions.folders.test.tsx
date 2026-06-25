@@ -138,6 +138,7 @@ vi.mock('react-native-worklets', () => ({
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
+    SafeAreaInsetsContext: React.createContext({ top: 0, bottom: 0, left: 0, right: 0 }),
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
@@ -169,6 +170,7 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
+    areServerProfileIdentifiersEquivalent: (left: string | null | undefined, right: string | null | undefined) => left === right,
     getServerProfileById: getServerProfileByIdSpy,
     // `serverRuntime.getActiveServerSnapshot` re-exports this; the session-list
     // memory-search augmentation reads it during render.

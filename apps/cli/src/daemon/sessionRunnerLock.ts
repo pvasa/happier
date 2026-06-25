@@ -4,9 +4,13 @@ import { join } from 'node:path';
 
 import { configuration } from '@/configuration';
 
-import { findHappyProcessByPid } from './doctor';
 import { readProcessRunState as readProcessRunStateDefault, type ProcessRunState } from './processRunState';
-import { hashProcessCommand } from './sessionRegistry';
+import {
+  readSessionRunnerProcessIdentity,
+  storedProcessHashMatchesCurrentIdentity,
+  storedProcessHashProvesPidReuse,
+  type SessionRunnerProcessCommandHashReader,
+} from './sessionRunnerProcessIdentity';
 
 type LockPayload = Readonly<{
   sessionId: string;
@@ -56,12 +60,6 @@ function killWedgedPidDefault(pid: number): void {
   process.kill(pid, 'SIGKILL');
 }
 
-async function getCurrentProcessCommandHashDefault(pid: number): Promise<string | null> {
-  const proc = await findHappyProcessByPid(pid).catch(() => null);
-  if (!proc?.command) return null;
-  return hashProcessCommand(proc.command);
-}
-
 function safeParseLockPayload(raw: string): LockPayload | null {
   try {
     const parsed = JSON.parse(raw);
@@ -98,7 +96,7 @@ export async function acquireSessionRunnerLock(params: Readonly<{
   nowMs?: number;
   happyHomeDir?: string;
   readProcessRunState?: (pid: number) => Promise<ProcessRunState>;
-  getCurrentProcessCommandHash?: (pid: number) => Promise<string | null>;
+  getCurrentProcessCommandHash?: SessionRunnerProcessCommandHashReader;
   killWedgedPid?: (pid: number) => void;
 }>): Promise<AcquireSessionRunnerLockResult> {
   const sessionId = normalizeSessionId(params.sessionId);
@@ -118,9 +116,13 @@ export async function acquireSessionRunnerLock(params: Readonly<{
     return { ok: false, reason: 'io_error', errorMessage: e instanceof Error ? e.message : String(e) };
   }
 
-  const getCurrentProcessCommandHash = params.getCurrentProcessCommandHash ?? getCurrentProcessCommandHashDefault;
-  const processCommandHashRaw = await getCurrentProcessCommandHash(pid).catch(() => null);
-  const processCommandHash = typeof processCommandHashRaw === 'string' && /^[a-f0-9]{64}$/.test(processCommandHashRaw) ? processCommandHashRaw : null;
+  const readProcessIdentity = async (pidToRead: number) =>
+    await readSessionRunnerProcessIdentity({
+      pid: pidToRead,
+      getProcessCommandHash: params.getCurrentProcessCommandHash,
+    });
+  const processIdentity = await readProcessIdentity(pid);
+  const processCommandHash = processIdentity.kind === 'happy' ? processIdentity.processCommandHash : null;
 
   const payload: LockPayload = {
     sessionId,
@@ -184,11 +186,16 @@ export async function acquireSessionRunnerLock(params: Readonly<{
     if (holderState === 'dead' || holderState === 'zombie') {
       // Dead or defunct: cannot serve, safe to break below (a zombie needs no kill).
     } else if (existing.processCommandHash) {
-      const currentHash = await getCurrentProcessCommandHash(existing.pid).catch(() => null);
-      const currentHashValid = typeof currentHash === 'string' && /^[a-f0-9]{64}$/.test(currentHash);
-      if (currentHashValid && currentHash !== existing.processCommandHash) {
-        // Provably a different process (PID reuse): treat the lock as stale and break it.
-      } else if (holderState === 'stopped' && currentHashValid && currentHash === existing.processCommandHash) {
+      const currentIdentity = await readProcessIdentity(existing.pid);
+      if (storedProcessHashProvesPidReuse({
+        storedProcessCommandHash: existing.processCommandHash,
+        currentIdentity,
+      })) {
+        // Provably a different process (PID reuse) or not a Happy process: treat the lock as stale and break it.
+      } else if (holderState === 'stopped' && storedProcessHashMatchesCurrentIdentity({
+        storedProcessCommandHash: existing.processCommandHash,
+        currentIdentity,
+      })) {
         // Proven same runner image but SIGSTOPped: it holds the lock and serves nothing
         // (incident 2026-06-12 "already running" refusal while wedged). Kill it so a
         // later SIGCONT cannot revive a duplicate, then break the lock.

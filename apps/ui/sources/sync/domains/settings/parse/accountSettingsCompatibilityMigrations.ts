@@ -210,6 +210,17 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
         next.avatarStyle = 'meshGradientColumns';
     }
 
+    // The tab-bar blur preference was generalized into a single "glass surfaces"
+    // control governing every floating glass panel (tab bar, jump-to-bottom, …).
+    if (!('glassBlurEnabled' in input) && 'tabBarBlurEnabled' in input) {
+        const parsed = z.boolean().safeParse(input.tabBarBlurEnabled);
+        if (parsed.success) next.glassBlurEnabled = parsed.data;
+    }
+    if (!('glassBlurIntensity' in input) && 'tabBarBlurIntensity' in input) {
+        const parsed = z.enum(['light', 'regular', 'strong'] as const).safeParse(input.tabBarBlurIntensity);
+        if (parsed.success) next.glassBlurIntensity = parsed.data;
+    }
+
     next.featureToggles = migrateAccountFeatureToggles({
         featureToggles: next.featureToggles,
         inputSchemaVersion,

@@ -1,12 +1,19 @@
 import { Platform } from 'react-native';
 import {
     buildDarkShadowLevels,
+    buildGlassBorderColor,
+    buildGlassCastShadow,
+    buildGlassInnerShadow,
     buildLightShadowLevels,
     buildShadowPopoverArrowBoxShadow,
-    buildTabBarBorderColor,
-    buildTabBarInnerShadow,
 } from '../shadowElevation';
 import { createVerticalGradient } from './verticalGradient';
+
+// The opt-in glass composer is a large surface, so its top inner-shadow reads a
+// touch stronger than on the small floating chrome (tab bar / jump-to-bottom).
+// Fade the composer's inner-shadow opacity slightly — COMPOSER ONLY; every other
+// glass surface keeps the shared `glass.innerShadow` at full strength.
+const COMPOSER_GLASS_INNER_SHADOW_OPACITY_SCALE = 0.7;
 
 // Shared spacing, sizing constants (DRY - used by both themes)
 const sharedSpacing = {
@@ -108,6 +115,10 @@ export const lightTheme = {
             pressed: '#fafafa',
             selected: '#f8f8f8',
             pressedOverlay: '#fafafa',
+            // Barely-there grouped-section tint. Baked as an opacity overlay (not a
+            // solid inset) so it reads a hair off the base surface; a runtime opacity
+            // transform would be a silent no-op once web var-ifies the token.
+            sectionTint: 'rgba(0,0,0,0.012)',
         },
         border: {
             default: Platform.select({ ios: '#eaeaea', default: '#eaeaea' }),
@@ -149,8 +160,25 @@ export const lightTheme = {
         },
         shadowLevels: buildLightShadowLevels(),
         shadowPopoverArrowBoxShadow: buildShadowPopoverArrowBoxShadow(false),
-        tabBarInnerShadow: buildTabBarInnerShadow(false),
-        tabBarBorder: buildTabBarBorderColor(false),
+        // Shared recipe for floating glass surfaces (GlassPanel): tab bar, jump-to-
+        // bottom button, glass composer, etc.
+        glass: {
+            border: buildGlassBorderColor(false),
+            innerShadow: buildGlassInnerShadow(false),
+            // Composer-only: a hair fainter than the shared `innerShadow`.
+            composerInnerShadow: buildGlassInnerShadow(false, COMPOSER_GLASS_INNER_SHADOW_OPACITY_SCALE),
+            castShadow: buildGlassCastShadow(false),
+            // Glass composer fill: white on light (unchanged from `surface.base`).
+            composerSurface: '#ffffff',
+            // Near-white solid fallback for glass panels (e.g. the session-list
+            // selection action bar) when blur is unavailable/off — lighter than
+            // `surface.elevated` (#f0f0f0), close to white so it reads as glass.
+            panelSurface: '#fafafa',
+            // Translucent tint behind the web `backdrop-filter` blur (GlassSurface webBlur
+            // tier) — kept fairly transparent so the blurred content actually shows through
+            // as frosted glass (too opaque reads as a flat panel over the light list).
+            webBlurTint: 'rgba(255, 255, 255, 0.5)',
+        },
 
         //
         // System components
@@ -236,15 +264,15 @@ export const lightTheme = {
         permissionButton: {
             allow: {
                 background: '#34C759',
-                text: '#FFFFFF',
+                text: '#34C759',
             },
             deny: {
                 background: '#FF3B30',
-                text: '#FFFFFF',
+                text: '#FF3B30',
             },
             allowAll: {
                 background: '#007AFF',
-                text: '#FFFFFF',
+                text: '#007AFF',
             },
             inactive: {
                 background: '#E5E5EA',
@@ -412,6 +440,7 @@ export const darkTheme = {
             pressed: '#302727',
             selected: '#292121',
             pressedOverlay: 'rgba(255,255,255,0.036)',
+            sectionTint: 'rgba(255,255,255,0.014)',
         },
         border: {
             default: 'rgba(255,255,255,0.050)',
@@ -452,8 +481,22 @@ export const darkTheme = {
         },
         shadowLevels: buildDarkShadowLevels(),
         shadowPopoverArrowBoxShadow: buildShadowPopoverArrowBoxShadow(true),
-        tabBarInnerShadow: buildTabBarInnerShadow(true),
-        tabBarBorder: buildTabBarBorderColor(true),
+        glass: {
+            border: buildGlassBorderColor(true),
+            innerShadow: buildGlassInnerShadow(true),
+            // Composer-only: a hair fainter than the shared `innerShadow`.
+            composerInnerShadow: buildGlassInnerShadow(true, COMPOSER_GLASS_INNER_SHADOW_OPACITY_SCALE),
+            castShadow: buildGlassCastShadow(true),
+            // Glass composer fill: a lifted/elevated tone on dark so the dark glass
+            // composer reads as raised glass (vs the flat `surface.base` = #191717).
+            composerSurface: '#221C1C',
+            // Solid grey-ish fill for opt-in glass panels — the same lifted/elevated
+            // tone as the dark glass composer (already glass-ish vs the flat base).
+            panelSurface: '#221C1C',
+            // Translucent tint behind the web `backdrop-filter` blur — a frosted dark
+            // (≈ `surface.base` #191717), kept transparent enough to read as glass.
+            webBlurTint: 'rgba(25, 23, 23, 0.5)',
+        },
 
         //
         // System components
@@ -539,15 +582,15 @@ export const darkTheme = {
         permissionButton: {
             allow: {
                 background: '#66DC7E',
-                text: '#EFEFEF',
+                text: '#66DC7E',
             },
             deny: {
                 background: '#EE6E6C',
-                text: '#EFEFEF',
+                text: '#EE6E6C',
             },
             allowAll: {
                 background: '#9EB9FF',
-                text: '#EFEFEF',
+                text: '#9EB9FF',
             },
             inactive: {
                 background: '#131111',

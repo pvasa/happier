@@ -220,6 +220,57 @@ describe('connectedServiceSchemas', () => {
         }));
     });
 
+    it('parses generalized quota recovery reset credits on quota snapshots', () => {
+        const now = Date.now();
+        const parsed = ConnectedServiceQuotaSnapshotV1Schema.parse({
+            v: 1,
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            fetchedAt: now,
+            staleAfterMs: 60_000,
+            planLabel: 'pro',
+            accountLabel: 'work@example.com',
+            meters: [],
+            recoveryCredits: {
+                kind: 'usage_limit_resets',
+                availableCount: 1,
+                totalCount: 1,
+                nextExpiresAtMs: now + 30 * 24 * 60 * 60_000,
+                source: 'provider_api',
+                confidence: 'exact',
+                credits: [
+                    {
+                        providerCreditId: 'reset-credit-1',
+                        kind: 'rate_limit_reset',
+                        status: 'available',
+                        providerResetType: 'codex_rate_limits',
+                        title: 'One free rate limit reset',
+                        description: 'Granted by the provider',
+                        grantedAtMs: now - 1_000,
+                        expiresAtMs: now + 30 * 24 * 60 * 60_000,
+                        redeemStartedAtMs: null,
+                        redeemedAtMs: null,
+                    },
+                ],
+            },
+        });
+
+        expect(parsed.recoveryCredits).toEqual(expect.objectContaining({
+            kind: 'usage_limit_resets',
+            availableCount: 1,
+            totalCount: 1,
+            nextExpiresAtMs: now + 30 * 24 * 60 * 60_000,
+            source: 'provider_api',
+            confidence: 'exact',
+        }));
+        expect(parsed.recoveryCredits?.credits[0]).toEqual(expect.objectContaining({
+            providerCreditId: 'reset-credit-1',
+            kind: 'rate_limit_reset',
+            status: 'available',
+            providerResetType: 'codex_rate_limits',
+        }));
+    });
+
     it('normalizes legacy connected-service limit categories to canonical public names', () => {
         const now = Date.now();
         const parsed = ConnectedServiceQuotaSnapshotV1Schema.parse({

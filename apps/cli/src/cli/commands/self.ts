@@ -441,6 +441,10 @@ function parseFirstPartyComponentId(value: string): FirstPartyComponentId {
   throw new Error(`Unknown first-party component: ${value}`);
 }
 
+function shouldSkipInstallPayloadMigration(processEnv: NodeJS.ProcessEnv): boolean {
+  return processEnv.HAPPIER_CLI_SKIP_INSTALL_PAYLOAD_MIGRATION === '1';
+}
+
 async function withInstalledCliMigrationRuntime<T>(params: Readonly<{
   channel: PublicReleaseRingId;
   run: () => Promise<T>;
@@ -500,11 +504,12 @@ async function cmdInternalInstallPayload(argv: string[], rawArgv: readonly strin
     componentId,
     channel,
     payloadRoot,
+    payloadRootAlreadyFiltered: true,
     processEnv: process.env,
     versionId,
   });
 
-  if (componentId === 'happier-cli') {
+  if (componentId === 'happier-cli' && !shouldSkipInstallPayloadMigration(process.env)) {
     await withInstalledCliMigrationRuntime({
       channel,
       run: async () => await maybeRunVersionGatedRuntimeMigration({

@@ -25,6 +25,14 @@ function targetFromHandle(handle: TerminalHostHandle): string {
   return handle.paneId ? `${handle.sessionName}:${handle.paneId}` : handle.sessionName;
 }
 
+function cursorPositionsEqual(
+  first: Readonly<{ x: number; y: number }> | null,
+  second: Readonly<{ x: number; y: number }> | null,
+): boolean {
+  if (first === null || second === null) return true;
+  return first.x === second.x && first.y === second.y;
+}
+
 function scheduledDeferral(input: TerminalPromptInput): Extract<TerminalInputInjectionResult, { status: 'deferred' }> | null {
   const reason = input.scheduling.deferReason;
   if (!reason) return null;
@@ -68,9 +76,16 @@ export function createTmuxTerminalHostAdapter(params?: Readonly<{ tmux?: TmuxUti
     // the bottom line.
     const target = targetFromHandle(handle);
     const firstInput = await tmux.captureCurrentInput(target);
+    const firstCursor = await tmux.captureCursorPosition(target);
     await delay(INPUT_STABILITY_DELAY_MS);
     const currentInput = await tmux.captureCurrentInput(target);
-    return { stable: firstInput === currentInput, currentInput, observedAt: Date.now() };
+    const cursor = await tmux.captureCursorPosition(target);
+    return {
+      stable: firstInput === currentInput && cursorPositionsEqual(firstCursor, cursor),
+      currentInput,
+      ...(cursor !== null ? { cursor } : {}),
+      observedAt: Date.now(),
+    };
   }
 
   return {
@@ -113,6 +128,13 @@ export function createTmuxTerminalHostAdapter(params?: Readonly<{ tmux?: TmuxUti
 
       const liveness = await evaluateLiveness(handle);
       if (!liveness.paneAlive) {
+        if (liveness.paneDead !== true) {
+          return {
+            status: 'deferred',
+            reason: 'pane_initializing',
+            ...(input.scheduling.retryAfterMs !== undefined ? { retryAfterMs: input.scheduling.retryAfterMs } : {}),
+          };
+        }
         return failedInjectionResult({
           reason: 'pane_dead',
           phase: 'liveness',

@@ -353,7 +353,7 @@ export async function ensureDevExpoServer({
     alreadyRunning &&
     !restart &&
     stackMode &&
-    wantWeb &&
+    (wantWeb || wantDevClient) &&
     desiredApiServerUrl &&
     runningStateApiServerUrl !== desiredApiServerUrl;
   // In stack mode, never adopt "running by port probe only" state. It may belong to a
@@ -369,6 +369,12 @@ export async function ensureDevExpoServer({
     wantTailscale &&
     Boolean(expoTailscaleIp) &&
     !Boolean(running.state?.tailscaleEnabled);
+  const shouldReplaceRunningExpo = Boolean(
+    restart ||
+    shouldRestartForApiServerMismatch ||
+    shouldRestartForPortFallbackInStackMode ||
+    shouldRestartForTailscaleMismatch
+  );
 
   if (
     alreadyRunning &&
@@ -427,7 +433,7 @@ export async function ensureDevExpoServer({
 
   const reservedMetroPorts = new Set();
 
-  if (restart && running.state?.pid) {
+  if (shouldReplaceRunningExpo && running.state?.pid) {
     const prevPid = Number(running.state.pid);
     const prevPort = Number(running.state?.port);
     const prevPidAlive = Number.isFinite(prevPid) && prevPid > 1 && isPidAlive(prevPid);

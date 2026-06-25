@@ -8,7 +8,7 @@ import {
     readSessionModelsState,
     readSessionModesState,
 } from '@/sync/domains/sessionControl/readSessionControlMetadata';
-import { normalizePermissionModeForAgent, parsePermissionIntentAlias } from '@happier-dev/agents';
+import { parsePermissionIntentAlias, resolveProviderNativePermissionModeForAgent } from '@happier-dev/agents';
 
 export type EffectivePermissionModeDescription = Readonly<{
     effectiveMode: PermissionMode;
@@ -76,7 +76,7 @@ export function describeEffectivePermissionMode(_params: {
         reasons.push({ code: 'plan_not_supported_for_provider' });
     }
 
-    const providerNative = normalizePermissionModeForAgent({ agentId, mode: effectiveMode });
+    const providerNative = resolveProviderNativePermissionModeForAgent({ agentId, mode: effectiveMode });
     if (providerNative !== effectiveMode) {
         reasons.push({ code: 'mode_mapped_for_provider', params: { providerMode: providerNative } });
     }

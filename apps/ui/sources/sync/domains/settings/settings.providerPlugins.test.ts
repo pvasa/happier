@@ -18,8 +18,25 @@ describe('settingsParse provider plugin defaults', () => {
         expect((settings as any).claudeRemoteStrictMcpServerConfig).toBe(false);
         expect((settings as any).claudeRemoteAdvancedOptionsJson).toBe('');
         expect((settings as any).claudeCodeExperimentalAgentTeamsEnabled).toBe(false);
+        expect((settings as any).claudeUnifiedTerminalResumeChoice).toBe('ask_every_time');
         expect((settings as any).codexBackendMode).toBe('appServer');
         expect((settings as any).backendCliSourcePreferenceById).toEqual({});
+    });
+
+    it('preserves valid Claude unified resume choice settings', () => {
+        const settings = settingsParse({
+            claudeUnifiedTerminalResumeChoice: 'resume_full_session',
+        } as any);
+
+        expect((settings as any).claudeUnifiedTerminalResumeChoice).toBe('resume_full_session');
+    });
+
+    it('falls back to ask_every_time for invalid Claude unified resume choice settings', () => {
+        const settings = settingsParse({
+            claudeUnifiedTerminalResumeChoice: 'resume_partial_session',
+        } as any);
+
+        expect((settings as any).claudeUnifiedTerminalResumeChoice).toBe('ask_every_time');
     });
 
     it('preserves legacy Codex backend mode when migrating settings from schema v5', () => {

@@ -34,12 +34,29 @@ const TAB_ROUTES = {
     settings: '/settings',
 } satisfies Record<TabType, TabRouteHref>;
 
+function createInitialMainTabRoutes(): Record<TabType, TabRouteHref> {
+    return { ...TAB_ROUTES };
+}
+
 export function resolveMobileBottomChromeActiveTab(pathname: string): TabType | null {
     if (pathname === '/') return 'sessions';
     if (pathname === '/settings' || pathname.startsWith('/settings/')) return 'settings';
     if (pathname === '/inbox' || pathname.startsWith('/inbox/')) return 'inbox';
     if (pathname === '/friends' || pathname.startsWith('/friends/')) return 'friends';
     return null;
+}
+
+function resolveRememberedMainTabRoute(
+    tab: TabType,
+    rememberedRoute: TabRouteHref | undefined,
+): TabRouteHref {
+    if (
+        typeof rememberedRoute === 'string'
+        && resolveMobileBottomChromeActiveTab(rememberedRoute) === tab
+    ) {
+        return rememberedRoute as TabRouteHref;
+    }
+    return TAB_ROUTES[tab];
 }
 
 function normalizeRouteParam(value: unknown): string | null {
@@ -84,6 +101,10 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     const activeTab = auth.isAuthenticated === true && typeof pathname === 'string'
         ? resolveMobileBottomChromeActiveTab(pathname)
         : null;
+    const mainTabRoutesRef = React.useRef<Record<TabType, TabRouteHref>>(createInitialMainTabRoutes());
+    if (activeTab && typeof pathname === 'string') {
+        mainTabRoutesRef.current[activeTab] = pathname as TabRouteHref;
+    }
     // Remember the most recent main tab so a session dismiss can cross-fade to the
     // bar it will actually land on, before the route commits.
     const lastMainTabRef = React.useRef<TabType>('sessions');
@@ -119,16 +140,19 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     ]);
 
     const handleTabPress = React.useCallback((tab: TabType) => {
-        const targetRoute = TAB_ROUTES[tab];
+        const targetRoute = resolveRememberedMainTabRoute(tab, mainTabRoutesRef.current[tab]);
         if (activeTab === tab) {
+            if (typeof pathname === 'string' && pathname !== TAB_ROUTES[tab]) {
+                router.navigate(TAB_ROUTES[tab]);
+            }
             return;
         }
 
-        router.replace(targetRoute);
+        router.navigate(targetRoute);
         if (tab !== 'settings') {
             fireAndForget(setActiveTab(tab));
         }
-    }, [activeTab, router, setActiveTab]);
+    }, [activeTab, pathname, router, setActiveTab]);
 
     const persistSessionSurface = React.useCallback((sessionId: string, surface: SessionMobileSurface) => {
         persistSessionLastMobileSurface(sessionId, surface);

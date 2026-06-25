@@ -5,7 +5,7 @@ export function planArchiveExtraction(params: Readonly<{
   archivePath: string;
   destDir: string;
   os: 'linux' | 'darwin' | 'windows';
-}>): Readonly<{ requiredCommand: 'tar' | 'powershell'; command: PlannedCommand }> {
+}>): Readonly<{ requiredCommand: 'tar'; command: PlannedCommand }> {
   const name = String(params.archiveName ?? '').trim();
   const archivePath = String(params.archivePath ?? '').trim();
   const destDir = String(params.destDir ?? '').trim();
@@ -22,12 +22,11 @@ export function planArchiveExtraction(params: Readonly<{
     if (os !== 'windows') {
       throw new Error(`[extract] .zip archives are supported only on windows (got ${os})`);
     }
-    const command = `Expand-Archive -LiteralPath "${archivePath}" -DestinationPath "${destDir}" -Force`;
     return {
-      requiredCommand: 'powershell',
+      requiredCommand: 'tar',
       command: {
-        cmd: 'powershell',
-        args: ['-NoProfile', '-Command', command],
+        cmd: 'tar',
+        args: ['-xf', archivePath, '-C', destDir],
       },
     };
   }
