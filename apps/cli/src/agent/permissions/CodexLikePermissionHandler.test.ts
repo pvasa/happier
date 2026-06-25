@@ -146,6 +146,27 @@ describe('CodexLikePermissionHandler', () => {
     expect(result.decision).toBe('approved');
   });
 
+  it('in safe-yolo, a native-auto provider relays reads (pass-through) while the default conservatively auto-approves them', () => {
+    const session = new FakeSession();
+
+    // supportsNativeAutoApproval: true (e.g. Codex) — "Auto" is a pass-through: the provider's own
+    // engine decides, so Happier returns no immediate decision and relays the escalation to the UI.
+    const passthrough = new CodexLikePermissionHandler({
+      session: session as any,
+      logPrefix: '[Test]',
+      supportsNativeAutoApproval: true,
+    });
+    passthrough.setPermissionMode('safe-yolo');
+    expect(passthrough.getImmediateDecision('t-native-read', 'Read', { file_path: '/tmp/x' })).toBeNull();
+    expect(passthrough.getImmediateDecision('t-native-write', 'Write', { file_path: '/tmp/x', content: 'y' })).toBeNull();
+
+    // Default (no native auto) — Happier's own conservative auto: auto-approve reads, surface writes.
+    const conservative = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Test]' });
+    conservative.setPermissionMode('safe-yolo');
+    expect(conservative.getImmediateDecision('t-default-read', 'Read', { file_path: '/tmp/x' })).toEqual({ decision: 'approved' });
+    expect(conservative.getImmediateDecision('t-default-write', 'Write', { file_path: '/tmp/x', content: 'y' })).toBeNull();
+  });
+
   it('resolves every duplicate same-id waiter from one permission response', async () => {
     const session = new FakeSession();
     const handler = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Test]' });

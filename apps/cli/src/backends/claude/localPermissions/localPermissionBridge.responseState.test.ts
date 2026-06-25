@@ -151,8 +151,8 @@ describe('ClaudeLocalPermissionBridge (response state)', () => {
     await expect(unrelated).resolves.toMatchObject({ suppressOutput: true });
   });
 
-  it('auto-completes only pending requests that match mode side effects', async () => {
-    const { session, client } = createPermissionHandlerSessionStub('session-mode-side-effects-match-only');
+  it('does not auto-complete other pending requests when switching to Auto (safe-yolo is pass-through)', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('session-mode-side-effects-passthrough');
     const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: 5_000 });
     bridge.activate();
 
@@ -162,7 +162,7 @@ describe('ClaudeLocalPermissionBridge (response state)', () => {
       tool_input: { file_path: '/tmp/a.txt' },
       tool_use_id: 'toolu_mode_match_1',
     });
-    const matching = bridge.handlePermissionHook({
+    const otherRead = bridge.handlePermissionHook({
       hook_event_name: 'PermissionRequest',
       tool_name: 'Read',
       tool_input: { file_path: '/tmp/b.txt' },
@@ -178,20 +178,24 @@ describe('ClaudeLocalPermissionBridge (response state)', () => {
     await vi.advanceTimersByTimeAsync(0);
     const permissionHandler = client.rpcHandlerManager.getHandler('permission');
     expect(permissionHandler).toBeDefined();
+    // Approve the first request and switch to Auto. Because Auto (safe-yolo) is a pass-through to
+    // Claude's native engine, the *other* pending requests are NOT auto-approved by Happier — they
+    // keep being surfaced (relayed), since Claude owns the auto-approve decision.
     await permissionHandler?.({ id: 'toolu_mode_match_1', approved: true, mode: 'safe-yolo' });
 
     await expect(first).resolves.toMatchObject({
       hookSpecificOutput: { decision: { behavior: 'allow' } },
     });
-    await expect(matching).resolves.toMatchObject({
-      hookSpecificOutput: { decision: { behavior: 'allow' } },
-    });
     expect(client.agentState.requests.toolu_mode_match_1).toBeUndefined();
-    expect(client.agentState.requests.toolu_mode_match_2).toBeUndefined();
+    // The non-explicitly-approved requests stay pending (no Happier-side auto-approval), regardless of
+    // whether their tool is read-like or write-like.
+    expect(client.agentState.requests.toolu_mode_match_2).toBeDefined();
+    expect(client.agentState.completedRequests.toolu_mode_match_2).toBeUndefined();
     expect(client.agentState.requests.toolu_mode_write_like_1).toBeDefined();
     expect(client.agentState.completedRequests.toolu_mode_write_like_1).toBeUndefined();
 
     bridge.dispose();
+    await expect(otherRead).resolves.toMatchObject({ suppressOutput: true });
     await expect(writeLike).resolves.toMatchObject({ suppressOutput: true });
   });
 

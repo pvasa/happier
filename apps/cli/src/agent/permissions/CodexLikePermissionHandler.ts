@@ -3,9 +3,13 @@
  *
  * Shared permission handler for ACP agents that use the "Codex decision" style:
  * - "yolo": auto-approve everything
- * - "safe-yolo" / "read-only": auto-approve read-only operations, prompt for write-like operations
+ * - "safe-yolo" ("Auto"): if the provider has a native auto engine (`supportsNativeAutoApproval`),
+ *   pass through — relay the provider's genuine escalations and impose no extra gate; otherwise fall
+ *   back to Happier's conservative auto (auto-approve read-only, prompt write-like).
+ * - "read-only": auto-approve read-only operations, deny/prompt write-like operations
  *
- * Providers can wrap this class to customize the log prefix and (optionally) the write-like heuristic.
+ * Providers can wrap this class to customize the log prefix, the write-like heuristic, and whether the
+ * provider supplies its own native auto-approval engine.
  */
 
 import { logger } from '@/ui/logger';
@@ -37,6 +41,15 @@ export { isDefaultWriteLikeToolName };
 export class CodexLikePermissionHandler extends BasePermissionHandler {
   private readonly logPrefix: string;
   private readonly isWriteLikeToolName: (toolName: string) => boolean;
+  /**
+   * When the underlying provider has its own native auto-approval engine (e.g. Codex's
+   * `approval_policy` + sandbox), Happier's "Auto" mode (`safe-yolo`) is a pass-through: the provider
+   * decides what to auto-approve and only escalates genuine asks, which Happier relays to the UI. In
+   * that case Happier must NOT impose its own write-like prompt on top. When false (the default, for
+   * providers without a native auto mode), `safe-yolo` falls back to Happier's own conservative auto
+   * (auto-approve reads, prompt write-like operations).
+   */
+  private readonly supportsNativeAutoApproval: boolean;
   private currentPermissionMode: PermissionMode = 'default';
   private currentPermissionModeUpdatedAt = 0;
 
@@ -44,6 +57,7 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
     session: ApiSessionClient;
     logPrefix: string;
     isWriteLikeToolName?: (toolName: string) => boolean;
+    supportsNativeAutoApproval?: boolean;
     pushSender?: PermissionRequestPushSender | null;
     getAccountSettings?: (() => AccountSettings | null) | null;
     getAccountSettingsSecretsReadKeys?: (() => ReadonlyArray<Uint8Array | null | undefined>) | null;
@@ -61,6 +75,7 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
     });
     this.logPrefix = params.logPrefix;
     this.isWriteLikeToolName = params.isWriteLikeToolName ?? isDefaultWriteLikeToolName;
+    this.supportsNativeAutoApproval = params.supportsNativeAutoApproval ?? false;
   }
 
   protected getLogPrefix(): string {
@@ -189,7 +204,10 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
       case 'bypassPermissions':
         return true;
       case 'safe-yolo':
-        return !this.isWriteLikeToolName(toolName);
+        // "Auto" mode. If the provider has a native auto engine, this is a pass-through: relay the
+        // provider's genuine escalations to the UI (return false → surface) instead of imposing
+        // Happier's write-like prompt. Otherwise fall back to Happier's conservative auto.
+        return this.supportsNativeAutoApproval ? false : !this.isWriteLikeToolName(toolName);
       case 'read-only':
         return !this.isWriteLikeToolName(toolName);
       case 'plan':

@@ -9,7 +9,9 @@
  *
  * This handler is mode-aware:
  * - "yolo": auto-approve
- * - "safe-yolo": auto-approve read-only, prompt for write-like
+ * - "safe-yolo" ("Auto"): pass-through — Codex's native sandbox/approval engine decides what to
+ *   auto-approve and only escalates genuine asks, which Happier relays to the UI (no extra Happier
+ *   write-like gate on top). This is why `supportsNativeAutoApproval` is set below.
  * - "read-only": deny write-like
  *
  * Codex itself remains responsible for sandbox/approval policy enforcement; this class only
@@ -43,6 +45,7 @@ export class CodexPermissionHandler extends CodexLikePermissionHandler {
     super({
       session,
       logPrefix: '[Codex]',
+      supportsNativeAutoApproval: true,
       pushSender: opts?.pushSender ?? null,
       getAccountSettings: opts?.getAccountSettings ?? null,
       getAccountSettingsSecretsReadKeys: opts?.getAccountSettingsSecretsReadKeys ?? null,

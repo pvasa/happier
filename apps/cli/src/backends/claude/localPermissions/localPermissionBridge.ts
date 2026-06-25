@@ -21,14 +21,14 @@ import { isToolAllowedForSession } from '@/agent/permissions/permissionToolIdent
 import { applyAllowedToolsToAllowlist, applyUpdatedPermissionsToAllowlist, seedAllowlistFromCompletedRequests } from '@/agent/permissions/applyPermissionAllowlistUpdates';
 import { resolvePermissionIntentFromMetadataSnapshot } from '@/agent/runtime/permission/permissionModeFromMetadata';
 import { normalizePermissionModeToIntent } from '@/agent/runtime/permission/permissionModeCanonical';
-import { isDefaultWriteLikeToolName } from '@/agent/permissions/writeLikeToolNameHeuristics';
+import { computeLocalPermissionPolicyDecision } from './permissionPolicyDecision';
 import { shouldSuppressProviderPermissionForHappierApproval } from '@/agent/tools/happierTools/resolveHappierActionForMcpToolName';
 import {
     CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
     isClaudeLocalPermissionBridgeAgentStateRequest,
 } from '@happier-dev/agents';
-import { isChangeTitleToolLikeName } from '@happier-dev/protocol/tools/v2';
 import { withAskUserQuestionUiFreeformDefault } from './askUserQuestionFreeformDefault';
+import { readClaudeSettingsAllowRules } from './claudeSettingsAllowlist';
 
 type PendingPermissionRequest = {
     id: string;
@@ -174,6 +174,7 @@ export class ClaudeLocalPermissionBridge {
             tryHandlePermissionRpc: (payload) => this.tryHandlePermissionRpc(payload),
         });
         this.seedAllowlistFromAgentState();
+        this.seedAllowlistFromClaudeSettings();
         this.syncPermissionModeFromMetadataSnapshot();
         this.startMetadataWatcher();
     }
@@ -452,16 +453,7 @@ export class ClaudeLocalPermissionBridge {
     }
 
     private computePolicyDecision(toolName: string): 'prompt' | 'allow' | 'deny' {
-        if (isChangeTitleToolLikeName(toolName)) return 'allow';
-        const mode = this.permissionMode;
-        if (mode === 'yolo') return 'allow';
-        if (mode === 'safe-yolo') {
-            return isDefaultWriteLikeToolName(toolName) ? 'prompt' : 'allow';
-        }
-        if (mode === 'read-only') {
-            return isDefaultWriteLikeToolName(toolName) ? 'deny' : 'allow';
-        }
-        return 'prompt';
+        return computeLocalPermissionPolicyDecision({ mode: this.permissionMode, toolName });
     }
 
     private resolveResponseTimeout(toolName: string): number | null {
@@ -1065,6 +1057,22 @@ export class ClaudeLocalPermissionBridge {
             const completed = snapshot?.completedRequests;
             if (!completed) return;
             seedAllowlistFromCompletedRequests(this.allowedToolIdentifiers, completed);
+        } catch {
+            // Best-effort only; allowlist seeding is not critical.
+        }
+    }
+
+    /**
+     * Honor the user's Claude Code `settings.json` `permissions.allow` rules so tools they have
+     * permanently allowed in Claude are not re-surfaced by the Happier hook bridge if Claude escalates
+     * them. Best-effort: missing/malformed settings files are ignored.
+     */
+    private seedAllowlistFromClaudeSettings(): void {
+        try {
+            const rules = readClaudeSettingsAllowRules({ cwd: this.session.path ?? null });
+            for (const rule of rules) {
+                this.allowedToolIdentifiers.add(rule);
+            }
         } catch {
             // Best-effort only; allowlist seeding is not critical.
         }
